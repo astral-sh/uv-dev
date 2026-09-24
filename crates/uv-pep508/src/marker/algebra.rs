@@ -93,9 +93,9 @@ pub(crate) struct InternerShared {
 /// The mutable [`Interner`] state, stored behind a lock.
 #[derive(Default)]
 struct InternerState {
-    /// Unique node IDs, hashed and compared through their immutable nodes in
-    /// [`InternerShared`].
-    unique: HashTable<NodeId>,
+    /// Unique node IDs and their cached hashes. Equality compares the immutable
+    /// nodes in [`InternerShared`].
+    unique: HashTable<(u64, NodeId)>,
 
     /// A cache for `AND` operations between two nodes.
     /// Note that `OR` is implemented in terms of `AND`.
@@ -156,13 +156,13 @@ impl InternerGuard<'_> {
         let hash = FxBuildHasher.hash_one(&node);
         let id = match self.state.unique.entry(
             hash,
-            |id| self.shared.node(*id) == &node,
-            |id| FxBuildHasher.hash_one(self.shared.node(*id)),
+            |(stored_hash, id)| *stored_hash == hash && self.shared.node(*id) == &node,
+            |(hash, _)| *hash,
         ) {
-            Entry::Occupied(entry) => *entry.get(),
+            Entry::Occupied(entry) => entry.get().1,
             Entry::Vacant(entry) => {
                 let id = NodeId::new(self.shared.nodes.push(node), false);
-                entry.insert(id);
+                entry.insert((hash, id));
                 id
             }
         };
