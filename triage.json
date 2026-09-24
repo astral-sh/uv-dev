@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 15925,
+        "title": "Add S3 request signing",
+        "url": "https://github.com/astral-sh/uv/pull/15925",
+        "state": "merged",
+        "reason": "Foundational implementation for this subsystem. It added endpoint-based S3 SigV4 signing through reqsign’s default AWS credential chain. Current source confirms AWS_PROFILE and valid cached SSO tokens are recognized, but not AWS_DEFAULT_PROFILE, expired SSO login-token refresh, or per-index signing configuration."
+      },
+      {
+        "kind": "issue",
+        "number": 13608,
+        "title": "Recognize an S3 store as valid for packages",
+        "url": "https://github.com/astral-sh/uv/issues/13608",
+        "state": "open",
+        "reason": "Adjacent request about recognizing S3 or MinIO storage as a package repository. It does not track AWS profile selection, SSO token refresh, or configuring signing per index, so it is not a duplicate."
+      }
+    ],
+    "search_scope": "Literal searches covered AWS_PROFILE, AWS_DEFAULT_PROFILE, AWS SSO, SSO token, AWS profile, Identity Center, and UV_S3_ENDPOINT_URL. Conceptual searches covered S3 authentication, AWS credential/profile chains, SigV4, private object-storage indexes, temporary-credential refresh, and per-index cloud signing. Closed issues and merged pull requests involving S3, AWS, reqsign, and cloud signing were searched. The discussions for astral-sh/uv#15925, astral-sh/uv#17092, and astral-sh/uv#20892 were inspected. astral-sh/uv#19025 was ruled out because it requests generic executable credential providers for CodeArtifact; astral-sh/uv#14067 concerns CloudFront 403/index fallback behavior. No existing item tracks AWS_DEFAULT_PROFILE, expired SSO access-token refresh, or index-level S3 signing."
+  },
+  "type": "enhancement",
+  "type_reason": "The report requests extensions to the experimental S3-signing feature. Current source and astral-sh/uv#15925 establish that AWS_PROFILE, AWS configuration files, and valid cached SSO tokens already participate in the credential chain, with expiring role credentials reloaded by the signer. Current code does not honor AWS_DEFAULT_PROFILE, follow an sso_session section, refresh an expired cached SSO access token, or select S3 signing per index. No incorrect behavior, regression, or duplicate was established.",
+  "summary": "astral-sh/uv#15925 is the foundational S3-signing implementation, while astral-sh/uv#13608 is a broader adjacent S3-package-source request. The remaining requested work is AWS_DEFAULT_PROFILE support, modern or expired SSO-session handling, and per-index signing configuration.",
+  "draft_response": "AWS_PROFILE is already supported for S3 endpoints through the default AWS credential chain added in astral-sh/uv#15925. The current chain can also exchange a valid cached SSO login token for role credentials and reload those role credentials when they expire. It does not currently honor AWS_DEFAULT_PROFILE, follow an sso_session section, or refresh/initiate login when the cached SSO access token itself has expired. S3 signing is also selected globally with UV_S3_ENDPOINT_URL rather than with an index-level signing setting.\n\nThose remaining pieces would be enhancements and need agreement on the configuration and authentication scope before implementation. Could you confirm whether the needed refresh is for an expired SSO access token, rather than expiring role credentials, and whether the profile uses inline SSO fields or an sso_session section? That will let us separate the credential-chain gap from the proposed per-index API."
+}
