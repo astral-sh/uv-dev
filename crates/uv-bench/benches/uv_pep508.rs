@@ -7,7 +7,24 @@ use std::ops::Bound;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main, measurement::WallTime};
 use uv_pep440::Version;
-use uv_pep508::{MarkerTree, MarkerTreeContents};
+use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder, MarkerTree, MarkerTreeContents};
+
+fn environment(machine: &str, full_version: &str, version: &str) -> MarkerEnvironment {
+    MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+        implementation_name: "cpython",
+        implementation_version: full_version,
+        os_name: "posix",
+        platform_machine: machine,
+        platform_python_implementation: "CPython",
+        platform_release: "6.8.0",
+        platform_system: "Linux",
+        platform_version: "6.8.0",
+        python_full_version: full_version,
+        python_version: version,
+        sys_platform: "linux",
+    })
+    .unwrap()
+}
 
 fn collect_markers(value: &toml::Value, markers: &mut Vec<MarkerTreeContents>) {
     match value {
@@ -42,7 +59,7 @@ fn collect_markers(value: &toml::Value, markers: &mut Vec<MarkerTreeContents>) {
     }
 }
 
-fn format_markers(criterion: &mut Criterion<WallTime>) {
+fn lockfile_markers() -> Vec<MarkerTreeContents> {
     let mut markers = Vec::new();
     for lockfile in [
         include_str!("../../../uv.lock"),
@@ -53,7 +70,11 @@ fn format_markers(criterion: &mut Criterion<WallTime>) {
             &mut markers,
         );
     }
+    markers
+}
 
+fn format_markers(criterion: &mut Criterion<WallTime>) {
+    let markers = lockfile_markers();
     let mut group = criterion.benchmark_group("marker_format");
     group.throughput(Throughput::Elements(markers.len() as u64));
     group.bench_function("lockfiles", |benchmark| {
@@ -152,10 +173,7 @@ fn format_markers(criterion: &mut Criterion<WallTime>) {
 }
 
 fn simplify_python_markers(criterion: &mut Criterion<WallTime>) {
-    let mut markers = Vec::new();
-    for contents in [include_str!("../../../uv.lock"), include_str!("../../../scripts/benchmarks/uv.lock")] {
-        collect_markers(&toml::from_str(contents).unwrap(), &mut markers);
-    }
+    let markers = lockfile_markers();
     let lower = Version::new([3, 9]);
     let upper = Version::new([3, 14]);
     let mut group = criterion.benchmark_group("marker_simplify_python_versions");
@@ -163,12 +181,48 @@ fn simplify_python_markers(criterion: &mut Criterion<WallTime>) {
     group.bench_function("lockfiles", |benchmark| {
         benchmark.iter(|| {
             for marker in &markers {
-                black_box(marker.as_ref().simplify_python_versions(Bound::Included(&lower), Bound::Excluded(&upper)));
+                black_box(
+                    marker
+                        .as_ref()
+                        .simplify_python_versions(Bound::Included(&lower), Bound::Excluded(&upper)),
+                );
             }
         });
     });
     group.finish();
 }
 
-criterion_group!(uv_pep508, format_markers, simplify_python_markers);
+fn evaluate_markers(criterion: &mut Criterion<WallTime>) {
+    let markers = lockfile_markers();
+    let env = environment("x86_64", "3.12.1", "3.12");
+    let mut group = criterion.benchmark_group("marker_evaluate");
+    group.throughput(Throughput::Elements(markers.len() as u64));
+    group.bench_function("lockfiles", |benchmark| {
+        benchmark.iter(|| {
+            for marker in &markers {
+                black_box(marker.as_ref().evaluate(black_box(&env), &[]));
+            }
+        });
+    });
+    let env = environment("machine-0127", "3.10.127", "3.10");
+    for alternatives in [16, 128, 512] {
+        let expression = (0..alternatives)
+            .map(|index| format!("platform_machine == 'machine-{index:04}'"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        let marker = expression.parse::<MarkerTree>().unwrap();
+        group.throughput(Throughput::Elements(1));
+        group.bench_function(format!("{alternatives}_alternatives"), |benchmark| {
+            benchmark.iter(|| black_box(black_box(marker).evaluate(black_box(&env), &[])));
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    uv_pep508,
+    format_markers,
+    simplify_python_markers,
+    evaluate_markers
+);
 criterion_main!(uv_pep508);
