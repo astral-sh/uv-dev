@@ -595,17 +595,8 @@ impl InternerGuard<'_> {
         assumption: NodeId,
         cache: &mut FxHashMap<(NodeId, NodeId), NodeId>,
     ) -> NodeId {
-        if assumption.is_true() || matches!(value, NodeId::TRUE | NodeId::FALSE) {
-            return value;
-        }
-        if assumption.is_false() {
-            return NodeId::FALSE;
-        }
-        if value == assumption {
-            return NodeId::TRUE;
-        }
-        if value == assumption.not() {
-            return NodeId::FALSE;
+        if let Some(result) = value.restrict_trivial(assumption) {
+            return result;
         }
         if let Some(&result) = cache.get(&(value, assumption)) {
             return result;
@@ -1347,6 +1338,23 @@ impl NodeId {
     /// Returns whether the nodes are disjoint if that can be determined without the interner.
     pub(crate) fn is_disjoint_trivial(self, other: Self) -> Option<bool> {
         self.and_trivial(other).map(Self::is_false)
+    }
+
+    /// Returns the restriction if it can be determined without inspecting the interner.
+    pub(crate) fn restrict_trivial(self, assumption: Self) -> Option<Self> {
+        if assumption.is_true() || matches!(self, Self::TRUE | Self::FALSE) {
+            return Some(self);
+        }
+        if assumption.is_false() {
+            return Some(Self::FALSE);
+        }
+        if self == assumption {
+            return Some(Self::TRUE);
+        }
+        if self == assumption.not() {
+            return Some(Self::FALSE);
+        }
+        None
     }
 }
 
