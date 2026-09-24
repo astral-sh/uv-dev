@@ -3,8 +3,9 @@ use std::ops::Bound;
 
 use arcstr::ArcStr;
 use indexmap::IndexMap;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use rustc_hash::FxBuildHasher;
+use smallvec::SmallVec;
 use version_ranges::Ranges;
 
 use uv_pep440::{Version, VersionSpecifier};
@@ -337,10 +338,26 @@ fn sort(dnf: &mut [Vec<MarkerExpression>]) {
 /// Merge any edges that lead to identical subtrees into a single range.
 pub(crate) fn collect_edges<'a, T>(
     map: impl ExactSizeIterator<Item = (&'a Ranges<T>, MarkerTree)>,
-) -> IndexMap<MarkerTree, Ranges<T>, FxBuildHasher>
+) -> impl Iterator<Item = (MarkerTree, Ranges<T>)>
 where
     T: Ord + Clone + 'a,
 {
+    // Most decision nodes have only a few edges. Keep their groups inline, while
+    // using a hash table for larger nodes to bound the cost of finding duplicates.
+    if map.len() <= 5 {
+        let mut paths: SmallVec<[(MarkerTree, Ranges<T>); 5]> = SmallVec::new();
+        for (range, tree) in map {
+            let (start, end) = range.bounding_range().unwrap();
+            let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
+            if let Some((_, union)) = paths.iter_mut().find(|(existing, _)| *existing == tree) {
+                *union = union.union(&range);
+            } else {
+                paths.push((tree, range));
+            }
+        }
+        return Either::Left(paths.into_iter());
+    }
+
     let mut paths: IndexMap<_, Ranges<_>, FxBuildHasher> = IndexMap::default();
     for (range, tree) in map {
         // OK because all ranges are guaranteed to be non-empty.
@@ -350,10 +367,10 @@ where
         paths
             .entry(tree)
             .and_modify(|union| *union = union.union(&range))
-            .or_insert_with(|| range.clone());
+            .or_insert(range);
     }
 
-    paths
+    Either::Right(paths.into_iter())
 }
 
 /// Returns `Some` if the expression can be simplified as an inequality consisting
@@ -487,6 +504,43 @@ fn is_negation(left: &MarkerExpression, right: &MarkerExpression) -> bool {
             };
 
             pair == pair2 && operator != operator2
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use version_ranges::Ranges;
+
+    use super::collect_edges;
+    use crate::MarkerTree;
+
+    #[test]
+    fn edge_groups_preserve_order_and_gaps() {
+        let edges: [(Ranges<i32>, MarkerTree); 6] = [
+            (Ranges::singleton(1), MarkerTree::FALSE),
+            (Ranges::singleton(2), MarkerTree::TRUE),
+            (Ranges::singleton(3), MarkerTree::FALSE),
+            (Ranges::singleton(4), MarkerTree::TRUE),
+            (Ranges::singleton(5), MarkerTree::FALSE),
+            (Ranges::singleton(6), MarkerTree::TRUE),
+        ];
+        for length in [4, 6] {
+            let groups: Vec<_> =
+                collect_edges(edges[..length].iter().map(|(range, tree)| (range, *tree))).collect();
+            let mut false_range = Ranges::singleton(1).union(&Ranges::singleton(3));
+            let mut true_range = Ranges::singleton(2).union(&Ranges::singleton(4));
+            if length == 6 {
+                false_range = false_range.union(&Ranges::singleton(5));
+                true_range = true_range.union(&Ranges::singleton(6));
+            }
+            assert_eq!(
+                groups,
+                [
+                    (MarkerTree::FALSE, false_range),
+                    (MarkerTree::TRUE, true_range)
+                ]
+            );
         }
     }
 }
