@@ -3,6 +3,7 @@
 extern crate uv_performance_memory_allocator;
 
 use std::hint::black_box;
+use std::ops::Bound;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main, measurement::WallTime};
 use uv_pep508::{MarkerTree, MarkerTreeContents};
@@ -79,6 +80,28 @@ fn format_markers(criterion: &mut Criterion<WallTime>) {
         benchmark.iter(|| {
             for marker in &markers {
                 black_box(black_box(marker.as_ref()).to_dnf());
+            }
+        });
+    });
+    group.finish();
+
+    let mut group = criterion.benchmark_group("marker_rewrite");
+    group.bench_function("terminal_extras", |benchmark| {
+        benchmark.iter(|| {
+            for marker in [MarkerTree::TRUE, MarkerTree::FALSE] {
+                black_box(black_box(marker).without_extras());
+                black_box(black_box(marker).only_extras());
+                black_box(black_box(marker).simplify_extras_with(|_| true));
+            }
+        });
+    });
+    group.bench_function("unbounded_python", |benchmark| {
+        benchmark.iter(|| {
+            for marker in &markers {
+                black_box(marker.as_ref().simplify_python_versions(
+                    black_box(Bound::Unbounded),
+                    black_box(Bound::Unbounded),
+                ));
             }
         });
     });

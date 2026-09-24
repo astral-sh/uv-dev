@@ -1275,6 +1275,11 @@ impl MarkerTree {
     /// should reconstitute all relevant markers from the source data.)
     #[must_use]
     pub fn simplify_python_versions(self, lower: Bound<&Version>, upper: Bound<&Version>) -> Self {
+        if matches!(self, Self::TRUE | Self::FALSE)
+            || matches!((lower, upper), (Bound::Unbounded, Bound::Unbounded))
+        {
+            return self;
+        }
         Self(
             INTERNER
                 .lock()
@@ -1295,6 +1300,9 @@ impl MarkerTree {
         lower: Bound<&Version>,
         upper: Bound<&Version>,
     ) -> Self {
+        if self.is_false() || matches!((lower, upper), (Bound::Unbounded, Bound::Unbounded)) {
+            return self;
+        }
         Self(
             INTERNER
                 .lock()
@@ -1313,6 +1321,9 @@ impl MarkerTree {
     /// `sys_platform == 'linux'` produces `python_version < '3.11'`.
     #[must_use]
     pub fn restrict(self, assumption: Self) -> Self {
+        if let Some(node) = self.0.restrict_trivial(assumption.0) {
+            return Self(node);
+        }
         Self(INTERNER.lock().restrict(self.0, assumption.0))
     }
 
@@ -1390,6 +1401,9 @@ impl MarkerTree {
     /// is always true is returned.
     #[must_use]
     pub fn without_extras(self) -> Self {
+        if matches!(self, Self::TRUE | Self::FALSE) {
+            return self;
+        }
         Self(INTERNER.lock().without_extras(self.0))
     }
 
@@ -1399,6 +1413,9 @@ impl MarkerTree {
     /// that is always true is returned.
     #[must_use]
     pub fn only_extras(self) -> Self {
+        if matches!(self, Self::TRUE | Self::FALSE) {
+            return self;
+        }
         Self(INTERNER.lock().only_extras(self.0))
     }
 
@@ -1456,6 +1473,9 @@ impl MarkerTree {
     }
 
     fn simplify_extras_with_impl(self, is_extra: &impl Fn(&ExtraName) -> bool) -> Self {
+        if matches!(self, Self::TRUE | Self::FALSE) {
+            return self;
+        }
         Self(INTERNER.lock().restrict_by(self.0, &|var| match var {
             Variable::Extra(name) => is_extra(name.extra()).then_some(true),
             _ => None,
@@ -1463,6 +1483,9 @@ impl MarkerTree {
     }
 
     fn simplify_not_extras_with_impl(self, is_extra: &impl Fn(&ExtraName) -> bool) -> Self {
+        if matches!(self, Self::TRUE | Self::FALSE) {
+            return self;
+        }
         Self(INTERNER.lock().restrict_by(self.0, &|var| match var {
             Variable::Extra(name) => is_extra(name.extra()).then_some(false),
             _ => None,
@@ -2064,6 +2087,37 @@ mod test {
             let reconstructed = simplified.and(assumption);
             assert_eq!(reconstructed, expected);
         }
+    }
+
+    #[test]
+    fn trivial_marker_rewrites() {
+        let marker = m("python_version >= '3.10' and extra == 'test'");
+        for terminal in [MarkerTree::TRUE, MarkerTree::FALSE] {
+            assert_eq!(terminal.without_extras(), terminal);
+            assert_eq!(terminal.only_extras(), terminal);
+            assert_eq!(
+                terminal.simplify_extras_with(|_| panic!("terminal has no extras")),
+                terminal
+            );
+            assert_eq!(
+                terminal.simplify_not_extras_with(|_| panic!("terminal has no extras")),
+                terminal
+            );
+            assert_eq!(terminal.restrict(marker), terminal);
+            assert_eq!(terminal.restrict(MarkerTree::FALSE), terminal);
+        }
+        assert_eq!(marker.restrict(MarkerTree::TRUE), marker);
+        assert_eq!(marker.restrict(MarkerTree::FALSE), MarkerTree::FALSE);
+        assert_eq!(marker.restrict(marker), MarkerTree::TRUE);
+        assert_eq!(marker.restrict(marker.negate()), MarkerTree::FALSE);
+        assert_eq!(
+            marker.simplify_python_versions(Bound::Unbounded, Bound::Unbounded),
+            marker
+        );
+        assert_eq!(
+            marker.complexify_python_versions(Bound::Unbounded, Bound::Unbounded),
+            marker
+        );
     }
 
     #[test]
