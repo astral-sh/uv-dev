@@ -48,7 +48,7 @@ use crate::commands::python::upgrade_report::{
 use crate::commands::python::{ChangeEvent, ChangeEventKind};
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::{ExitStatus, UvError, conjunction, elapsed};
-use crate::printer::Printer;
+use crate::printer::{Printer, jsonl_result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct InstallRequest<'a> {
@@ -267,8 +267,11 @@ pub(crate) async fn install(
     printer: Printer,
 ) -> Result<ExitStatus> {
     let (sender, mut receiver) = mpsc::unbounded_channel();
-    let json_output = matches!(output_format, PythonUpgradeFormat::Json);
-    let mut report = json_output.then(UpgradeReport::default);
+    let structured_output = matches!(
+        output_format,
+        PythonUpgradeFormat::Json | PythonUpgradeFormat::Jsonl
+    );
+    let mut report = structured_output.then(UpgradeReport::default);
     let mut compiler_failed_key = None;
     let compiler = async {
         let mut total_files = 0;
@@ -287,7 +290,7 @@ pub(crate) async fn install(
                 Ok(result) => result,
                 Err(err) => {
                     compiler_failed_key = Some(installation.key().clone());
-                    if json_output {
+                    if structured_output {
                         receiver.close();
                     }
                     return Err(err);
@@ -565,7 +568,11 @@ async fn perform_install(
 
     // Find requests that are already satisfied
     let mut changelog = Changelog {
-        report: matches!(output_format, PythonUpgradeFormat::Json).then(|| UpgradeChanges {
+        report: matches!(
+            output_format,
+            PythonUpgradeFormat::Json | PythonUpgradeFormat::Jsonl
+        )
+        .then(|| UpgradeChanges {
             before: existing_installations
                 .iter()
                 .map(|installation| (installation.key().clone(), installation.into()))
@@ -1366,12 +1373,18 @@ fn write_upgrade_report(
     report: &UpgradeReport,
     printer: Printer,
 ) -> Result<()> {
-    if matches!(format, PythonUpgradeFormat::Json) {
-        writeln!(
-            printer.stdout_important_raw(),
-            "{}",
-            serde_json::to_string_pretty(report)?
-        )?;
+    match format {
+        PythonUpgradeFormat::Text => {}
+        PythonUpgradeFormat::Json => {
+            writeln!(
+                printer.stdout_important_raw(),
+                "{}",
+                serde_json::to_string_pretty(report)?
+            )?;
+        }
+        PythonUpgradeFormat::Jsonl => {
+            writeln!(printer.stdout_important_raw(), "{}", jsonl_result(report)?)?;
+        }
     }
     Ok(())
 }

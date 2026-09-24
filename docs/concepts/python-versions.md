@@ -193,6 +193,11 @@ included alongside successful requests; operation-level errors also cover failur
 finalization and optional bytecode compilation. The command retains its normal exit status. Use
 `--preview-features json-output` to suppress the experimental-format warning.
 
+Use `--output-format jsonl --preview-features jsonl` to receive progress records followed by the
+same completed report in a `"type": "result"` record. A failed upgrade can still install Python
+versions, so consumers should inspect the final report and the command's exit status. The JSONL
+format is also a preview and may change without warning.
+
 Virtual environments using the Python version will be automatically upgraded to the new patch
 version.
 

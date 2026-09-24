@@ -11,6 +11,8 @@ use url::Url;
 use uv_python::downloads::{ManagedPythonDownloadList, PythonDownloadRequest};
 use uv_static::EnvVars;
 use uv_test::TestContext;
+use uv_test::json_schema::JsonSchema;
+use uv_test::jsonl::{JsonlOutput, JsonlResultExpectation};
 
 const CPYTHON_RELEASES: &str =
     "https://github.com/astral-sh/python-build-standalone/releases/download";
@@ -151,6 +153,49 @@ fn report(output: &Output, code: i32) -> Result<Value> {
     assert_eq!(report["schema"], json!({"version": "preview"}));
     assert!(report["upgrades"].is_array());
     Ok(report)
+}
+
+fn jsonl_upgrade(context: &TestContext, catalog: &Path) -> Command {
+    let mut command = context.python_upgrade();
+    local_catalog(&mut command, catalog);
+    command.args(["--output-format", "jsonl", "--preview-features", "jsonl"]);
+    command
+}
+
+fn parse_upgrade_jsonl(
+    output: &Output,
+    expectation: JsonlResultExpectation,
+) -> Result<JsonlOutput> {
+    // The result carries the existing upgrade report. Validate progress against the shared
+    // schema and use the common consumer for framing, operation IDs, and terminal ordering.
+    let envelope = JsonSchema::new(
+        r#"{"type":"object","required":["type"],"properties":{"type":{"enum":["progress","result"]}}}"#,
+    )?;
+    let parsed = JsonlOutput::parse(&envelope, output, expectation)?;
+    let progress_schema = JsonSchema::new(include_str!(
+        "../../../../docs/reference/internals/jsonl-progress.schema.json"
+    ))?;
+    for progress in &parsed.progress {
+        progress_schema.parse(&serde_json::to_vec(progress)?)?;
+    }
+    Ok(parsed)
+}
+
+fn jsonl_report(output: &Output, code: i32) -> Result<(JsonlOutput, Value)> {
+    assert_eq!(output.status.code(), Some(code));
+    let parsed = parse_upgrade_jsonl(output, JsonlResultExpectation::Required)?;
+    let mut report = parsed.result.clone().context("missing upgrade result")?;
+    assert_eq!(
+        report
+            .as_object_mut()
+            .context("upgrade result is not an object")?
+            .remove("type"),
+        Some(json!("result"))
+    );
+    assert_eq!(report["schema"], json!({"version": "preview"}));
+    assert!(report["upgrades"].is_array());
+    assert!(report["errors"].is_array());
+    Ok((parsed, report))
 }
 
 /// Keep snapshots focused on request association and completed changes, not platform identity.
@@ -623,5 +668,206 @@ fn python_upgrade_json_bytecode_failure() -> Result<()> {
     ]
     "#);
     assert_eq!(failed["errors"][0]["kind"], "bytecode");
+    Ok(())
+}
+
+#[test]
+fn python_upgrade_jsonl_noop_matches_json() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let fixture = python_fixture(&context, "cpython-3.12.9")?;
+    let catalog = write_catalog(&context, &[fixture])?;
+    install(&context, catalog.path(), &["3.12.9"]);
+
+    let expected = report(&upgrade(&context, catalog.path()).arg("3.12").output()?, 0)?;
+    let (stream, actual) = jsonl_report(
+        &jsonl_upgrade(&context, catalog.path())
+            .arg("3.12")
+            .output()?,
+        0,
+    )?;
+    assert_eq!(actual, expected);
+    assert!(stream.progress.is_empty());
+
+    let mut command = context.python_upgrade();
+    local_catalog(&mut command, catalog.path());
+    let warning = command
+        .args(["3.12", "--output-format", "jsonl"])
+        .env_remove(EnvVars::UV_PREVIEW)
+        .env_remove(EnvVars::UV_PREVIEW_FEATURES)
+        .output()?;
+    assert_eq!(jsonl_report(&warning, 0)?.1, expected);
+    let stderr = String::from_utf8(warning.stderr)?;
+    assert_eq!(
+        stderr
+            .matches("The JSONL output format is experimental")
+            .count(),
+        1
+    );
+    assert!(!stderr.contains("The `--output-format json` option is experimental"));
+    Ok(())
+}
+
+#[test]
+fn python_upgrade_jsonl_progress_precedes_result() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let old = python_fixture(&context, "cpython-3.12.8")?;
+    let new = python_fixture(&context, "cpython-3.12.9")?;
+    let new_key = new.key.clone();
+    let catalog = write_catalog(&context, &[old, new])?;
+    install(&context, catalog.path(), &["3.12.8"]);
+
+    let (stream, upgraded) = jsonl_report(
+        &jsonl_upgrade(&context, catalog.path())
+            .arg("3.12")
+            .output()?,
+        0,
+    )?;
+    assert!(!stream.progress.is_empty());
+    assert!(
+        stream
+            .operations
+            .values()
+            .any(|operation| { operation.phase == "download" && operation.completed })
+    );
+    assert!(stream.progress.iter().any(|progress| {
+        progress["phase"] == "download"
+            && progress["status"] == "started"
+            && progress["name"]
+                .as_str()
+                .is_some_and(|name| name.contains(&new_key))
+    }));
+    assert_eq!(upgraded["upgrades"][0]["outcome"], "upgraded");
+    assert_eq!(upgraded["upgrades"][0]["from"][0]["version"], "3.12.8");
+    assert_eq!(upgraded["upgrades"][0]["to"]["key"], new_key);
+    assert!(context.temp_dir.child("managed").child(&new_key).is_dir());
+
+    let after = report(&upgrade(&context, catalog.path()).arg("3.12").output()?, 0)?;
+    assert_eq!(upgraded["upgrades"][0]["to"], after["upgrades"][0]["to"]);
+    assert_eq!(after["upgrades"][0]["outcome"], "no_op");
+    Ok(())
+}
+
+#[test]
+fn python_upgrade_jsonl_partial_failure_keeps_completed_upgrade() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let old = python_fixture(&context, "cpython-3.12.8")?;
+    let new = python_fixture(&context, "cpython-3.12.9")?;
+    let new_key = new.key.clone();
+    let mut missing = python_metadata(&context, "cpython-3.13.1")?;
+    missing.metadata["url"] = json!(
+        Url::from_file_path(context.temp_dir.child("missing.tar.gz").path())
+            .map_err(|()| anyhow::anyhow!("failed to create missing archive URL"))?
+    );
+    missing.metadata["sha256"] = Value::Null;
+    let missing_key = missing.key.clone();
+    let catalog = write_catalog(&context, &[old, new, missing])?;
+    install(&context, catalog.path(), &["3.12.8"]);
+
+    let (stream, upgraded) = jsonl_report(
+        &jsonl_upgrade(&context, catalog.path())
+            .args(["3.13", "3.12"])
+            .output()?,
+        1,
+    )?;
+    assert!(!stream.progress.is_empty());
+    assert_eq!(upgraded["upgrades"][0]["request"], "3.12");
+    assert_eq!(upgraded["upgrades"][0]["outcome"], "upgraded");
+    assert_eq!(upgraded["upgrades"][0]["to"]["key"], new_key);
+    assert_eq!(upgraded["upgrades"][1]["request"], "3.13");
+    assert_eq!(upgraded["upgrades"][1]["outcome"], "failed");
+    assert_eq!(upgraded["upgrades"][1]["errors"][0]["kind"], "download");
+    assert!(context.temp_dir.child("managed").child(new_key).is_dir());
+    assert!(
+        !context
+            .temp_dir
+            .child("managed")
+            .child(missing_key)
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn python_upgrade_jsonl_quiet_and_no_progress() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let fixture = python_fixture(&context, "cpython-3.12.9")?;
+    let catalog = write_catalog(&context, &[fixture])?;
+    install(&context, catalog.path(), &["3.12.9"]);
+
+    for flag in ["--no-progress", "-q"] {
+        let output = jsonl_upgrade(&context, catalog.path())
+            .args(["3.12", "--reinstall", flag])
+            .output()?;
+        let (stream, report) = jsonl_report(&output, 0)?;
+        assert!(stream.progress.is_empty());
+        assert_eq!(report["upgrades"][0]["outcome"], "reinstalled");
+        if flag == "-q" {
+            assert!(output.stderr.is_empty());
+        }
+    }
+    let silent = jsonl_upgrade(&context, catalog.path())
+        .args(["3.12", "--reinstall", "-qq"])
+        .output()?;
+    assert!(silent.status.success());
+    let parsed = parse_upgrade_jsonl(&silent, JsonlResultExpectation::Forbidden)?;
+    assert!(parsed.progress.is_empty());
+    assert!(silent.stdout.is_empty());
+    assert!(silent.stderr.is_empty());
+    Ok(())
+}
+
+#[test]
+fn python_upgrade_jsonl_invalid_request_keeps_exit_status() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let fixture = python_metadata(&context, "cpython-3.12.9")?;
+    let catalog = write_catalog(&context, &[fixture])?;
+    let expected = report(
+        &upgrade(&context, catalog.path()).arg("3.12.9").output()?,
+        2,
+    )?;
+    let (stream, failed) = jsonl_report(
+        &jsonl_upgrade(&context, catalog.path())
+            .arg("3.12.9")
+            .output()?,
+        2,
+    )?;
+    assert!(stream.progress.is_empty());
+    assert_eq!(failed, expected);
+    assert_eq!(failed["upgrades"], json!([]));
+    assert_eq!(failed["errors"][0]["kind"], "operation");
+    Ok(())
+}
+
+#[test]
+fn python_upgrade_jsonl_bytecode_failure_matches_json() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let fixture = python_fixture(&context, "cpython-3.12.9")?;
+    let key = fixture.key.clone();
+    let catalog = write_catalog(&context, &[fixture])?;
+    install(&context, catalog.path(), &["3.12.9"]);
+    let installation = context.temp_dir.child("managed").child(key);
+    let executable = installation.child(if cfg!(windows) {
+        "python.exe"
+    } else {
+        "bin/python3.12"
+    });
+    executable.write_str("not a Python interpreter\n")?;
+
+    let expected = report(
+        &upgrade(&context, catalog.path())
+            .args(["3.12", "--compile-bytecode"])
+            .output()?,
+        2,
+    )?;
+    let (_, failed) = jsonl_report(
+        &jsonl_upgrade(&context, catalog.path())
+            .args(["3.12", "--compile-bytecode"])
+            .output()?,
+        2,
+    )?;
+    assert_eq!(failed, expected);
+    assert_eq!(failed["upgrades"][0]["errors"][0]["kind"], "bytecode");
+    assert_eq!(failed["errors"][0]["kind"], "bytecode");
+    assert!(installation.is_dir());
     Ok(())
 }
