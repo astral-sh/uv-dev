@@ -292,7 +292,11 @@ fn structured_locks_admit_only_the_generated_environment_policy() -> Result<()> 
         .reverse();
     assert!(validate_project(&project, &toml::to_string(&changed)?).is_err());
     let mut changed: toml::Value = toml::from_str(&pyproject)?;
-    changed["tool"]["uv"]["index-strategy"] = "unsafe-best-match".into();
+    let previous = changed["tool"]["uv"]
+        .as_table_mut()
+        .context("uv table")?
+        .insert("index-strategy".to_owned(), "unsafe-best-match".into());
+    assert!(previous.is_none());
     assert!(validate_project(&project, &toml::to_string(&changed)?).is_err());
     let mut overlapping = scenario;
     overlapping
