@@ -31,7 +31,19 @@ pub(crate) fn with_dnf<R>(
 ///
 /// We choose DNF as it is easier to simplify for user-facing output.
 pub(crate) fn to_dnf(tree: MarkerTree) -> Vec<Vec<MarkerExpression>> {
-    to_dnf_in(tree, Global)
+    with_arena(|allocator| to_owned_dnf_in(tree, allocator))
+}
+
+fn to_owned_dnf_in<A: Allocator + Copy>(
+    tree: MarkerTree,
+    allocator: A,
+) -> Vec<Vec<MarkerExpression>> {
+    // Public DNF values outlive the traversal arena. Move only the surviving
+    // clauses into ordinary owned vectors after simplification is complete.
+    to_dnf_in(tree, allocator)
+        .into_iter()
+        .map(|clause| clause.into_iter().collect())
+        .collect()
 }
 
 /// Returns a simplified DNF expression with clause storage allocated by `allocator`.
