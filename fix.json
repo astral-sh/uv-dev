@@ -1,0 +1,13 @@
+{
+  "outcome": "fixed",
+  "summary": "Archive installer metadata now serializes the credential-free original URL instead of its display-redacted form. The updated regression test verifies that query values and encoding remain intact and that repeated installation is a no-op.",
+  "validation": [
+    "cargo test --package uv --test pip_install direct_url_json_",
+    "cargo test --package uv --test pip incompatible_direct_url_redacts_credentials",
+    "cargo test --package uv-redacted redact_azure_sas_query_signature",
+    "cargo test --package uv-pypi-types direct_url_",
+    "cargo +stable fmt --all --check",
+    "cargo +stable clippy --package uv-pypi-types --all-targets -- -D warnings"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2108"
+}

@@ -12,7 +12,7 @@ Repository evidence corroborates the reported mechanism:
 
 - astral-sh/uv#21360 added `sig` to sensitive display parameters for the 0.12.8 release. Its stated contract and test require the original request URL to remain intact.
 - `DisplaySafeUrl` masks sensitive query values when formatted. If it encounters one, it rebuilds the complete query with a form serializer, which accounts for the observed encoding changes in neighboring parameters.
-- The `DirectUrl` conversion for a parsed archive currently calls the wrapped URL's display conversion when populating the string later serialized to `direct_url.json`. This crosses the display/persistence boundary and stores the masked representation.
+- Before the fix, the `DirectUrl` conversion for a parsed archive called the wrapped URL's display conversion when populating the string later serialized to `direct_url.json`. This crossed the display/persistence boundary and stored the masked representation.
 - Installer satisfaction checking parses the installed metadata URL and compares it with the requested canonical URL. Replacing a real query value with `****` makes those identities differ, so uv rejects its own installed distribution on every run.
 - astral-sh/uv#21755 independently added the same `sig` display rule in 0.12.16 without changing metadata construction. It therefore did not address the regression, consistent with the report through 0.12.18.
 
@@ -45,17 +45,36 @@ Observed results:
 
 This directly confirms both the first-bad boundary and the repeated-install plan described in astral-sh/uv#21969.
 
-Existing tests do not cover this end-to-end case:
+Before the parent regression test was added, nearby tests did not cover this end-to-end case:
 
 - `crates/uv-redacted/src/lib.rs::tests::redact_azure_sas_query_signature` checks display redaction only.
 - `crates/uv/tests/pip_install/pip_install.rs::direct_url_json_direct_url` checks `direct_url.json` for a direct URL without query parameters and does not perform a second install.
 - `crates/uv/tests/pip/pip_sync.rs::incompatible_direct_url_redacts_credentials` checks redaction in an error for an incompatible wheel; it never installs the wheel or reads `direct_url.json`.
 
+## Fix
+
+Outcome: **fixed**.
+
+The parent regression test in `crates/uv/tests/pip_install/pip_install.rs::direct_url_json_direct_url` initially passed while asserting the undesirable redacted metadata and reinstall plan. It was changed first to require the original synthetic query in `direct_url.json` and `Would make no changes` from the second dry run; that desired assertion failed because the installed metadata still contained the redacted, reserialized URL.
+
+The production change is limited to the archive `DirectUrl` producer in `crates/uv-pypi-types/src/parsed_url.rs`. It now serializes the parsed URL's credential-free underlying representation instead of formatting `DisplaySafeUrl`. This retains the original query, including its value and encoding, without persisting URL user information. Display and logging paths continue to redact sensitive query values.
+
+Neighboring producers and consumers were inspected. Git URL parsing intentionally removes query parameters before producing VCS metadata, while local path and directory forms did not provide another demonstrated manifestation of this failure. No additional test case was added. The existing direct-URL Git metadata tests, the incompatible-wheel display-redaction test, the Azure query-redaction test, and the parsed/direct URL conversion tests continue to pass.
+
+Successful focused validation:
+
+- `cargo test --package uv --test pip_install direct_url_json_`
+- `cargo test --package uv --test pip incompatible_direct_url_redacts_credentials`
+- `cargo test --package uv-redacted redact_azure_sas_query_signature`
+- `cargo test --package uv-pypi-types direct_url_`
+- `cargo +stable fmt --all --check`
+- `cargo +stable clippy --package uv-pypi-types --all-targets -- -D warnings`
+
 ## Draft response
 
-Thanks for the clear reproduction. This is a bug introduced by the `sig` display-redaction change in astral-sh/uv#21360. The current metadata path formats the wrapped URL when constructing `direct_url.json`, so the display-only redaction is persisted as `sig=****` and the query is reserialized. The next satisfaction check compares that stored URL with the requested URL and treats the installed distribution as mismatched.
+Thanks for the clear reproduction. This is a bug introduced by the `sig` display-redaction change in astral-sh/uv#21360. The metadata path formatted the wrapped URL when constructing `direct_url.json`, so the display-only redaction was persisted as `sig=****` and the query was reserialized. The next satisfaction check compared that stored URL with the requested URL and treated the installed distribution as mismatched.
 
-astral-sh/uv#11082 and astral-sh/uv#11088 addressed a related path percent-encoding comparison, but not replacement of a query value. The next step is to preserve the original URL serialization when writing `direct_url.json` while retaining redaction in logs and user-facing output, with an integration test that installs the same signed direct URL twice and verifies the second install and dry run are no-ops.
+astral-sh/uv#11082 and astral-sh/uv#11088 addressed a related path percent-encoding comparison, but not replacement of a query value. The fix now preserves the credential-free original URL serialization when writing `direct_url.json` while retaining redaction in logs and user-facing output. The integration regression test verifies both the stored metadata and that a second dry run is a no-op.
 
 ## Classification
 
@@ -75,3 +94,5 @@ This is not a duplicate. astral-sh/uv#11082 covered a different URL-representati
 Searches covered open and closed issues and open, closed, and merged pull requests. Literal searches used `direct_url.json`, `sig=****`, 0.12.8, astral-sh/uv#21360, repeated reinstall wording, and `Would make no changes`. Conceptual searches covered direct-URL satisfaction and idempotence, Azure SAS and shared-access URLs, `DisplaySafeUrl`, credential and query redaction, URL normalization, and percent encoding. Fix-oriented checks included the 0.12.x changelog, merged redaction changes, and the resolution chain for astral-sh/uv#11082.
 
 Plausible candidates were inspected and ruled out: astral-sh/uv#17711 and astral-sh/uv#15832 concern mismatched wheel tags; astral-sh/uv#10359 concerns Azure index cache headers and SAS cache churn; astral-sh/uv#13560 and astral-sh/uv#13791 concern the broader display-safe URL migration and export behavior, not installed direct-URL identity.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/2108
