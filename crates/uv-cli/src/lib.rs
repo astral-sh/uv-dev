@@ -71,6 +71,8 @@ pub enum PythonUpgradeFormat {
     Text,
     /// JSON (for computers).
     Json,
+    /// Newline-delimited JSON, including progress updates.
+    Jsonl,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -237,6 +239,9 @@ impl Cli {
             Commands::Python(PythonNamespace {
                 command: PythonCommand::List(args),
             }) => matches!(args.output_format, PythonListFormat::Jsonl),
+            Commands::Python(PythonNamespace {
+                command: PythonCommand::Upgrade(args),
+            }) => matches!(args.output_format, PythonUpgradeFormat::Jsonl),
             Commands::Self_(SelfNamespace {
                 command:
                     SelfCommand::Version {
@@ -6600,7 +6605,7 @@ pub struct PythonUpgradeArgs {
 
     /// The format of the completed upgrade report.
     ///
-    /// The JSON schema is experimental and may change without warning.
+    /// The JSON and JSONL schemas are experimental and may change without warning.
     #[arg(long, value_enum, default_value_t = PythonUpgradeFormat::default())]
     pub output_format: PythonUpgradeFormat,
 
