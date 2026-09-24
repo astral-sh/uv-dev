@@ -1,11 +1,9 @@
-use std::cell::Cell;
 use std::fmt;
 use std::ops::Bound;
 
 use allocator_api2::alloc::{Allocator, Global};
 use allocator_api2::vec::Vec;
 use arcstr::ArcStr;
-use bumpalo::Bump;
 use indexmap::IndexMap;
 use itertools::{Either, Itertools};
 use rustc_hash::FxBuildHasher;
@@ -16,28 +14,12 @@ use uv_pep440::{Version, VersionSpecifier};
 use crate::marker::tree::ContainerOperator;
 use crate::{ExtraOperator, MarkerExpression, MarkerOperator, MarkerTree, MarkerTreeKind};
 
-thread_local! {
-    static DNF_ARENA: Cell<Option<Bump>> = const { Cell::new(None) };
-}
-
 /// Use temporary DNF clauses, then release their storage together.
 pub(crate) fn with_dnf<R>(
     tree: MarkerTree,
-    use_dnf: impl FnOnce(&[Vec<MarkerExpression, &Bump>]) -> R,
+    use_dnf: impl FnOnce(&[Vec<MarkerExpression>]) -> R,
 ) -> R {
-    // Removing the arena lets nested formatting and thread-local destructors use their own.
-    let mut arena = DNF_ARENA
-        .try_with(Cell::take)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let result = use_dnf(&to_dnf_in(tree, &arena));
-    // Reuse ordinary clause storage without retaining unusually large diagrams.
-    if arena.allocated_bytes() <= 64 * 1024 {
-        arena.reset();
-        let _ = DNF_ARENA.try_with(|slot| slot.set(Some(arena)));
-    }
-    result
+    use_dnf(&to_dnf_in(tree, Global))
 }
 
 /// Returns a simplified DNF expression for a given marker tree.
