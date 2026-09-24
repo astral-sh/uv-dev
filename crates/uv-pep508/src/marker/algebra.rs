@@ -45,16 +45,19 @@
 //! or a terminal `true`/`false` node. Interning allows the reduction rule that isomorphic nodes are
 //! merged to be applied globally.
 
+use std::alloc::Allocator;
 use std::cmp::Ordering;
 use std::fmt;
 use std::ops::Bound;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use arcstr::ArcStr;
+use hashbrown::HashMap;
 use itertools::{Either, Itertools};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use version_ranges::Ranges;
 
+use uv_allocator::with_arena;
 use uv_pep440::{Operator, Version, VersionPattern, VersionSpecifier, release_specifier_to_range};
 
 use crate::marker::MarkerValueExtra;
@@ -576,15 +579,24 @@ impl InternerGuard<'_> {
     /// outside of `assumption` is unspecified, which lets us eliminate decisions that are only
     /// needed to restate the assumption.
     pub(crate) fn restrict(&mut self, value: NodeId, assumption: NodeId) -> NodeId {
-        let mut cache = FxHashMap::default();
-        self.restrict_cached(value, assumption, &mut cache)
+        with_arena(|allocator| self.restrict_in(value, assumption, allocator))
     }
 
-    fn restrict_cached(
+    fn restrict_in<A: Allocator>(
         &mut self,
         value: NodeId,
         assumption: NodeId,
-        cache: &mut FxHashMap<(NodeId, NodeId), NodeId>,
+        allocator: A,
+    ) -> NodeId {
+        let mut cache = HashMap::with_hasher_in(FxBuildHasher, allocator);
+        self.restrict_cached(value, assumption, &mut cache)
+    }
+
+    fn restrict_cached<A: Allocator>(
+        &mut self,
+        value: NodeId,
+        assumption: NodeId,
+        cache: &mut HashMap<(NodeId, NodeId), NodeId, FxBuildHasher, A>,
     ) -> NodeId {
         if assumption.is_true() || matches!(value, NodeId::TRUE | NodeId::FALSE) {
             return value;
