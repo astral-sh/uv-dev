@@ -410,8 +410,9 @@ impl InternerGuard<'_> {
             "`and_nontrivial` requires a non-trivial conjunction"
         );
 
-        // The operation was memoized.
-        if let Some(result) = self.state.cache.get(&(xi, yi)) {
+        // Conjunction is commutative, so either operand order shares one entry.
+        let key = if xi < yi { (xi, yi) } else { (yi, xi) };
+        if let Some(result) = self.state.cache.get(&key) {
             return *result;
         }
 
@@ -463,7 +464,7 @@ impl InternerGuard<'_> {
         //
         // ADDs often contain duplicated subgraphs in distinct branches due to the restricted
         // variable ordering. Memoizing allows ADD operations to remain polynomial time.
-        self.state.cache.insert((xi, yi), node);
+        self.state.cache.insert(key, node);
 
         node
     }
@@ -2045,6 +2046,26 @@ mod tests {
             assert_eq!(complement.0, node.not().0);
         }
         assert_eq!(interner.shared.nodes.count(), count);
+    }
+
+    #[test]
+    fn conjunction_cache_is_commutative() {
+        let interner = Interner::default();
+        let mut guard = interner.lock();
+        let left = guard.expression(
+            MarkerExpression::from_str("python_version >= '3.10'")
+                .unwrap()
+                .unwrap(),
+        );
+        let right = guard.expression(
+            MarkerExpression::from_str("extra == 'test'")
+                .unwrap()
+                .unwrap(),
+        );
+        let result = guard.and(left, right);
+        let entries = guard.state.cache.len();
+        assert_eq!(guard.and(right, left).0, result.0);
+        assert_eq!(guard.state.cache.len(), entries);
     }
 
     #[test]
