@@ -112,7 +112,7 @@ pub(crate) fn pip_show(
         )?;
     }
 
-    let distributions = distributions.iter().flatten().collect_vec();
+    let distributions = distributions.into_iter().flatten().collect_vec();
 
     // Like `pip`, if no packages were found, return a failure.
     if distributions.is_empty() {
@@ -123,27 +123,32 @@ pub(crate) fn pip_show(
     // Required-by field which needs to iterate over other installed packages' metadata.
     // To prevent the need to parse metadata repeatedly when multiple packages need to be shown,
     // we parse the metadata once and collect the needed data beforehand.
+    // Distinct installed versions can have the same normalized name. Key metadata by its
+    // installed path so each displayed distribution retains its own requirements.
     let mut requires_map = FxHashMap::default();
     // For Requires field
     for dist in &distributions {
         if let Some(metadata) = optional_metadata(dist.read_metadata())? {
             requires_map.insert(
-                dist.name(),
-                metadata
-                    .requires_dist
-                    .iter()
-                    .filter(|req| req.evaluate_markers(&markers, &[]))
-                    .map(|req| &req.name)
-                    .sorted_unstable()
-                    .dedup()
-                    .collect_vec(),
+                dist.install_path(),
+                (
+                    dist.name(),
+                    metadata
+                        .requires_dist
+                        .iter()
+                        .filter(|req| req.evaluate_markers(&markers, &[]))
+                        .map(|req| &req.name)
+                        .sorted_unstable()
+                        .dedup()
+                        .collect_vec(),
+                ),
             );
         }
     }
     // For Required-by field
     if !requires_map.is_empty() {
         for installed in site_packages.iter() {
-            if requires_map.contains_key(installed.name()) {
+            if requires_map.contains_key(installed.install_path()) {
                 continue;
             }
             if let Some(metadata) = optional_metadata(installed.read_metadata())? {
@@ -154,7 +159,7 @@ pub(crate) fn pip_show(
                     .map(|req| &req.name)
                     .collect_vec();
                 if !requires.is_empty() {
-                    requires_map.insert(installed.name(), requires);
+                    requires_map.insert(installed.install_path(), (installed.name(), requires));
                 }
             }
         }
@@ -171,9 +176,9 @@ pub(crate) fn pip_show(
             let required_by = required_by_map.entry(distribution.name()).or_default();
             required_by.extend(
                 requires_map
-                    .iter()
+                    .values()
                     .filter(|(name, requires)| {
-                        **name != distribution.name()
+                        *name != distribution.name()
                             && requires
                                 .iter()
                                 .any(|requirement| *requirement == distribution.name())
@@ -182,7 +187,7 @@ pub(crate) fn pip_show(
             );
         }
     } else {
-        for (name, requires) in &requires_map {
+        for (name, requires) in requires_map.values() {
             for requirement in requires {
                 if requirement != name
                     && let Some(required_by) = required_by_map.get_mut(requirement)
@@ -251,7 +256,7 @@ pub(crate) fn pip_show(
         }
 
         // If available, print the requirements.
-        if let Some(requires) = requires_map.get(distribution.name()) {
+        if let Some((_, requires)) = requires_map.get(distribution.install_path()) {
             if requires.is_empty() {
                 writeln!(printer.stdout(), "Requires:")?;
             } else {
