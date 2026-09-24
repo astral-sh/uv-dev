@@ -6,6 +6,7 @@ use std::hint::black_box;
 use std::ops::Bound;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main, measurement::WallTime};
+use uv_pep440::Version;
 use uv_pep508::{MarkerTree, MarkerTreeContents};
 
 fn collect_markers(value: &toml::Value, markers: &mut Vec<MarkerTreeContents>) {
@@ -150,5 +151,24 @@ fn format_markers(criterion: &mut Criterion<WallTime>) {
     group.finish();
 }
 
-criterion_group!(uv_pep508, format_markers);
+fn simplify_python_markers(criterion: &mut Criterion<WallTime>) {
+    let mut markers = Vec::new();
+    for contents in [include_str!("../../../uv.lock"), include_str!("../../../scripts/benchmarks/uv.lock")] {
+        collect_markers(&toml::from_str(contents).unwrap(), &mut markers);
+    }
+    let lower = Version::new([3, 9]);
+    let upper = Version::new([3, 14]);
+    let mut group = criterion.benchmark_group("marker_simplify_python_versions");
+    group.throughput(Throughput::Elements(markers.len() as u64));
+    group.bench_function("lockfiles", |benchmark| {
+        benchmark.iter(|| {
+            for marker in &markers {
+                black_box(marker.as_ref().simplify_python_versions(Bound::Included(&lower), Bound::Excluded(&upper)));
+            }
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(uv_pep508, format_markers, simplify_python_markers);
 criterion_main!(uv_pep508);

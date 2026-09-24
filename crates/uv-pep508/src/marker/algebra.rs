@@ -772,6 +772,17 @@ impl InternerGuard<'_> {
             children: Edges::Version { edges },
         } = node
         else {
+            // Descendants have strictly later variables. These Boolean variables
+            // follow Python versions, so their subtrees cannot depend on the bounds.
+            if matches!(
+                node.var,
+                Variable::In { .. }
+                    | Variable::Contains { .. }
+                    | Variable::Extra(_)
+                    | Variable::List(_)
+            ) {
+                return i;
+            }
             // Simplify all nodes recursively.
             let children = node.children.map(i, |node_id| {
                 self.simplify_python_versions(node_id, py_lower, py_upper)
