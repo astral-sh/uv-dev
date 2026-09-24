@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21360,
+        "title": "Redact Azure shared access signatures in URLs",
+        "url": "https://github.com/astral-sh/uv/pull/21360",
+        "state": "merged",
+        "reason": "astral-sh/uv#21360 is the release-timed trigger: it added `sig` to display redaction for 0.12.8 while explicitly stating that formatting must not alter the URL used for requests."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21755,
+        "title": "Redact Azure shared access signatures in displayed URLs",
+        "url": "https://github.com/astral-sh/uv/pull/21755",
+        "state": "merged",
+        "reason": "astral-sh/uv#21755 independently added the same display rule in 0.12.16 without changing `direct_url.json` construction, so it did not fix the persistence and satisfaction regression reported through 0.12.18."
+      },
+      {
+        "kind": "issue",
+        "number": 11082,
+        "title": "uv encodes `direct_url.json` content differently than pip",
+        "url": "https://github.com/astral-sh/uv/issues/11082",
+        "state": "closed",
+        "reason": "astral-sh/uv#11082 is the closest prior metadata-identity symptom: differing percent-encoding in `direct_url.json` caused an unnecessary reinstall. It involved a local file path and pip-to-uv interoperability, not repeated `sig` redaction after uv’s own install."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11088,
+        "title": "Percent-decode URLs in canonical comparisons",
+        "url": "https://github.com/astral-sh/uv/pull/11088",
+        "state": "merged",
+        "reason": "astral-sh/uv#11088 fixed astral-sh/uv#11082 by normalizing percent-encoding in URL paths during comparisons. It is adjacent precedent, but it does not prevent a query value from being replaced with `****` before metadata is written."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms for `direct_url.json`, `sig=****`, 0.12.8, astral-sh/uv#21360, repeated reinstall output, and “Would make no changes”; conceptual terms for direct-URL satisfaction/idempotence, Azure SAS/shared-access URLs, `DisplaySafeUrl`, credential/query redaction, URL normalization, and percent encoding; and fix-oriented release/history searches. Inspected astral-sh/uv#17711 and astral-sh/uv#15832 but ruled them out because their repeated reinstalls come from inconsistent wheel tags; astral-sh/uv#10359 concerns Azure index cache headers/SAS cache churn; astral-sh/uv#13560 and astral-sh/uv#13791 concern broader credential-display/export behavior rather than installed direct-URL identity. No open issue or pull request already tracks this `sig` metadata regression."
+  },
+  "type": "bug",
+  "type_reason": "This is a source-corroborated regression, not a duplicate. The current direct-URL metadata conversion obtains the URL through the redacting display representation, and installer satisfaction checking later compares the persisted URL with the requested URL. Since astral-sh/uv#21360 added `sig` display redaction in 0.12.8, uv can persist `sig=****` and then reject its own installed metadata on every run. The earlier astral-sh/uv#11082 was fixed for path percent-encoding and does not track this regression; no open item does.",
+  "summary": "The closest cause-level items are merged display-redaction changes astral-sh/uv#21360 and astral-sh/uv#21755. The closest historical symptom is astral-sh/uv#11082, fixed by astral-sh/uv#11088 for path encoding rather than redacted query values. No existing tracker covers the same regression.",
+  "draft_response": "Thanks for the clear reproduction. This is a bug introduced by the `sig` display-redaction change in astral-sh/uv#21360. The current metadata path formats the wrapped URL when constructing `direct_url.json`, so the display-only redaction is persisted as `sig=****` and the query is reserialized. The next satisfaction check compares that stored URL with the requested URL and treats the installed distribution as mismatched. astral-sh/uv#11082 and astral-sh/uv#11088 addressed a related path percent-encoding comparison, but not replacement of a query value. The next step is to preserve the original URL serialization when writing `direct_url.json` while retaining redaction in logs and user-facing output, with an integration test that installs the same signed direct URL twice and verifies the second install and dry run are no-ops."
+}
