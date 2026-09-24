@@ -1,0 +1,1 @@
+{"author":{"id":"MDQ6VXNlcjg4NTA1NA==","is_bot":false,"login":"wolfv","name":"Wolf Vollprecht"},"body":"Looks like #21540 made `FlatDistributions` private which we used in `pixi` to build a `VersionMap`. Would be amazing if we can make it public again :)","number":21964,"title":"uv no longer exports `FlatDistributions`","url":"https://github.com/astral-sh/uv/issues/21964"}
