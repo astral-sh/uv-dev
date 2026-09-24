@@ -3236,7 +3236,7 @@ impl VersionRequest {
             && request.matches_interpreter(&installation.interpreter)
     }
 
-    fn matches_build_name(&self, key: &PythonInstallationKey) -> bool {
+    pub(crate) fn matches_build_name(&self, key: &PythonInstallationKey) -> bool {
         self.build_request()
             .is_none_or(|build_request| build_request.matches_build_name(key))
     }

@@ -649,9 +649,11 @@ impl PythonDownloadRequest {
         &self,
         installation: &PythonInstallation,
     ) -> bool {
+        // The interpreter check determines version compatibility, including prerelease ranges.
+        // Only the build name needs to be checked against the installation key.
         if !self.version().map_or_else(
             || installation.key().build_name().is_none(),
-            |version| version.matches_installation_key(installation.key()),
+            |version| version.matches_build_name(installation.key()),
         ) {
             return false;
         }
