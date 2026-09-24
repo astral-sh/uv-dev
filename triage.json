@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11675,
+        "title": "uv sync --only-group and --no-extra still evaluates other package sources not specified, source = path",
+        "url": "https://github.com/astral-sh/uv/issues/11675",
+        "state": "open",
+        "reason": "Closest canonical match: sync evaluates an unavailable path source from a non-selected group or extra. Maintainers explain that all groups are resolved and recommend frozen mode when using an existing lockfile."
+      },
+      {
+        "kind": "issue",
+        "number": 11573,
+        "title": "uv requires platform-specific wheels to be present, even on different platforms",
+        "url": "https://github.com/astral-sh/uv/issues/11573",
+        "state": "closed",
+        "reason": "Exact precedent for locked mode inspecting an unavailable platform-specific path distribution. Maintainers confirmed that locked mode resolves to validate the lockfile and recommended frozen mode."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the exact errors and identifiers (`Distribution not found at`, `Failed to generate package metadata`, `--no-group`, `--no-sources-package`, dependency metadata and hashes), plus conceptual terms covering excluded groups, unavailable path/private sources, cross-platform distributions, lockfile validation, and frozen mode. No closer pull request was found. astral-sh/uv#9804 was redundant with the selected matches; astral-sh/uv#11104 concerns inaccessible private indexes; astral-sh/uv#13487 concerns cross-platform locking without group selection; and astral-sh/uv#21429 retains the missing path as a selected direct dependency."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#11675 already tracks the same underlying behavior: sync resolves a path source even when its group or extra is excluded from installation. The `--locked` condition does not establish a regression because current documentation and astral-sh/uv#11573 confirm that locked mode performs resolution to validate the lockfile.",
+  "summary": "astral-sh/uv#11675 is the closest open discussion, while astral-sh/uv#11573 confirms the exact locked-versus-frozen behavior for unavailable path distributions.",
+  "draft_response": "Thanks for the report. This matches astral-sh/uv#11675. `--no-group lab` excludes that group from the environment sync, but not from the resolution used to validate the lockfile. Since `--locked` asserts that the lockfile would remain unchanged after resolution, uv still inspects the declared path source. `--no-sources-package smaract-ctl` changes the source used for that resolution rather than removing the group, which is why uv then searches the registry.\n\nWhen the lockfile was generated where the archive is available, use `uv sync --frozen --no-group lab --no-progress` on machines where it is unavailable. `--frozen` uses the existing lockfile without validating it through another resolution, so dependency metadata should not be necessary. Let's keep the broader discussion in astral-sh/uv#11675."
+}
