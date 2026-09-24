@@ -7,7 +7,7 @@
 //! Then lowers them into a dependency specification.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Formatter;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -1027,6 +1027,19 @@ pub(crate) struct ToolUvWorkspace {
         "#
     )]
     pub(crate) members: Option<Vec<SerdePattern>>,
+    /// Workspace members to use as resolution roots.
+    ///
+    /// Other discovered members remain available to workspace sources, but only participate in
+    /// resolution when reached through a dependency. When omitted, every member is a root.
+    #[option(
+        default = "None",
+        value_type = "list[str]",
+        example = r#"
+            roots = ["root-a", "root-b"]
+        "#
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) roots: Option<BTreeSet<PackageName>>,
     /// Packages to exclude as workspace members. If a package matches both `members` and
     /// `exclude`, it will be excluded.
     ///
