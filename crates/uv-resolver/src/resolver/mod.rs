@@ -1,6 +1,6 @@
 //! Given a set of requirements, find a set of compatible packages.
 
-use std::alloc::Allocator;
+use std::alloc::{Allocator, Global};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -21,7 +21,6 @@ use tokio::sync::oneshot;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, info, instrument, trace, warn};
 
-use uv_allocator::with_arena;
 use uv_configuration::{Constraints, Excludes, Overrides};
 use uv_distribution::{ArchiveMetadata, DistributionDatabase};
 use uv_distribution_types::{
@@ -3924,7 +3923,7 @@ fn find_environments(id: Id<PubGrubPackage>, state: &State<UvDependencyProvider>
         return MarkerTree::TRUE;
     }
 
-    with_arena(|allocator| find_environments_in(id, state, allocator))
+    find_environments_in(id, state, Global)
 }
 
 fn find_environments_in<A: Allocator + Copy>(
