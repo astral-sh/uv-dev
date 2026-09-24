@@ -1439,6 +1439,24 @@ fn python_reinstall_missing_build_name() -> anyhow::Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python-managed")]
+fn python_reinstall_empty() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_filtered_latest_python_versions()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror();
+
+    uv_snapshot!(context.filters(), context.python_install().arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.[LATEST] in [TIME]
+     + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
+    ");
+}
+
+#[test]
 fn python_reinstall() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
@@ -2265,6 +2283,84 @@ fn python_install_preview_upgrade() {
             );
         });
     }
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_install_build_name_patch_alias() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_python_install_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+    let platform = platform_key_from_env()?;
+    let metadata: serde_json::Value = serde_json::from_str(&fs_err::read_to_string(
+        context
+            .workspace_root
+            .join("crates/uv-python/download-metadata.json"),
+    )?)?;
+    let mut downloads = serde_json::Map::new();
+    for patch in [7, 15] {
+        let key = format!("cpython-3.13.{patch}-{platform}");
+        let mut entry = metadata
+            .get(key.replace("-macos-", "-darwin-"))
+            .context("Missing bundled Python download")?
+            .clone();
+        let revision = entry
+            .as_object_mut()
+            .and_then(|fields| fields.remove("build"))
+            .context("Missing bundled build revision")?;
+        entry["build_revision"] = revision;
+        downloads.insert(key, entry.clone());
+        entry["build_name"] = serde_json::json!("custom");
+        downloads.insert(format!("custom-{patch}"), entry);
+    }
+    let catalog = context.temp_dir.child("downloads.json");
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1, "downloads": downloads
+    }))?)?;
+    let context = context.with_env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, catalog.path());
+    context
+        .python_install()
+        .args(["3.13", "3.13.7+custom", "--no-bin"])
+        .assert()
+        .success();
+
+    // Requesting a moving unnamed build must not make the named patch request upgradeable.
+    context
+        .python_install()
+        .args(["3.13", "3.13.7+custom", "--force"])
+        .assert()
+        .success();
+    let bin_python = context
+        .bin_dir
+        .child(format!("python3.13{}", std::env::consts::EXE_SUFFIX));
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(read_link(&bin_python), @"[TEMP_DIR]/managed/cpython-3.13.7+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]");
+    });
+
+    context
+        .python_install()
+        .args(["3.13.15+custom", "--no-bin"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str()).arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.13.7
+    ");
+
+    // A minor request for the named build explicitly opts its alias into patch tracking.
+    context
+        .python_install()
+        .args(["3.13+custom", "--force"])
+        .assert()
+        .success();
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(read_link(&bin_python), @"[TEMP_DIR]/managed/cpython-3.13+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]");
+    });
+    Ok(())
 }
 
 #[test]
