@@ -1,3 +1,4 @@
+use std::alloc::Allocator;
 use std::collections::BTreeSet;
 
 use owo_colors::OwoColorize;
@@ -5,6 +6,7 @@ use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
+use uv_allocator::with_arena;
 use uv_configuration::AnnotationStyle;
 use uv_distribution_types::{DistributionMetadata, Name, SourceAnnotation, SourceAnnotations};
 use uv_normalize::PackageName;
@@ -87,6 +89,16 @@ impl<'a> DisplayResolutionGraph<'a> {
 /// Write the graph in the `{name}=={version}` format of requirements.txt that pip uses.
 impl std::fmt::Display for DisplayResolutionGraph<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        with_arena(|allocator| self.fmt_in(f, allocator))
+    }
+}
+
+impl DisplayResolutionGraph<'_> {
+    fn fmt_in<A: Allocator + Copy>(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        allocator: A,
+    ) -> std::fmt::Result {
         // Determine the annotation sources for each package.
         let sources = if self.include_annotations {
             let mut sources = SourceAnnotations::default();
@@ -192,18 +204,16 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
         };
 
         // Collect all packages.
-        let mut nodes = graph
-            .node_indices()
-            .filter_map(|index| {
-                let dist = &graph[index];
-                let name = dist.name();
-                if self.no_emit_packages.contains(name) {
-                    return None;
-                }
+        let mut nodes = Vec::new_in(allocator);
+        nodes.extend(graph.node_indices().filter_map(|index| {
+            let dist = &graph[index];
+            let name = dist.name();
+            if self.no_emit_packages.contains(name) {
+                return None;
+            }
 
-                Some((index, dist))
-            })
-            .collect::<Vec<_>>();
+            Some((index, dist))
+        }));
 
         // Sort the nodes by name, but with editable packages first.
         nodes.sort_unstable_by_key(|(index, node)| (node.to_comparator(), *index));
@@ -234,11 +244,13 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
             if self.include_annotations {
                 // Display all dependents (i.e., all packages that depend on the current package).
                 let dependents = {
-                    let mut dependents = graph
-                        .edges_directed(index, Direction::Incoming)
-                        .map(|edge| &graph[edge.source()])
-                        .map(uv_distribution_types::Name::name)
-                        .collect::<Vec<_>>();
+                    let mut dependents = Vec::new_in(allocator);
+                    dependents.extend(
+                        graph
+                            .edges_directed(index, Direction::Incoming)
+                            .map(|edge| &graph[edge.source()])
+                            .map(uv_distribution_types::Name::name),
+                    );
                     dependents.sort_unstable();
                     dependents.dedup();
                     dependents
@@ -260,12 +272,14 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
                         }
                         dependents => {
                             let separator = if has_hashes { "\n    " } else { "  " };
-                            let dependents = dependents
-                                .iter()
-                                .map(ToString::to_string)
-                                .chain(source.iter().map(ToString::to_string))
-                                .collect::<Vec<_>>()
-                                .join(", ");
+                            let mut names = Vec::new_in(allocator);
+                            names.extend(
+                                dependents
+                                    .iter()
+                                    .map(ToString::to_string)
+                                    .chain(source.iter().map(ToString::to_string)),
+                            );
+                            let dependents = names.join(", ");
                             let comment = format!("# via {dependents}").green().to_string();
                             annotation = Some((separator, comment));
                         }
@@ -286,13 +300,15 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
                         }
                         dependents => {
                             let separator = "\n";
-                            let dependent = source
-                                .iter()
-                                .map(ToString::to_string)
-                                .chain(dependents.iter().map(ToString::to_string))
-                                .map(|name| format!("    #   {name}"))
-                                .collect::<Vec<_>>()
-                                .join("\n");
+                            let mut names = Vec::new_in(allocator);
+                            names.extend(
+                                source
+                                    .iter()
+                                    .map(ToString::to_string)
+                                    .chain(dependents.iter().map(ToString::to_string))
+                                    .map(|name| format!("    #   {name}")),
+                            );
+                            let dependent = names.join("\n");
                             let comment = format!("    # via\n{dependent}").green().to_string();
                             annotation = Some((separator, comment));
                         }
