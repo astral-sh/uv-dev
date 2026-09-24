@@ -1,5 +1,6 @@
 //! Given a set of requirements, find a set of compatible packages.
 
+use std::alloc::Allocator;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -10,15 +11,17 @@ use std::time::Instant;
 use std::{mem, thread};
 
 use futures::{FutureExt, StreamExt};
+use hashbrown::{HashMap as ScratchMap, HashSet as ScratchSet};
 use itertools::Itertools;
 use papaya::{HashMap, ResizeMode};
 use pubgrub::{Id, IncompId, Incompatibility, Kind, Ranges, State, Term};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use tokio::sync::mpsc::{self, Receiver};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, debug, info, instrument, trace, warn};
 
+use uv_allocator::with_arena;
 use uv_configuration::{Constraints, Excludes, Overrides};
 use uv_distribution::{ArchiveMetadata, DistributionDatabase};
 use uv_distribution_types::{
@@ -3921,10 +3924,19 @@ fn find_environments(id: Id<PubGrubPackage>, state: &State<UvDependencyProvider>
         return MarkerTree::TRUE;
     }
 
+    with_arena(|allocator| find_environments_in(id, state, allocator))
+}
+
+fn find_environments_in<A: Allocator + Copy>(
+    id: Id<PubGrubPackage>,
+    state: &State<UvDependencyProvider>,
+    allocator: A,
+) -> MarkerTree {
     // First, collect the reverse-dependency closure for the package. We limit the propagation
     // below to this subgraph so cycles in unrelated packages don't matter here.
-    let mut ancestors = FxHashSet::default();
-    let mut stack = vec![id];
+    let mut ancestors = ScratchSet::with_hasher_in(FxBuildHasher, allocator);
+    let mut stack = Vec::new_in(allocator);
+    stack.push(id);
     let mut root = None;
     ancestors.insert(id);
 
@@ -3955,7 +3967,7 @@ fn find_environments(id: Id<PubGrubPackage>, state: &State<UvDependencyProvider>
 
     // Propagate markers forward from the root through the collected subgraph. This reaches a
     // fixpoint even in the presence of cycles, unlike the recursive reverse walk above.
-    let mut environments = FxHashMap::default();
+    let mut environments = ScratchMap::with_hasher_in(FxBuildHasher, allocator);
     let mut queue = VecDeque::from([root]);
     environments.insert(root, MarkerTree::TRUE);
 

@@ -46,7 +46,7 @@ arcstr = { workspace = true }
 papaya = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
-hashbrown = { workspace = true }
+hashbrown = { workspace = true, features = ["nightly"] }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 jiff = { workspace = true, features = ["serde"] }
