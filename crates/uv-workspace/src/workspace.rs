@@ -826,9 +826,26 @@ impl Workspace {
         &self,
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<RequiresPythonSources, DependencyGroupError> {
+        self.requires_python_matching(groups, |name| self.is_resolution_root(name))
+    }
+
+    /// Returns the Python requirements for a selected set of workspace members.
+    pub fn requires_python_for(
+        &self,
+        groups: &DependencyGroupsWithDefaults,
+        packages: &[PackageName],
+    ) -> Result<RequiresPythonSources, DependencyGroupError> {
+        self.requires_python_matching(groups, |name| packages.contains(name))
+    }
+
+    fn requires_python_matching(
+        &self,
+        groups: &DependencyGroupsWithDefaults,
+        includes: impl Fn(&PackageName) -> bool,
+    ) -> Result<RequiresPythonSources, DependencyGroupError> {
         let mut requires = RequiresPythonSources::new();
         for (name, member) in self.packages() {
-            if !self.is_resolution_root(name) {
+            if !includes(name) {
                 continue;
             }
             // Get the top-level requires-python for this resolution root, which is always active
