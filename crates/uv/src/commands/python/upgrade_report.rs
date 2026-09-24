@@ -37,7 +37,7 @@ impl UpgradeReport {
         &mut self,
         key: &PythonInstallationKey,
         kind: UpgradeErrorKind,
-        message: String,
+        message: &str,
     ) {
         let key = key.to_string();
         for entry in &mut self.upgrades {
@@ -45,7 +45,7 @@ impl UpgradeReport {
                 entry.outcome = UpgradeOutcome::Failed;
                 entry.errors.push(UpgradeError {
                     kind,
-                    message: message.clone(),
+                    message: message.to_owned(),
                 });
             }
         }

@@ -339,7 +339,7 @@ pub(crate) async fn install(
         }
         if let Err(err) = &compiler_result {
             if let Some(key) = compiler_failed_key.as_ref() {
-                report.fail_installation(key, UpgradeErrorKind::Bytecode, format!("{err:#}"));
+                report.fail_installation(key, UpgradeErrorKind::Bytecode, &format!("{err:#}"));
             }
             report.errors.push(UpgradeError {
                 kind: UpgradeErrorKind::Bytecode,
@@ -809,7 +809,7 @@ async fn perform_install(
                     report.fail_installation(
                         download.key(),
                         UpgradeErrorKind::Download,
-                        format!("{err:#}"),
+                        &format!("{err:#}"),
                     );
                 }
                 errors.push((
@@ -858,7 +858,7 @@ async fn perform_install(
                 report.fail_installation(
                     installation.key(),
                     UpgradeErrorKind::Finalize,
-                    format!("{err:#}"),
+                    &format!("{err:#}"),
                 );
             }
             return Err(err.into());
@@ -900,7 +900,7 @@ async fn perform_install(
                 report.fail_installation(
                     installation.key(),
                     UpgradeErrorKind::MinorVersionLink,
-                    format!("{err:#}"),
+                    &format!("{err:#}"),
                 );
             }
             return Err(err.into());
@@ -2034,7 +2034,7 @@ mod tests {
                         .fail_installation(
                             keys[index],
                             UpgradeErrorKind::Download,
-                            err.to_string(),
+                            &err.to_string(),
                         );
                     observed_errors.push((index, err.kind()));
                     Ok(())
