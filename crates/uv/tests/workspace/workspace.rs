@@ -194,7 +194,7 @@ fn workspace_resolution_roots_relock() -> Result<()> {
     uv_snapshot!(context.filters(), context.export().arg("--frozen").arg("--package").arg("root-a"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Could not find root package `root-a`
+    error: Workspace member `root-a` has no independent locked resolution. Add it to `tool.uv.workspace.roots` and run `uv lock`.
     ");
 
     write_workspace(r#"roots = ["root-a", "root-b"]"#)?;

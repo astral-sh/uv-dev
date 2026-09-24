@@ -106,6 +106,14 @@ impl<'env> TreeDisplay<'env> {
                 })
                 .collect()
         };
+        let mut selected_roots = members
+            .iter()
+            .filter(|id| packages.contains(&id.name))
+            .map(|id| id.name.clone())
+            .collect::<BTreeSet<_>>();
+        if selected_roots.is_empty() {
+            selected_roots.extend(members.iter().map(|id| id.name.clone()));
+        }
 
         // Conflict extras and groups are encoded as marker expressions. Include the declared
         // mutual-exclusion constraints when checking whether a universal path is satisfiable.
@@ -173,8 +181,9 @@ impl<'env> TreeDisplay<'env> {
                     continue;
                 }
 
-                if markers
-                    .is_some_and(|markers| !dep.complexified_marker.evaluate_no_extras(markers))
+                let marker = dep.complexified_marker.select_roots(&selected_roots);
+                if marker.is_false()
+                    || markers.is_some_and(|markers| !marker.evaluate_no_extras(markers))
                 {
                     continue;
                 }
@@ -187,11 +196,7 @@ impl<'env> TreeDisplay<'env> {
                 graph.add_edge(
                     index,
                     dep_index,
-                    Edge::Dev(
-                        group,
-                        Some(RequestedExtras::Dependency(&dep.extra)),
-                        dep.complexified_marker,
-                    ),
+                    Edge::Dev(group, Some(RequestedExtras::Dependency(&dep.extra)), marker),
                 );
 
                 // Push its dependencies on the queue.
@@ -353,8 +358,9 @@ impl<'env> TreeDisplay<'env> {
                     continue;
                 }
 
-                if markers
-                    .is_some_and(|markers| !dep.complexified_marker.evaluate_no_extras(markers))
+                let marker = dep.complexified_marker.select_roots(&selected_roots);
+                if marker.is_false()
+                    || markers.is_some_and(|markers| !marker.evaluate_no_extras(markers))
                 {
                     continue;
                 }
@@ -368,16 +374,9 @@ impl<'env> TreeDisplay<'env> {
                     index,
                     dep_index,
                     if let Some(extra) = extra {
-                        Edge::Optional(
-                            extra,
-                            Some(RequestedExtras::Dependency(&dep.extra)),
-                            dep.complexified_marker,
-                        )
+                        Edge::Optional(extra, Some(RequestedExtras::Dependency(&dep.extra)), marker)
                     } else {
-                        Edge::Prod(
-                            Some(RequestedExtras::Dependency(&dep.extra)),
-                            dep.complexified_marker,
-                        )
+                        Edge::Prod(Some(RequestedExtras::Dependency(&dep.extra)), marker)
                     },
                 );
 
