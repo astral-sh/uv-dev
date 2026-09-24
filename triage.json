@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15238,
+        "title": "`uv sync` removes necessary dependencies when two packages include the same module",
+        "url": "https://github.com/astral-sh/uv/issues/15238",
+        "state": "open",
+        "reason": "Canonical match: maintainers confirmed that package files can be gone while the distribution’s `.dist-info` remains, causing later syncs to accept the package as installed. The open thread explicitly tracks incomplete-install detection and documents the same targeted `--reinstall-package` recovery."
+      },
+      {
+        "kind": "issue",
+        "number": 19412,
+        "title": "`uv sync` does not properly recover from an environment with faulty packages (opencv-contrib-python package problem)",
+        "url": "https://github.com/astral-sh/uv/issues/19412",
+        "state": "open",
+        "reason": "Independent reproduction of the same observable sync failure: package metadata survives after files are removed, and an ordinary `uv sync` does not repair the environment. Its confirmed trigger is overlapping OpenCV distributions, unlike the unconfirmed trigger here."
+      },
+      {
+        "kind": "issue",
+        "number": 16468,
+        "title": "uv remove followed by uv add leaves package in incomplete state with missing RECORD file and package files",
+        "url": "https://github.com/astral-sh/uv/issues/16468",
+        "state": "open",
+        "reason": "Closely adjacent incomplete-environment report where metadata remains and reinstall repairs the package. The important difference is that its `RECORD` is missing, while astral-sh/uv#21968 has a readable `RECORD` that lists the absent library."
+      },
+      {
+        "kind": "issue",
+        "number": 19683,
+        "title": "uv pip install uvicorn==0.41.0 silently drops the supervisors/ subpackage during wheel extraction. Five files listed in RECORD never appear on disk. pip install uvicorn==0.41.0 in the same venv extracts correctly.",
+        "url": "https://github.com/astral-sh/uv/issues/19683",
+        "state": "closed",
+        "reason": "Matches the `RECORD`-lists-missing-files symptom, but the reporter confirmed a stale/corrupt cache and closed it after a clean-cache install worked. Cache corruption is not established in astral-sh/uv#21968."
+      }
+    ],
+    "search_scope": "Searched all issue and pull-request states with literal terms including `libnccl.so.2`, `nvidia-nccl-cu13`, `RECORD`, missing installed/package files, `.dist-info`, `reinstall-package`, disk quota/full filesystem, and corrupt cache. Conceptual searches covered incomplete or broken environments, environment integrity/verification, package-file deletion, `uv sync` accepting installed metadata, and `uv pip check`. Fix-oriented searches and linked-thread inspection covered incomplete-install detection, cached-wheel validation, RECORD healing, overlapping-package uninstall behavior, and content-addressed archives. The strongest canonical result is open astral-sh/uv#15238. Open astral-sh/uv#16841 and closed astral-sh/uv#19562 concern invalid cached archives and were inspected but not included because they address a possible origin of corruption, not detection of missing files in an installed environment. Merged astral-sh/uv#18943 validates and heals `RECORD` against wheel contents before cache persistence; it does not validate an already-installed environment, so this is not evidence of a regression of that fix. No open, closed, or merged pull request implementing general installed-file integrity detection was found."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#15238 already tracks the same underlying problem: uv considers a distribution installed from its surviving metadata even when files named by that distribution are absent, and the maintainer explicitly left detection of incomplete installs open. The NCCL package and suspected full-filesystem/cache trigger are a new, unconfirmed path into that state, but the requested capability and subsequent `uv sync` behavior are the same. No prior merged fix for installed-environment file validation was found, so this is not an established regression.",
+  "summary": "astral-sh/uv#15238 is the canonical open discussion for detecting incomplete installations that ordinary sync accepts; astral-sh/uv#19412 corroborates the same sync behavior. astral-sh/uv#16468 and astral-sh/uv#19683 are adjacent missing-file reports with materially different `RECORD` and cache evidence.",
+  "draft_response": "Thanks for clearly separating the observed state from the suspected trigger. uv does not currently provide a command that validates every installed file against each distribution’s `RECORD`. `uv pip check` checks metadata and dependency compatibility, so it would not detect this missing-library state.\n\nThis is the same incomplete-install detection gap tracked in astral-sh/uv#15238: if package files are absent while the distribution metadata remains, a later sync can treat the package as installed. The current targeted recovery is the `--reinstall-package` command you used. Let’s centralize the behavior and any implementation work in astral-sh/uv#15238.\n\nThe full filesystem or a corrupt cache could explain how the library disappeared, but the available evidence does not establish either cause. If you can reproduce the transition into this state, please add the exact uv and Python versions plus verbose install and sync logs to astral-sh/uv#15238; that would help distinguish an installation/cache failure from later file removal."
+}
