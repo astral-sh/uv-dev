@@ -31,7 +31,7 @@ pub(crate) fn with_dnf<R>(
 ///
 /// We choose DNF as it is easier to simplify for user-facing output.
 pub(crate) fn to_dnf(tree: MarkerTree) -> Vec<Vec<MarkerExpression>> {
-    with_arena(|allocator| to_owned_dnf_in(tree, allocator))
+    to_owned_dnf_in(tree, Global)
 }
 
 fn to_owned_dnf_in<A: Allocator + Copy>(
