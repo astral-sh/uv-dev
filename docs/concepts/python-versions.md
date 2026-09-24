@@ -184,6 +184,15 @@ $ uv python upgrade
 After an upgrade, uv will prefer the new version, but will retain the existing version as it may
 still be used by virtual environments.
 
+For automation, `uv python upgrade --output-format json` writes a completed upgrade report to
+stdout. This preview format includes each requested version's outcome, the matching installations
+before the upgrade, the resulting installation, and executable links that were actually changed.
+Installation identities include the build separately, since a Python build can change without
+changing its version. The `from` installations are not necessarily removed. Failed requests are
+included alongside successful requests; operation-level errors also cover failures during
+finalization and optional bytecode compilation. The command retains its normal exit status. Use
+`--preview-features json-output` to suppress the experimental-format warning.
+
 Virtual environments using the Python version will be automatically upgraded to the new patch
 version.
 

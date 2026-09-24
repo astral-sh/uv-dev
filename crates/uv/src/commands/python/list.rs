@@ -20,6 +20,7 @@ use uv_python::{
 };
 
 use crate::commands::ExitStatus;
+use crate::commands::python::PythonVersionParts;
 use crate::printer::{Printer, jsonl_result_data};
 use crate::settings::PythonListKinds;
 
@@ -28,17 +29,6 @@ enum Kind {
     Download,
     Managed,
     System,
-}
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-struct PythonVersionParts {
-    #[cfg_attr(feature = "schemars", schemars(range(max = u64::MAX)))]
-    major: u64,
-    #[cfg_attr(feature = "schemars", schemars(range(max = u64::MAX)))]
-    minor: u64,
-    #[cfg_attr(feature = "schemars", schemars(range(max = u64::MAX)))]
-    patch: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -277,17 +267,11 @@ pub(crate) async fn list(
                         }
                     }
                     let version = key.version();
-                    let release = version.release();
 
                     Ok(PythonListEntry {
                         key: key.to_string(),
                         version: version.version().clone(),
-                        #[expect(clippy::get_first)]
-                        version_parts: PythonVersionParts {
-                            major: release.get(0).copied().unwrap_or(0),
-                            minor: release.get(1).copied().unwrap_or(0),
-                            patch: release.get(2).copied().unwrap_or(0),
-                        },
+                        version_parts: (*key).into(),
                         path: path_or_none,
                         symlink: symlink_or_none,
                         url: url_or_none,

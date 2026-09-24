@@ -20,9 +20,9 @@ use uv_cli::{
     PipCompileArgs, PipFreezeArgs, PipInstallArgs, PipListArgs, PipShowArgs, PipSyncArgs,
     PipTreeArgs, PipUninstallArgs, ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs,
     PythonListArgs, PythonListFormat, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs,
-    RemoveArgs, RunArgs, SyncArgs, SyncFormat, ToolAuditArgs, ToolDirArgs, ToolInstallArgs,
-    ToolListArgs, ToolListFormat, ToolRunArgs, ToolUninstallArgs, TreeArgs, TreeFormat,
-    UpgradeArgs, VenvArgs, VersionArgs, VersionBumpSpec, VersionFormat,
+    PythonUpgradeFormat, RemoveArgs, RunArgs, SyncArgs, SyncFormat, ToolAuditArgs, ToolDirArgs,
+    ToolInstallArgs, ToolListArgs, ToolListFormat, ToolRunArgs, ToolUninstallArgs, TreeArgs,
+    TreeFormat, UpgradeArgs, VenvArgs, VersionArgs, VersionBumpSpec, VersionFormat,
 };
 use uv_cli::{
     AuthorFrom, BuildArgs, BuildOptionsArgs, CheckArgs, ExcludeNewerArgs, ExportArgs, FormatArgs,
@@ -1728,6 +1728,7 @@ impl PythonInstallSettings {
 pub(crate) struct PythonUpgradeSettings {
     pub(crate) install_dir: Option<PathBuf>,
     pub(crate) targets: Vec<String>,
+    pub(crate) output_format: PythonUpgradeFormat,
     pub(crate) force: bool,
     pub(crate) registry: Option<bool>,
     pub(crate) python_install_mirror: Option<String>,
@@ -1775,6 +1776,7 @@ impl PythonUpgradeSettings {
         let PythonUpgradeArgs {
             install_dir,
             targets,
+            output_format,
             mirror: _,
             pypy_mirror: _,
             reinstall,
@@ -1785,6 +1787,7 @@ impl PythonUpgradeSettings {
         Ok(Self {
             install_dir,
             targets,
+            output_format,
             force,
             registry,
             python_install_mirror,
