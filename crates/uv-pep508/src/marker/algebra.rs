@@ -1505,23 +1505,37 @@ impl Edges {
         T: Ord + Clone,
     {
         let mut edges = SmallVec::new();
+        let mut next = Bound::Unbounded;
 
-        // Add the `true` edges.
+        // The ranges are already ordered. Emit each gap before its matching
+        // interval, avoiding a separately allocated complement and a sort.
         for (start, end) in range.iter() {
-            let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
-            edges.push((range, NodeId::TRUE));
+            let gap_end = match start {
+                Bound::Included(value) => Some(Bound::Excluded(value.clone())),
+                Bound::Excluded(value) => Some(Bound::Included(value.clone())),
+                Bound::Unbounded => None,
+            };
+            if let Some(gap_end) = gap_end {
+                let gap = Ranges::from_range_bounds((next, gap_end));
+                if !gap.is_empty() {
+                    edges.push((gap, NodeId::FALSE));
+                }
+            }
+            edges.push((
+                Ranges::from_range_bounds((start.cloned(), end.cloned())),
+                NodeId::TRUE,
+            ));
+            next = match end {
+                Bound::Included(value) => Bound::Excluded(value.clone()),
+                Bound::Excluded(value) => Bound::Included(value.clone()),
+                Bound::Unbounded => return edges,
+            };
         }
 
-        // Add the `false` edges.
-        for (start, end) in range.complement().iter() {
-            let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
-            edges.push((range, NodeId::FALSE));
-        }
-
-        // Sort the ranges.
-        //
-        // The ranges are disjoint so we don't care about equality.
-        edges.sort_by(|(range1, _), (range2, _)| compare_disjoint_range_start(range1, range2));
+        edges.push((
+            Ranges::from_range_bounds((next, Bound::Unbounded)),
+            NodeId::FALSE,
+        ));
         edges
     }
 
@@ -1897,26 +1911,6 @@ fn python_version_to_full_version(specifier: VersionSpecifier) -> Result<Version
     }
 }
 
-/// Compares the start of two ranges that are known to be disjoint.
-fn compare_disjoint_range_start<T>(range1: &Ranges<T>, range2: &Ranges<T>) -> Ordering
-where
-    T: Ord,
-{
-    let (upper1, _) = range1.bounding_range().unwrap();
-    let (upper2, _) = range2.bounding_range().unwrap();
-
-    match (upper1, upper2) {
-        (Bound::Unbounded, _) => Ordering::Less,
-        (_, Bound::Unbounded) => Ordering::Greater,
-        (Bound::Included(v1), Bound::Excluded(v2)) if v1 == v2 => Ordering::Less,
-        (Bound::Excluded(v1), Bound::Included(v2)) if v1 == v2 => Ordering::Greater,
-        // Note that the ranges are disjoint, so their lower bounds cannot be equal.
-        (Bound::Included(v1) | Bound::Excluded(v1), Bound::Included(v2) | Bound::Excluded(v2)) => {
-            v1.cmp(v2)
-        }
-    }
-}
-
 /// Returns `true` if two disjoint ranges can be conjoined seamlessly without introducing a gap.
 fn can_conjoin<T>(range1: &Ranges<T>, range2: &Ranges<T>) -> bool
 where
@@ -1956,15 +1950,72 @@ impl fmt::Debug for NodeId {
 
 #[cfg(test)]
 mod tests {
-    use uv_pep440::{Version, VersionSpecifier};
+    use std::ops::Bound;
 
-    use super::{INTERNER, Interner, NodeId};
+    use uv_pep440::{Version, VersionSpecifier};
+    use version_ranges::Ranges;
+
+    use super::{Edges, INTERNER, Interner, NodeId, can_conjoin};
     use crate::{MarkerExpression, MarkerValueVersion};
 
     fn expr(s: &str) -> NodeId {
         INTERNER
             .lock()
             .expression(MarkerExpression::from_str(s).unwrap().unwrap())
+    }
+
+    #[test]
+    fn ordered_range_edges_partition_the_domain() {
+        let bounds = [
+            Bound::Unbounded,
+            Bound::Included(-2),
+            Bound::Excluded(-2),
+            Bound::Included(0),
+            Bound::Excluded(0),
+            Bound::Included(2),
+            Bound::Excluded(2),
+        ];
+        for lower in bounds {
+            for upper in bounds {
+                let range = Ranges::<i32>::from_range_bounds((lower, upper))
+                    .union(&Ranges::singleton(-4))
+                    .union(&Ranges::singleton(4));
+                let edges = Edges::from_range(&range);
+                assert!(
+                    edges
+                        .windows(2)
+                        .all(|pair| can_conjoin(&pair[0].0, &pair[1].0))
+                );
+                let mut true_range = Ranges::empty();
+                let mut false_range = Ranges::empty();
+                for (index, (edge, child)) in edges.iter().enumerate() {
+                    assert!(!edge.is_empty());
+                    assert_eq!(edge.iter().count(), 1);
+                    for (previous, _) in &edges[..index] {
+                        assert!(previous.is_disjoint(edge));
+                    }
+                    if child.is_true() {
+                        true_range = true_range.union(edge);
+                    } else {
+                        assert!(child.is_false());
+                        false_range = false_range.union(edge);
+                    }
+                }
+                assert_eq!(true_range, range);
+                assert_eq!(false_range, range.complement());
+                for value in -5..=5 {
+                    assert_eq!(
+                        edges
+                            .iter()
+                            .filter(|(edge, _)| edge.contains(&value))
+                            .count(),
+                        1
+                    );
+                }
+            }
+        }
+        assert_eq!(Edges::from_range(&Ranges::<i32>::empty()).len(), 1);
+        assert_eq!(Edges::from_range(&Ranges::<i32>::full()).len(), 1);
     }
 
     #[test]
