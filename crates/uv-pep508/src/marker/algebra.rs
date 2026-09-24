@@ -47,12 +47,15 @@
 
 use std::cmp::Ordering;
 use std::fmt;
+use std::hash::BuildHasher;
 use std::ops::Bound;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use arcstr::ArcStr;
+use hashbrown::HashTable;
+use hashbrown::hash_table::Entry;
 use itertools::{Either, Itertools};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use version_ranges::Ranges;
 
 use uv_pep440::{Operator, Version, VersionPattern, VersionSpecifier, release_specifier_to_range};
@@ -90,9 +93,9 @@ pub(crate) struct InternerShared {
 /// The mutable [`Interner`] state, stored behind a lock.
 #[derive(Default)]
 struct InternerState {
-    /// A map from a [`Node`] to a unique [`NodeId`], representing an index
-    /// into [`InternerShared`].
-    unique: FxHashMap<Node, NodeId>,
+    /// Unique node IDs, hashed and compared through their immutable nodes in
+    /// [`InternerShared`].
+    unique: HashTable<NodeId>,
 
     /// A cache for `AND` operations between two nodes.
     /// Note that `OR` is implemented in terms of `AND`.
@@ -148,15 +151,20 @@ impl InternerGuard<'_> {
             return if flipped { first.not() } else { first };
         }
 
-        // Insert the node.
-        // Probing before inserting keeps the clone off the common path where an isomorphic node
-        // has already been interned. Cloning a [`Node`] copies every outgoing edge range.
-        let id = if let Some(&id) = self.state.unique.get(&node) {
-            id
-        } else {
-            let id = NodeId::new(self.shared.nodes.push(node.clone()), false);
-            self.state.unique.insert(node, id);
-            id
+        // The shared store owns each node. The index only needs its ID, so new
+        // nodes do not duplicate their outgoing edge ranges in the hash table.
+        let hash = FxBuildHasher.hash_one(&node);
+        let id = match self.state.unique.entry(
+            hash,
+            |id| self.shared.node(*id) == &node,
+            |id| FxBuildHasher.hash_one(self.shared.node(*id)),
+        ) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                let id = NodeId::new(self.shared.nodes.push(node), false);
+                entry.insert(id);
+                id
+            }
         };
 
         if flipped { id.not() } else { id }
@@ -1948,13 +1956,44 @@ impl fmt::Debug for NodeId {
 
 #[cfg(test)]
 mod tests {
-    use super::{INTERNER, NodeId};
-    use crate::MarkerExpression;
+    use uv_pep440::{Version, VersionSpecifier};
+
+    use super::{INTERNER, Interner, NodeId};
+    use crate::{MarkerExpression, MarkerValueVersion};
 
     fn expr(s: &str) -> NodeId {
         INTERNER
             .lock()
             .expression(MarkerExpression::from_str(s).unwrap().unwrap())
+    }
+
+    #[test]
+    fn interned_nodes_survive_index_growth() {
+        let interner = Interner::default();
+        let mut guard = interner.lock();
+        let nodes: Vec<_> = (0..128)
+            .map(|minor| {
+                guard.expression(MarkerExpression::Version {
+                    key: MarkerValueVersion::PythonFullVersion,
+                    specifier: VersionSpecifier::equals_version(Version::new([3, minor])),
+                })
+            })
+            .collect();
+        let count = interner.shared.nodes.count();
+        for (minor, node) in nodes.into_iter().enumerate() {
+            let version = Version::new([3, minor as u64]);
+            let duplicate = guard.expression(MarkerExpression::Version {
+                key: MarkerValueVersion::PythonFullVersion,
+                specifier: VersionSpecifier::equals_version(version.clone()),
+            });
+            let complement = guard.expression(MarkerExpression::Version {
+                key: MarkerValueVersion::PythonFullVersion,
+                specifier: VersionSpecifier::not_equals_version(version),
+            });
+            assert_eq!(duplicate.0, node.0);
+            assert_eq!(complement.0, node.not().0);
+        }
+        assert_eq!(interner.shared.nodes.count(), count);
     }
 
     #[test]
