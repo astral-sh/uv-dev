@@ -688,14 +688,18 @@ impl InternerGuard<'_> {
     /// this would return a marker
     /// `os_name == ... or sys_platform == ...`.
     pub(crate) fn without_extras(&mut self, i: NodeId) -> NodeId {
-        let mut cache = FxHashMap::default();
+        with_arena(|allocator| self.without_extras_in(i, allocator))
+    }
+
+    fn without_extras_in<A: Allocator>(&mut self, i: NodeId, allocator: A) -> NodeId {
+        let mut cache = HashMap::with_hasher_in(FxBuildHasher, allocator);
         self.without_extras_cached(i, &mut cache)
     }
 
-    fn without_extras_cached(
+    fn without_extras_cached<A: Allocator>(
         &mut self,
         mut i: NodeId,
-        cache: &mut FxHashMap<NodeId, NodeId>,
+        cache: &mut HashMap<NodeId, NodeId, FxBuildHasher, A>,
     ) -> NodeId {
         if matches!(i, NodeId::TRUE | NodeId::FALSE) {
             return i;
