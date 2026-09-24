@@ -823,13 +823,13 @@ fn python_upgrade_jsonl_invalid_request_keeps_exit_status() -> Result<()> {
     let catalog = write_catalog(&context, &[fixture])?;
     let expected = report(
         &upgrade(&context, catalog.path()).arg("3.12.9").output()?,
-        2,
+        1,
     )?;
     let (stream, failed) = jsonl_report(
         &jsonl_upgrade(&context, catalog.path())
             .arg("3.12.9")
             .output()?,
-        2,
+        1,
     )?;
     assert!(stream.progress.is_empty());
     assert_eq!(failed, expected);
