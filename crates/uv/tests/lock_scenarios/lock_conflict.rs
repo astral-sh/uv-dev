@@ -124,6 +124,20 @@ fn project_conflicts_with_explicit_workspace_roots() -> Result<()> {
     common-leaf==1.0.0
     shared-leaf==2.0.0
     ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("legacy")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("common")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    common-leaf==1.0.0
+    ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 0 (success)
@@ -198,6 +212,296 @@ fn project_conflicts_with_explicit_workspace_roots() -> Result<()> {
       ]
     ]
     "#);
+    Ok(())
+}
+
+/// A service can be exported from a composite virtual root without exporting its siblings.
+#[test]
+fn workspace_root_export_context_axes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(
+        r#"
+        name = "workspace-root-export-context-axes"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.sqlalchemy.versions."1.4.0"]
+        sdist = false
+        [packages.sqlalchemy.versions."2.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."3.0.0"]
+        sdist = false
+        [packages.sibling-leaf.versions."1.0.0"]
+        sdist = false
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [tool.uv]
+        conflicts = [[{ package = "context-a" }, { package = "context-b" }]]
+
+        [tool.uv.workspace]
+        members = ["axes/*", "services/*", "contexts/*"]
+        roots = ["context-a", "context-b", "context-common"]
+
+        [tool.uv.sources]
+        python-312 = { workspace = true }
+        python-313 = { workspace = true }
+        sqlalchemy-1 = { workspace = true }
+        sqlalchemy-2 = { workspace = true }
+        lib-1 = { workspace = true }
+        lib-2 = { workspace = true }
+        lib-3 = { workspace = true }
+        service-a = { workspace = true }
+        service-b = { workspace = true }
+        service-shared = { workspace = true }
+        "#,
+    )?;
+    for (name, requires_python, dependencies) in [
+        ("python-312", ">=3.12,<3.13", ""),
+        ("python-313", ">=3.13,<3.14", ""),
+        ("sqlalchemy-1", ">=3.12", "\"sqlalchemy>=1,<2\""),
+        ("sqlalchemy-2", ">=3.12", "\"sqlalchemy>=2,<3\""),
+        ("lib-1", ">=3.12", "\"shared-leaf>=1,<2\""),
+        ("lib-2", ">=3.12", "\"shared-leaf>=2,<3\""),
+        ("lib-3", ">=3.12", "\"shared-leaf>=3,<4\""),
+    ] {
+        context
+            .temp_dir
+            .child("axes")
+            .child(name)
+            .child("pyproject.toml")
+            .write_str(&format!(
+                r#"
+            [project]
+            name = "{name}"
+            version = "0.1.0"
+            requires-python = "{requires_python}"
+            dependencies = [{dependencies}]
+            [tool.uv]
+            package = false
+            "#,
+            ))?;
+    }
+    for (name, requires_python, dependencies) in [
+        (
+            "service-a",
+            ">=3.13,<3.14",
+            "\"sqlalchemy>=2,<3\", \"shared-leaf>=3,<4\"",
+        ),
+        (
+            "service-b",
+            ">=3.12,<3.13",
+            "\"sqlalchemy>=1,<2\", \"shared-leaf>=3,<4\"",
+        ),
+        (
+            "service-shared",
+            ">=3.12,<3.14",
+            "\"sqlalchemy>=1,<3\", \"shared-leaf>=1,<4\", \"sibling-leaf==1\"",
+        ),
+    ] {
+        context
+            .temp_dir
+            .child("services")
+            .child(name)
+            .child("pyproject.toml")
+            .write_str(&format!(
+                r#"
+            [project]
+            name = "{name}"
+            version = "0.1.0"
+            requires-python = "{requires_python}"
+            dependencies = [{dependencies}]
+            [tool.uv]
+            package = false
+            "#,
+            ))?;
+    }
+    for (name, requires_python, dependencies) in [
+        (
+            "context-a",
+            ">=3.13,<3.14",
+            "\"python-313\", \"sqlalchemy-2\", \"lib-3\", \"service-a\", \"service-shared\"",
+        ),
+        (
+            "context-b",
+            ">=3.12,<3.13",
+            "\"python-312\", \"sqlalchemy-1\", \"lib-3\", \"service-b\", \"service-shared\"",
+        ),
+        ("context-common", ">=3.13,<3.14", "\"service-a\""),
+    ] {
+        context
+            .temp_dir
+            .child("contexts")
+            .child(name)
+            .child("pyproject.toml")
+            .write_str(&format!(
+                r#"
+            [project]
+            name = "{name}"
+            version = "0.1.0"
+            requires-python = "{requires_python}"
+            dependencies = [{dependencies}]
+            [tool.uv]
+            package = false
+            "#,
+            ))?;
+    }
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 15 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url()).arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 15 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("service-a")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==3.0.0 ; python_full_version >= '3.13'
+    sqlalchemy==2.0.0 ; python_full_version >= '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("service-b")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==3.0.0 ; python_full_version < '3.13'
+    sqlalchemy==1.4.0 ; python_full_version < '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("service-shared")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `service-shared` has different dependency closures in workspace roots `context-a`, `context-b`; select one with `--resolution-root`
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("service-shared")
+        .arg("--resolution-root").arg("context-a")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==3.0.0 ; python_full_version >= '3.13'
+    sibling-leaf==1.0.0 ; python_full_version >= '3.13'
+    sqlalchemy==2.0.0 ; python_full_version >= '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("service-shared")
+        .arg("--resolution-root").arg("context-b")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==3.0.0 ; python_full_version < '3.13'
+    sibling-leaf==1.0.0 ; python_full_version < '3.13'
+    sqlalchemy==1.4.0 ; python_full_version < '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("service-a")
+        .arg("--resolution-root").arg("context-b")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `service-a` is not reachable from the selected resolution roots
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("service-shared")
+        .arg("--resolution-root").arg("context-a")
+        .arg("--resolution-root").arg("context-b")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `context-a` and package `context-b` are incompatible with the declared conflicts: {context-a, context-b}
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("service-a")
+        .arg("--resolution-root").arg("service-a")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `service-a` is not a locked workspace resolution root
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("service-shared")
+        .arg("--resolution-root").arg("context-common")
+        .arg("--resolution-root").arg("context-b")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The selected resolution roots have no common supported environment
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("service-a")
+        .arg("--package").arg("service-shared")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Exporting several non-root members requires an explicit `--resolution-root` selection
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("service-a")
+        .arg("--resolution-root").arg("context-a")
+        .arg("--resolution-root").arg("context-common")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==3.0.0 ; python_full_version >= '3.13'
+    sqlalchemy==2.0.0 ; python_full_version >= '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--package").arg("service-a")
+        .arg("--preview-features").arg("package-conflicts")
+        .arg("--index-url").arg(server.index_url())
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==3.0.0 ; python_full_version >= '3.13'
+    sqlalchemy==2.0.0 ; python_full_version >= '3.13'
+
+    ----- stderr -----
+    Resolved 15 packages in [TIME]
+    ");
+
+    context.temp_dir.child("exports.toml").write_str(
+        r#"
+        [[export]]
+        output-file = "a.txt"
+        package = ["service-shared"]
+        resolution-root = ["context-a"]
+        [[export]]
+        output-file = "b.txt"
+        package = ["service-shared"]
+        resolution-root = ["context-b"]
+        "#,
+    )?;
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--batch").arg("exports.toml")
+        .arg("--preview-features").arg("batch-export")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("a.txt"), @"
+    shared-leaf==3.0.0 ; python_full_version >= '3.13'
+    sibling-leaf==1.0.0 ; python_full_version >= '3.13'
+    sqlalchemy==2.0.0 ; python_full_version >= '3.13'
+    ");
+    assert_snapshot!(context.read("b.txt"), @"
+    shared-leaf==3.0.0 ; python_full_version < '3.13'
+    sibling-leaf==1.0.0 ; python_full_version < '3.13'
+    sqlalchemy==1.4.0 ; python_full_version < '3.13'
+    ");
     Ok(())
 }
 

@@ -2941,6 +2941,7 @@ pub(crate) struct ExportSettings {
     pub(super) format: Option<ExportFormat>,
     pub(super) all_packages: bool,
     pub(super) package: Vec<PackageName>,
+    pub(super) resolution_root: Vec<PackageName>,
     pub(super) prune: Vec<PackageName>,
     pub(super) extras: ExtrasSpecification,
     pub(super) groups: DependencyGroups,
@@ -2973,6 +2974,7 @@ impl ExportSettings {
             format,
             all_packages,
             package,
+            resolution_root,
             prune,
             extra,
             all_extras,
@@ -3059,6 +3061,7 @@ impl ExportSettings {
             format,
             all_packages,
             package,
+            resolution_root,
             prune,
             extras: ExtrasSpecification::from_args(
                 extra.unwrap_or_default(),
