@@ -16,7 +16,7 @@
 
 #![warn(missing_docs)]
 
-use std::alloc::Allocator;
+use std::alloc::{Allocator, Global};
 #[cfg(feature = "schemars")]
 use std::borrow::Cow;
 use std::error::Error;
@@ -29,7 +29,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 use url::Url;
 
-use uv_allocator::with_arena;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_normalize::{ExtraName, PackageName};
 
@@ -819,7 +818,7 @@ fn parse_specifier<T: Pep508Url>(
 fn parse_version_specifier<T: Pep508Url>(
     cursor: &mut Cursor,
 ) -> Result<Option<VersionOrUrl<T>>, Pep508Error<T>> {
-    with_arena(|allocator| parse_version_specifier_in(cursor, allocator))
+    parse_version_specifier_in(cursor, Global)
 }
 
 fn parse_version_specifier_in<T: Pep508Url, A: Allocator>(
@@ -868,7 +867,7 @@ fn parse_version_specifier_in<T: Pep508Url, A: Allocator>(
 fn parse_version_specifier_parentheses<T: Pep508Url>(
     cursor: &mut Cursor,
 ) -> Result<Option<VersionOrUrl<T>>, Pep508Error<T>> {
-    with_arena(|allocator| parse_version_specifier_parentheses_in(cursor, allocator))
+    parse_version_specifier_parentheses_in(cursor, Global)
 }
 
 fn parse_version_specifier_parentheses_in<T: Pep508Url, A: Allocator>(
