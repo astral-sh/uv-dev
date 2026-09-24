@@ -6,7 +6,7 @@ Classification: bug
 
 ## Summary
 
-The report shows a repeatable regression for direct wheel URLs whose query contains `sig`. uv 0.12.7 writes the requested value to `direct_url.json` and recognizes the installation on the next run. Starting with 0.12.8 and continuing through 0.12.18, the installed metadata contains `sig=****`; every later `uv pip install` or dry run consequently plans an uninstall and reinstall. When redaction is active, the URL formatter also reserializes the full query, so otherwise unchanged values such as timestamps acquire percent encoding.
+Targeted testing reproduces the regression for direct wheel URLs whose query contains `sig`. uv 0.12.7 writes the requested value to `direct_url.json` and recognizes the installation on the next run. uv 0.12.8, the installed uv 0.12.13, and uv 0.12.18 instead write `sig=****`; a later `uv pip install --dry-run` plans an uninstall and reinstall. When redaction is active, the URL formatter also reserializes the full query, so otherwise unchanged values such as timestamps acquire percent encoding.
 
 Repository evidence corroborates the reported mechanism:
 
@@ -18,6 +18,39 @@ Repository evidence corroborates the reported mechanism:
 
 No open issue or pull request already tracks this exact `sig` metadata regression.
 
+## Reproduction
+
+Outcome: **reproducible**.
+
+The reproduction ran on Linux 6.17.0-1022-azure x86_64 with Python 3.12.3. The `uv` executable on `PATH` was uv 0.12.13; uv 0.12.7, 0.12.8, and 0.12.18 were run through `uvx`. All virtual environments, tool installations, downloads, and caches were isolated under a new `/tmp/uv-21969.*` directory. The URL used a synthetic `sig=reproduction-value`; no URL or credential from the report was used.
+
+The essential commands for each version were:
+
+```console
+$ uvx --from uv==0.12.7 uv --no-config venv /tmp/uv-21969/venv-0.12.7 --python python3.12
+$ uvx --from uv==0.12.7 uv --no-config pip install --python /tmp/uv-21969/venv-0.12.7/bin/python 'six @ https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?sig=reproduction-value&st=2026-09-15T16:34:14Z'
+$ uvx --from uv==0.12.7 uv --no-config pip install --python /tmp/uv-21969/venv-0.12.7/bin/python --dry-run 'six @ https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?sig=reproduction-value&st=2026-09-15T16:34:14Z'
+```
+
+The same commands were repeated with `uv==0.12.8` and `uv==0.12.18`; the installed uv 0.12.13 was also tested directly. The cache directory was set separately for each version.
+
+Observed results:
+
+| Version | Installed `direct_url.json` | Second `uv pip install --dry-run` |
+|---|---|---|
+| 0.12.7 | Retained the synthetic `sig` value and the unencoded timestamp | `Would make no changes` |
+| 0.12.8 | Stored `sig=****` and percent-encoded the timestamp colons | `Would uninstall 1 package` and `Would install 1 package` |
+| 0.12.13 | Stored `sig=****` and percent-encoded the timestamp colons | `Would uninstall 1 package` and `Would install 1 package` |
+| 0.12.18 | Stored `sig=****` and percent-encoded the timestamp colons | `Would uninstall 1 package` and `Would install 1 package` |
+
+This directly confirms both the first-bad boundary and the repeated-install plan described in astral-sh/uv#21969.
+
+Existing tests do not cover this end-to-end case:
+
+- `crates/uv-redacted/src/lib.rs::tests::redact_azure_sas_query_signature` checks display redaction only.
+- `crates/uv/tests/pip_install/pip_install.rs::direct_url_json_direct_url` checks `direct_url.json` for a direct URL without query parameters and does not perform a second install.
+- `crates/uv/tests/pip/pip_sync.rs::incompatible_direct_url_redacts_credentials` checks redaction in an error for an incompatible wheel; it never installs the wheel or reads `direct_url.json`.
+
 ## Draft response
 
 Thanks for the clear reproduction. This is a bug introduced by the `sig` display-redaction change in astral-sh/uv#21360. The current metadata path formats the wrapped URL when constructing `direct_url.json`, so the display-only redaction is persisted as `sig=****` and the query is reserialized. The next satisfaction check compares that stored URL with the requested URL and treats the installed distribution as mismatched.
@@ -26,7 +59,7 @@ astral-sh/uv#11082 and astral-sh/uv#11088 addressed a related path percent-encod
 
 ## Classification
 
-This is a source-corroborated correctness regression and should be classified as a `bug`. uv persists a display-safe representation as installation identity metadata, then treats that altered identity as different from the original requirement. The first-bad-release boundary matches astral-sh/uv#21360 and the 0.12.8 changelog.
+This is an observed correctness regression and should be classified as a `bug`. uv persists a display-safe representation as installation identity metadata, then treats that altered identity as different from the original requirement. The reproduced first-bad-release boundary matches astral-sh/uv#21360 and the 0.12.8 changelog.
 
 This is not a duplicate. astral-sh/uv#11082 covered a different URL-representation mismatch and was fixed by path percent-decoding in astral-sh/uv#11088. The repeated-install issues astral-sh/uv#17711 and astral-sh/uv#15832 arise from inconsistent wheel filename and internal `WHEEL` tags. No open item covers redacted `sig` values persisted to `direct_url.json`.
 

@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with Python 3.12.3, I used isolated /tmp environments and caches to install a six wheel URL containing synthetic `sig` and timestamp parameters, then repeated `uv pip install --dry-run`. With `uvx --from uv==0.12.7 uv`, direct_url.json retained the original values and reported `Would make no changes`. Versions 0.12.8, installed 0.12.13, and 0.12.18 stored `sig=****`, percent-encoded the timestamp, and planned one uninstall and one install. This reproduces the reported regression boundary. The issue-context README was updated with commands, results, and test-coverage gaps."
+}
