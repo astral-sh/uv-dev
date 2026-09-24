@@ -11,6 +11,8 @@ use assert_fs::{
     prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir},
 };
 use indoc::indoc;
+#[cfg(feature = "test-python-managed")]
+use insta::allow_duplicates;
 use predicates::prelude::predicate;
 use tracing::debug;
 use uv_test::{LATEST_PYTHON_3_12, TestContext, uv_snapshot};
@@ -806,6 +808,27 @@ async fn python_project_build_name_catalog() -> anyhow::Result<()> {
     project
         .child(".venv/custom-marker")
         .assert(predicate::path::exists());
+
+    // A wildcard request reuses the named build on repeated runs, even without a catalog.
+    for _ in 0..2 {
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), project_run("any")
+                .arg("--offline")
+                .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, "missing-catalog.json")
+                .arg("python").arg("-c").arg(base_prefix), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            Checked in [TIME]
+            ");
+        }
+        project
+            .child(".venv/custom-marker")
+            .assert(predicate::path::exists());
+    }
 
     assert_eq!(
         server

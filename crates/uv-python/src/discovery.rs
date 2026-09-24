@@ -2258,6 +2258,10 @@ impl PythonRequest {
 
     /// Check the interpreter's properties and local managed build identity against this request.
     pub fn satisfied(&self, interpreter: &Interpreter, cache: &Cache) -> bool {
+        // A wildcard request imposes no build identity restriction on an existing environment.
+        if let Self::Any = self {
+            return true;
+        }
         if !self.satisfied_by_interpreter(interpreter, cache) {
             return false;
         }
