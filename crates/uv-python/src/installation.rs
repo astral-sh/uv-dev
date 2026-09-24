@@ -404,7 +404,7 @@ impl PythonInstallation {
     /// Returns `true` if this is a managed (uv-installed) Python installation.
     ///
     /// Uses the source as a fast path, then falls back to checking the interpreter's base prefix.
-    pub fn is_managed(&self) -> bool {
+    pub(crate) fn is_managed(&self) -> bool {
         self.source.is_managed() || self.interpreter.is_managed()
     }
 
