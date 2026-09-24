@@ -1,7 +1,10 @@
+use std::alloc::{Allocator, Global};
+use std::cell::Cell;
 use std::fmt;
 use std::ops::Bound;
 
 use arcstr::ArcStr;
+use bumpalo::Bump;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use rustc_hash::FxBuildHasher;
@@ -12,6 +15,30 @@ use uv_pep440::{Version, VersionSpecifier};
 use crate::marker::tree::ContainerOperator;
 use crate::{ExtraOperator, MarkerExpression, MarkerOperator, MarkerTree, MarkerTreeKind};
 
+thread_local! {
+    static DNF_ARENA: Cell<Option<Bump>> = const { Cell::new(None) };
+}
+
+/// Use temporary DNF clauses, then release their storage together.
+pub(crate) fn with_dnf<R>(
+    tree: MarkerTree,
+    use_dnf: impl FnOnce(&[Vec<MarkerExpression, &Bump>]) -> R,
+) -> R {
+    // Removing the arena lets nested formatting and thread-local destructors use their own.
+    let mut arena = DNF_ARENA
+        .try_with(Cell::take)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let result = use_dnf(&to_dnf_in(tree, &arena));
+    // Reuse ordinary clause storage without retaining unusually large diagrams.
+    if arena.allocated_bytes() <= 64 * 1024 {
+        arena.reset();
+        let _ = DNF_ARENA.try_with(|slot| slot.set(Some(arena)));
+    }
+    result
+}
+
 /// Returns a simplified DNF expression for a given marker tree.
 ///
 /// Marker trees are represented as decision diagrams that cannot be directly serialized to.
@@ -21,9 +48,17 @@ use crate::{ExtraOperator, MarkerExpression, MarkerOperator, MarkerTree, MarkerT
 ///
 /// We choose DNF as it is easier to simplify for user-facing output.
 pub(crate) fn to_dnf(tree: MarkerTree) -> Vec<Vec<MarkerExpression>> {
-    let mut dnf = Vec::new();
-    collect_dnf(tree, &mut dnf, &mut Vec::new());
-    simplify(&mut dnf);
+    to_dnf_in(tree, Global)
+}
+
+/// Returns a simplified DNF expression with clause storage allocated by `allocator`.
+fn to_dnf_in<A: Allocator + Copy>(
+    tree: MarkerTree,
+    allocator: A,
+) -> Vec<Vec<MarkerExpression, A>, A> {
+    let mut dnf = Vec::new_in(allocator);
+    collect_dnf(tree, &mut dnf, &mut Vec::new_in(allocator));
+    simplify(&mut dnf, allocator);
     sort(&mut dnf);
     dnf
 }
@@ -34,10 +69,10 @@ pub(crate) fn to_dnf(tree: MarkerTree) -> Vec<Vec<MarkerExpression>> {
 /// the tree and collecting all paths to a `true` terminal node.
 ///
 /// `path` is the list of marker expressions traversed on the current path.
-fn collect_dnf(
+fn collect_dnf<A: Allocator + Copy>(
     tree: MarkerTree,
-    dnf: &mut Vec<Vec<MarkerExpression>>,
-    path: &mut Vec<MarkerExpression>,
+    dnf: &mut Vec<Vec<MarkerExpression, A>, A>,
+    path: &mut Vec<MarkerExpression, A>,
 ) {
     match tree.kind() {
         // Reached a `false` node, meaning the conjunction is irrelevant for DNF.
@@ -45,7 +80,9 @@ fn collect_dnf(
         // Reached a solution, store the conjunction.
         MarkerTreeKind::True => {
             if !path.is_empty() {
-                dnf.push(path.clone());
+                let mut clause = Vec::with_capacity_in(path.len(), *path.allocator());
+                clause.extend_from_slice(path);
+                dnf.push(clause);
             }
         }
         MarkerTreeKind::Version(marker) => {
@@ -237,12 +274,12 @@ fn collect_dnf(
 ///
 /// Note: This function has quadratic time complexity. However, it is not applied on every marker
 /// operation, only to user facing output, which are typically very simple.
-fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
+fn simplify<A: Allocator + Copy>(dnf: &mut Vec<Vec<MarkerExpression, A>, A>, allocator: A) {
     for i in 0..dnf.len() {
         let clause = &dnf[i];
 
         // Find redundant terms in this clause.
-        let mut redundant_terms = Vec::new();
+        let mut redundant_terms = Vec::new_in(allocator);
         'term: for (skipped, skipped_term) in clause.iter().enumerate() {
             for (j, other_clause) in dnf.iter().enumerate() {
                 if i == j {
@@ -290,7 +327,7 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
     // Once we have eliminated redundant terms, there may also be redundant clauses.
     // For example, `(A and B) or (not A and B)` would have been simplified above to
     // `(A and B) or B` and can now be further simplified to just `B`.
-    let mut redundant_clauses = Vec::new();
+    let mut redundant_clauses = Vec::new_in(allocator);
     'clause: for i in 0..dnf.len() {
         let clause = &dnf[i];
 
@@ -321,7 +358,7 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
 /// Sort the clauses in a DNF expression, for backwards compatibility. The goal is to avoid
 /// unnecessary churn in the display output of the marker expressions, e.g., when modifying the
 /// internal representations used in the marker algebra.
-fn sort(dnf: &mut [Vec<MarkerExpression>]) {
+fn sort<A: Allocator>(dnf: &mut [Vec<MarkerExpression, A>]) {
     // Sort each clause.
     for clause in dnf.iter_mut() {
         clause.sort_by_key(MarkerExpression::kind);
@@ -488,5 +525,81 @@ fn is_negation(left: &MarkerExpression, right: &MarkerExpression) -> bool {
 
             pair == pair2 && operator != operator2
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+
+    use bumpalo::Bump;
+
+    use super::{to_dnf, to_dnf_in, with_dnf};
+    use crate::MarkerTree;
+
+    #[test]
+    fn arena_dnf_matches_owned_clauses() {
+        let mut arena = Bump::new();
+        for expression in [
+            "python_version >= '3.10'",
+            "python_version != '3.10.*' and sys_platform != 'win32'",
+            "extra == 'test' or (os_name == 'posix' and python_version < '3.12')",
+            "(sys_platform == 'win32' and python_version < '3.11') or (sys_platform == 'linux' and python_version >= '3.9')",
+        ] {
+            let tree = expression.parse::<MarkerTree>().unwrap();
+            let expected = to_dnf(tree);
+            {
+                let actual = to_dnf_in(tree, &arena);
+                assert_eq!(
+                    actual.iter().map(|clause| &clause[..]).collect::<Vec<_>>(),
+                    expected.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+                    "{expression}"
+                );
+            }
+            arena.reset();
+        }
+    }
+
+    #[test]
+    fn nested_dnf_keeps_outer_clauses_alive() {
+        let outer = "sys_platform == 'win32' or python_version < '3.12'"
+            .parse::<MarkerTree>()
+            .unwrap();
+        let inner = "os_name == 'posix'".parse::<MarkerTree>().unwrap();
+        let expected = to_dnf(outer);
+        with_dnf(outer, |outer| {
+            with_dnf(inner, |inner| assert_eq!(inner.len(), 1));
+            assert_eq!(
+                outer.iter().map(|clause| &clause[..]).collect::<Vec<_>>(),
+                expected.iter().map(Vec::as_slice).collect::<Vec<_>>()
+            );
+        });
+    }
+
+    #[test]
+    fn format_during_thread_local_destruction() {
+        struct FormatOnDrop;
+
+        impl Drop for FormatOnDrop {
+            fn drop(&mut self) {
+                let marker = "sys_platform == 'win32'".parse::<MarkerTree>().unwrap();
+                assert_eq!(
+                    marker.contents().unwrap().to_string(),
+                    "sys_platform == 'win32'"
+                );
+            }
+        }
+
+        thread_local! {
+            static FORMAT_ON_DROP: FormatOnDrop = const { FormatOnDrop };
+        }
+
+        thread::spawn(|| {
+            FORMAT_ON_DROP.with(|_| {});
+            let marker = "os_name == 'posix'".parse::<MarkerTree>().unwrap();
+            assert_eq!(marker.contents().unwrap().to_string(), "os_name == 'posix'");
+        })
+        .join()
+        .unwrap();
     }
 }

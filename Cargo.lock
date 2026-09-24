@@ -6957,6 +6957,7 @@ dependencies = [
  "arcstr",
  "astral-version-ranges",
  "boxcar",
+ "bumpalo",
  "indexmap",
  "insta",
  "itertools 0.14.0",

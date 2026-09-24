@@ -1830,22 +1830,23 @@ impl Display for MarkerTreeContents {
         }
 
         // Write the output in DNF form.
-        let dnf = self.0.to_dnf();
-        let [conjunction] = &dnf[..] else {
-            for (index, conjunction) in dnf.iter().enumerate() {
-                if index > 0 {
-                    f.write_str(" or ")?;
+        simplify::with_dnf(self.0, |dnf| {
+            let [conjunction] = dnf else {
+                for (index, conjunction) in dnf.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(" or ")?;
+                    }
+                    if conjunction.len() == 1 {
+                        write!(f, "{}", conjunction.iter().format(" and "))?;
+                    } else {
+                        write!(f, "({})", conjunction.iter().format(" and "))?;
+                    }
                 }
-                if conjunction.len() == 1 {
-                    write!(f, "{}", conjunction.iter().format(" and "))?;
-                } else {
-                    write!(f, "({})", conjunction.iter().format(" and "))?;
-                }
-            }
-            return Ok(());
-        };
+                return Ok(());
+            };
 
-        write!(f, "{}", conjunction.iter().format(" and "))
+            write!(f, "{}", conjunction.iter().format(" and "))
+        })
     }
 }
 
