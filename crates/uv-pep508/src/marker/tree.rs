@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{Bound, Deref};
@@ -1054,16 +1054,24 @@ impl MarkerTree {
             MarkerTreeKind::True => return true,
             MarkerTreeKind::False => return false,
             MarkerTreeKind::Version(marker) => {
-                for (range, tree) in marker.edges() {
-                    if range.contains(env.get_version(marker.key())) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
-                }
+                return marker
+                    .edge(env.get_version(marker.key()))
+                    .is_some_and(|tree| tree.evaluate_reporter_impl(env, extras, reporter));
             }
             MarkerTreeKind::String(marker) => {
+                let l_string = env.get_string(marker.key());
+                if !matches!(
+                    marker.key(),
+                    CanonicalMarkerValueString::PlatformRelease
+                        | CanonicalMarkerValueString::PlatformVersion
+                ) {
+                    return marker
+                        .edge(l_string)
+                        .is_some_and(|tree| tree.evaluate_reporter_impl(env, extras, reporter));
+                }
+                // These fields report lexicographic comparisons for each range
+                // examined before reaching the matching edge.
                 for (range, tree) in marker.children() {
-                    let l_string = env.get_string(marker.key());
-
                     if matches!(
                         marker.key(),
                         CanonicalMarkerValueString::PlatformRelease
@@ -1095,11 +1103,9 @@ impl MarkerTree {
                 let Ok(version) = env.get_string(marker.key()).parse::<Version>() else {
                     return false;
                 };
-                for (range, tree) in marker.edges() {
-                    if range.contains(&version) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
-                }
+                return marker
+                    .edge(&version)
+                    .is_some_and(|tree| tree.evaluate_reporter_impl(env, extras, reporter));
             }
             MarkerTreeKind::In(marker) => {
                 return marker
@@ -1541,6 +1547,10 @@ impl<K: Copy> VersionMarkerTree<'_, K> {
             .iter()
             .map(|(range, node)| (range, MarkerTree(node.negate(self.id))))
     }
+
+    fn edge(&self, version: &Version) -> Option<MarkerTree> {
+        find_range_edge(self.map, version).map(|node| MarkerTree(node.negate(self.id)))
+    }
 }
 
 impl<K: Copy + Ord> PartialOrd for VersionMarkerTree<'_, K> {
@@ -1577,6 +1587,36 @@ impl StringMarkerTree<'_> {
             .iter()
             .map(|(range, node)| (range, MarkerTree(node.negate(self.id))))
     }
+
+    fn edge(&self, value: &str) -> Option<MarkerTree> {
+        find_range_edge(self.map, value).map(|node| MarkerTree(node.negate(self.id)))
+    }
+}
+
+/// Find the child for a value in an ordered, disjoint range map.
+#[inline]
+fn find_range_edge<T, Q>(edges: &[(Ranges<T>, NodeId)], value: &Q) -> Option<NodeId>
+where
+    T: Ord + Borrow<Q>,
+    Q: Ord + ?Sized,
+{
+    // Ordinary markers have only a few edges. Binary search pays off for wide
+    // maps, and the final containment check also handles restricted domains.
+    if edges.len() <= 5 {
+        return edges
+            .iter()
+            .find(|(range, _)| range.contains(value))
+            .map(|(_, node)| *node);
+    }
+    let index = edges.partition_point(|(range, _)| match range.bounding_range().unwrap().1 {
+        Bound::Included(end) => end.borrow() < value,
+        Bound::Excluded(end) => end.borrow() <= value,
+        Bound::Unbounded => false,
+    });
+    edges
+        .get(index)
+        .filter(|(range, _)| range.contains(value))
+        .map(|(_, node)| *node)
 }
 
 impl PartialOrd for StringMarkerTree<'_> {
@@ -1869,10 +1909,12 @@ mod test {
     use std::str::FromStr;
 
     use insta::assert_snapshot;
+    use version_ranges::Ranges;
 
     use uv_normalize::ExtraName;
     use uv_pep440::Version;
 
+    use super::{NodeId, find_range_edge};
     use crate::marker::{MarkerEnvironment, MarkerEnvironmentBuilder};
     use crate::{MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString};
 
@@ -1882,6 +1924,33 @@ mod test {
 
     fn m(s: &str) -> MarkerTree {
         s.parse().unwrap()
+    }
+
+    #[test]
+    fn range_lookup_handles_bounds_and_gaps() {
+        for count in [2, 12] {
+            let mut edges = vec![(Ranges::strictly_lower_than(-1), NodeId::FALSE)];
+            for index in 0..count {
+                let bounds = if index % 2 == 0 {
+                    (Bound::Included(index * 3), Bound::Excluded(index * 3 + 2))
+                } else {
+                    (Bound::Excluded(index * 3), Bound::Included(index * 3 + 2))
+                };
+                edges.push((Ranges::<i32>::from_range_bounds(bounds), NodeId::TRUE));
+            }
+            edges.push((Ranges::higher_than(count * 3), NodeId::FALSE));
+            for value in -3..=count * 3 + 2 {
+                let expected = edges
+                    .iter()
+                    .find(|(range, _)| range.contains(&value))
+                    .map(|(_, node)| node.is_true());
+                assert_eq!(
+                    find_range_edge(&edges, &value).map(NodeId::is_true),
+                    expected,
+                    "{count} ranges at {value}",
+                );
+            }
+        }
     }
 
     #[test]

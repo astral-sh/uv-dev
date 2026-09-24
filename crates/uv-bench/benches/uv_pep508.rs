@@ -5,7 +5,24 @@ extern crate uv_performance_memory_allocator;
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main, measurement::WallTime};
-use uv_pep508::{MarkerTree, MarkerTreeContents};
+use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder, MarkerTree, MarkerTreeContents};
+
+fn environment(machine: &str, full_version: &str, version: &str) -> MarkerEnvironment {
+    MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+        implementation_name: "cpython",
+        implementation_version: full_version,
+        os_name: "posix",
+        platform_machine: machine,
+        platform_python_implementation: "CPython",
+        platform_release: "6.8.0",
+        platform_system: "Linux",
+        platform_version: "6.8.0",
+        python_full_version: full_version,
+        python_version: version,
+        sys_platform: "linux",
+    })
+    .unwrap()
+}
 
 fn collect_markers(value: &toml::Value, markers: &mut Vec<MarkerTreeContents>) {
     match value {
@@ -82,6 +99,30 @@ fn format_markers(criterion: &mut Criterion<WallTime>) {
             }
         });
     });
+    group.finish();
+
+    let env = environment("x86_64", "3.12.1", "3.12");
+    let mut group = criterion.benchmark_group("marker_evaluate");
+    group.throughput(Throughput::Elements(markers.len() as u64));
+    group.bench_function("lockfiles", |benchmark| {
+        benchmark.iter(|| {
+            for marker in &markers {
+                black_box(marker.as_ref().evaluate(black_box(&env), &[]));
+            }
+        });
+    });
+    let env = environment("machine-0127", "3.10.127", "3.10");
+    for alternatives in [16, 128, 512] {
+        let expression = (0..alternatives)
+            .map(|index| format!("platform_machine == 'machine-{index:04}'"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        let marker = expression.parse::<MarkerTree>().unwrap();
+        group.throughput(Throughput::Elements(1));
+        group.bench_function(format!("{alternatives}_alternatives"), |benchmark| {
+            benchmark.iter(|| black_box(black_box(marker).evaluate(black_box(&env), &[])));
+        });
+    }
     group.finish();
 }
 
