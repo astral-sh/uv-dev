@@ -4,7 +4,7 @@ use petgraph::{
     algo::toposort,
     graph::{DiGraph, NodeIndex},
 };
-use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
+use rustc_hash::FxBuildHasher;
 use std::alloc::Allocator;
 #[cfg(feature = "schemars")]
 use std::borrow::Cow;
@@ -108,15 +108,16 @@ impl Conflicts {
         }
 
         with_arena(|allocator| {
-            self.expand_transitive_group_includes_in(package, groups, allocator);
+            self.expand_transitive_group_includes_in(package, groups, allocator, allocator);
         });
     }
 
-    fn expand_transitive_group_includes_in<A: Allocator + Copy>(
+    fn expand_transitive_group_includes_in<A: Allocator + Copy, B: Allocator + Copy>(
         &mut self,
         package: &PackageName,
         groups: &DependencyGroups,
         allocator: A,
+        scratch_allocator: B,
     ) {
         let mut graph = DiGraph::new();
         let mut group_node_idxs: HashMap<&GroupName, NodeIndex, _, A> =
@@ -126,8 +127,8 @@ impl Conflicts {
         // Used for transitively deriving new conflict sets with substitutions.
         // The keys are canonical items (mentioned directly in configured conflicts).
         // The values correspond to groups that transitively include them.
-        let mut substitutions: FxHashMap<Rc<ConflictItem>, FxHashSet<Rc<ConflictItem>>> =
-            FxHashMap::default();
+        let mut substitutions: HashMap<_, HashSet<_, _, B>, _, B> =
+            HashMap::with_hasher_in(FxBuildHasher, scratch_allocator);
 
         // Track all existing conflict sets to avoid duplicates.
         let mut conflict_sets: IndexSet<ConflictSet, FxBuildHasher> = IndexSet::default();
@@ -146,7 +147,7 @@ impl Conflicts {
                     continue;
                 }
                 let item = Rc::new(item.clone());
-                let mut canonical_items = FxHashSet::default();
+                let mut canonical_items = HashSet::with_hasher_in(FxBuildHasher, scratch_allocator);
                 canonical_items.insert(item.clone());
                 let node_id = graph.add_node(canonical_items);
                 group_node_idxs.insert(group, node_id);
@@ -164,7 +165,7 @@ impl Conflicts {
                 package: package.clone(),
                 kind: ConflictKind::Group(group.clone()),
             };
-            let node_id = graph.add_node(FxHashSet::default());
+            let node_id = graph.add_node(HashSet::with_hasher_in(FxBuildHasher, scratch_allocator));
             group_node_idxs.insert(group, node_id);
             node_conflict_items.insert(node_id, Rc::new(group_conflict_item));
         }
@@ -190,7 +191,7 @@ impl Conflicts {
         for node in topo_nodes {
             let mut neighbors = graph.neighbors(node).detach();
             while let Some(neighbor_idx) = neighbors.next_node(&graph) {
-                let mut neighbor_canonical_items = Vec::new();
+                let mut neighbor_canonical_items = Vec::new_in(scratch_allocator);
                 if let Some(canonical_items) = graph.node_weight(node) {
                     let neighbor_item = node_conflict_items
                         .get(&neighbor_idx)
@@ -200,7 +201,9 @@ impl Conflicts {
                         neighbor_canonical_items.push(canonical_item.clone());
                         substitutions
                             .entry(canonical_item.clone())
-                            .or_default()
+                            .or_insert_with(|| {
+                                HashSet::with_hasher_in(FxBuildHasher, scratch_allocator)
+                            })
                             .insert(neighbor_item.clone());
                     }
                 }
@@ -216,7 +219,7 @@ impl Conflicts {
         // Note that new sets are (potentially) added to transitive_conflict_sets
         // at the end of each iteration.
         for (canonical_item, subs) in substitutions {
-            let mut new_conflict_sets = FxHashSet::default();
+            let mut new_conflict_sets = HashSet::with_hasher_in(FxBuildHasher, scratch_allocator);
             for conflict_set in conflict_sets
                 .iter()
                 .filter(|set| set.contains_item(&canonical_item))
