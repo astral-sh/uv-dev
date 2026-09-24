@@ -104,6 +104,24 @@ struct Collector {
     marker_ids: FxHashMap<MarkerTree, u32>,
 }
 
+/// Encode independently supplied marker roots under the same limits as a captured graph.
+pub(super) fn collect_markers(
+    roots: impl IntoIterator<Item = MarkerTree>,
+    budget: &mut Budget,
+) -> Result<(Vec<CapturedMarker>, Vec<u32>), Stop> {
+    let mut collector = Collector::new(budget.limits);
+    collector.budget.usage = budget.usage;
+    let result = roots
+        .into_iter()
+        .map(|marker| {
+            collector.budget.charge(Resource::AvailabilityEntries, 1)?;
+            collector.marker(marker)
+        })
+        .collect::<Result<Vec<_>, _>>();
+    budget.usage = collector.budget.usage;
+    result.map(|roots| (collector.markers, roots))
+}
+
 impl Collector {
     fn new(limits: CaptureLimits) -> Self {
         Self {

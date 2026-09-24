@@ -12,6 +12,7 @@ use uv_pep440::{
     EncodedVersion, LocalVersionSlice, MIN_VERSION, Operator, Version, VersionSpecifier,
     VersionSpecifiers, release_specifiers_to_ranges,
 };
+use uv_pep508::MarkerTree;
 
 use super::NoSolutionEvidence;
 use super::budget::{Budget, CaptureLimits, Resource, Stop};
@@ -23,8 +24,11 @@ use super::wire::{
     CapturedReasonKind, CapturedSource, VersionBound,
 };
 
+mod environment;
 #[cfg(test)]
 mod tests;
+
+use environment::ExpectedEnvironments;
 
 /// A bounded inventory supplied by the source-bound scenario checker, not by a captured graph.
 ///
@@ -39,6 +43,7 @@ pub struct ClosedWorldInventory {
     project_groups: BTreeSet<String>,
     registry: BTreeMap<String, RegistryPackage>,
     python: ExpectedPython,
+    environments: Option<ExpectedEnvironments>,
     budget: Budget,
     failed: bool,
 }
@@ -128,8 +133,32 @@ impl ClosedWorldInventory {
                 target,
                 ranges,
             },
+            environments: None,
             budget,
             failed: false,
+        })
+    }
+
+    /// Bind the configured supported environments of a fresh workspace lock.
+    ///
+    /// The ordered entries are independent project inputs, not forks learned from a lockfile or
+    /// a capture. They must be disjoint ordinary marker domains that intersect the project Python
+    /// policy.
+    /// Satisfiability of the project over their union remains a separate caller obligation.
+    pub fn set_supported_environments(
+        &mut self,
+        environments: &[MarkerTree],
+    ) -> Result<(), ClosedWorldNoSolutionError> {
+        self.mutate(|inventory| {
+            if inventory.environments.is_some() {
+                return Err(unsupported("supported environments were already supplied"));
+            }
+            inventory.environments = Some(ExpectedEnvironments::new(
+                environments,
+                &inventory.python.target,
+                &mut inventory.budget,
+            )?);
+            Ok(())
         })
     }
 
@@ -398,18 +427,22 @@ fn classify_graph(
         return Err(unsupported("an index authentication failure was observed"));
     }
     if graph.workspace_members.as_slice() != [inventory.project.as_str()]
-        || !graph.environment.initial_forks.is_empty()
         || !graph.environment.include.is_empty()
         || !graph.environment.exclude.is_empty()
     {
         return Err(unsupported("unsupported workspace or conflict policy"));
     }
-    check_python(
+    let effective_python = check_python(
         &graph.original_python,
         &graph.effective_python,
         inventory,
         budget,
     )?;
+    if let Some(environments) = &inventory.environments {
+        environments.check(&graph, &effective_python, budget)?;
+    } else if !graph.environment.initial_forks.is_empty() {
+        return Err(unsupported("unsupported workspace or conflict policy"));
+    }
     let root_package = graph.root_package as usize;
     let mut admitted = Vec::new();
     for (index, package) in graph.packages.iter().enumerate() {
@@ -785,7 +818,7 @@ fn check_python(
     effective: &CapturedPython,
     inventory: &ClosedWorldInventory,
     budget: &mut Budget,
-) -> Result<(), ClosedWorldNoSolutionError> {
+) -> Result<RequiresPython, ClosedWorldNoSolutionError> {
     if original.source != CapturedPythonSource::RequiresPython
         || original.exact.to_version() != inventory.python.exact
         || !domain_matches(&original.installed, &inventory.python.installed)
@@ -828,7 +861,7 @@ fn check_python(
             "effective Python policy is outside the original domain",
         ));
     }
-    Ok(())
+    Ok(effective_policy)
 }
 
 fn domain_matches(domain: &CapturedPythonDomain, expected: &RequiresPython) -> bool {

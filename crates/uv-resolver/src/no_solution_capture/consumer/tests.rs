@@ -123,6 +123,133 @@ fn original_group_proxy_capture_uses_raw_native_absence_ranges() -> Result<(), B
 }
 
 #[test]
+fn supported_environments_bind_initial_and_failed_forks() -> Result<(), Box<dyn Error>> {
+    let mut inventory = inventory()?;
+    inventory.set_supported_environments(&[
+        "sys_platform == 'darwin'".parse()?,
+        "sys_platform == 'win32'".parse()?,
+    ])?;
+    let mut capture = value()?;
+    // The recorded failed fork is Darwin with Python >=3.13. Both initial fork markers already
+    // occur in the checked capture as package markers.
+    capture["graph"]["environment"]["initial_forks"] = json!([2, 3]);
+    classify_closed_world_no_solution(&serde_json::to_vec(&capture)?, &options(), &inventory)?;
+
+    for forks in [json!([]), json!([2]), json!([3, 2]), json!([2, 0])] {
+        let mut changed = capture.clone();
+        changed["graph"]["environment"]["initial_forks"] = forks;
+        assert!(reject(&changed, &inventory)?.contains("initial forks differ"));
+    }
+    for marker in [0, 1, 4] {
+        let mut changed = capture.clone();
+        // Keep the original failed marker reachable when changing the active environment.
+        changed["graph"]["packages"][1]["group"]["marker"] = json!(5);
+        changed["graph"]["environment"]["marker"] = json!(marker);
+        assert!(reject(&changed, &inventory)?.contains("outside the certified domain"));
+    }
+    let mut changed = capture.clone();
+    changed["graph"]["original_python"]["target_marker"] = json!(7);
+    changed["graph"]["effective_python"]["target_marker"] = json!(6);
+    assert!(reject(&changed, &inventory)?.contains("Python marker differs"));
+
+    // This ordered wire DAG describes `os_name == 'nt' and sys_platform == 'darwin'`.
+    // Native marker algebra knows the conjunction is impossible even though its two keys differ.
+    let mut changed = capture.clone();
+    changed["graph"]["markers"][5] = changed["graph"]["markers"][2].clone();
+    changed["graph"]["markers"][5]["string"]["key"] = json!("os_name");
+    let edges = changed["graph"]["markers"][5]["string"]["edges"]
+        .as_array_mut()
+        .ok_or("string marker edges")?;
+    for edge in edges.iter_mut() {
+        for bound in ["lower", "upper"] {
+            if edge["intervals"][0][bound]["value"] == "darwin" {
+                edge["intervals"][0][bound]["value"] = json!("nt");
+            }
+        }
+    }
+    edges[1]["child"] = json!(2);
+    changed["graph"]["packages"][1]["group"]["marker"] = json!(4);
+    assert!(reject(&changed, &inventory)?.contains("linked OS marker variables"));
+
+    // A checked but non-ordered DAG must not let the implication walker forget a variable.
+    let mut changed = capture;
+    changed["graph"]["markers"][5] = changed["graph"]["markers"][4].clone();
+    changed["graph"]["markers"][5]["version"]["edges"][1]["child"] = json!(2);
+    changed["graph"]["packages"][1]["group"]["marker"] = json!(4);
+    changed["usage"]["marker_edges"] = json!(16);
+    changed["usage"]["intervals"] = json!(58);
+    assert!(reject(&changed, &inventory)?.contains("marker variables are not ordered"));
+    Ok(())
+}
+
+#[test]
+fn supported_environment_construction_is_bounded_and_fail_closed() -> Result<(), Box<dyn Error>> {
+    let os_name: MarkerTree = "os_name == 'nt'".parse()?;
+    let sys_platform: MarkerTree = "sys_platform == 'linux'".parse()?;
+    assert!(os_name.is_disjoint(sys_platform));
+    assert!(
+        inventory()?
+            .set_supported_environments(&[os_name, sys_platform])
+            .expect_err("linked native variables")
+            .to_string()
+            .contains("linked OS marker variables")
+    );
+    let cases: &[(&[&str], &str)] = &[
+        (
+            &["sys_platform == 'darwin'", "python_version >= '3.12'"],
+            "not disjoint",
+        ),
+        (
+            &["python_version < '3.12'"],
+            "excludes the project Python domain",
+        ),
+        (&["extra == 'feature'"], "UnsupportedMarker"),
+    ];
+    for (markers, expected) in cases {
+        let markers = markers
+            .iter()
+            .map(|marker| marker.parse())
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut inventory = inventory()?;
+        assert!(
+            inventory
+                .set_supported_environments(&markers)
+                .expect_err("unsupported domain")
+                .to_string()
+                .contains(expected)
+        );
+        assert!(
+            classify_closed_world_no_solution(ORIGINAL, &options(), &inventory)
+                .expect_err("poisoned inventory")
+                .to_string()
+                .contains("construction failed")
+        );
+    }
+
+    let mut bounded = inventory()?;
+    bounded.budget.limits.marker_nodes = 0;
+    assert!(
+        bounded
+            .set_supported_environments(&["sys_platform == 'darwin'".parse()?])
+            .expect_err("marker budget")
+            .to_string()
+            .contains("MarkerNodes")
+    );
+
+    let mut unrestricted = inventory()?;
+    unrestricted.set_supported_environments(&[])?;
+    classify_closed_world_no_solution(ORIGINAL, &options(), &unrestricted)?;
+    assert!(
+        unrestricted
+            .set_supported_environments(&[])
+            .expect_err("one configuration")
+            .to_string()
+            .contains("already supplied")
+    );
+    Ok(())
+}
+
+#[test]
 fn typed_authentication_and_availability_controls_fail_closed() -> Result<(), Box<dyn Error>> {
     type Mutation = fn(&mut Value);
     let mutations: &[(&str, Mutation, &str)] = &[
