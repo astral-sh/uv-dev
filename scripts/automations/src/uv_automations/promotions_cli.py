@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import assert_never
 
 from uv_automations.actions import append_summary, write_json_output, write_output
-from uv_automations.github_promotion import PromotionGitHub
+from uv_automations.github_promotion import PromotionGitHub, PromotionReadError
 from uv_automations.github_promotion_completion import PromotionCompletionGitHub
 from uv_automations.github_promotion_queue import PromotionQueueGitHub
 from uv_automations.json import loads
@@ -52,8 +52,9 @@ from uv_automations.workflows.promotion_queue import (
     DispatchedReplay,
     QueuedPromotion,
     QueueRecordOutcome,
-    ReplayOutcome,
+    ReplayBatchOutcome,
     SkippedReplay,
+    UnconfirmedReplay,
     record_queue,
     replay_one,
     replay_queued_promotions,
@@ -413,9 +414,10 @@ def _write_plan(plan: PromotionPlan, output: Path, summary: Path) -> None:
     assert_never(plan)
 
 
-def _replay_summary(outcomes: tuple[ReplayOutcome, ...]) -> str:
+def _replay_summary(outcomes: tuple[ReplayBatchOutcome, ...]) -> str:
     dispatched: list[str] = []
     skipped: Counter[str] = Counter()
+    unconfirmed: list[str] = []
     for outcome in outcomes:
         match outcome:
             case DispatchedReplay():
@@ -424,6 +426,10 @@ def _replay_summary(outcomes: tuple[ReplayOutcome, ...]) -> str:
                 )
             case SkippedReplay():
                 skipped[outcome.reason.value] += 1
+            case UnconfirmedReplay():
+                unconfirmed.append(
+                    f"{outcome.source.repository.name}#{outcome.source.number}"
+                )
             case _:
                 assert_never(outcome)
     text = f"Replayed {len(dispatched)} queued promotion(s)."
@@ -437,7 +443,21 @@ def _replay_summary(outcomes: tuple[ReplayOutcome, ...]) -> str:
             )
             + "."
         )
+    if unconfirmed:
+        text += (
+            f"\n\nCould not confirm {len(unconfirmed)} queued promotion check(s): "
+            + ", ".join(unconfirmed)
+            + "."
+        )
     return text
+
+
+def _write_replay_summary(
+    summary: Path, outcomes: tuple[ReplayBatchOutcome, ...]
+) -> None:
+    append_summary(summary, _replay_summary(outcomes))
+    if any(isinstance(outcome, UnconfirmedReplay) for outcome in outcomes):
+        raise PromotionReadError("Some queued promotion checks could not be confirmed")
 
 
 def run(command: PromotionCommand) -> None:
@@ -509,7 +529,7 @@ def run(command: PromotionCommand) -> None:
                 PromotionQueueGitHub(),
                 command.main,
             )
-            append_summary(command.summary, _replay_summary(outcomes))
+            _write_replay_summary(command.summary, outcomes)
             return
         case ReplayOnePromotion():
             queued = _read_queue(command.source)
@@ -525,7 +545,7 @@ def run(command: PromotionCommand) -> None:
                 BranchRevision(command.source.repository, "main", main),
                 expected=queued,
             )
-            append_summary(command.summary, _replay_summary((outcome,)))
+            _write_replay_summary(command.summary, (outcome,))
             return
         case ReplayPromotedChildren():
             reader = PromotionGitHub(token_variable="GH_SOURCE_TOKEN")
@@ -539,7 +559,7 @@ def run(command: PromotionCommand) -> None:
                 BranchRevision(command.parent.repository, "main", main),
                 parent=command.parent,
             )
-            append_summary(command.summary, _replay_summary(outcomes))
+            _write_replay_summary(command.summary, outcomes)
             return
         case SyncPromotionSource():
             if command.repository != UV_DEV_REPOSITORY:
