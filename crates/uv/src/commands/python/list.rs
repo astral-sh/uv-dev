@@ -120,7 +120,7 @@ pub(crate) async fn list(
         .await?;
 
         let downloads = download_list
-            .iter_matching(&download_request)
+            .iter_matching_with_build_revisions(&download_request)?
             // Downloads are ordered by revision, newest first. Display one artifact per key.
             .unique_by(|download| download.key())
             // TODO(zanieb): Add a way to show debug downloads, we just hide them for now
