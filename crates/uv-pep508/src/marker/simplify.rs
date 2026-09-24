@@ -296,11 +296,11 @@ fn collect_dnf<A: Allocator + Copy>(
 /// Note: This function has quadratic time complexity. However, it is not applied on every marker
 /// operation, only to user facing output, which are typically very simple.
 fn simplify<A: Allocator + Copy>(dnf: &mut Vec<Vec<MarkerExpression, A>, A>, allocator: A) {
+    let mut redundant = Vec::new_in(allocator);
     for i in 0..dnf.len() {
         let clause = &dnf[i];
 
         // Find redundant terms in this clause.
-        let mut redundant_terms = Vec::new_in(allocator);
         'term: for (skipped, skipped_term) in clause.iter().enumerate() {
             for (j, other_clause) in dnf.iter().enumerate() {
                 if i == j {
@@ -330,17 +330,17 @@ fn simplify<A: Allocator + Copy>(dnf: &mut Vec<Vec<MarkerExpression, A>, A>, all
                         .position(|x| x == term)
                         // If the term was already removed from this one, we cannot
                         // depend on it for further simplification.
-                        .is_some_and(|i| !redundant_terms.contains(&i))
+                        .is_some_and(|i| !redundant.contains(&i))
                 }) {
-                    redundant_terms.push(skipped);
+                    redundant.push(skipped);
                     continue 'term;
                 }
             }
         }
 
-        // Eliminate any redundant terms.
-        redundant_terms.sort_by(|a, b| b.cmp(a));
-        for term in redundant_terms {
+        // Indices are collected in ascending order. Remove them from the end,
+        // retaining the scratch allocation for the following clauses.
+        for term in redundant.drain(..).rev() {
             dnf[i].remove(term);
         }
     }
@@ -348,13 +348,12 @@ fn simplify<A: Allocator + Copy>(dnf: &mut Vec<Vec<MarkerExpression, A>, A>, all
     // Once we have eliminated redundant terms, there may also be redundant clauses.
     // For example, `(A and B) or (not A and B)` would have been simplified above to
     // `(A and B) or B` and can now be further simplified to just `B`.
-    let mut redundant_clauses = Vec::new_in(allocator);
     'clause: for i in 0..dnf.len() {
         let clause = &dnf[i];
 
         for (j, other_clause) in dnf.iter().enumerate() {
             // Ignore clauses that are going to be eliminated.
-            if i == j || redundant_clauses.contains(&j) {
+            if i == j || redundant.contains(&j) {
                 continue;
             }
 
@@ -364,14 +363,14 @@ fn simplify<A: Allocator + Copy>(dnf: &mut Vec<Vec<MarkerExpression, A>, A>, all
                 // from a linear search to an integer `HashSet` lookup
                 clause.contains(term)
             }) {
-                redundant_clauses.push(i);
+                redundant.push(i);
                 continue 'clause;
             }
         }
     }
 
     // Eliminate any redundant clauses.
-    for i in redundant_clauses.into_iter().rev() {
+    for i in redundant.into_iter().rev() {
         dnf.remove(i);
     }
 }
@@ -587,6 +586,20 @@ mod tests {
 
     use super::{collect_edges_in, to_dnf, to_dnf_in, with_dnf};
     use crate::MarkerTree;
+
+    #[test]
+    fn dnf_simplifies_successive_clauses() {
+        let marker: MarkerTree = "extra == 'a' or extra == 'b' or extra == 'c' or extra == 'd'"
+            .parse()
+            .unwrap();
+        let dnf = marker.to_dnf();
+        assert_eq!(dnf.len(), 4);
+        assert!(dnf.iter().all(|clause| clause.len() == 1));
+        assert_eq!(
+            marker.try_to_string().unwrap(),
+            "extra == 'a' or extra == 'b' or extra == 'c' or extra == 'd'"
+        );
+    }
 
     #[test]
     fn arena_edge_groups_preserve_order_and_gaps() {
