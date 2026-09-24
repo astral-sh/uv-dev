@@ -106,10 +106,9 @@ Use `--python-version` and `--python-platform` (`linux`, `macos`, or `windows`) 
 marker environments. Comma-separated values check their Cartesian product, with a fresh cache for
 each fixed-environment projection. The checker verifies satisfiability and the exact reachable
 dependency closure, not a particular preferred version. It uses a closed-world local index and
-rejects unsupported policies, including pre-releases, yanked candidates, non-universal wheels, and
-non-additive extras. `--max-states` bounds the exhaustive search and fails explicitly when a graph
-is too large. The root's Python range is enforced in full, while dependency `Requires-Python`
-follows uv's
+rejects unsupported policies, including yanked candidates, non-universal wheels, and non-additive
+extras. `--max-states` bounds the exhaustive search and fails explicitly when a graph is too large.
+The root's Python range is enforced in full, while dependency `Requires-Python` follows uv's
 [lower-bound-only policy](https://docs.astral.sh/uv/pip/compatibility/#requires-python-upper-bounds).
 Empty dependency Python ranges are not modeled.
 
@@ -125,6 +124,17 @@ cargo dev check-scenarios --uv target/debug/uv --lock --python-version 3.12,3.13
 Add `--lock-without-metadata` to exercise the metadata-free lockfile preview. The selected format is
 used for the initial lock, both read-only round trips, frozen exports, and any diagnostic refresh.
 Failure captures record the format and exhaustive-search bound alongside the command trace.
+
+Explicit Packse `resolution` and `fork_strategy` settings are passed to the initial resolution,
+read-only lock checks, and frozen exports. The Packse `prereleases` flag selects `allow` when
+enabled and `if-necessary` otherwise. Both permit pre-release candidates; the oracle checks
+dependency correctness instead of prescribing whether a stable version should be preferred. Explicit
+lock `environments` restrict the independent marker domain and are retained in the generated project
+for all lock and export commands. Requested projections outside that domain are rejected.
+Environment entries must be disjoint, intersect the root Python range, and contain no extra or PEP
+751 list markers. The marker witness proves satisfiability over that restricted domain.
+Original-derivation `structured-v1` classification still requires unrestricted lock environments and
+stable package versions.
 
 Add `--project-selections` for project optional dependencies and PEP 735 dependency groups. The
 universal lock is checked against all roots together. Frozen exports disable default groups and

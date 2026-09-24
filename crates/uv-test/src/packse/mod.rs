@@ -6,6 +6,7 @@
 
 pub mod check;
 mod derivation;
+mod domain;
 mod evidence;
 pub mod generate;
 pub mod lock_score;

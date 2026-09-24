@@ -224,6 +224,51 @@ fn only_the_generated_project_and_supported_index_policy_are_admitted() -> Resul
     let mut unsupported = document()?.scenario()?;
     unsupported.resolver_options.prereleases = true;
     assert!(validate_scenario_policy(&unsupported).is_err());
+    unsupported.resolver_options.prereleases = false;
+    unsupported.resolver_options.environments = vec!["sys_platform == 'win32'".parse()?];
+    assert!(validate_scenario_policy(&unsupported).is_err());
+    let prerelease = SCENARIO
+        .replace(
+            "[packages.a.versions.\"1.0.0\"]",
+            "[packages.a.versions.\"1.0.0rc1\"]",
+        )
+        .parse::<ScenarioDocument>()?
+        .scenario()?;
+    assert!(validate_scenario_policy(&prerelease).is_err());
+    Ok(())
+}
+
+#[test]
+fn structured_locks_bind_explicit_selection_policies() -> Result<()> {
+    let scenario = format!(
+        "{SCENARIO}\n[resolver_options]\nresolution = 'lowest'\nfork_strategy = 'fewest'\n"
+    )
+    .parse::<ScenarioDocument>()?
+    .scenario()?;
+    validate_scenario_policy(&scenario)?;
+    let arguments = lock_arguments(
+        &scenario,
+        LockfileMode::Standard,
+        Path::new("cache"),
+        "http://127.0.0.1:1234/simple/".to_owned(),
+        Path::new("python"),
+    )?;
+    for (option, value) in [("--resolution", "lowest"), ("--fork-strategy", "fewest")] {
+        assert_eq!(
+            arguments
+                .windows(2)
+                .filter(|pair| pair[0] == option && pair[1] == value)
+                .count(),
+            1
+        );
+    }
+    assert_eq!(
+        arguments
+            .iter()
+            .filter(|argument| *argument == "--prerelease=if-necessary")
+            .count(),
+        1
+    );
     Ok(())
 }
 

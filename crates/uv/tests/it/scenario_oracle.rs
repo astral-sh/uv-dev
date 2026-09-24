@@ -3,6 +3,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result, bail};
 
 use uv_python::PythonVersion;
+use uv_resolver::ForkStrategy;
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
 use uv_test::packse::check::{
@@ -19,7 +20,85 @@ use uv_test::packse::lock_score::score_lock_versions;
 use uv_test::packse::minimize::minimize_witnessed_project_lock_scenario;
 use uv_test::packse::oracle::Selection;
 use uv_test::packse::project::{ProjectSelection, ScenarioProject};
-use uv_test::packse::scenario::{Scenario, ScenarioDocument};
+use uv_test::packse::scenario::{Resolution, Scenario, ScenarioDocument};
+
+#[test]
+fn prerelease_scenarios_match_the_exhaustive_oracle() -> Result<()> {
+    let target = ScenarioTarget {
+        python: PythonVersion::from_str("3.12").expect("valid Python version"),
+        platform: ScenarioPlatform::Linux,
+    };
+    for path in [
+        "prereleases/package-only-prereleases-in-range.toml",
+        "prereleases/transitive-prerelease-and-stable-dependency.toml",
+    ] {
+        for prereleases in [false, true] {
+            let context = uv_test::test_context!("3.12");
+            let mut scenario =
+                Scenario::from_path(&context.workspace_root.join("test/scenarios").join(path))?;
+            scenario.resolver_options.prereleases = prereleases;
+            let result = check_scenario(&context, &scenario, &target, 100_000)?;
+            assert_eq!(result.selection, Some(scenario.expected.packages));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn prerelease_locks_match_their_concrete_projections() -> Result<()> {
+    let contents = r#"
+name = "prerelease-lock-domain"
+[root]
+requires_python = ">=3.12,<3.14"
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1rc1"]
+[packages.a.versions."2"]
+requires = ["missing"]
+"#;
+    let targets = ScenarioTarget::matrix(
+        &["3.12", "3.13"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[ScenarioPlatform::Linux, ScenarioPlatform::Windows],
+    );
+    for prereleases in [false, true] {
+        let graph = WitnessedProjectGraph {
+            document: format!("{contents}\n[resolver_options]\nprereleases = {prereleases}\n")
+                .parse()?,
+            assignment: [("a".parse()?, "1rc1".parse()?)].into_iter().collect(),
+        };
+        let scenario = graph.document.scenario()?;
+        let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+        for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+            let options = LockCheckOptions {
+                max_states: 100_000,
+                lockfile,
+                evidence: LockEvidenceMode::PrintedV1,
+            };
+            let context = uv_test::test_context!("3.12");
+            assert!(matches!(
+                check_lock_scenario(&context, &scenario, &targets, options)?,
+                LockCheckResult::Satisfiable { projections, .. }
+                    if projections == targets.len()
+            ));
+            let context = uv_test::test_context!("3.12");
+            assert!(matches!(
+                check_witnessed_project_lock_scenario(
+                    &context,
+                    &graph,
+                    &targets,
+                    &selections,
+                    options,
+                    100_000,
+                )?,
+                LockCheckResult::Satisfiable { projections, .. }
+                    if projections == targets.len() * selections.len()
+            ));
+        }
+    }
+    Ok(())
+}
 
 #[test]
 fn fixed_scenarios_match_the_exhaustive_oracle() -> Result<()> {
@@ -182,6 +261,62 @@ fn lock_version_scores_use_the_actual_universal_lock() -> Result<()> {
         let lock = context.read("uv.lock");
         assert_eq!(score_lock_versions(&lock)?.excess_versions(), 1);
         assert_eq!(context.read("uv.lock"), lock);
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_resolution_policies_survive_lock_round_trips() -> Result<()> {
+    let targets = ScenarioTarget::matrix(
+        &["3.12", "3.13"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[ScenarioPlatform::Linux],
+    );
+    let document: ScenarioDocument = r#"
+name = "fork-policy-oracle"
+[root]
+requires_python = ">=3.12,<3.14"
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1.0.0"]
+requires_python = ">=3.12"
+[packages.a.versions."2.0.0"]
+requires_python = ">=3.13"
+"#
+    .parse()?;
+    for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+        for resolution in [
+            Resolution::Highest,
+            Resolution::Lowest,
+            Resolution::LowestDirect,
+        ] {
+            for fork_strategy in [ForkStrategy::RequiresPython, ForkStrategy::Fewest] {
+                let context = uv_test::test_context!("3.12");
+                let mut scenario = document.scenario()?;
+                scenario.resolver_options.resolution = Some(resolution);
+                scenario.resolver_options.fork_strategy = Some(fork_strategy);
+                let result = check_lock_scenario(
+                    &context,
+                    &scenario,
+                    &targets,
+                    LockCheckOptions {
+                        lockfile,
+                        ..LockCheckOptions::new(100)
+                    },
+                )?;
+                assert!(matches!(result, LockCheckResult::Satisfiable { .. }));
+                let expected = usize::from(
+                    resolution == Resolution::Highest
+                        && fork_strategy == ForkStrategy::RequiresPython,
+                );
+                assert_eq!(
+                    score_lock_versions(&context.read("uv.lock"))?.excess_versions(),
+                    expected,
+                    "{lockfile:?}, {resolution}, {fork_strategy}"
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -704,6 +839,75 @@ fn certified_project_locks_match_their_concrete_projections() -> Result<()> {
             LockCheckResult::Satisfiable { projections, .. }
                 if projections == targets.len() * selections.len()
         ));
+    }
+    Ok(())
+}
+
+#[test]
+fn restricted_lock_domains_match_their_concrete_projections() -> Result<()> {
+    let graph = WitnessedProjectGraph {
+        document: r#"
+name = "restricted-lock-domain"
+[root]
+requires_python = ">=3.12,<3.15"
+requires = ["a", "missing; sys_platform != 'win32'"]
+optional_dependencies = { feature = ["a"] }
+dependency_groups = { dev = ["a"] }
+[expected]
+satisfiable = true
+[resolver_options]
+fork_strategy = "fewest"
+environments = ["sys_platform == 'win32' and python_version >= '3.13'"]
+[packages.a.versions."1.0.0"]
+requires_python = ">=3.13,<3.15"
+"#
+        .parse()?,
+        assignment: [("a".parse()?, "1.0.0".parse()?)].into_iter().collect(),
+    };
+    let scenario = graph.document.scenario()?;
+    let selections = ScenarioProject::new(&scenario)?.selection_matrix();
+    let targets = ScenarioTarget::matrix(
+        &["3.13", "3.14"]
+            .map(|version| PythonVersion::from_str(version).expect("valid Python version")),
+        &[ScenarioPlatform::Windows],
+    );
+    for lockfile in [LockfileMode::Standard, LockfileMode::WithoutMetadata] {
+        let options = LockCheckOptions {
+            max_states: 100_000,
+            lockfile,
+            evidence: LockEvidenceMode::PrintedV1,
+        };
+        let context = uv_test::test_context!("3.13");
+        let result =
+            check_project_lock_scenario(&context, &scenario, &targets, &selections, options)?;
+        let LockCheckResult::Satisfiable { projections, .. } = result else {
+            bail!("the restricted project must be satisfiable");
+        };
+        assert_eq!(projections, targets.len() * selections.len());
+
+        let context = uv_test::test_context!("3.13");
+        let result = check_witnessed_project_lock_scenario(
+            &context,
+            &graph,
+            &targets,
+            &selections,
+            options,
+            100_000,
+        )?;
+        let LockCheckResult::Satisfiable { projections, .. } = result else {
+            bail!("the restricted witness must be satisfiable");
+        };
+        assert_eq!(projections, targets.len() * selections.len());
+
+        let mut base = graph.document.scenario()?;
+        base.root.optional_dependencies.clear();
+        base.root.dependency_groups = None;
+        let context = uv_test::test_context!("3.13");
+        let result = check_lock_scenario(&context, &base, &targets, options)?;
+        let LockCheckResult::Satisfiable { projections, .. } = result else {
+            bail!("the restricted base project must be satisfiable");
+        };
+        assert_eq!(projections, targets.len());
     }
     Ok(())
 }

@@ -13,6 +13,7 @@ use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers, release_specifiers_to_ranges};
 use uv_pep508::{MarkerEnvironment, MarkerExpression, Requirement, VersionOrUrl};
 
+use super::domain::lock_environment_marker;
 use super::scenario::Scenario;
 
 /// One selected version per reachable package.
@@ -37,9 +38,10 @@ pub struct ScenarioOracle<'a> {
 impl<'a> ScenarioOracle<'a> {
     /// Validate that the graph only uses policies understood by the oracle.
     ///
-    /// Stable, non-yanked versions with platform-independent wheels are supported. Dependencies
-    /// may have ordinary environment markers and additive extras, including recursive extras.
-    /// Dependency `Requires-Python` is interpreted as a lower bound, as documented by uv.
+    /// Non-yanked versions with platform-independent wheels are supported, including pre-releases
+    /// under the default stable-first policy or global pre-release opt-in. Dependencies may have
+    /// ordinary environment markers and additive extras, including recursive extras. Dependency
+    /// `Requires-Python` is interpreted as a lower bound, as documented by uv.
     pub fn new(scenario: &'a Scenario, environment: &'a MarkerEnvironment) -> Result<Self> {
         ensure!(
             !scenario.root.has_project_dependencies(),
@@ -54,6 +56,21 @@ impl<'a> ScenarioOracle<'a> {
         root_requirements: Vec<Requirement>,
     ) -> Result<Self> {
         validate_scenario(scenario, &root_requirements)?;
+        ensure!(
+            scenario
+                .root
+                .requires_python
+                .as_ref()
+                .is_none_or(|specifier| {
+                    specifier.contains(&environment.python_full_version().only_release())
+                }),
+            "the root does not support Python {}",
+            environment.python_full_version()
+        );
+        ensure!(
+            lock_environment_marker(scenario)?.evaluate(environment, &[]),
+            "the marker environment is outside the scenario's supported lock environments"
+        );
 
         Ok(Self {
             scenario,
@@ -91,18 +108,6 @@ impl<'a> ScenarioOracle<'a> {
         &self,
         selection: &Selection,
     ) -> Result<BTreeMap<PackageName, BTreeSet<ExtraName>>> {
-        ensure!(
-            self.scenario
-                .root
-                .requires_python
-                .as_ref()
-                .is_none_or(|specifier| {
-                    specifier.contains(&self.environment.python_full_version().only_release())
-                }),
-            "the root does not support Python {}",
-            self.environment.python_full_version()
-        );
-
         let mut active: BTreeMap<PackageName, BTreeSet<ExtraName>> = BTreeMap::new();
         for requirement in &self.root_requirements {
             if requirement.evaluate_markers(self.environment, &[]) {
@@ -266,16 +271,13 @@ pub(super) fn validate_scenario(
         scenario.resolver_options.required_environments.is_empty(),
         "the scenario oracle checks one environment at a time"
     );
+    lock_environment_marker(scenario)?;
 
     for requirement in root_requirements {
         validate_requirement(requirement)?;
     }
     for (name, package) in &scenario.packages {
         for (version, metadata) in &package.versions {
-            ensure!(
-                !version.any_prerelease(),
-                "the scenario oracle does not model pre-release selection: {name}=={version}"
-            );
             ensure!(
                 !metadata.yanked,
                 "the scenario oracle does not model yanked releases: {name}=={version}"
@@ -407,6 +409,64 @@ mod tests {
 
     fn scenario(contents: &str) -> Scenario {
         toml::from_str(contents).expect("valid scenario")
+    }
+
+    #[test]
+    fn accepts_prereleases_without_imposing_stable_preference() -> Result<()> {
+        let mut scenario = scenario(
+            r#"
+name = "prerelease-candidates"
+[root]
+requires = ["a>=1"]
+[expected]
+satisfiable = true
+[packages.a.versions."1"]
+[packages.a.versions."2rc1"]
+"#,
+        );
+        let environment = environment();
+        for prereleases in [false, true] {
+            scenario.resolver_options.prereleases = prereleases;
+            let oracle = ScenarioOracle::new(&scenario, &environment)?;
+            oracle.validate(&selection(&[("a", "1")]))?;
+            oracle.validate(&selection(&[("a", "2rc1")]))?;
+            assert_eq!(
+                oracle.find_solution(3)?.solution,
+                Some(selection(&[("a", "2rc1")]))
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn checks_prerelease_dependency_closure() -> Result<()> {
+        let scenario = scenario(
+            r#"
+name = "prerelease-closure"
+[root]
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1rc1"]
+requires = ["b==2rc1"]
+[packages.a.versions."2"]
+requires = ["missing"]
+[packages.b.versions."1"]
+[packages.b.versions."2rc1"]
+"#,
+        );
+        let environment = environment();
+        let oracle = ScenarioOracle::new(&scenario, &environment)?;
+        let valid = selection(&[("a", "1rc1"), ("b", "2rc1")]);
+        oracle.validate(&valid)?;
+        assert!(oracle.validate(&selection(&[("a", "1rc1")])).is_err());
+        assert!(
+            oracle
+                .validate(&selection(&[("a", "1rc1"), ("b", "1")]))
+                .is_err()
+        );
+        assert_eq!(oracle.find_solution(9)?.solution, Some(valid));
+        Ok(())
     }
 
     #[test]
@@ -598,10 +658,10 @@ requires_python = ">=3.12,<3.13"
         oracle.validate(&expected)?;
 
         scenario.root.requires_python = Some(">=3.12,<3.14".parse()?);
-        let oracle = ScenarioOracle::new(&scenario, &environment)?;
-        assert_eq!(oracle.find_solution(4)?.solution, None);
         insta::assert_snapshot!(
-            oracle.validate(&expected).expect_err("the root upper bound is enforced"),
+            ScenarioOracle::new(&scenario, &environment)
+                .err()
+                .expect("the root upper bound is enforced before searching"),
             @"the root does not support Python 3.14.0"
         );
         Ok(())
@@ -699,7 +759,6 @@ requires = ["b; extra != 'gpu'"]
     fn rejects_unmodeled_candidate_policies() {
         let environment = environment();
         let cases = [
-            ("pre-release", "[packages.a.versions.\"1rc1\"]"),
             ("yanked", "[packages.a.versions.\"1\"]\nyanked = true"),
             (
                 "platform wheel",
@@ -729,12 +788,40 @@ requires = ["b; extra != 'gpu'"]
             .collect::<Vec<_>>()
             .join("\n");
         insta::assert_snapshot!(errors, @"
-        pre-release: the scenario oracle does not model pre-release selection: a==1rc1
         yanked: the scenario oracle does not model yanked releases: a==1
         platform wheel: the scenario oracle requires universal wheels: a==1
         source build: the scenario oracle requires universal wheels: a==1
         direct URL: the scenario oracle does not model direct URLs: b @ https://example.org/b.whl
         PEP 751 marker: the scenario oracle does not model PEP 751 list markers: b ; 'dev' in dependency_groups
         ");
+    }
+
+    #[test]
+    fn rejects_projections_outside_restricted_lock_environments() {
+        let mut scenario = scenario(
+            r#"
+name = "restricted"
+[root]
+requires = []
+[expected]
+satisfiable = true
+[resolver_options]
+environments = ["sys_platform == 'win32'"]
+"#,
+        );
+        let environment = environment();
+        let error = ScenarioOracle::new(&scenario, &environment)
+            .err()
+            .expect("the Linux projection is outside the supported domain");
+        insta::assert_snapshot!(error, @"the marker environment is outside the scenario's supported lock environments");
+        scenario.resolver_options.environments =
+            vec!["sys_platform == 'linux'".parse().expect("valid marker")];
+        ScenarioOracle::new(&scenario, &environment)
+            .expect("the Linux projection is in the supported domain");
+        let environment = environment_for_python("3.11.0", "3.11");
+        let error = ScenarioOracle::new(&scenario, &environment)
+            .err()
+            .expect("the root Python range is checked before searching");
+        insta::assert_snapshot!(error, @"the root does not support Python 3.11.0");
     }
 }

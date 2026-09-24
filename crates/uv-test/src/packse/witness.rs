@@ -7,19 +7,21 @@ use serde::Serialize;
 
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{VersionSpecifiers, release_specifiers_to_ranges};
-use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion, Requirement, VersionOrUrl};
+use uv_pep508::{MarkerTree, Requirement, VersionOrUrl};
 
+use super::domain::{lock_environment_marker, python_marker};
 use super::oracle::{Selection, validate_scenario};
 use super::project::ScenarioProject;
 use super::scenario::{Scenario, ScenarioDocument};
 
-/// A sufficient satisfiability proof over the project's entire supported Python domain.
+/// A sufficient satisfiability proof over the project's entire supported marker domain.
 ///
 /// The activation markers and extra sets are conservative over-approximations. A rejected
 /// assignment is not evidence that the project is unsatisfiable.
 #[derive(Debug, Serialize)]
 pub struct MarkerWitnessCertificate {
     requires_python: VersionSpecifiers,
+    supported_environments: Option<String>,
     assignment: Selection,
     activations: BTreeMap<PackageName, CertifiedActivation>,
     checked_requirements: usize,
@@ -66,6 +68,7 @@ struct Activation {
 ///
 /// All optional project dependencies and groups are roots. Package-extra predicates must be
 /// additive; each package's extra set is the union of its requests across every environment.
+/// The domain intersects the root Python range with the configured supported environments.
 /// This deliberately checks some extra requirements in a larger domain than necessary, so a
 /// proof is sufficient but incomplete. No concrete environment or resolver output is sampled.
 /// `max_work` bounds requirement evaluations; exhausting it does not imply unsatisfiability.
@@ -110,10 +113,11 @@ pub fn certify_project_marker_witness(
         );
     }
 
-    let domain = python_marker(requires_python);
+    let environments = lock_environment_marker(&scenario)?;
+    let domain = python_marker(requires_python).and(environments);
     ensure!(
         !domain.is_false(),
-        "the root Python marker domain must not be empty"
+        "the supported project marker domain must not be empty"
     );
     let mut state = WitnessState {
         scenario: &scenario,
@@ -149,6 +153,7 @@ pub fn certify_project_marker_witness(
 
     Ok(MarkerWitnessCertificate {
         requires_python: requires_python.clone(),
+        supported_environments: environments.try_to_string(),
         assignment: assignment.clone(),
         activations: state
             .activations
@@ -254,18 +259,6 @@ impl WitnessState<'_> {
     }
 }
 
-/// Build the full release-only Python condition, retaining exclusions and upper bounds.
-fn python_marker(specifiers: &VersionSpecifiers) -> MarkerTree {
-    specifiers
-        .iter()
-        .fold(MarkerTree::TRUE, |marker, specifier| {
-            marker.and(MarkerTree::expression(MarkerExpression::Version {
-                key: MarkerValueVersion::PythonFullVersion,
-                specifier: specifier.clone(),
-            }))
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +346,72 @@ requires_python = ">=3.13,<3.15"
             let error = certify_project_marker_witness(&document, &assignment, 100)
                 .expect_err("the assigned version excludes a reachable Python region");
             assert!(error.to_string().contains("entire reachable Python domain"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn certifies_only_the_configured_lock_domain() -> Result<()> {
+        let contents = r#"
+name = "restricted-witness"
+[root]
+requires_python = ">=3.12,<3.15"
+requires = ["a", "missing; sys_platform != 'win32'"]
+[expected]
+satisfiable = true
+[resolver_options]
+environments = ["sys_platform == 'win32' and python_version >= '3.13'"]
+[packages.a.versions."1.0.0"]
+requires_python = ">=3.13,<3.15"
+"#;
+        let assignment = assignment(&[("a", "1.0.0")]);
+        let certificate = certify_project_marker_witness(&contents.parse()?, &assignment, 100)?;
+        assert_eq!(
+            activation(&certificate, "a"),
+            "python_full_version >= '3.13' and python_full_version < '3.15' and sys_platform == 'win32'"
+                .parse()?,
+        );
+        assert_eq!(
+            certificate.supported_environments,
+            Some(
+                "sys_platform == 'win32' and python_version >= '3.13'"
+                    .parse::<MarkerTree>()?
+                    .try_to_string()
+                    .expect("restricted marker"),
+            )
+        );
+        let unrestricted = contents
+            .replace(
+                "environments = [\"sys_platform == 'win32' and python_version >= '3.13'\"]",
+                "environments = []",
+            )
+            .parse()?;
+        assert!(certify_project_marker_witness(&unrestricted, &assignment, 100).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn certifies_prerelease_assignments_without_version_preferences() -> Result<()> {
+        let contents = r#"
+name = "prerelease-witness"
+[root]
+requires_python = ">=3.12,<3.15"
+requires = ["a"]
+[expected]
+satisfiable = true
+[packages.a.versions."1rc1"]
+[packages.a.versions."2"]
+requires = ["missing"]
+"#;
+        let prerelease = assignment(&[("a", "1rc1")]);
+        for enabled in [false, true] {
+            let document =
+                format!("{contents}\n[resolver_options]\nprereleases = {enabled}\n").parse()?;
+            let certificate = certify_project_marker_witness(&document, &prerelease, 100)?;
+            assert_eq!(certificate.assignment(), &prerelease);
+            assert!(
+                certify_project_marker_witness(&document, &assignment(&[("a", "2")]), 100).is_err()
+            );
         }
         Ok(())
     }
