@@ -1,6 +1,10 @@
+import ast
+import itertools
 import json
+import re
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -9,6 +13,68 @@ def job(workflow: str, name: str, next_name: str | None = None) -> str:
     contents = (ROOT / ".github/workflows" / workflow).read_text()
     section = contents.split(f"  {name}:\n", 1)[1]
     return section.split(f"  {next_name}:\n", 1)[0] if next_name else section
+
+
+def wakeup_condition() -> str:
+    section = job("promote-pull-request.yml", "replay-promoted-children", "recover")
+    condition = section.split("    if: >-\n", 1)[1].split("    runs-on:", 1)[0].strip()
+    if not condition.startswith("${{") or not condition.endswith("}}"):
+        raise ValueError("Expected an explicit workflow condition")
+    return " ".join(condition[3:-2].split())
+
+
+def wakeup_is_enabled(
+    *,
+    repository: str = "astral-sh/uv-dev",
+    ref: str = "refs/heads/main",
+    prepare: str = "success",
+    action: str = "observed-closed",
+    promote: str = "skipped",
+    closed: str = "",
+    cancelled: bool = False,
+) -> bool:
+    """Evaluate only the condition language used by the actual wakeup job."""
+    values = {
+        "github.repository": repository,
+        "github.ref": ref,
+        "needs.prepare.result": prepare,
+        "needs.prepare.outputs.action": action,
+        "needs.promote.result": promote,
+        "needs.promote.outputs.closed": closed,
+    }
+    condition = wakeup_condition().replace("&&", " and ").replace("||", " or ")
+    expression = ast.parse(re.sub(r"!(?!=)", "not ", condition), mode="eval")
+
+    def value(node: ast.AST) -> bool | str:
+        match node:
+            case ast.Constant(value=str() as text):
+                return text
+            case ast.Attribute():
+                return values[ast.unparse(node)]
+            case ast.Call(func=ast.Name(id="always"), args=[], keywords=[]):
+                return True
+            case ast.Call(func=ast.Name(id="cancelled"), args=[], keywords=[]):
+                return cancelled
+            case ast.UnaryOp(op=ast.Not(), operand=operand):
+                return not boolean(operand)
+            case ast.BoolOp(op=ast.And(), values=operands):
+                evaluated = tuple(boolean(operand) for operand in operands)
+                return all(evaluated)
+            case ast.BoolOp(op=ast.Or(), values=operands):
+                evaluated = tuple(boolean(operand) for operand in operands)
+                return any(evaluated)
+            case ast.Compare(left=left, ops=[ast.Eq()], comparators=[right]):
+                return value(left) == value(right)
+            case _:
+                raise ValueError(f"Unexpected workflow condition: {ast.dump(node)}")
+
+    def boolean(node: ast.AST) -> bool:
+        result = value(node)
+        if not isinstance(result, bool):
+            raise TypeError("Expected a Boolean workflow condition")
+        return result
+
+    return boolean(expression.body)
 
 
 class PromotionWorkflowBoundaryTests(unittest.TestCase):
@@ -21,8 +87,9 @@ class PromotionWorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("pull_requests: write", prepare)
         self.assertNotIn("contents: write", prepare)
 
-    def test_observed_closed_preparation_does_not_activate_mutation_jobs(self) -> None:
-        workflow = (ROOT / ".github/workflows/promote-pull-request.yml").read_text()
+    def test_observed_closed_preparation_only_wakes_independent_child_checks(
+        self,
+    ) -> None:
         prepare = job("promote-pull-request.yml", "prepare", "queue")
         queue = job("promote-pull-request.yml", "queue", "replay-queued-promotion")
         update = job(
@@ -39,7 +106,74 @@ class PromotionWorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("needs.prepare.outputs.action == 'promote'", publisher)
         self.assertIn("needs.promote.outputs.closed == 'true'", replay)
         self.assertIn("needs.prepare.outputs.approval_id != ''", recover)
-        self.assertNotIn("observed-closed", workflow)
+        self.assertIn("needs: [prepare, promote]", replay)
+        for section in (prepare, queue, update, publisher, recover):
+            self.assertNotIn("observed-closed", section)
+
+    def test_parent_wakeup_condition_truth_table(self) -> None:
+        self.assertEqual(
+            wakeup_condition(),
+            "always() && !cancelled() && "
+            "github.repository == 'astral-sh/uv-dev' && "
+            "github.ref == 'refs/heads/main' && "
+            "needs.prepare.result == 'success' && "
+            "( (needs.promote.result == 'success' && "
+            "needs.promote.outputs.closed == 'true') || "
+            "(needs.promote.result == 'skipped' && "
+            "needs.prepare.outputs.action == 'observed-closed') )",
+        )
+        statuses = ("success", "failure", "skipped", "cancelled")
+        for prepare, action, promote, closed, cancelled in itertools.product(
+            statuses,
+            ("", "promote", "update-parent", "observed-closed", "stale", "unknown"),
+            statuses,
+            ("", "false", "true"),
+            (False, True),
+        ):
+            with self.subTest(
+                prepare=prepare,
+                action=action,
+                promote=promote,
+                closed=closed,
+                cancelled=cancelled,
+            ):
+                self.assertEqual(
+                    wakeup_is_enabled(
+                        prepare=prepare,
+                        action=action,
+                        promote=promote,
+                        closed=closed,
+                        cancelled=cancelled,
+                    ),
+                    not cancelled
+                    and prepare == "success"
+                    and (
+                        (promote == "success" and closed == "true")
+                        or (promote == "skipped" and action == "observed-closed")
+                    ),
+                )
+        for repository, ref in itertools.product(
+            ("astral-sh/uv", "astral-sh/uv-security", "someone/uv-dev"),
+            ("refs/heads/main", "refs/heads/other", "refs/pull/10/merge"),
+        ):
+            with self.subTest(repository=repository, ref=ref):
+                self.assertFalse(wakeup_is_enabled(repository=repository, ref=ref))
+        self.assertFalse(wakeup_is_enabled(ref="refs/heads/other"))
+
+    def test_wakeup_condition_evaluator_rejects_unknown_syntax(self) -> None:
+        for expression in (
+            "always() || unknown()",
+            "needs.prepare.result != 'success'",
+            "github.repository.lower() == 'astral-sh/uv-dev'",
+            "needs.prepare.outputs.unknown == ''",
+            "1",
+        ):
+            with (
+                self.subTest(expression=expression),
+                patch(f"{__name__}.wakeup_condition", return_value=expression),
+                self.assertRaises((KeyError, TypeError, ValueError)),
+            ):
+                wakeup_is_enabled()
 
     def test_queue_record_and_dispatch_have_separate_writers(self) -> None:
         queue = job("promote-pull-request.yml", "queue", "replay-queued-promotion")

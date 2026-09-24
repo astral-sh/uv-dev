@@ -571,8 +571,20 @@ jobs:
 
   replay-promoted-children:
     name: Check children of promoted pull request
-    needs: promote
-    if: github.repository == 'astral-sh/uv-dev' && github.ref == 'refs/heads/main' && needs.promote.outputs.closed == 'true'
+    needs: [prepare, promote]
+    if: >-
+      ${{
+        always() && !cancelled() &&
+        github.repository == 'astral-sh/uv-dev' &&
+        github.ref == 'refs/heads/main' &&
+        needs.prepare.result == 'success' &&
+        (
+          (needs.promote.result == 'success' &&
+           needs.promote.outputs.closed == 'true') ||
+          (needs.promote.result == 'skipped' &&
+           needs.prepare.outputs.action == 'observed-closed')
+        )
+      }}
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     environment: automations
     timeout-minutes: 10

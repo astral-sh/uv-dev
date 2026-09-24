@@ -194,9 +194,11 @@ is an untrusted request to revalidate, not reconstructed publication authority.
 Before ordinary planning, `promotions prepare` can recognize an already-closed direct `uv-dev`
 promotion. Its read-only `ObservedClosedPromotion` result requires an unedited bot-App receipt and
 an exact current source/upstream revision, followed by a fresh read of both pull requests. It emits
-only `action=observed-closed` and a summary; it cannot publish, recover, close a pull request, or
-dispatch children. Rebased and private promotions retain their separate approval and planning
-contracts because the historical promotion receipt does not record the transformed head or consent.
+only `action=observed-closed` and a summary; it cannot publish, recover, or close a pull request. A
+separately gated replay job can use this observation to check the parent's queued children, each of
+which still requires its own current approval and synchronized-parent proof. Rebased and private
+promotions retain their separate approval and planning contracts because the historical promotion
+receipt does not record the transformed head or consent.
 
 `PromotionApproval.head` comes from the trusted dispatch, not the issue-event response. The trusted
 v2 dispatcher source binds that value to the signed webhook's `pull_request.head.sha` and rejects a
@@ -250,9 +252,10 @@ survives or has been deleted. Manual promotion retains its existing-branch behav
 bot-ready transition revokes the old replay approval.
 
 The workflow wakes the queue after a successful public-main sync, after recording a new queue entry,
-and after finishing a promoted parent's source-close receipt. The last wakeup considers only that
-parent's children. Queue recording has only source-PR write authority. Local replay uses the source
-repository's own `GITHUB_TOKEN`, whose
+and after finishing or observing a promoted parent's source closure. The last wakeup considers only
+that parent's children; retries may dispatch the same still-authorized child again. Queue recording
+has only source-PR write authority. Local replay uses the source repository's own `GITHUB_TOKEN`,
+whose
 [`workflow_dispatch` calls can start another run](https://docs.github.com/en/actions/concepts/security/github_token).
 Cross-repository replay runs in `replay-queued-promotions.yml`, with an exact reusable-workflow STS
 rule targeting only `uv-dev`; this remains distinct from the first matching direct sync/publisher
