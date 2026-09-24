@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -47,7 +47,8 @@ use crate::implementation::{
 use crate::installation::{PythonInstallation, PythonInstallationKey};
 use crate::managed::{ManagedPythonInstallation, compare_build_revisions};
 use crate::python_version::{
-    BuildRevisionError, python_build_revision_from_env, python_named_build_revision_from_env,
+    BuildRevisionError, python_build_revision_from_env, python_build_revisions_from_env,
+    python_named_build_revision_from_env,
 };
 use crate::{
     Interpreter, PythonBuildName, PythonBuildRequest, PythonRequest, PythonVariant, PythonVersion,
@@ -1172,6 +1173,41 @@ impl ManagedPythonDownloadList {
     ) -> impl Iterator<Item = &ManagedPythonDownload> {
         self.iter_all()
             .filter(move |download| request.satisfied_by_download(download))
+    }
+
+    /// Iterate over matching downloads, applying build revision constraints from the environment
+    /// without filling in a default implementation or platform.
+    pub fn iter_matching_with_build_revisions(
+        &self,
+        request: &PythonDownloadRequest,
+    ) -> Result<impl Iterator<Item = &ManagedPythonDownload>, Error> {
+        let explicit_build_name = request
+            .version
+            .as_ref()
+            .and_then(VersionRequest::build_request)
+            .is_some_and(|build_request| build_request.build_name().is_some());
+        let named_build_revision = if request.build_revision.is_none() && explicit_build_name {
+            python_named_build_revision_from_env()?
+        } else {
+            None
+        };
+        let build_revisions = if request.build_revision.is_none() && !explicit_build_name {
+            python_build_revisions_from_env()?
+        } else {
+            BTreeMap::new()
+        };
+        Ok(self.iter_matching(request).filter(move |download| {
+            let build_revision = named_build_revision.as_ref().or_else(|| {
+                match download.key().implementation().as_ref() {
+                    LenientImplementationName::Known(implementation) => {
+                        build_revisions.get(implementation)
+                    }
+                    LenientImplementationName::Unknown(_) => None,
+                }
+            });
+            build_revision
+                .is_none_or(|revision| download.build_revision() == Some(revision.as_str()))
+        }))
     }
 
     /// Return the first [`ManagedPythonDownload`] matching a request, if any.

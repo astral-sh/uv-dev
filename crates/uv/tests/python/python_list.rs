@@ -85,6 +85,98 @@ fn python_list_versioned_catalog_artifacts() -> Result<()> {
 }
 
 #[test]
+fn python_list_build_revision_pins() -> Result<()> {
+    // Listing catalog entries does not download or execute Python.
+    let context = uv_test::test_context_with_versions!(&[]).with_collapsed_whitespace();
+    let catalog = context.temp_dir.child("downloads.json");
+    let mut downloads = serde_json::Map::new();
+    for (name, build_name) in [
+        ("cpython", None),
+        ("cpython", Some("custom")),
+        ("pypy", None),
+    ] {
+        for revision in ["9", "10"] {
+            let label = format!("{name}-{}-{revision}", build_name.unwrap_or("unnamed"));
+            let mut entry = serde_json::json!({
+                "name": name, "arch": { "family": "x86_64", "variant": null },
+                "os": "linux", "libc": "gnu", "major": 3, "minor": 13, "patch": 7,
+                "build_revision": revision,
+                "url": format!("https://example.com/{label}.tar.gz")
+            });
+            if let Some(build_name) = build_name {
+                entry["build_name"] = serde_json::json!(build_name);
+            }
+            downloads.insert(label, entry);
+        }
+    }
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1, "downloads": downloads
+    }))?)?;
+    let list = || {
+        let mut command = context.python_list();
+        command
+            .args([
+                "--only-downloads",
+                "--all-platforms",
+                "--all-arches",
+                "--all-versions",
+                "--show-urls",
+            ])
+            .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, catalog.path());
+        command
+    };
+
+    // Unpinned listings choose the newest revision for each identity.
+    uv_snapshot!(context.filters(), list(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.13.7-linux-x86_64-gnu https://example.com/cpython-unnamed-10.tar.gz
+    cpython-3.13.7+custom-linux-x86_64-gnu https://example.com/cpython-custom-10.tar.gz
+    pypy-3.13.7-linux-x86_64-gnu https://example.com/pypy-unnamed-10.tar.gz
+    ");
+
+    // The named-build pin applies to explicit build names, independently of the CPython pin.
+    uv_snapshot!(context.filters(), list().arg("3.13+custom")
+        .env(EnvVars::UV_PYTHON_BUILD_REVISION, "9")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "missing"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.13.7+custom-linux-x86_64-gnu https://example.com/cpython-custom-9.tar.gz
+    ");
+    uv_snapshot!(context.filters(), list().arg("3.13+custom")
+        .env(EnvVars::UV_PYTHON_BUILD_REVISION, "missing"), @"
+    exit_code: 0 (success)
+    ");
+
+    // A named-build pin does not constrain requests without an explicit build name.
+    uv_snapshot!(context.filters(), list().arg("3.13")
+        .env(EnvVars::UV_PYTHON_BUILD_REVISION, "missing"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.13.7-linux-x86_64-gnu https://example.com/cpython-unnamed-10.tar.gz
+    pypy-3.13.7-linux-x86_64-gnu https://example.com/pypy-unnamed-10.tar.gz
+    ");
+
+    // Legacy pins remain implementation-specific, without narrowing a broad listing to CPython.
+    uv_snapshot!(context.filters(), list().arg("3.13")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "9"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.13.7-linux-x86_64-gnu https://example.com/cpython-unnamed-9.tar.gz
+    pypy-3.13.7-linux-x86_64-gnu https://example.com/pypy-unnamed-10.tar.gz
+    ");
+    uv_snapshot!(context.filters(), list().arg("3.13")
+        .env(EnvVars::UV_PYTHON_PYPY_BUILD, "9"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.13.7-linux-x86_64-gnu https://example.com/cpython-unnamed-10.tar.gz
+    pypy-3.13.7-linux-x86_64-gnu https://example.com/pypy-unnamed-9.tar.gz
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn python_list() {
     let mut context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
