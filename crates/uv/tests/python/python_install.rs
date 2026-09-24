@@ -886,6 +886,58 @@ async fn python_project_build_name_catalog() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_project_prerelease_environment_reuse() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_python_install_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+    context.python_install().arg("3.14.0rc3").assert().success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.14.0rc3"
+    "#})?;
+    context
+        .sync()
+        .arg("--python")
+        .arg("3.14.0rc3")
+        .assert()
+        .success();
+    let marker = context.venv.child("prerelease-marker");
+    marker.touch()?;
+
+    // A range without an explicit prerelease accepts the same interpreter on repeated runs.
+    for _ in 0..2 {
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.run()
+                .arg("--offline")
+                .arg("--python")
+                .arg(">=3.14")
+                .arg("python")
+                .arg("-c")
+                .arg("import platform; print(platform.python_version())"), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            3.14.0rc3
+
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            Checked in [TIME]
+            ");
+        }
+        marker.assert(predicate::path::exists());
+    }
+    Ok(())
+}
+
 #[tokio::test]
 #[cfg(feature = "test-python-managed")]
 async fn python_build_name_catalog_fallback() -> anyhow::Result<()> {

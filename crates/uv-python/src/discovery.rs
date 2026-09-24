@@ -2270,9 +2270,11 @@ impl PythonRequest {
         };
         let key = ManagedPythonInstallation::key_from_interpreter(interpreter)
             .unwrap_or_else(|| interpreter.key());
+        // Version and variant compatibility are determined by the interpreter check, including
+        // its prerelease range semantics. Only the build name remains to be checked here.
         request.version().map_or_else(
             || key.build_name().is_none(),
-            |version| version.matches_installation_key(&key),
+            |version| version.matches_build_name(&key),
         )
     }
 
