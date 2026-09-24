@@ -45,7 +45,7 @@
 //! or a terminal `true`/`false` node. Interning allows the reduction rule that isomorphic nodes are
 //! merged to be applied globally.
 
-use std::alloc::Allocator;
+use std::alloc::{Allocator, Global};
 use std::cmp::Ordering;
 use std::fmt;
 use std::ops::Bound;
@@ -688,7 +688,7 @@ impl InternerGuard<'_> {
     /// this would return a marker
     /// `os_name == ... or sys_platform == ...`.
     pub(crate) fn without_extras(&mut self, i: NodeId) -> NodeId {
-        with_arena(|allocator| self.without_extras_in(i, allocator))
+        self.without_extras_in(i, Global)
     }
 
     fn without_extras_in<A: Allocator>(&mut self, i: NodeId, allocator: A) -> NodeId {
