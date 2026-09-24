@@ -10,7 +10,6 @@ use std::alloc::{Allocator, Global};
 use std::borrow::Cow;
 use std::fmt;
 use std::{collections::BTreeSet, hash::Hash, rc::Rc};
-use uv_allocator::with_arena;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 
 use crate::dependency_groups::{DependencyGroupSpecifier, DependencyGroups};
@@ -107,15 +106,7 @@ impl Conflicts {
             return;
         }
 
-        with_arena(|allocator| {
-            // Large inclusion graphs can keep many propagation tables live at once.
-            // Give those tables independent allocations so their storage can be freed early.
-            if groups.keys().count() <= 24 {
-                self.expand_transitive_group_includes_in(package, groups, Global, allocator);
-            } else {
-                self.expand_transitive_group_includes_in(package, groups, Global, Global);
-            }
-        });
+        self.expand_transitive_group_includes_in(package, groups, Global, Global);
     }
 
     fn expand_transitive_group_includes_in<A: Allocator + Copy, B: Allocator + Copy>(
