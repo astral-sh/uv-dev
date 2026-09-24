@@ -46,7 +46,10 @@ fn format_markers(criterion: &mut Criterion<WallTime>) {
         include_str!("../../../uv.lock"),
         include_str!("../../../scripts/benchmark/uv.lock"),
     ] {
-        collect_markers(&lockfile.parse::<toml::Value>().unwrap(), &mut markers);
+        collect_markers(
+            &toml::from_str::<toml::Value>(lockfile).unwrap(),
+            &mut markers,
+        );
     }
 
     let mut group = criterion.benchmark_group("marker_format");
