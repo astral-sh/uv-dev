@@ -238,7 +238,7 @@ fn format_markers(criterion: &mut Criterion<WallTime>) {
         include_str!("../../../scripts/benchmark/uv.lock"),
     ] {
         collect_markers(
-            &lockfile.parse::<toml::Value>().expect("valid lockfile"),
+            &toml::from_str::<toml::Value>(lockfile).expect("valid lockfile"),
             &mut markers,
         );
     }
