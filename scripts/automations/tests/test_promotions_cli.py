@@ -18,6 +18,7 @@ from uv_automations.models import (
 from uv_automations.promotion_models import (
     AUTOMATIONS_BOT_ID,
     UV_DEV_REPOSITORY,
+    UV_SECURITY_REPOSITORY,
     ConvertedToDraftEvent,
     LabelAddedEvent,
     PromotionActor,
@@ -159,6 +160,16 @@ class PromotionCliTests(unittest.TestCase):
                     summary=Path("summary"),
                 )
                 with (
+                    patch.object(
+                        PromotionGitHub,
+                        "_command",
+                        side_effect=AssertionError("Unexpected GitHub request"),
+                    ),
+                    patch.object(
+                        promotions_cli,
+                        "inspect_completed_promotion",
+                        return_value=None,
+                    ) as closed,
                     patch.object(promotions_cli, "plan_promotion") as ordinary,
                     patch.object(promotions_cli, "plan_queued_promotion") as replay,
                     patch.object(promotions_cli, "_write_plan") as write,
@@ -170,6 +181,11 @@ class PromotionCliTests(unittest.TestCase):
                 selected.assert_called_once()
                 self.assertEqual(selected.call_args.args[1], request)
                 skipped.assert_not_called()
+                if approval_id is None:
+                    closed.assert_called_once()
+                    self.assertEqual(closed.call_args.args[1], request)
+                else:
+                    closed.assert_not_called()
                 write.assert_called_once_with(
                     selected.return_value, command.github_output, command.summary
                 )
@@ -200,6 +216,35 @@ class PromotionCliTests(unittest.TestCase):
             cli.run(command)
         get_pull_request.assert_called_once_with(SOURCE)
         self.assertEqual(output.getvalue(), "")
+
+    def test_private_preparation_does_not_observe_public_completion(self) -> None:
+        command = promotions_cli.PreparePromotion(
+            request=PromotionRequest(PromotionScope(UV_SECURITY_REPOSITORY, 20), HEAD),
+            github_output=Path("output"),
+            summary=Path("summary"),
+        )
+        with (
+            patch.object(
+                PromotionGitHub,
+                "_command",
+                side_effect=AssertionError("Unexpected GitHub request"),
+            ),
+            patch.object(
+                promotions_cli,
+                "inspect_completed_promotion",
+                side_effect=AssertionError("Unexpected public completion read"),
+            ),
+            patch.object(promotions_cli, "plan_promotion") as ordinary,
+            patch.object(promotions_cli, "plan_queued_promotion") as replay,
+            patch.object(promotions_cli, "_write_plan") as write,
+        ):
+            cli.run(command)
+        ordinary.assert_called_once()
+        self.assertEqual(ordinary.call_args.args[1], command.request)
+        replay.assert_not_called()
+        write.assert_called_once_with(
+            ordinary.return_value, command.github_output, command.summary
+        )
 
 
 if __name__ == "__main__":

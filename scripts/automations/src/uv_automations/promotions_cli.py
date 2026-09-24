@@ -36,6 +36,7 @@ from uv_automations.workflows.promotion import (
     WaitForSync,
     plan_promotion,
 )
+from uv_automations.workflows.promotion_closed import inspect_completed_promotion
 from uv_automations.workflows.promotion_completion import (
     PromotionCompletion,
     SkippedCompletion,
@@ -443,6 +444,23 @@ def run(command: PromotionCommand) -> None:
     match command:
         case PreparePromotion():
             reader = PromotionGitHub()
+            if (
+                command.request.source.repository == UV_DEV_REPOSITORY
+                and command.request.approval_id is None
+                and (observed := inspect_completed_promotion(reader, command.request))
+                is not None
+            ):
+                write_output(command.github_output, "action", "observed-closed")
+                append_summary(
+                    command.summary,
+                    f"The requested revision `{observed.head}` is already published "
+                    f"in [astral-sh/uv#{observed.upstream.scope.number}]"
+                    f"(https://github.com/astral-sh/uv/pull/{observed.upstream.scope.number}); "
+                    f"[astral-sh/uv-dev#{observed.source.scope.number}]"
+                    f"(https://github.com/astral-sh/uv-dev/pull/{observed.source.scope.number}) "
+                    "is closed.",
+                )
+                return
             plan = (
                 plan_queued_promotion(reader, command.request)
                 if command.request.source.repository == UV_DEV_REPOSITORY
