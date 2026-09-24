@@ -1407,23 +1407,48 @@ impl MarkerTree {
     /// The operator provided to the function is guaranteed to be
     /// `MarkerOperator::Equal` or `MarkerOperator::NotEqual`.
     pub fn visit_extras(self, mut f: impl FnMut(MarkerOperator, &ExtraName)) {
+        fn visit_children(
+            children: impl Iterator<Item = MarkerTree>,
+            f: &mut impl FnMut(MarkerOperator, &ExtraName),
+        ) {
+            // Only child identity matters here. Keep the common case inline and
+            // allocate a set only when a node has more than five distinct children.
+            let mut inline = [MarkerTree::FALSE; 5];
+            let mut len = 0;
+            let mut overflow: Option<rustc_hash::FxHashSet<MarkerTree>> = None;
+            for child in children {
+                if let Some(seen) = &mut overflow {
+                    if !seen.insert(child) {
+                        continue;
+                    }
+                } else {
+                    if inline[..len].contains(&child) {
+                        continue;
+                    }
+                    if len < inline.len() {
+                        inline[len] = child;
+                        len += 1;
+                    } else {
+                        let mut seen: rustc_hash::FxHashSet<_> = inline.into_iter().collect();
+                        seen.insert(child);
+                        overflow = Some(seen);
+                    }
+                }
+                imp(child, f);
+            }
+        }
+
         fn imp(tree: MarkerTree, f: &mut impl FnMut(MarkerOperator, &ExtraName)) {
             match tree.kind() {
                 MarkerTreeKind::True | MarkerTreeKind::False => {}
                 MarkerTreeKind::Version(kind) => {
-                    for (tree, _) in simplify::collect_edges(kind.edges()) {
-                        imp(tree, f);
-                    }
+                    visit_children(kind.edges().map(|(_, tree)| tree), f);
                 }
                 MarkerTreeKind::VersionString(kind) => {
-                    for (tree, _) in simplify::collect_edges(kind.edges()) {
-                        imp(tree, f);
-                    }
+                    visit_children(kind.edges().map(|(_, tree)| tree), f);
                 }
                 MarkerTreeKind::String(kind) => {
-                    for (tree, _) in simplify::collect_edges(kind.children()) {
-                        imp(tree, f);
-                    }
+                    visit_children(kind.children().map(|(_, tree)| tree), f);
                 }
                 MarkerTreeKind::In(kind) => {
                     for (_, tree) in kind.children() {
@@ -3724,6 +3749,31 @@ mod test {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn visit_extras_distinct_children() {
+        for distinct in [2, 7] {
+            let expression = (0..24)
+                .map(|index| {
+                    format!(
+                        "(platform_machine == 'machine-{index:02}' and extra == 'extra-{:02}')",
+                        index % distinct
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" or ");
+            let mut extras = Vec::new();
+            m(&expression).visit_extras(|operator, extra| {
+                extras.push((operator, extra.to_string()));
+            });
+            assert_eq!(
+                extras,
+                (0..distinct)
+                    .map(|index| (MarkerOperator::Equal, format!("extra-{index:02}")))
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     /// Case a: There is no version `3` (no trailing zero) in the interner yet.

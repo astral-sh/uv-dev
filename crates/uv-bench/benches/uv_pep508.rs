@@ -95,6 +95,36 @@ fn format_markers(criterion: &mut Criterion<WallTime>) {
         });
     });
     group.finish();
+
+    let mut group = criterion.benchmark_group("marker_visit_extras");
+    group.throughput(Throughput::Elements(markers.len() as u64));
+    group.bench_function("lockfiles", |benchmark| {
+        benchmark.iter(|| {
+            for marker in &markers {
+                marker.as_ref().visit_extras(|operator, extra| {
+                    black_box((operator, extra));
+                });
+            }
+        });
+    });
+    for alternatives in [4, 32, 128] {
+        let expression = (0..alternatives)
+            .map(|index| format!("platform_machine == 'machine-{index:04}'"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        let marker = format!("extra == 'test' and ({expression})")
+            .parse::<MarkerTree>()
+            .unwrap();
+        group.throughput(Throughput::Elements(1));
+        group.bench_function(format!("{alternatives}_alternatives"), |benchmark| {
+            benchmark.iter(|| {
+                black_box(marker).visit_extras(|operator, extra| {
+                    black_box((operator, extra));
+                });
+            });
+        });
+    }
+    group.finish();
 }
 
 criterion_group!(uv_pep508, format_markers);
