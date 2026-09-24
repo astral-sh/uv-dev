@@ -529,75 +529,45 @@ jobs:
 
           upstream_number=$(jq --exit-status --raw-output '.number | select(type == "number")' <<< "$upstream_pull_request")
 
-          # Automation controls and triage labels belong to the source repository.
-          upstream_labels=$(jq '{labels: [.labels[].name | select(test("^(bot|priority|size|risk|severity):") | not)]}' <<< "$source_pull_request")
-          if jq --exit-status '.labels | length > 0' <<< "$upstream_labels" > /dev/null; then
-            gh api \
-              --method POST \
-              "repos/astral-sh/uv/issues/$upstream_number/labels" \
-              --input - \
-              --silent <<< "$upstream_labels"
-          fi
-
-          gh api \
-            --method POST \
-            "repos/astral-sh/uv/issues/$upstream_number/assignees" \
-            --raw-field "assignees[]=$PROMOTER" \
-            --silent
-
-          echo "number=$upstream_number" >> "$GITHUB_OUTPUT"
+          jq --null-input --compact-output \
+            --arg source_repository "$GITHUB_REPOSITORY" \
+            --argjson source_repository_id "$GITHUB_REPOSITORY_ID" \
+            --argjson source_number "$PULL_REQUEST_NUMBER" \
+            --arg source_base_ref "$SOURCE_BASE_REF" --arg source_base_sha "$SOURCE_BASE_SHA" \
+            --arg head_ref "$HEAD_REF" --arg head_sha "$EXPECTED_HEAD_SHA" \
+            --arg action "$ACTION" --argjson approval_id "$APPROVAL_ID" \
+            --arg approval_kind "$APPROVAL_EVENT" --arg replay_approval_id "$REPLAY_APPROVAL_ID" \
+            --argjson upstream_number "$upstream_number" --argjson upstream_repository_id "$UV_REPOSITORY_ID" \
+            --arg upstream_base "$BASE_REF" --arg promoted_head "$PROMOTED_HEAD" \
+            '{
+              version: 1,
+              source: {repository: $source_repository, repository_id: $source_repository_id, pull_request: $source_number},
+              source_base: {repository: $source_repository, repository_id: $source_repository_id, ref: $source_base_ref, sha: $source_base_sha},
+              source_head: {repository: $source_repository, repository_id: $source_repository_id, ref: $head_ref, sha: $head_sha},
+              action: $action, approval_id: $approval_id, approval_kind: $approval_kind,
+              replay_approval_id: (if $replay_approval_id == "" then null else ($replay_approval_id | tonumber) end),
+              upstream: {repository: "astral-sh/uv", repository_id: $upstream_repository_id, pull_request: $upstream_number},
+              upstream_base: $upstream_base, promoted_head: $promoted_head
+            }' |
+            "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions complete-metadata \
+              --repo "$GITHUB_REPOSITORY" --repository-id "$GITHUB_REPOSITORY_ID" \
+              --pull-request "$PULL_REQUEST_NUMBER" \
+              --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Close source pull request
         id: close
         if: steps.promote.outputs.number != ''
         env:
-          APPROVAL_EVENT: ${{ needs.prepare.outputs.approval_event }}
-          APPROVAL_ID: ${{ needs.prepare.outputs.approval_id }}
           AUTOMATIONS_PYTHON: ${{ steps.automations.outputs.python }}
-          EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
           GH_TOKEN: ${{ steps.token.outputs.token }}
-          PROMOTED_HEAD: ${{ steps.verify.outputs.head_sha }}
+          PROMOTION_COMPLETION: ${{ steps.promote.outputs.completion }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
-          REPLAY_APPROVAL_ID: ${{ inputs.approval_id }}
-          UPSTREAM_NUMBER: ${{ steps.promote.outputs.number }}
         run: |
-          current_approval=$(
-            "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions current-approval \
-              --repo "$GITHUB_REPOSITORY" --repository-id "$GITHUB_REPOSITORY_ID" \
-              --pull-request "$PULL_REQUEST_NUMBER" --expected-head "$EXPECTED_HEAD_SHA" \
-              --approval-id "$REPLAY_APPROVAL_ID"
-          )
-          if [ "$current_approval" != "$APPROVAL_ID" ]; then
-            echo "The promotion approval changed after publication; leaving the source unchanged."
-            exit 0
-          fi
-          pull_request=$(gh pr view "$PULL_REQUEST_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isDraft,labels,headRefOid)
-          if ! jq --exit-status \
-            --arg approval_event "$APPROVAL_EVENT" --arg label "$PROMOTION_LABEL" \
-            '.state == "OPEN" and ((.isDraft | not) or $approval_event == "labeled") and ($approval_event != "labeled" or any(.labels[]; .name == $label))' \
-            <<< "$pull_request" > /dev/null; then
-            echo "The source pull request is no longer eligible for promotion; refusing to close it." >&2
-            exit 1
-          fi
-
-          upstream_url="https://github.com/astral-sh/uv/pull/$UPSTREAM_NUMBER"
-          source_head=$(jq --raw-output '.headRefOid' <<< "$pull_request")
-          promoted_head=$(gh pr view "$UPSTREAM_NUMBER" --repo astral-sh/uv --json headRefOid --jq .headRefOid)
-          if [ "$source_head" != "$EXPECTED_HEAD_SHA" ]; then
-            echo "changed_head=$source_head" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$promoted_head" != "$PROMOTED_HEAD" ]; then
-            echo "rejection_reason=The upstream promotion moved from $PROMOTED_HEAD to $promoted_head." >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          gh pr close "$PULL_REQUEST_NUMBER" \
-            --repo "$GITHUB_REPOSITORY" \
-            --comment "Promoted to [#$UPSTREAM_NUMBER]($upstream_url)."
-
-          echo "closed=true" >> "$GITHUB_OUTPUT"
-          echo "Promoted $GITHUB_REPOSITORY#$PULL_REQUEST_NUMBER to [#$UPSTREAM_NUMBER]($upstream_url)." >> "$GITHUB_STEP_SUMMARY"
+          "$AUTOMATIONS_PYTHON" -I -m uv_automations promotions close-source \
+            --repo "$GITHUB_REPOSITORY" --repository-id "$GITHUB_REPOSITORY_ID" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY" \
+            <<< "$PROMOTION_COMPLETION"
 
   replay-promoted-children:
     name: Check children of promoted pull request

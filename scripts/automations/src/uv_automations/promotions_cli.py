@@ -11,6 +11,7 @@ from typing import assert_never
 
 from uv_automations.actions import append_summary, write_json_output, write_output
 from uv_automations.github_promotion import PromotionGitHub
+from uv_automations.github_promotion_completion import PromotionCompletionGitHub
 from uv_automations.github_promotion_queue import PromotionQueueGitHub
 from uv_automations.json import loads
 from uv_automations.models import CommitSha, RepositoryIdentity, RepositoryName
@@ -35,6 +36,12 @@ from uv_automations.workflows.promotion import (
     WaitForSync,
     plan_promotion,
 )
+from uv_automations.workflows.promotion_completion import (
+    PromotionCompletion,
+    SkippedCompletion,
+    close_source,
+    complete_metadata,
+)
 from uv_automations.workflows.promotion_publish import (
     BaseCopyOutcome,
     ensure_upstream_base,
@@ -53,6 +60,7 @@ from uv_automations.workflows.promotion_queue import (
 from uv_automations.workflows.promotion_replay import plan_queued_promotion
 
 MAX_BASE_COPY_JSON_BYTES = 16 * 1024
+MAX_COMPLETION_JSON_BYTES = 16 * 1024
 
 
 class PromotionCommandKind(StrEnum):
@@ -64,6 +72,8 @@ class PromotionCommandKind(StrEnum):
     REPLAY_CHILDREN = "promotions.replay-children"
     SYNC = "promotions.sync"
     ENSURE_BASE = "promotions.ensure-base"
+    COMPLETE_METADATA = "promotions.complete-metadata"
+    CLOSE_SOURCE = "promotions.close-source"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -117,6 +127,14 @@ class EnsurePromotionBase:
     summary: Path
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CompletePromotion:
+    source: PromotionScope
+    close: bool
+    github_output: Path
+    summary: Path
+
+
 type PromotionCommand = (
     PreparePromotion
     | ReadPromotionApproval
@@ -126,6 +144,7 @@ type PromotionCommand = (
     | ReplayPromotedChildren
     | SyncPromotionSource
     | EnsurePromotionBase
+    | CompletePromotion
 )
 
 
@@ -206,6 +225,16 @@ def add_commands(parser: argparse.ArgumentParser) -> None:
     ensure.add_argument("--github-output", type=Path, required=True)
     ensure.add_argument("--summary", type=Path, required=True)
 
+    for name, kind in (
+        ("complete-metadata", PromotionCommandKind.COMPLETE_METADATA),
+        ("close-source", PromotionCommandKind.CLOSE_SOURCE),
+    ):
+        complete = commands.add_parser(name)
+        complete.set_defaults(command=kind)
+        _add_source(complete)
+        complete.add_argument("--github-output", type=Path, required=True)
+        complete.add_argument("--summary", type=Path, required=True)
+
 
 def parse_command(parsed: argparse.Namespace) -> PromotionCommand:
     kind = PromotionCommandKind(parsed.command)
@@ -261,6 +290,13 @@ def parse_command(parsed: argparse.Namespace) -> PromotionCommand:
                 github_output=parsed.github_output,
                 summary=parsed.summary,
             )
+        case PromotionCommandKind.COMPLETE_METADATA | PromotionCommandKind.CLOSE_SOURCE:
+            return CompletePromotion(
+                source=_scope(parsed),
+                close=kind == PromotionCommandKind.CLOSE_SOURCE,
+                github_output=parsed.github_output,
+                summary=parsed.summary,
+            )
     assert_never(kind)
 
 
@@ -276,6 +312,16 @@ def _read_queue(source: PromotionScope) -> QueuedPromotion:
     if queued.source != source:
         raise ValueError("Promotion queue belongs to another source")
     return queued
+
+
+def _write_skipped_completion(
+    skipped: SkippedCompletion, output: Path, summary: Path
+) -> None:
+    if skipped.changed_head is not None:
+        write_output(output, "changed_head", str(skipped.changed_head))
+    else:
+        write_output(output, "rejection_reason", skipped.reason)
+    append_summary(summary, skipped.reason)
 
 
 def _write_plan(plan: PromotionPlan, output: Path, summary: Path) -> None:
@@ -506,5 +552,39 @@ def run(command: PromotionCommand) -> None:
                         "The promotion base or approval changed before publication.",
                     )
             append_summary(command.summary, f"Promotion base: {outcome.value}.")
+            return
+        case CompletePromotion():
+            completion = PromotionCompletion.from_json(
+                _read_json(MAX_COMPLETION_JSON_BYTES)
+            )
+            if completion.source != command.source:
+                raise ValueError("Promotion completion belongs to another source")
+            reader = PromotionCompletionGitHub()
+            writer = PromotionCompletionGitHub()
+            skipped = (
+                close_source(reader, writer, completion)
+                if command.close
+                else complete_metadata(reader, writer, completion)
+            )
+            if skipped is not None:
+                _write_skipped_completion(
+                    skipped, command.github_output, command.summary
+                )
+            elif command.close:
+                write_json_output(command.github_output, "closed", True)
+                append_summary(
+                    command.summary,
+                    f"Promoted {completion.source.repository.name}"
+                    f"#{completion.source.number} to "
+                    f"[#{completion.upstream.number}]"
+                    f"(https://github.com/astral-sh/uv/pull/{completion.upstream.number}).",
+                )
+            else:
+                write_output(
+                    command.github_output, "number", str(completion.upstream.number)
+                )
+                write_json_output(
+                    command.github_output, "completion", completion.to_json()
+                )
             return
     assert_never(command)

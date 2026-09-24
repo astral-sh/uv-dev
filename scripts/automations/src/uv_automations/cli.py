@@ -359,6 +359,7 @@ def run(command: Command) -> None:
             | promotions_cli.ReplayPromotedChildren()
             | promotions_cli.SyncPromotionSource()
             | promotions_cli.EnsurePromotionBase()
+            | promotions_cli.CompletePromotion()
         ):
             promotions_cli.run(command)
             return
