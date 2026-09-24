@@ -83,6 +83,18 @@ fn format_markers(criterion: &mut Criterion<WallTime>) {
         });
     });
     group.finish();
+
+    let expressions: Vec<_> = markers.iter().map(ToString::to_string).collect();
+    let mut group = criterion.benchmark_group("marker_parse");
+    group.throughput(Throughput::Elements(expressions.len() as u64));
+    group.bench_function("lockfiles", |benchmark| {
+        benchmark.iter(|| {
+            for expression in &expressions {
+                black_box(black_box(expression).parse::<MarkerTree>().unwrap());
+            }
+        });
+    });
+    group.finish();
 }
 
 criterion_group!(uv_pep508, format_markers);
