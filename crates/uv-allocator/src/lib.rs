@@ -2,7 +2,11 @@
 
 use std::cell::Cell;
 
+#[expect(unsafe_code, reason = "implementing Allocator requires raw memory operations")]
+mod scratch;
+
 pub use bumpalo::Bump as Arena;
+pub use scratch::ScratchAllocator;
 
 thread_local! {
     static ARENA: Cell<Option<Arena>> = const { Cell::new(None) };
