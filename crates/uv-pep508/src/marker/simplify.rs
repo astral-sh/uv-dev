@@ -392,15 +392,6 @@ fn sort<A: Allocator>(dnf: &mut [Vec<MarkerExpression, A>]) {
 }
 
 /// Merge any edges that lead to identical subtrees into a single range.
-pub(crate) fn collect_edges<'a, T>(
-    map: impl ExactSizeIterator<Item = (&'a Ranges<T>, MarkerTree)>,
-) -> impl Iterator<Item = (MarkerTree, Ranges<T>)>
-where
-    T: Ord + Clone + 'a,
-{
-    collect_edges_in(map, Global)
-}
-
 fn collect_edges_in<'a, T, A>(
     map: impl Iterator<Item = (&'a Ranges<T>, MarkerTree)>,
     allocator: A,
