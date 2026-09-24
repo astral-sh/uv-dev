@@ -392,14 +392,17 @@ The versioned catalog fields have distinct roles:
   for an unnamed build. When provided, it must be a non-null, canonical lowercase value matching
   `[a-z][a-z0-9_]*`.
 - `build_revision` is required for every entry, including unnamed builds. It must be a non-empty
-  string of ASCII digits, such as `"20260825"` or `"42"`. Publishers should increase this number for
-  each new revision of a build.
+  string of ASCII digits without leading zeros, such as `"0"`, `"42"`, or `"20260825"`. Publishers
+  should increase this number for each new revision of a build.
 
 A catalog can contain multiple revisions of the same installation key. Give each record a distinct
 key in the `downloads` object; the entry's fields determine the installation identity. When
 selecting a download without a revision pin, uv chooses the numerically greatest revision for the
 matching implementation, Python version, Python variant, build name, and platform. For example,
 revision `"10"` is newer than `"9"`. The catalog has no `default` field.
+
+Records with the same installation identity and revision must specify the same URL and checksum; uv
+rejects conflicting artifacts. Identical duplicate records are allowed.
 
 The versioned envelope ensures clients that do not understand build names reject the catalog instead
 of treating a named build as unnamed. The legacy unversioned format still supports its optional
@@ -436,6 +439,9 @@ $ UV_PYTHON_BUILD_REVISION=20260825 uv python install 3.13+custom
 without a build name, use
 [`UV_PYTHON_CPYTHON_BUILD`](../reference/environment.md#uv_python_cpython_build) to select a build
 revision.
+
+`uv python list` applies these revision pins when listing downloads. Without a pin, it shows the
+newest available revision for each matching installation key.
 
 Installed Python versions and existing environments are matched using their local build identity and
 recorded revision; their continued use does not require the catalog to list them or be reachable.
