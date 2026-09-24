@@ -1,3 +1,4 @@
+use std::alloc::Allocator;
 use std::collections::{BTreeMap, BTreeSet, Bound};
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
@@ -10,6 +11,7 @@ use pubgrub::{DerivationTree, Derived, External, Map, Ranges, Term};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::trace;
 
+use uv_allocator::with_arena;
 use uv_distribution_types::{
     DerivationChain, DistErrorKind, IndexCapabilities, IndexLocations, IndexUrl, RequestedDist,
 };
@@ -330,7 +332,7 @@ enum TreeTask {
     Rebuild(DerivedMetadata),
 }
 
-fn schedule_derived(tasks: &mut Vec<TreeTask>, derived: ErrorDerived) {
+fn schedule_derived<A: Allocator>(tasks: &mut Vec<TreeTask, A>, derived: ErrorDerived) {
     let Derived {
         terms,
         shared_id,
@@ -348,15 +350,36 @@ fn schedule_derived(tasks: &mut Vec<TreeTask>, derived: ErrorDerived) {
 
 fn transform_derivation_tree(
     derivation_tree: ErrorTree,
+    transform_external: impl FnMut(ErrorExternal) -> Option<ErrorTree>,
+    transform_derived: impl FnMut(
+        DerivedMetadata,
+        Option<ErrorTree>,
+        Option<ErrorTree>,
+    ) -> Option<ErrorTree>,
+) -> Option<ErrorTree> {
+    with_arena(|allocator| {
+        transform_derivation_tree_in(
+            derivation_tree,
+            transform_external,
+            transform_derived,
+            allocator,
+        )
+    })
+}
+
+fn transform_derivation_tree_in<A: Allocator + Copy>(
+    derivation_tree: ErrorTree,
     mut transform_external: impl FnMut(ErrorExternal) -> Option<ErrorTree>,
     mut transform_derived: impl FnMut(
         DerivedMetadata,
         Option<ErrorTree>,
         Option<ErrorTree>,
     ) -> Option<ErrorTree>,
+    allocator: A,
 ) -> Option<ErrorTree> {
-    let mut tasks = vec![TreeTask::Visit(StackSafeErrorTree::new(derivation_tree))];
-    let mut results: Vec<Option<StackSafeErrorTree>> = Vec::new();
+    let mut tasks = Vec::new_in(allocator);
+    tasks.push(TreeTask::Visit(StackSafeErrorTree::new(derivation_tree)));
+    let mut results: Vec<Option<StackSafeErrorTree>, A> = Vec::new_in(allocator);
 
     while let Some(task) = tasks.pop() {
         match task {

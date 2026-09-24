@@ -7292,6 +7292,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "uv-allocator",
  "uv-cache",
  "uv-cache-key",
  "uv-client",
