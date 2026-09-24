@@ -14,7 +14,6 @@
 //! assert_eq!(dependency_specification.extras, vec![ExtraName::from_str("security").unwrap(), ExtraName::from_str("tests").unwrap()].into());
 //! ```
 
-#![feature(allocator_api)]
 #![warn(missing_docs)]
 
 #[cfg(feature = "schemars")]

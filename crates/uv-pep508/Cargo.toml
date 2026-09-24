@@ -15,6 +15,7 @@ authors = { workspace = true }
 workspace = true
 
 [dependencies]
+uv-allocator = { workspace = true }
 uv-cache-key = { workspace = true }
 uv-fs = { workspace = true }
 uv-normalize = { workspace = true }
@@ -23,7 +24,6 @@ uv-redacted = { workspace = true }
 
 arcstr = { workspace = true}
 boxcar = { workspace = true }
-bumpalo = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 regex = { workspace = true }

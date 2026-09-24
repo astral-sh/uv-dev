@@ -1,42 +1,25 @@
 use std::alloc::{Allocator, Global};
-use std::cell::Cell;
 use std::fmt;
 use std::ops::Bound;
 
 use arcstr::ArcStr;
-use bumpalo::Bump;
 use indexmap::IndexMap;
 use itertools::{Either, Itertools};
 use rustc_hash::FxBuildHasher;
 use version_ranges::Ranges;
 
+use uv_allocator::{Arena, with_arena};
 use uv_pep440::{Version, VersionSpecifier};
 
 use crate::marker::tree::ContainerOperator;
 use crate::{ExtraOperator, MarkerExpression, MarkerOperator, MarkerTree, MarkerTreeKind};
 
-thread_local! {
-    static DNF_ARENA: Cell<Option<Bump>> = const { Cell::new(None) };
-}
-
 /// Use temporary DNF clauses, then release their storage together.
 pub(crate) fn with_dnf<R>(
     tree: MarkerTree,
-    use_dnf: impl FnOnce(&[Vec<MarkerExpression, &Bump>]) -> R,
+    use_dnf: impl FnOnce(&[Vec<MarkerExpression, &Arena>]) -> R,
 ) -> R {
-    // Removing the arena lets nested formatting and thread-local destructors use their own.
-    let mut arena = DNF_ARENA
-        .try_with(Cell::take)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let result = use_dnf(&to_dnf_in(tree, &arena));
-    // Reuse ordinary clause storage without retaining unusually large diagrams.
-    if arena.allocated_bytes() <= 64 * 1024 {
-        arena.reset();
-        let _ = DNF_ARENA.try_with(|slot| slot.set(Some(arena)));
-    }
-    result
+    with_arena(|arena| use_dnf(&to_dnf_in(tree, arena)))
 }
 
 /// Returns a simplified DNF expression for a given marker tree.
@@ -560,7 +543,7 @@ fn is_negation(left: &MarkerExpression, right: &MarkerExpression) -> bool {
 mod tests {
     use std::thread;
 
-    use bumpalo::Bump;
+    use uv_allocator::Arena;
     use version_ranges::Ranges;
 
     use super::{collect_edges_in, to_dnf, to_dnf_in, with_dnf};
@@ -568,7 +551,7 @@ mod tests {
 
     #[test]
     fn arena_edge_groups_preserve_order_and_gaps() {
-        let arena = Bump::new();
+        let arena = Arena::new();
         let edges: [(Ranges<i32>, MarkerTree); 6] = [
             (Ranges::singleton(1), MarkerTree::FALSE),
             (Ranges::singleton(2), MarkerTree::TRUE),
@@ -601,7 +584,7 @@ mod tests {
 
     #[test]
     fn arena_dnf_matches_owned_clauses() {
-        let mut arena = Bump::new();
+        let mut arena = Arena::new();
         for expression in [
             "python_version >= '3.10'",
             "python_version != '3.10.*' and sys_platform != 'win32'",
