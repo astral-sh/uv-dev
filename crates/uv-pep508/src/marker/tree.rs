@@ -1973,6 +1973,18 @@ mod test {
                 ),
                 marker,
             );
+            assert_eq!(
+                marker
+                    .complexify_python_versions(
+                        Bound::Included(&Version::new([3, 9])),
+                        Bound::Excluded(&Version::new([3, 14])),
+                    )
+                    .simplify_python_versions(
+                        Bound::Included(&Version::new([3, 9])),
+                        Bound::Excluded(&Version::new([3, 14])),
+                    ),
+                marker,
+            );
         }
 
         assert_eq!(

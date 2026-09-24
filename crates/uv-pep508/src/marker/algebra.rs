@@ -772,15 +772,13 @@ impl InternerGuard<'_> {
             children: Edges::Version { edges },
         } = node
         else {
-            // Descendants have strictly later variables. These Boolean variables
-            // follow Python versions, so their subtrees cannot depend on the bounds.
-            if matches!(
-                node.var,
-                Variable::In { .. }
-                    | Variable::Contains { .. }
-                    | Variable::Extra(_)
-                    | Variable::List(_)
-            ) {
+            // Boolean leaves cannot contain Python-version decisions. Check the
+            // children directly: complexification can insert version decisions
+            // below Boolean variables.
+            if let Edges::Boolean { high, low } = &node.children
+                && matches!(*high, NodeId::TRUE | NodeId::FALSE)
+                && matches!(*low, NodeId::TRUE | NodeId::FALSE)
+            {
                 return i;
             }
             // Simplify all nodes recursively.
