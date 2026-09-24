@@ -1,13 +1,16 @@
+use hashbrown::{HashMap, HashSet};
 use indexmap::IndexSet;
 use petgraph::{
     algo::toposort,
     graph::{DiGraph, NodeIndex},
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
+use std::alloc::Allocator;
 #[cfg(feature = "schemars")]
 use std::borrow::Cow;
 use std::fmt;
 use std::{collections::BTreeSet, hash::Hash, rc::Rc};
+use uv_allocator::with_arena;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 
 use crate::dependency_groups::{DependencyGroupSpecifier, DependencyGroups};
@@ -104,9 +107,22 @@ impl Conflicts {
             return;
         }
 
+        with_arena(|allocator| {
+            self.expand_transitive_group_includes_in(package, groups, allocator);
+        });
+    }
+
+    fn expand_transitive_group_includes_in<A: Allocator + Copy>(
+        &mut self,
+        package: &PackageName,
+        groups: &DependencyGroups,
+        allocator: A,
+    ) {
         let mut graph = DiGraph::new();
-        let mut group_node_idxs: FxHashMap<&GroupName, NodeIndex> = FxHashMap::default();
-        let mut node_conflict_items: FxHashMap<NodeIndex, Rc<ConflictItem>> = FxHashMap::default();
+        let mut group_node_idxs: HashMap<&GroupName, NodeIndex, _, A> =
+            HashMap::with_hasher_in(FxBuildHasher, allocator);
+        let mut node_conflict_items: HashMap<NodeIndex, Rc<ConflictItem>, _, A> =
+            HashMap::with_hasher_in(FxBuildHasher, allocator);
         // Used for transitively deriving new conflict sets with substitutions.
         // The keys are canonical items (mentioned directly in configured conflicts).
         // The values correspond to groups that transitively include them.
@@ -117,7 +133,7 @@ impl Conflicts {
         let mut conflict_sets: IndexSet<ConflictSet, FxBuildHasher> = IndexSet::default();
 
         // Add groups in directly defined conflict sets to the graph.
-        let mut seen: FxHashSet<&GroupName> = FxHashSet::default();
+        let mut seen: HashSet<&GroupName, _, A> = HashSet::with_hasher_in(FxBuildHasher, allocator);
 
         for set in &self.0 {
             conflict_sets.insert(set.clone());
