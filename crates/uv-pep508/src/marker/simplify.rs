@@ -448,7 +448,7 @@ where
 ///
 /// For example, `os_name < 'Linux' or os_name > 'Linux'` can be simplified to
 /// `os_name != 'Linux'`.
-fn range_inequality<T>(range: &Ranges<T>) -> Option<Vec<&T>>
+fn range_inequality<T>(range: &Ranges<T>) -> Option<impl Iterator<Item = &T>>
 where
     T: Ord + Clone + fmt::Debug,
 {
@@ -456,15 +456,19 @@ where
         return None;
     }
 
-    let mut excluded = Vec::new();
     for ((_, end), (start, _)) in range.iter().tuple_windows() {
         match (end, start) {
-            (Bound::Excluded(v1), Bound::Excluded(v2)) if v1 == v2 => excluded.push(v1),
+            (Bound::Excluded(v1), Bound::Excluded(v2)) if v1 == v2 => {}
             _ => return None,
         }
     }
 
-    Some(excluded)
+    Some(range.iter().tuple_windows().map(|((_, end), _)| {
+        let Bound::Excluded(value) = end else {
+            unreachable!("inequality bounds were checked above")
+        };
+        value
+    }))
 }
 
 /// Returns `Some` if the version range can be simplified as a star specifier.
