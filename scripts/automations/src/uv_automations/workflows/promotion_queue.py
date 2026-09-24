@@ -9,6 +9,7 @@ from uv_automations.github_actions import WorkflowDispatch
 from uv_automations.github_promotion import (
     PromotedParentReader,
     PromotionComparisonReader,
+    PromotionReadError,
     PromotionRevisionReader,
     verified_promoted_parent,
 )
@@ -312,6 +313,20 @@ class DispatchedReplay:
 type ReplayOutcome = DispatchedReplay | SkippedReplay
 
 
+@dataclass(frozen=True, slots=True)
+class UnconfirmedReplay:
+    """A child check failed, possibly after GitHub accepted its dispatch."""
+
+    source: PromotionScope
+
+    def __post_init__(self) -> None:
+        if self.source.repository != UV_DEV_REPOSITORY:
+            raise ValueError("Unconfirmed replay must belong to uv-dev")
+
+
+type ReplayBatchOutcome = ReplayOutcome | UnconfirmedReplay
+
+
 def _source_matches(source: PromotionPullRequest, queued: QueuedPromotion) -> bool:
     return (
         source.scope == queued.source
@@ -577,7 +592,7 @@ def replay_queued_promotions(
     main: BranchRevision,
     *,
     parent: PromotionScope | None = None,
-) -> tuple[ReplayOutcome, ...]:
+) -> tuple[ReplayBatchOutcome, ...]:
     if main.repository != UV_DEV_REPOSITORY or main.ref != "main":
         raise ValueError("Automatic promotion replay requires uv-dev/main")
     base = None
@@ -588,7 +603,7 @@ def replay_queued_promotions(
         if source_parent.is_open or not source_parent.same_repository:
             return ()
         base = source_parent.details.head.ref
-    outcomes: list[ReplayOutcome] = []
+    outcomes: list[ReplayBatchOutcome] = []
     for source in reader.list_pull_requests(UV_DEV_REPOSITORY, base=base):
         if (
             (source.draft and PROMOTION_LABEL not in source.details.labels)
@@ -596,14 +611,20 @@ def replay_queued_promotions(
             or source.details.base.ref == "main"
         ):
             continue
-        outcomes.append(
-            replay_one(
-                reader,
-                upstream_reader,
-                writer,
-                source.scope,
-                main,
-                expected_parent=parent,
+        try:
+            outcomes.append(
+                replay_one(
+                    reader,
+                    upstream_reader,
+                    writer,
+                    source.scope,
+                    main,
+                    expected_parent=parent,
+                )
             )
-        )
+        except PromotionReadError:
+            # A failed child read must not strand independently approved
+            # siblings. A dispatch response can also be lost after acceptance;
+            # record that uncertainty without issuing the same POST again.
+            outcomes.append(UnconfirmedReplay(source.scope))
     return tuple(outcomes)

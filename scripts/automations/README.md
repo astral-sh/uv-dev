@@ -245,11 +245,14 @@ outcomes = replay_queued_promotions(source, upstream, PromotionQueueGitHub(), ma
 Replay verifies the exact current source and latest readiness transition, never-edited queue
 receipt, uniquely bot-promoted parent, original-parent-head history, upstream merge, and public
 source-main ancestry. `DispatchedReplay` retains the returned workflow-run identity; `SkippedReplay`
-has a closed reason enum. `plan_queued_promotion` repeats those checks in the dispatched worker and
-rebases the child onto the pinned public `main`, even if an old parent or grandparent branch
-survives or has been deleted. Manual promotion retains its existing-branch behavior.
-`current_ready_approval` is deliberately stricter than the legacy `ready_approval`: a later draft or
-bot-ready transition revokes the old replay approval.
+has a closed reason enum. A batch continues after a child's GitHub read or dispatch response fails,
+recording an `UnconfirmedReplay` without repeating a possibly accepted dispatch. The CLI summarizes
+the completed and unconfirmed checks, then fails the job so an incomplete wakeup remains visible.
+`plan_queued_promotion` repeats the authority checks in the dispatched worker and rebases the child
+onto the pinned public `main`, even if an old parent or grandparent branch survives or has been
+deleted. Manual promotion retains its existing-branch behavior. `current_ready_approval` is
+deliberately stricter than the legacy `ready_approval`: a later draft or bot-ready transition
+revokes the old replay approval.
 
 The workflow wakes the queue after a successful public-main sync, after recording a new queue entry,
 and after finishing or observing a promoted parent's source closure. The last wakeup considers only
