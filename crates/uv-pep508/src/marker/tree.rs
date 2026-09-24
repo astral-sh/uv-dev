@@ -1960,6 +1960,33 @@ mod test {
 
     #[test]
     fn simplify_python_versions() {
+        for expression in [
+            "'lin' in sys_platform and extra == 'test'",
+            "sys_platform in 'linux' or extra != 'test'",
+            "extra == 'test' and 'dev' in dependency_groups",
+        ] {
+            let marker = m(expression);
+            assert_eq!(
+                marker.simplify_python_versions(
+                    Bound::Included(&Version::new([3, 9])),
+                    Bound::Excluded(&Version::new([3, 14])),
+                ),
+                marker,
+            );
+            assert_eq!(
+                marker
+                    .complexify_python_versions(
+                        Bound::Included(&Version::new([3, 9])),
+                        Bound::Excluded(&Version::new([3, 14])),
+                    )
+                    .simplify_python_versions(
+                        Bound::Included(&Version::new([3, 9])),
+                        Bound::Excluded(&Version::new([3, 14])),
+                    ),
+                marker,
+            );
+        }
+
         assert_eq!(
             m("(extra == 'foo' and sys_platform == 'win32') or extra == 'foo'")
                 .simplify_extras(&["foo".parse().unwrap()]),

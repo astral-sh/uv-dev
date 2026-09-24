@@ -772,6 +772,15 @@ impl InternerGuard<'_> {
             children: Edges::Version { edges },
         } = node
         else {
+            // Boolean leaves cannot contain Python-version decisions. Check the
+            // children directly: complexification can insert version decisions
+            // below Boolean variables.
+            if let Edges::Boolean { high, low } = &node.children
+                && matches!(*high, NodeId::TRUE | NodeId::FALSE)
+                && matches!(*low, NodeId::TRUE | NodeId::FALSE)
+            {
+                return i;
+            }
             // Simplify all nodes recursively.
             let children = node.children.map(i, |node_id| {
                 self.simplify_python_versions(node_id, py_lower, py_upper)

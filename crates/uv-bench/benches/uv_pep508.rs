@@ -3,8 +3,10 @@
 extern crate uv_performance_memory_allocator;
 
 use std::hint::black_box;
+use std::ops::Bound;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main, measurement::WallTime};
+use uv_pep440::Version;
 use uv_pep508::{MarkerTree, MarkerTreeContents};
 
 fn collect_markers(value: &toml::Value, markers: &mut Vec<MarkerTreeContents>) {
@@ -79,6 +81,23 @@ fn format_markers(criterion: &mut Criterion<WallTime>) {
         benchmark.iter(|| {
             for marker in &markers {
                 black_box(black_box(marker.as_ref()).to_dnf());
+            }
+        });
+    });
+    group.finish();
+
+    let lower = Version::new([3, 9]);
+    let upper = Version::new([3, 14]);
+    let mut group = criterion.benchmark_group("marker_simplify_python_versions");
+    group.throughput(Throughput::Elements(markers.len() as u64));
+    group.bench_function("lockfiles", |benchmark| {
+        benchmark.iter(|| {
+            for marker in &markers {
+                black_box(
+                    marker
+                        .as_ref()
+                        .simplify_python_versions(Bound::Included(&lower), Bound::Excluded(&upper)),
+                );
             }
         });
     });
