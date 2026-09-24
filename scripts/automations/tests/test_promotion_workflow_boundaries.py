@@ -21,6 +21,26 @@ class PromotionWorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("pull_requests: write", prepare)
         self.assertNotIn("contents: write", prepare)
 
+    def test_observed_closed_preparation_does_not_activate_mutation_jobs(self) -> None:
+        workflow = (ROOT / ".github/workflows/promote-pull-request.yml").read_text()
+        prepare = job("promote-pull-request.yml", "prepare", "queue")
+        queue = job("promote-pull-request.yml", "queue", "replay-queued-promotion")
+        update = job(
+            "promote-pull-request.yml", "update-pull-request-parent", "promote"
+        )
+        publisher = job(
+            "promote-pull-request.yml", "promote", "replay-promoted-children"
+        )
+        replay = job("promote-pull-request.yml", "replay-promoted-children", "recover")
+        recover = job("promote-pull-request.yml", "recover")
+        self.assertIn("action: ${{ steps.plan.outputs.action }}", prepare)
+        self.assertIn("needs.prepare.outputs.queue != ''", queue)
+        self.assertIn("needs.prepare.outputs.action == 'update-parent'", update)
+        self.assertIn("needs.prepare.outputs.action == 'promote'", publisher)
+        self.assertIn("needs.promote.outputs.closed == 'true'", replay)
+        self.assertIn("needs.prepare.outputs.approval_id != ''", recover)
+        self.assertNotIn("observed-closed", workflow)
+
     def test_queue_record_and_dispatch_have_separate_writers(self) -> None:
         queue = job("promote-pull-request.yml", "queue", "replay-queued-promotion")
         replay = job(

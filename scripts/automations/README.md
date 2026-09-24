@@ -191,6 +191,13 @@ describes the exact open cross-repository parent and missing upstream ref when t
 needs to copy a stacked base. Its serialized `CopyUpstreamBaseClaim`, like `PromotionApprovalClaim`,
 is an untrusted request to revalidate, not reconstructed publication authority.
 
+Before ordinary planning, `promotions prepare` can recognize an already-closed direct `uv-dev`
+promotion. Its read-only `ObservedClosedPromotion` result requires an unedited bot-App receipt and
+an exact current source/upstream revision, followed by a fresh read of both pull requests. It emits
+only `action=observed-closed` and a summary; it cannot publish, recover, close a pull request, or
+dispatch children. Rebased and private promotions retain their separate approval and planning
+contracts because the historical promotion receipt does not record the transformed head or consent.
+
 `PromotionApproval.head` comes from the trusted dispatch, not the issue-event response. The trusted
 v2 dispatcher source binds that value to the signed webhook's `pull_request.head.sha` and rejects a
 different live head before dispatch; this is a required source contract, not a claim that a service
