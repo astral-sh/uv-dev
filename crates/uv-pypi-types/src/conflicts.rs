@@ -5,12 +5,11 @@ use petgraph::{
     graph::{DiGraph, NodeIndex},
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
-use std::alloc::Allocator;
+use std::alloc::{Allocator, Global};
 #[cfg(feature = "schemars")]
 use std::borrow::Cow;
 use std::fmt;
 use std::{collections::BTreeSet, hash::Hash, rc::Rc};
-use uv_allocator::with_arena;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 
 use crate::dependency_groups::{DependencyGroupSpecifier, DependencyGroups};
@@ -107,9 +106,7 @@ impl Conflicts {
             return;
         }
 
-        with_arena(|allocator| {
-            self.expand_transitive_group_includes_in(package, groups, allocator);
-        });
+        self.expand_transitive_group_includes_in(package, groups, Global);
     }
 
     fn expand_transitive_group_includes_in<A: Allocator + Copy>(
