@@ -3,6 +3,7 @@ use std::fmt;
 use std::ops::Bound;
 
 use arcstr::ArcStr;
+use hashbrown::HashMap;
 use indexmap::IndexMap;
 use itertools::{Either, Itertools};
 use rustc_hash::FxBuildHasher;
@@ -270,6 +271,123 @@ fn collect_dnf<A: Allocator + Copy>(
 /// Note: This function has quadratic time complexity. However, it is not applied on every marker
 /// operation, only to user facing output, which are typically very simple.
 fn simplify<A: Allocator + Copy>(dnf: &mut Vec<Vec<MarkerExpression, A>, A>, allocator: A) {
+    if dnf.len() >= 8 && simplify_indexed(dnf, allocator) {
+        return;
+    }
+    simplify_linear(dnf, allocator);
+}
+
+/// Intern large DNF expressions so subset checks compare bit sets instead of marker values.
+/// The index follows the clause order because each simplification can affect later clauses.
+fn simplify_indexed<A: Allocator + Copy, B: Allocator + Copy>(
+    dnf: &mut Vec<Vec<MarkerExpression, A>, A>,
+    allocator: B,
+) -> bool {
+    let mut terms = HashMap::with_hasher_in(FxBuildHasher, allocator);
+    let mut expressions = Vec::new_in(allocator);
+    let mut clauses = Vec::with_capacity_in(dnf.len(), allocator);
+    for clause in dnf.iter() {
+        let mut indexes = Vec::with_capacity_in(clause.len(), allocator);
+        for term in clause {
+            let index = *terms.entry(term).or_insert_with(|| {
+                let index = expressions.len();
+                expressions.push(term);
+                index
+            });
+            indexes.push(index);
+        }
+        clauses.push(indexes);
+    }
+
+    let words = expressions.len().div_ceil(64);
+    // A sparse expression can have far more distinct terms than terms per clause.
+    // Bound the dense index to 32 MiB and use the linear algorithm beyond that.
+    if dnf.len().saturating_mul(words) > 4 * 1024 * 1024 {
+        return false;
+    }
+    let mut negated = Vec::with_capacity_in(expressions.len(), allocator);
+    for expression in &expressions {
+        negated.push(negate_expression(expression).and_then(|term| terms.get(&term).copied()));
+    }
+    drop(terms);
+    drop(expressions);
+
+    let mut sets = Vec::with_capacity_in(clauses.len(), allocator);
+    for clause in &clauses {
+        let mut set = Vec::with_capacity_in(words, allocator);
+        set.resize(words, 0u64);
+        for &term in clause {
+            // The linear algorithm tracks the first occurrence of a repeated term.
+            // A set cannot represent that distinction.
+            if set[term / 64] & (1 << (term % 64)) != 0 {
+                return false;
+            }
+            set[term / 64] |= 1 << (term % 64);
+        }
+        sets.push(set);
+    }
+
+    for i in 0..clauses.len() {
+        for position in 0..clauses[i].len() {
+            let skipped = clauses[i][position];
+            let redundant = sets.iter().enumerate().any(|(j, other)| {
+                if i == j || other[skipped / 64] & (1 << (skipped % 64)) != 0 {
+                    return false;
+                }
+                other
+                    .iter()
+                    .zip(&sets[i])
+                    .enumerate()
+                    .all(|(word, (&other, &this))| {
+                        let mut missing = other & !this;
+                        while missing != 0 {
+                            let term = word * 64 + missing.trailing_zeros() as usize;
+                            if negated[term] != Some(skipped) {
+                                return false;
+                            }
+                            missing &= missing - 1;
+                        }
+                        true
+                    })
+            });
+            if redundant {
+                clauses[i][position] = usize::MAX;
+                sets[i][skipped / 64] &= !(1 << (skipped % 64));
+            }
+        }
+    }
+
+    let mut redundant = Vec::with_capacity_in(clauses.len(), allocator);
+    redundant.resize(clauses.len(), false);
+    for i in 0..clauses.len() {
+        redundant[i] = sets.iter().enumerate().any(|(j, other)| {
+            i != j
+                && !redundant[j]
+                && other
+                    .iter()
+                    .zip(&sets[i])
+                    .all(|(&other, &this)| other & !this == 0)
+        });
+    }
+
+    for (clause, indexes) in dnf.iter_mut().zip(clauses) {
+        let mut position = 0;
+        clause.retain(|_| {
+            let keep = indexes[position] != usize::MAX;
+            position += 1;
+            keep
+        });
+    }
+    let mut position = 0;
+    dnf.retain(|_| {
+        let keep = !redundant[position];
+        position += 1;
+        keep
+    });
+    true
+}
+
+fn simplify_linear<A: Allocator + Copy>(dnf: &mut Vec<Vec<MarkerExpression, A>, A>, allocator: A) {
     for i in 0..dnf.len() {
         let clause = &dnf[i];
 
@@ -551,15 +669,132 @@ fn is_negation(left: &MarkerExpression, right: &MarkerExpression) -> bool {
     }
 }
 
+/// Construct the single expression accepted by [`is_negation`] for this left operand.
+fn negate_expression(expression: &MarkerExpression) -> Option<MarkerExpression> {
+    Some(match expression {
+        MarkerExpression::Version { key, specifier } => MarkerExpression::Version {
+            key: *key,
+            specifier: VersionSpecifier::from_version(
+                specifier.operator().negate()?,
+                specifier.version().clone(),
+            )
+            .ok()?,
+        },
+        MarkerExpression::VersionIn {
+            key,
+            versions,
+            operator,
+        } => MarkerExpression::VersionIn {
+            key: *key,
+            versions: versions.clone(),
+            operator: negate_container_operator(*operator),
+        },
+        MarkerExpression::String {
+            key,
+            operator,
+            value,
+        } => MarkerExpression::String {
+            key: *key,
+            operator: operator.negate()?,
+            value: value.clone(),
+        },
+        MarkerExpression::List { pair, operator } => MarkerExpression::List {
+            pair: pair.clone(),
+            operator: negate_container_operator(*operator),
+        },
+        MarkerExpression::Extra { name, operator } => MarkerExpression::Extra {
+            name: name.clone(),
+            operator: operator.negate(),
+        },
+    })
+}
+
+fn negate_container_operator(operator: ContainerOperator) -> ContainerOperator {
+    match operator {
+        ContainerOperator::In => ContainerOperator::NotIn,
+        ContainerOperator::NotIn => ContainerOperator::In,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::alloc::Global;
     use std::thread;
 
     use uv_allocator::Arena;
+    use uv_pep440::{Operator, Version, VersionSpecifier};
     use version_ranges::Ranges;
 
-    use super::{collect_edges_in, to_dnf, to_dnf_in, with_dnf};
-    use crate::MarkerTree;
+    use super::{
+        collect_edges_in, is_negation, negate_expression, simplify_indexed, simplify_linear,
+        to_dnf, to_dnf_in, with_dnf,
+    };
+    use crate::{MarkerExpression, MarkerTree, MarkerValueVersion};
+
+    #[test]
+    fn indexed_simplification_matches_linear_order() {
+        let mut expressions: Vec<_> = [
+            "extra == 'a'",
+            "extra != 'a'",
+            "extra == 'b'",
+            "extra != 'b'",
+            "python_version == '3.10'",
+            "python_version != '3.10'",
+            "python_version >= '3.9'",
+            "python_version < '3.9'",
+            "python_version ~= '3.9'",
+            "python_version in '3.9 3.10'",
+            "python_version not in '3.9 3.10'",
+            "sys_platform == 'linux'",
+            "sys_platform != 'linux'",
+            "'test' in extras",
+            "'test' not in extras",
+        ]
+        .map(|value| MarkerExpression::from_str(value).unwrap().unwrap())
+        .into();
+        expressions.push(MarkerExpression::Version {
+            key: MarkerValueVersion::PythonVersion,
+            specifier: VersionSpecifier::from_version(Operator::ExactEqual, Version::new([3, 10]))
+                .unwrap(),
+        });
+        for left in &expressions {
+            for right in &expressions {
+                assert_eq!(
+                    is_negation(left, right),
+                    negate_expression(left).as_ref() == Some(right)
+                );
+            }
+        }
+        let arena = Arena::new();
+        let mut seed = 17u64;
+        let mut indexed_cases = 0;
+        for case in 0..2000 {
+            let mut next = || {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                (seed >> 32) as usize
+            };
+            let mut expected = Vec::new();
+            for _ in 0..next() % 30 {
+                let mut clause = Vec::new();
+                for _ in 0..next() % 12 {
+                    let term = expressions[next() % expressions.len()].clone();
+                    if case % 2 == 0 || !clause.contains(&term) {
+                        clause.push(term);
+                    }
+                }
+                expected.push(clause);
+            }
+            let mut actual = expected.clone();
+            simplify_linear(&mut expected, Global);
+            if simplify_indexed(&mut actual, &arena) {
+                indexed_cases += 1;
+            } else {
+                simplify_linear(&mut actual, Global);
+            }
+            assert_eq!(actual, expected, "case {case}");
+        }
+        assert!(indexed_cases >= 1000);
+    }
 
     #[test]
     fn arena_edge_groups_preserve_order_and_gaps() {
