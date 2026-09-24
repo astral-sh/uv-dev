@@ -5,7 +5,7 @@ use petgraph::{
     graph::{DiGraph, NodeIndex},
 };
 use rustc_hash::FxBuildHasher;
-use std::alloc::Allocator;
+use std::alloc::{Allocator, Global};
 #[cfg(feature = "schemars")]
 use std::borrow::Cow;
 use std::fmt;
@@ -108,7 +108,13 @@ impl Conflicts {
         }
 
         with_arena(|allocator| {
-            self.expand_transitive_group_includes_in(package, groups, allocator, allocator);
+            // Large inclusion graphs can keep many propagation tables live at once.
+            // Give those tables independent allocations so their storage can be freed early.
+            if groups.keys().count() <= 24 {
+                self.expand_transitive_group_includes_in(package, groups, allocator, allocator);
+            } else {
+                self.expand_transitive_group_includes_in(package, groups, allocator, Global);
+            }
         });
     }
 
