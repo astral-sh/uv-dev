@@ -10,7 +10,7 @@ The reported scaling is reproducible. In an isolated temporary project with `tra
 
 The root cause was the workspace-member requirement producer: before universal lock resolution, `ExtrasResolver` expanded every name in package metadata's `Provides-Extra` into a requested extra, including extras with no conditional requirements. Conflict handling therefore created a full resolver environment for each empty extra. Every environment contained the same shared base dependency graph, and downstream conflict-marker processing repeatedly combined those equivalent paths.
 
-The issue reports uv 0.12.17 on macOS arm64; the independent reproduction used the installed uv 0.12.13 on Linux x86_64 and CPython 3.12.3. The closest precedent is astral-sh/uv#16779, fixed by astral-sh/uv#19538, but that regression fixture has a different dependency shape. astral-sh/uv#18317 and astral-sh/uv#21399 cover related conflict scaling in workspaces but not this single-project case.
+The issue reports uv 0.12.17 on macOS arm64; the independent reproduction used the installed uv 0.12.13 on Linux x86_64 and CPython 3.12.3. The closest historical precedent is astral-sh/uv#16779, fixed by astral-sh/uv#19538, but that regression fixture has a different dependency shape. A maintainer subsequently said this issue is “roughly the same as” the open astral-sh/uv#18317, making that issue a possible canonical discussion despite its workspace-focused report. The comment was tentative and did not formally mark astral-sh/uv#21954 as a duplicate.
 
 ## Reproduction
 
@@ -87,13 +87,15 @@ This was reproducible and is fixed by excluding dependency-free extras from the 
 
 `bug` fits because a targeted reproduction confirms effectively unusable lock performance rather than a request for a new capability. The repository already treated the same user-visible failure family as a bug in astral-sh/uv#16779 and astral-sh/uv#19538.
 
-This should not be classified as a duplicate. The historical report is closed, its merged fix memoized `without_extras`, and its regression test used 29 conflicts with one optional dependency that requested another package's extra. This issue was caused earlier in the lock pipeline by activating dependency-free `Provides-Extra` entries as root requirements. No open issue was found that tracks this exact single-project trigger.
+The initial triage treated this as a separate bug because the historical astral-sh/uv#16779 is closed, its merged fix memoized `without_extras`, and its regression test used 29 conflicts with one optional dependency that requested another package's extra. This issue was caused earlier in the lock pipeline by activating dependency-free `Provides-Extra` entries as root requirements.
+
+On 2026-09-24, maintainer Charlie Marsh commented that astral-sh/uv#21954 is “roughly the same as” astral-sh/uv#18317. That is meaningful evidence that maintainers may prefer to centralize the conflict-scaling reports in astral-sh/uv#18317, but the question-like wording is not a final duplicate decision. If the issues are consolidated, the confirmed empty-extra root cause, focused regression coverage, and fix in astral-sh/uv-dev#2065 should be retained in the canonical discussion.
 
 ## Related
 
 - astral-sh/uv#16779 — Closest historical issue. A single project had a group of 26 mutually exclusive extras; resolution completed in seconds, but `uv lock` effectively hung while processing conflict-generated markers. Maintainers traced the work into marker algebra. The issue is closed, so it is historical context rather than an open canonical duplicate.
 - astral-sh/uv#19538 — Merged fix for astral-sh/uv#16779, titled “Avoid conflict set combinatorial explosion.” It memoized `without_extras` and added a one-minute timeout regression test using 29 conflicts. The new reproduction demonstrates that a different large-conflict-set shape remains pathological in uv 0.12.13 and is reported in uv 0.12.17.
-- astral-sh/uv#18317 — Open report about repeated conflict declarations across workspace members. Its comments include lock-time growth and a maintainer explanation that scenario counts grow exponentially, but its primary symptoms are workspace duplication and lockfile bloat rather than runtime from distinct extras in one project.
+- astral-sh/uv#18317 — Open report about repeated conflict declarations across workspace members. Its comments include lock-time growth and a maintainer explanation that scenario counts grow exponentially. Although its original symptoms emphasize workspace duplication and lockfile bloat rather than runtime from distinct extras in one project, a maintainer now considers astral-sh/uv#21954 “roughly the same,” so this is the leading candidate for the canonical discussion.
 - astral-sh/uv#21399 — Merged performance improvement for conflict simplification in large workspaces. It stops tracking unrelated extras but explicitly continues tracking extras involved in declared conflicts, so it does not cover the extras in this reproduction.
 
 ## Search evidence
@@ -102,4 +104,4 @@ Searches covered literal combinations of `conflicts`, `uv lock`, slow or hanging
 
 astral-sh/uv#17990 was inspected but ruled out as a close match because it requests independent resolution targets and environment switching rather than tracking current lock-time scaling. astral-sh/uv#15101 concerns simplifying impossible marker edges and lockfile output, not large-conflict-set runtime. General slow-resolution reports such as astral-sh/uv#10438 and astral-sh/uv#13698 were also ruled out because their confirmed triggers were unrelated resolver forking and index metadata downloads, respectively.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/2065
+Pull request: astral-sh/uv-dev#2065
