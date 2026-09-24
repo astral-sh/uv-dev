@@ -86,7 +86,10 @@ fn collect_dnf<A: Allocator + Copy>(
             }
         }
         MarkerTreeKind::Version(marker) => {
-            for (tree, range) in collect_edges_in(marker.edges(), *path.allocator()) {
+            for (tree, range) in collect_edges_in(
+                marker.edges().filter(|(_, tree)| !tree.is_false()),
+                *path.allocator(),
+            ) {
                 // Detect whether the range for this edge can be simplified as an inequality.
                 if let Some(excluded) = range_inequality(&range) {
                     let current = path.len();
@@ -129,7 +132,10 @@ fn collect_dnf<A: Allocator + Copy>(
             }
         }
         MarkerTreeKind::VersionString(marker) => {
-            for (tree, range) in collect_edges_in(marker.edges(), *path.allocator()) {
+            for (tree, range) in collect_edges_in(
+                marker.edges().filter(|(_, tree)| !tree.is_false()),
+                *path.allocator(),
+            ) {
                 for (lower, upper) in range.iter() {
                     let current = path.len();
                     let lower = lower.map(|version| ArcStr::from(version.to_string()));
@@ -149,7 +155,10 @@ fn collect_dnf<A: Allocator + Copy>(
             }
         }
         MarkerTreeKind::String(marker) => {
-            for (tree, range) in collect_edges_in(marker.children(), *path.allocator()) {
+            for (tree, range) in collect_edges_in(
+                marker.children().filter(|(_, tree)| !tree.is_false()),
+                *path.allocator(),
+            ) {
                 // Detect whether the range for this edge can be simplified as an inequality.
                 if let Some(excluded) = range_inequality(&range) {
                     let current = path.len();
@@ -183,6 +192,9 @@ fn collect_dnf<A: Allocator + Copy>(
         }
         MarkerTreeKind::In(marker) => {
             for (value, tree) in marker.children() {
+                if tree.is_false() {
+                    continue;
+                }
                 let operator = if value {
                     MarkerOperator::In
                 } else {
@@ -202,6 +214,9 @@ fn collect_dnf<A: Allocator + Copy>(
         }
         MarkerTreeKind::Contains(marker) => {
             for (value, tree) in marker.children() {
+                if tree.is_false() {
+                    continue;
+                }
                 let operator = if value {
                     MarkerOperator::Contains
                 } else {
@@ -221,6 +236,9 @@ fn collect_dnf<A: Allocator + Copy>(
         }
         MarkerTreeKind::List(marker) => {
             for (is_high, tree) in marker.children() {
+                if tree.is_false() {
+                    continue;
+                }
                 let expr = MarkerExpression::List {
                     pair: marker.pair().clone(),
                     operator: if is_high {
@@ -237,6 +255,9 @@ fn collect_dnf<A: Allocator + Copy>(
         }
         MarkerTreeKind::Extra(marker) => {
             for (value, tree) in marker.children() {
+                if tree.is_false() {
+                    continue;
+                }
                 let operator = if value {
                     ExtraOperator::Equal
                 } else {
@@ -382,7 +403,7 @@ where
 }
 
 fn collect_edges_in<'a, T, A>(
-    map: impl ExactSizeIterator<Item = (&'a Ranges<T>, MarkerTree)>,
+    map: impl Iterator<Item = (&'a Ranges<T>, MarkerTree)>,
     allocator: A,
 ) -> impl Iterator<Item = (MarkerTree, Ranges<T>)>
 where
@@ -391,9 +412,10 @@ where
 {
     // Small nodes can reuse the traversal's storage without building a hash table.
     // Larger nodes retain hashed grouping to bound the duplicate lookup cost.
-    if map.len() <= 5 {
+    let maximum_len = map.size_hint().1.unwrap_or(usize::MAX);
+    if maximum_len <= 5 {
         let mut paths: Vec<(MarkerTree, Ranges<T>), A> =
-            Vec::with_capacity_in(map.len(), allocator);
+            Vec::with_capacity_in(maximum_len, allocator);
         for (range, tree) in map {
             let (start, end) = range.bounding_range().unwrap();
             let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
