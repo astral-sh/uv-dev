@@ -6,7 +6,7 @@ use std::ops::Bound;
 use arcstr::ArcStr;
 use bumpalo::Bump;
 use indexmap::IndexMap;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use rustc_hash::FxBuildHasher;
 use version_ranges::Ranges;
 
@@ -86,7 +86,7 @@ fn collect_dnf<A: Allocator + Copy>(
             }
         }
         MarkerTreeKind::Version(marker) => {
-            for (tree, range) in collect_edges(marker.edges()) {
+            for (tree, range) in collect_edges_in(marker.edges(), *path.allocator()) {
                 // Detect whether the range for this edge can be simplified as an inequality.
                 if let Some(excluded) = range_inequality(&range) {
                     let current = path.len();
@@ -129,7 +129,7 @@ fn collect_dnf<A: Allocator + Copy>(
             }
         }
         MarkerTreeKind::VersionString(marker) => {
-            for (tree, range) in collect_edges(marker.edges()) {
+            for (tree, range) in collect_edges_in(marker.edges(), *path.allocator()) {
                 for (lower, upper) in range.iter() {
                     let current = path.len();
                     let lower = lower.map(|version| ArcStr::from(version.to_string()));
@@ -149,7 +149,7 @@ fn collect_dnf<A: Allocator + Copy>(
             }
         }
         MarkerTreeKind::String(marker) => {
-            for (tree, range) in collect_edges(marker.children()) {
+            for (tree, range) in collect_edges_in(marker.children(), *path.allocator()) {
                 // Detect whether the range for this edge can be simplified as an inequality.
                 if let Some(excluded) = range_inequality(&range) {
                     let current = path.len();
@@ -374,10 +374,38 @@ fn sort<A: Allocator>(dnf: &mut [Vec<MarkerExpression, A>]) {
 /// Merge any edges that lead to identical subtrees into a single range.
 pub(crate) fn collect_edges<'a, T>(
     map: impl ExactSizeIterator<Item = (&'a Ranges<T>, MarkerTree)>,
-) -> IndexMap<MarkerTree, Ranges<T>, FxBuildHasher>
+) -> impl Iterator<Item = (MarkerTree, Ranges<T>)>
 where
     T: Ord + Clone + 'a,
 {
+    collect_edges_in(map, Global)
+}
+
+fn collect_edges_in<'a, T, A>(
+    map: impl ExactSizeIterator<Item = (&'a Ranges<T>, MarkerTree)>,
+    allocator: A,
+) -> impl Iterator<Item = (MarkerTree, Ranges<T>)>
+where
+    T: Ord + Clone + 'a,
+    A: Allocator,
+{
+    // Small nodes can reuse the traversal's storage without building a hash table.
+    // Larger nodes retain hashed grouping to bound the duplicate lookup cost.
+    if map.len() <= 5 {
+        let mut paths: Vec<(MarkerTree, Ranges<T>), A> =
+            Vec::with_capacity_in(map.len(), allocator);
+        for (range, tree) in map {
+            let (start, end) = range.bounding_range().unwrap();
+            let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
+            if let Some((_, union)) = paths.iter_mut().find(|(existing, _)| *existing == tree) {
+                *union = union.union(&range);
+            } else {
+                paths.push((tree, range));
+            }
+        }
+        return Either::Left(paths.into_iter());
+    }
+
     let mut paths: IndexMap<_, Ranges<_>, FxBuildHasher> = IndexMap::default();
     for (range, tree) in map {
         // OK because all ranges are guaranteed to be non-empty.
@@ -387,10 +415,10 @@ where
         paths
             .entry(tree)
             .and_modify(|union| *union = union.union(&range))
-            .or_insert_with(|| range.clone());
+            .or_insert(range);
     }
 
-    paths
+    Either::Right(paths.into_iter())
 }
 
 /// Returns `Some` if the expression can be simplified as an inequality consisting
@@ -533,9 +561,43 @@ mod tests {
     use std::thread;
 
     use bumpalo::Bump;
+    use version_ranges::Ranges;
 
-    use super::{to_dnf, to_dnf_in, with_dnf};
+    use super::{collect_edges_in, to_dnf, to_dnf_in, with_dnf};
     use crate::MarkerTree;
+
+    #[test]
+    fn arena_edge_groups_preserve_order_and_gaps() {
+        let arena = Bump::new();
+        let edges: [(Ranges<i32>, MarkerTree); 6] = [
+            (Ranges::singleton(1), MarkerTree::FALSE),
+            (Ranges::singleton(2), MarkerTree::TRUE),
+            (Ranges::singleton(3), MarkerTree::FALSE),
+            (Ranges::singleton(4), MarkerTree::TRUE),
+            (Ranges::singleton(5), MarkerTree::FALSE),
+            (Ranges::singleton(6), MarkerTree::TRUE),
+        ];
+        for length in [4, 6] {
+            let groups: Vec<_> = collect_edges_in(
+                edges[..length].iter().map(|(range, tree)| (range, *tree)),
+                &arena,
+            )
+            .collect();
+            let mut false_range = Ranges::singleton(1).union(&Ranges::singleton(3));
+            let mut true_range = Ranges::singleton(2).union(&Ranges::singleton(4));
+            if length == 6 {
+                false_range = false_range.union(&Ranges::singleton(5));
+                true_range = true_range.union(&Ranges::singleton(6));
+            }
+            assert_eq!(
+                groups,
+                [
+                    (MarkerTree::FALSE, false_range),
+                    (MarkerTree::TRUE, true_range)
+                ]
+            );
+        }
+    }
 
     #[test]
     fn arena_dnf_matches_owned_clauses() {
