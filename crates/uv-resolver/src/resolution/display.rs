@@ -1,4 +1,4 @@
-use std::alloc::Allocator;
+use std::alloc::{Allocator, Global};
 use std::collections::BTreeSet;
 
 use hashbrown::{HashMap, hash_map::Entry};
@@ -199,9 +199,9 @@ impl DisplayResolutionGraph<'_> {
 
         // Reduce the graph, removing or combining extras for a given package.
         let graph = if self.include_extras {
-            combine_extras(&graph, allocator)
+            combine_extras(&graph, Global)
         } else {
-            strip_extras(&graph, allocator)
+            strip_extras(&graph, Global)
         };
 
         // Collect all packages.
