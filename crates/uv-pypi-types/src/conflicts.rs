@@ -5,7 +5,7 @@ use petgraph::{
     graph::{DiGraph, NodeIndex},
 };
 use rustc_hash::FxBuildHasher;
-use std::alloc::Allocator;
+use std::alloc::{Allocator, Global};
 #[cfg(feature = "schemars")]
 use std::borrow::Cow;
 use std::fmt;
@@ -108,7 +108,7 @@ impl Conflicts {
         }
 
         with_arena(|allocator| {
-            self.expand_transitive_group_includes_in(package, groups, allocator, allocator);
+            self.expand_transitive_group_includes_in(package, groups, allocator, Global);
         });
     }
 
