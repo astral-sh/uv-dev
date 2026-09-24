@@ -128,16 +128,21 @@ class PromotionCompletionGitHub(PromotionGitHub):
 
     def record_promotion(self, completion: PromotionCompletion) -> None:
         source = completion.source
-        comment = decode_promotion_comment(
-            self._completion_api(
-                "POST",
-                f"repos/{source.repository.name}/issues/{source.number}/comments",
-                {"body": completion.comment},
-            ),
-            source,
-        )
-        if not comment.is_automation or comment.body != completion.comment:
-            raise ValueError("GitHub did not create the expected promotion record")
+        try:
+            comment = decode_promotion_comment(
+                self._completion_api(
+                    "POST",
+                    f"repos/{source.repository.name}/issues/{source.number}/comments",
+                    {"body": completion.comment},
+                ),
+                source,
+            )
+            if not comment.is_automation or comment.body != completion.comment:
+                raise ValueError("Unexpected promotion record")
+        except KeyError, TypeError, ValueError:
+            # The POST can have committed even when its response cannot attest
+            # the receipt. Reconcile the canonical list without leaking fields.
+            raise PromotionReadError("Invalid GitHub promotion response") from None
 
     def close_promotion_source(self, source: PromotionScope) -> None:
         require_promotion_source(source.repository)

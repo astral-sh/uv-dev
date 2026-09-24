@@ -229,14 +229,19 @@ def _current(
     return _CurrentCompletion(source, approval)
 
 
-def _retry_delay(attempt: int, error: PromotionReadError | None = None) -> None:
+def _retry_delay(
+    attempt: int,
+    error: PromotionReadError | None = None,
+    *,
+    before_reconciliation: bool = False,
+) -> None:
     delay = float(2**attempt)
     if isinstance(error, CompletionRequestError):
         if not error.retryable:
             raise error
         if error.retry_after is not None:
             delay = max(delay, error.retry_after)
-    if attempt + 1 < COMPLETION_ATTEMPTS:
+    if before_reconciliation or attempt + 1 < COMPLETION_ATTEMPTS:
         sleep(delay)
 
 
@@ -286,7 +291,7 @@ def close_source(
     # canonical receipt; never repeat an ambiguous POST in this invocation.
     comment_attempted = False
     for attempt in range(COMPLETION_ATTEMPTS):
-        failure = None
+        waited = False
         try:
             current = _current(reader, completion)
             if isinstance(current, SkippedCompletion):
@@ -298,32 +303,34 @@ def close_source(
                 break
             if not comment_attempted:
                 comment_attempted = True
-                writer.record_promotion(completion)
-                if _recorded(reader, completion) is True:
+                try:
+                    writer.record_promotion(completion)
+                except PromotionReadError as error:
+                    # A server-requested delay applies to reconciliation reads
+                    # too, including a final attempt with an ambiguous result.
+                    _retry_delay(attempt, error, before_reconciliation=True)
+                    waited = True
+                current = _current(reader, completion)
+                if isinstance(current, SkippedCompletion):
+                    return current
+                recorded = _recorded(reader, completion)
+                if isinstance(recorded, SkippedCompletion):
+                    return recorded
+                if recorded:
                     break
         except PromotionReadError as error:
-            failure = error
-            if comment_attempted:
-                try:
-                    current = _current(reader, completion)
-                    if isinstance(current, SkippedCompletion):
-                        return current
-                    recorded = _recorded(reader, completion)
-                    if isinstance(recorded, SkippedCompletion):
-                        return recorded
-                    if recorded:
-                        break
-                except PromotionReadError:
-                    pass
             if attempt + 1 == COMPLETION_ATTEMPTS:
                 raise
-        _retry_delay(attempt, failure)
+            _retry_delay(attempt, error)
+            continue
+        if not waited:
+            _retry_delay(attempt)
     else:
         raise PromotionReadError("Could not confirm the promotion comment")
 
     close_attempted = False
     for attempt in range(COMPLETION_ATTEMPTS):
-        failure = None
+        waited = False
         try:
             current = _current(reader, completion, allow_closed=close_attempted)
             if isinstance(current, SkippedCompletion):
@@ -339,7 +346,8 @@ def close_source(
             try:
                 writer.close_promotion_source(completion.source)
             except PromotionReadError as error:
-                failure = error
+                _retry_delay(attempt, error, before_reconciliation=True)
+                waited = True
             current = _current(reader, completion, allow_closed=True)
             if isinstance(current, SkippedCompletion):
                 return current
@@ -350,16 +358,10 @@ def close_source(
                 if recorded:
                     return None
         except PromotionReadError as error:
-            # The final response may also be lost after the state change. Its
-            # read-only reconciliation below must run before reporting failure.
-            failure = failure or error
-        _retry_delay(attempt, failure)
-    current = _current(reader, completion, allow_closed=close_attempted)
-    if isinstance(current, SkippedCompletion):
-        return current
-    recorded = _recorded(reader, completion)
-    if isinstance(recorded, SkippedCompletion):
-        return recorded
-    if recorded and current.source.details.state == PullRequestState.CLOSED:
-        return None
+            if attempt + 1 == COMPLETION_ATTEMPTS:
+                raise
+            _retry_delay(attempt, error)
+            continue
+        if not waited:
+            _retry_delay(attempt)
     raise PromotionReadError("Could not confirm the source pull request closed")

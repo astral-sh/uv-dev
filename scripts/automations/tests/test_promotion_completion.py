@@ -109,8 +109,10 @@ class FaultInjection:
         self.failures: dict[str, list[str]] = {}
         self.headers: dict[str, str] = {}
         self.delays: list[float] = []
+        self.trace: list[tuple[str, str | float]] = []
         self.drift_after_labels = False
         self.close_after_record = False
+        self.comment_response: object | None = None
         self.permission = "write"
 
     def receipt(self, body: str | None = None) -> dict[str, object]:
@@ -151,6 +153,7 @@ class FaultInjection:
         upstream_issue = f"repos/{UV_REPOSITORY.name}/issues/{UPSTREAM.number}"
         operation = f"{method} {endpoint}"
         self.calls[operation] += 1
+        self.trace.append(("api", operation))
         failures = self.failures.get(operation, [])
         failure = failures.pop(0) if failures else ""
 
@@ -161,6 +164,8 @@ class FaultInjection:
             if "--include" in arguments:
                 header = self.headers.get(operation, "")
                 body = f"HTTP/2.0 {status} Status\r\n{header}\r\n{body}"
+            if failure:
+                self.trace.append(("failed", operation))
             return subprocess.CompletedProcess(
                 arguments, int(bool(failure)), body, failure
             )
@@ -200,6 +205,8 @@ class FaultInjection:
                 self.comments.append(result)
                 if self.close_after_record:
                     self.source["state"] = "closed"
+                if self.comment_response is not None:
+                    result = self.comment_response
             case "PATCH", value if value == source_pr:
                 if payload != {"state": "closed"}:
                     raise AssertionError(payload)
@@ -220,13 +227,17 @@ class FaultInjection:
         )
 
     def execute(self, *, close: bool = False) -> SkippedCompletion | None:
+        def wait(delay: float) -> None:
+            self.delays.append(delay)
+            self.trace.append(("sleep", delay))
+
         with (
             patch(
                 "uv_automations.github_promotion.subprocess.run", side_effect=self.run
             ),
             patch(
                 "uv_automations.workflows.promotion_completion.sleep",
-                side_effect=self.delays.append,
+                side_effect=wait,
             ),
         ):
             function = close_source if close else complete_metadata
@@ -238,6 +249,121 @@ class FaultInjection:
 
 
 class PromotionCompletionTests(unittest.TestCase):
+    def assert_delayed_after_failures(
+        self, fixture: FaultInjection, delay: float
+    ) -> None:
+        failures = [
+            index for index, event in enumerate(fixture.trace) if event[0] == "failed"
+        ]
+        self.assertTrue(failures)
+        for index in failures:
+            self.assertEqual(fixture.trace[index + 1], ("sleep", delay))
+            self.assertEqual(fixture.trace[index + 2][0], "api")
+
+    def test_mutation_reconciliation_obeys_retry_after_before_every_api_call(
+        self,
+    ) -> None:
+        now = datetime(2026, 9, 24, 12, 0, 0, tzinfo=UTC)
+        for resource, status, header in (
+            (resource, status, header)
+            for resource in ("comments", "close")
+            for status in (429, 503)
+            for header in ("20", "Thu, 24 Sep 2026 12:00:20 GMT")
+        ):
+            with self.subTest(resource=resource, status=status, header=header):
+                fixture = FaultInjection()
+                operation = fixture.operation(
+                    "PATCH" if resource == "close" else "POST", resource
+                )
+                fixture.failures[operation] = [f"after HTTP {status}"]
+                fixture.headers[operation] = f"Retry-After: {header}\r\n"
+                with patch(
+                    "uv_automations.github_promotion_completion.datetime"
+                ) as clock:
+                    clock.now.return_value = now
+                    self.assertIsNone(fixture.execute(close=True))
+                self.assert_delayed_after_failures(fixture, 20.0)
+                self.assertEqual(
+                    fixture.calls[fixture.operation("POST", "comments")], 1
+                )
+                self.assertEqual(fixture.calls[fixture.operation("PATCH", "close")], 1)
+
+    def test_reconciliation_get_and_final_attempt_obey_their_delays(self) -> None:
+        fixture = FaultInjection()
+        operation = fixture.operation("PATCH", "close")
+        fixture.failures[operation] = [
+            "before HTTP 503",
+            "before HTTP 503",
+            "after HTTP 429",
+        ]
+        fixture.headers[operation] = "Retry-After: 20\r\n"
+        self.assertIsNone(fixture.execute(close=True))
+        self.assert_delayed_after_failures(fixture, 20.0)
+        self.assertEqual(fixture.calls[operation], 3)
+
+        fixture = FaultInjection()
+        operation = fixture.operation("GET", "comments")
+        # The first read proves absence; the second is the post-POST readback.
+        fixture.failures[operation] = ["", "before HTTP 429"]
+        fixture.headers[operation] = "Retry-After: 6\r\n"
+        self.assertIsNone(fixture.execute(close=True))
+        self.assert_delayed_after_failures(fixture, 6.0)
+        self.assertEqual(fixture.calls[fixture.operation("POST", "comments")], 1)
+
+        fixture = FaultInjection()
+        source_read = fixture.operation("GET", "close")
+        comment_write = fixture.operation("POST", "comments")
+        fixture.failures[source_read] = ["before HTTP 503", "before HTTP 503"]
+        fixture.failures[comment_write] = ["after HTTP 429"]
+        fixture.headers[source_read] = "Retry-After: 20\r\n"
+        fixture.headers[comment_write] = "Retry-After: 20\r\n"
+        self.assertIsNone(fixture.execute(close=True))
+        self.assert_delayed_after_failures(fixture, 20.0)
+        self.assertEqual(fixture.calls[comment_write], 1)
+
+    def test_over_budget_or_permanent_mutation_failure_has_no_followup_request(
+        self,
+    ) -> None:
+        for resource, status, header in (
+            (resource, status, header)
+            for resource in ("comments", "close")
+            for status, header in (
+                (429, "31"),
+                (503, "999999999999999999"),
+                (401, ""),
+                (422, ""),
+            )
+        ):
+            with self.subTest(resource=resource, status=status, header=header):
+                fixture = FaultInjection()
+                operation = fixture.operation(
+                    "PATCH" if resource == "close" else "POST", resource
+                )
+                fixture.failures[operation] = [f"after HTTP {status}"]
+                if header:
+                    fixture.headers[operation] = f"Retry-After: {header}\r\n"
+                with self.assertRaises(CompletionRequestError):
+                    fixture.execute(close=True)
+                self.assertEqual(fixture.trace[-1], ("failed", operation))
+                self.assertEqual(fixture.calls[operation], 1)
+                self.assertFalse(fixture.delays)
+
+        for status, header in ((429, "31"), (401, "")):
+            with self.subTest(read_status=status):
+                fixture = FaultInjection()
+                operation = fixture.operation("GET", "comments")
+                fixture.failures[operation] = ["", f"before HTTP {status}"]
+                if header:
+                    fixture.headers[operation] = f"Retry-After: {header}\r\n"
+                with self.assertRaises(CompletionRequestError):
+                    fixture.execute(close=True)
+                self.assertEqual(fixture.trace[-1], ("failed", operation))
+                self.assertEqual(
+                    fixture.calls[fixture.operation("POST", "comments")], 1
+                )
+                self.assertEqual(fixture.calls[fixture.operation("PATCH", "close")], 0)
+                self.assertFalse(fixture.delays)
+
     def test_retry_after_parsing_is_bounded_and_sanitized(self) -> None:
         now = datetime(2026, 9, 24, 12, 0, 0, tzinfo=UTC)
         for value, expected in (
@@ -441,6 +567,23 @@ class PromotionCompletionTests(unittest.TestCase):
         self.assertEqual(fixture.calls[operation], 1)
         self.assertEqual(len(fixture.comments), 1)
         self.assertEqual(fixture.calls[fixture.operation("PATCH", "close")], 1)
+
+    def test_committed_comment_with_invalid_response_reconciles_safely(self) -> None:
+        for response in (
+            {},
+            {"user": {"type": "private-invalid-actor"}},
+            {**FaultInjection().receipt(), "performed_via_github_app": None},
+            {**FaultInjection().receipt(), "body": "private-unexpected-body"},
+        ):
+            with self.subTest(response=response):
+                fixture = FaultInjection()
+                fixture.comment_response = response
+                self.assertIsNone(fixture.execute(close=True))
+                self.assertEqual(
+                    fixture.calls[fixture.operation("POST", "comments")], 1
+                )
+                self.assertEqual(fixture.calls[fixture.operation("PATCH", "close")], 1)
+                self.assertEqual(fixture.delays, [1.0])
 
     def test_uncommitted_comment_failure_is_not_blindly_retried(self) -> None:
         fixture = FaultInjection()
