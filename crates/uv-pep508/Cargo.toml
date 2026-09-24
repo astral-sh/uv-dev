@@ -21,6 +21,7 @@ uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-redacted = { workspace = true }
 
+allocator-api2 = "=0.2.21"
 arcstr = { workspace = true}
 boxcar = { workspace = true }
 bumpalo = { workspace = true }

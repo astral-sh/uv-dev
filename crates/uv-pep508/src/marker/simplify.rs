@@ -1,8 +1,9 @@
-use std::alloc::{Allocator, Global};
 use std::cell::Cell;
 use std::fmt;
 use std::ops::Bound;
 
+use allocator_api2::alloc::{Allocator, Global};
+use allocator_api2::vec::Vec;
 use arcstr::ArcStr;
 use bumpalo::Bump;
 use indexmap::IndexMap;
@@ -47,8 +48,19 @@ pub(crate) fn with_dnf<R>(
 /// which can be used to create a CNF expression.
 ///
 /// We choose DNF as it is easier to simplify for user-facing output.
-pub(crate) fn to_dnf(tree: MarkerTree) -> Vec<Vec<MarkerExpression>> {
-    to_dnf_in(tree, Global)
+pub(crate) fn to_dnf(tree: MarkerTree) -> std::vec::Vec<std::vec::Vec<MarkerExpression>> {
+    into_std_vec(to_dnf_in(tree, Global))
+        .into_iter()
+        .map(into_std_vec)
+        .collect()
+}
+
+fn into_std_vec<T>(values: Vec<T>) -> std::vec::Vec<T> {
+    let (pointer, length, capacity) = values.into_raw_parts();
+    // SAFETY: allocator-api2's Global delegates to Rust's global allocator.
+    // The allocation retains the same element type, length, and capacity, and
+    // into_raw_parts transfers ownership without freeing it.
+    unsafe { std::vec::Vec::from_raw_parts(pointer, length, capacity) }
 }
 
 /// Returns a simplified DNF expression with clause storage allocated by `allocator`.
