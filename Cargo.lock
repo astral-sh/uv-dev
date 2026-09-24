@@ -5889,6 +5889,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-allocator"
+version = "0.0.85"
+dependencies = [
+ "bumpalo",
+]
+
+[[package]]
 name = "uv-audit"
 version = "0.0.85"
 dependencies = [
@@ -5976,6 +5983,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "uv",
+ "uv-allocator",
  "uv-cache",
  "uv-cli",
  "uv-client",
@@ -6957,7 +6965,6 @@ dependencies = [
  "arcstr",
  "astral-version-ranges",
  "boxcar",
- "bumpalo",
  "indexmap",
  "insta",
  "itertools 0.14.0",
@@ -6974,6 +6981,7 @@ dependencies = [
  "tracing-test",
  "unicode-width 0.2.2",
  "url",
+ "uv-allocator",
  "uv-cache-key",
  "uv-fs",
  "uv-normalize",

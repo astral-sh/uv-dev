@@ -17,6 +17,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 uv = { version = "0.12.18", path = "crates/uv", default-features = false }
+uv-allocator = { version = "0.0.85", path = "crates/uv-allocator" }
 uv-audit = { version = "0.0.85", path = "crates/uv-audit" }
 uv-auth = { version = "0.0.85", path = "crates/uv-auth" }
 uv-bin-install = { version = "0.0.85", path = "crates/uv-bin-install" }
