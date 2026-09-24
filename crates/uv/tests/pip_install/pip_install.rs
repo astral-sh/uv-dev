@@ -11774,10 +11774,8 @@ fn direct_url_json_direct_url() -> Result<()> {
     });
     direct_url.assert(predicates::path::is_file());
 
-    // Persisting the redacted signature changes the package's source identity, so every subsequent
-    // install reinstalls it. See astral-sh/uv#21969.
     let direct_url_content = fs_err::read_to_string(direct_url.path())?;
-    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16%3A34%3A14Z&sig=****","archive_info":{}}"#);
+    insta::assert_snapshot!(direct_url_content, @r#"{"url":"https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16:34:14Z&sig=abc","archive_info":{}}"#);
 
     uv_snapshot!(context.pip_install()
         .arg("-r")
@@ -11786,11 +11784,8 @@ fn direct_url_json_direct_url() -> Result<()> {
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
-    Would uninstall 1 package
-    Would install 1 package
-     - six==1.17.0 (from https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16%3A34%3A14Z&sig=****)
-     + six==1.17.0 (from https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl?st=2026-09-15T16%3A34%3A14Z&sig=****)
+    Checked 1 package in [TIME]
+    Would make no changes
     "
     );
 
