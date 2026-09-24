@@ -100,7 +100,10 @@ class PromotionWorkflowBoundaryTests(unittest.TestCase):
         )
         replay = job("promote-pull-request.yml", "replay-promoted-children", "recover")
         self.assertIn("closed: ${{ steps.close.outputs.closed }}", publisher)
-        self.assertIn('echo "closed=true" >> "$GITHUB_OUTPUT"', publisher)
+        self.assertIn("promotions close-source", publisher)
+        self.assertIn(
+            "PROMOTION_COMPLETION: ${{ steps.promote.outputs.completion }}", publisher
+        )
         self.assertIn("needs.promote.outputs.closed == 'true'", replay)
         self.assertIn("promotions replay-children", replay)
         self.assertIn('--parent "$PARENT_PULL_REQUEST"', replay)
@@ -113,7 +116,10 @@ class PromotionWorkflowBoundaryTests(unittest.TestCase):
             "promote-pull-request.yml", "promote", "replay-promoted-children"
         )
         recover = job("promote-pull-request.yml", "recover")
-        self.assertEqual(publisher.count("promotions current-approval"), 3)
+        self.assertEqual(publisher.count("promotions current-approval"), 2)
+        self.assertIn("promotions complete-metadata", publisher)
+        self.assertIn("promotions close-source", publisher)
+        self.assertNotIn("gh pr close", publisher)
         self.assertIn("promotions current-approval", recover)
         for section in (publisher, recover):
             self.assertIn("REPLAY_APPROVAL_ID: ${{ inputs.approval_id }}", section)
