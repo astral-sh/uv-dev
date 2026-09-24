@@ -220,7 +220,7 @@ class PromotionReplayFailureTests(unittest.TestCase):
             self.assertIn("Could not confirm 1 queued promotion check(s)", summary)
             self.assertNotIn("injected private response", stderr.getvalue())
 
-    def test_failure_does_not_upgrade_another_childs_approval(self) -> None:
+    def test_failure_does_not_upgrade_a_sibling_approval(self) -> None:
         fixture = ReplayBatchFixture()
         fixture.dispatch_allowed = True
         fixture.unconfirmed_dispatch = SECOND
