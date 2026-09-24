@@ -11,7 +11,7 @@ use pubgrub::{DerivationTree, Derived, External, Map, Ranges, Term};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::trace;
 
-use uv_allocator::with_arena;
+use uv_allocator::{ScratchAllocator, with_arena};
 use uv_distribution_types::{
     DerivationChain, DistErrorKind, IndexCapabilities, IndexLocations, IndexUrl, RequestedDist,
 };
@@ -357,12 +357,12 @@ fn transform_derivation_tree(
         Option<ErrorTree>,
     ) -> Option<ErrorTree>,
 ) -> Option<ErrorTree> {
-    with_arena(|allocator| {
+    with_arena(|arena| {
         transform_derivation_tree_in(
             derivation_tree,
             transform_external,
             transform_derived,
-            allocator,
+            ScratchAllocator::new(arena),
         )
     })
 }
