@@ -1,10 +1,11 @@
 use std::alloc::Allocator;
 use std::collections::BTreeSet;
 
+use hashbrown::{HashMap, hash_map::Entry};
 use owo_colors::OwoColorize;
 use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Direction, Graph};
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::FxBuildHasher;
 
 use uv_allocator::with_arena;
 use uv_configuration::AnnotationStyle;
@@ -198,9 +199,9 @@ impl DisplayResolutionGraph<'_> {
 
         // Reduce the graph, removing or combining extras for a given package.
         let graph = if self.include_extras {
-            combine_extras(&graph)
+            combine_extras(&graph, allocator)
         } else {
-            strip_extras(&graph)
+            strip_extras(&graph, allocator)
         };
 
         // Collect all packages.
@@ -357,14 +358,18 @@ type RequirementsTxtGraph<'dist> = Graph<RequirementsTxtDist<'dist>, (), Directe
 /// would _not_ be combined.
 ///
 /// We also remove the root node, to simplify the graph structure.
-fn combine_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGraph<'dist> {
+fn combine_extras<'dist, A: Allocator>(
+    graph: &IntermediatePetGraph<'dist>,
+    allocator: A,
+) -> RequirementsTxtGraph<'dist> {
     /// Return the key for a node.
     fn version_marker<'dist>(dist: &'dist RequirementsTxtDist) -> (&'dist PackageName, MarkerTree) {
         (dist.name(), dist.markers)
     }
 
     let mut next = RequirementsTxtGraph::with_capacity(graph.node_count(), graph.edge_count());
-    let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
+    let mut inverse =
+        HashMap::with_capacity_and_hasher_in(graph.node_count(), FxBuildHasher, allocator);
 
     // Re-add the nodes to the reduced graph.
     for index in graph.node_indices() {
@@ -375,14 +380,14 @@ fn combine_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxt
         // In the `requirements.txt` output, we want a flat installation list, so we need to use
         // the reachability markers instead of the edge markers.
         match inverse.entry(version_marker(dist)) {
-            std::collections::hash_map::Entry::Occupied(entry) => {
+            Entry::Occupied(entry) => {
                 let index = *entry.get();
                 let node: &mut RequirementsTxtDist = &mut next[index];
                 node.extras.extend(dist.extras.iter().cloned());
                 node.extras.sort_unstable();
                 node.extras.dedup();
             }
-            std::collections::hash_map::Entry::Vacant(entry) => {
+            Entry::Vacant(entry) => {
                 let index = next.add_node(dist.clone());
                 entry.insert(index);
             }
@@ -414,9 +419,13 @@ fn combine_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxt
 /// `flask` node, with a conjunction of their markers.
 ///
 /// We also remove the root node, to simplify the graph structure.
-fn strip_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGraph<'dist> {
+fn strip_extras<'dist, A: Allocator>(
+    graph: &IntermediatePetGraph<'dist>,
+    allocator: A,
+) -> RequirementsTxtGraph<'dist> {
     let mut next = RequirementsTxtGraph::with_capacity(graph.node_count(), graph.edge_count());
-    let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
+    let mut inverse =
+        HashMap::with_capacity_and_hasher_in(graph.node_count(), FxBuildHasher, allocator);
 
     // Re-add the nodes to the reduced graph.
     for index in graph.node_indices() {
@@ -427,7 +436,7 @@ fn strip_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGr
         // In the `requirements.txt` output, we want a flat installation list, so we need to use
         // the reachability markers instead of the edge markers.
         match inverse.entry(dist.version_id()) {
-            std::collections::hash_map::Entry::Occupied(entry) => {
+            Entry::Occupied(entry) => {
                 let index = *entry.get();
                 let node: &mut RequirementsTxtDist = &mut next[index];
                 node.extras.clear();
@@ -439,7 +448,7 @@ fn strip_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGr
                 // In this case, we want to write `foo==1.0.0; sys_platform == 'linux' or sys_platform == 'windows'`
                 node.markers = node.markers.or(dist.markers);
             }
-            std::collections::hash_map::Entry::Vacant(entry) => {
+            Entry::Vacant(entry) => {
                 let index = next.add_node(dist.clone());
                 entry.insert(index);
             }
