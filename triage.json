@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21540,
+        "title": "Apply flat index policies in each resolver",
+        "url": "https://github.com/astral-sh/uv/pull/21540",
+        "state": "merged",
+        "reason": "The direct source-confirmed change: it made FlatDistributions crate-private, removed its public re-export and BTreeMap conversion, and moved distribution ranking into resolver-policy application."
+      },
+      {
+        "kind": "issue",
+        "number": 2015,
+        "title": "`Intepreter::query` was made `pub(crate)`",
+        "url": "https://github.com/astral-sh/uv/issues/2015",
+        "state": "closed",
+        "reason": "A close precedent from the same pixi integration: another public uv Rust API became crate-private and was restored by astral-sh/uv#2016. It concerns Interpreter::query, so it is adjacent evidence rather than a duplicate."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for FlatDistributions, VersionMap, FlatIndex, flat-distribution ranking, lost exports, public resolver APIs, crate-private changes, external/programmatic crate consumers, and pixi. No separate tracker or restoration fix was found. astral-sh/uv#2015 was the strongest conceptual candidate but concerns a different API. astral-sh/uv#21223 and follow-ups to astral-sh/uv#21540 concern hash enforcement and resolver internals, not restoring this API."
+  },
+  "type": "enhancement",
+  "type_reason": "astral-sh/uv#21540 intentionally internalized flat-distribution ranking so resolver-specific policies are applied per request. Restoring FlatDistributions or adding a replacement VersionMap constructor is therefore a request for exposed functionality, not incorrect command behavior. uv-resolver’s Rust interface is also documented as internal and unstable.",
+  "summary": "astral-sh/uv#21540 directly removed the public FlatDistributions path used by pixi. No existing tracker covers restoring it; astral-sh/uv#2015 is a distinct but relevant precedent involving another pixi-used API made crate-private.",
+  "draft_response": "Thanks for flagging this. astral-sh/uv#21540 intentionally moved flat-distribution ranking into the resolver so that tags, hash strategy, and build options are applied per resolver request; as part of that change, FlatDistributions became crate-private and its public re-export and BTreeMap conversion were removed. The uv-resolver Rust interface is internal and does not carry stability guarantees, so exposing the old type again may not be the right API now that its role has changed. Could you link the current pixi call site and show which input you need to convert into a VersionMap? That will let us evaluate whether FlatDistributions should be exposed again or whether a narrower constructor would fit the new policy model."
+}
