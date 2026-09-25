@@ -526,11 +526,14 @@ mod tests {
             CacheBucket::SourceDistributions,
             WheelCache::Index(&index_url).wheel_dir(package.as_ref()),
         );
-        for version in ["2.0", "10.0", "1.0"] {
-            let revision_id = format!("revision-{version}");
+        for (index, version) in ["2.0", "10.0", "1.0"].into_iter().enumerate() {
+            let revision_id = format!("{index:016x}");
             let version_shard = package_shard.shard(version);
             fs_err::create_dir_all(version_shard.as_ref())?;
-            let revision = (CacheInfo::default(), (&revision_id, Vec::<String>::new()));
+            let revision = (
+                CacheInfo::default(),
+                (&revision_id, Vec::<String>::new(), Option::<u64>::None),
+            );
             fs_err::write(
                 version_shard.entry(LOCAL_REVISION),
                 rmp_serde::to_vec(&revision)?,
@@ -615,8 +618,11 @@ mod tests {
         );
         let valid = package_shard.shard("1.0");
         fs_err::create_dir_all(valid.as_ref())?;
-        let revision_id = "revision-1.0";
-        let revision = (CacheInfo::default(), (revision_id, Vec::<String>::new()));
+        let revision_id = "0000000000000000";
+        let revision = (
+            CacheInfo::default(),
+            (revision_id, Vec::<String>::new(), Option::<u64>::None),
+        );
         fs_err::write(valid.entry(LOCAL_REVISION), rmp_serde::to_vec(&revision)?)?;
         let wheel = valid.shard(revision_id).shard("demo-1.0-py3-none-any");
         cache
