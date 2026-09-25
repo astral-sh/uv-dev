@@ -4,7 +4,8 @@ pub use plan::{IncompatibleWheelError, Plan, Planner};
 pub use preparer::{Error as PrepareError, Preparer, Reporter as PrepareReporter};
 pub use satisfies::BuildSettings;
 pub use site_packages::{
-    InstallationStrategy, SatisfiesResult, SitePackages, SitePackagesDiagnostic,
+    InstallationStrategy, InstalledReachability, SatisfiesResult, SitePackages,
+    SitePackagesDiagnostic,
 };
 pub use uninstall::{UninstallError, uninstall};
 

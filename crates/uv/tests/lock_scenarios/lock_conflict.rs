@@ -102,6 +102,103 @@ fn extra_conflict_discovery_respects_parent_reachability() -> Result<()> {
     Ok(())
 }
 
+/// Workspace-member discovery must follow each locked package identity, even when multiple
+/// versions share a name and only one of them depends on the member with conflicting extras.
+#[test]
+fn workspace_member_conflicts_preserve_locked_package_identity() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        x = []
+        y = []
+
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [tool.uv]
+        conflicts = [[
+            { package = "member", extra = "x" },
+            { package = "member", extra = "y" },
+        ]]
+        "#,
+    )?;
+    context.temp_dir.child("member/pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        x = []
+        y = []
+        "#,
+    )?;
+    context.temp_dir.child("uv.lock").write_str(
+        r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "member", extra = "x" },
+            { package = "member", extra = "y" },
+        ]]
+
+        [manifest]
+        members = ["member", "project"]
+
+        [[package]]
+        name = "member"
+        version = "0.1.0"
+        source = { virtual = "member" }
+        [package.optional-dependencies]
+        x = []
+        y = []
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "proxy", version = "1.0.0", source = { virtual = "proxy1" }, marker = "sys_platform == 'linux'" },
+            { name = "proxy", version = "2.0.0", source = { virtual = "proxy2" }, marker = "sys_platform != 'linux'" },
+        ]
+        [package.optional-dependencies]
+        x = []
+        y = []
+
+        [[package]]
+        name = "proxy"
+        version = "1.0.0"
+        source = { virtual = "proxy1" }
+        dependencies = [{ name = "member" }]
+
+        [[package]]
+        name = "proxy"
+        version = "2.0.0"
+        source = { virtual = "proxy2" }
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen")
+        .arg("--package").arg("project")
+        .arg("--extra").arg("x")
+        .arg("--extra").arg("y"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extras `x` and `y` are incompatible with the declared conflicts: {`member[x]`, `member[y]`}
+    ");
+
+    Ok(())
+}
+
 /// This tests a "basic" case for specifying conflicting extras.
 ///
 /// Namely, we check that 1) without declaring them conflicting,
