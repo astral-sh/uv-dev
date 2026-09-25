@@ -2437,7 +2437,7 @@ fn install_editable_unnamed_no_build() -> Result<()> {
         .arg("--no-build")
         .arg("-e")
         .arg("editable"), @"
-    exit_code: 2 (failure)
+    exit_code: 1 (failure)
     ----- stderr -----
     error: Building source distributions is disabled
     "
