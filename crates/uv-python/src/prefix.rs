@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use same_file::is_same_file;
+
 use uv_pypi_types::Scheme;
 
 /// A `--prefix` directory into which packages can be installed, separate from a virtual environment
@@ -21,7 +23,10 @@ impl Prefix {
 
     /// Return an iterator over the `site-packages` directories inside the environment.
     pub(crate) fn site_packages(&self, virtualenv: &Scheme) -> impl Iterator<Item = PathBuf> {
-        std::iter::once(self.0.join(&virtualenv.purelib))
+        let purelib = self.0.join(&virtualenv.purelib);
+        let platlib = self.0.join(&virtualenv.platlib);
+        let distinct = purelib != platlib && !is_same_file(&purelib, &platlib).unwrap_or(false);
+        std::iter::once(purelib).chain(distinct.then_some(platlib))
     }
 
     /// Initialize the `--prefix` directory.
@@ -41,5 +46,52 @@ impl Prefix {
 impl From<PathBuf> for Prefix {
     fn from(path: PathBuf) -> Self {
         Self(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use anyhow::Result;
+    use uv_pypi_types::Scheme;
+
+    use super::Prefix;
+
+    #[test]
+    fn split_prefix_site_packages() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let root = temp_dir.path().join("prefix");
+        let prefix = Prefix::from(root.clone());
+        let virtualenv = Scheme {
+            purelib: "lib/python3.12/site-packages".into(),
+            platlib: "lib64/python3.12/site-packages".into(),
+            scripts: "bin".into(),
+            data: PathBuf::new(),
+            include: "include".into(),
+        };
+
+        assert_eq!(
+            prefix.site_packages(&virtualenv).collect::<Vec<_>>(),
+            [
+                root.join("lib/python3.12/site-packages"),
+                root.join("lib64/python3.12/site-packages")
+            ]
+        );
+
+        prefix.init(&virtualenv)?;
+        assert!(root.join("lib/python3.12/site-packages").is_dir());
+        assert!(root.join("lib64/python3.12/site-packages").is_dir());
+
+        let combined = Scheme {
+            platlib: virtualenv.purelib.clone(),
+            ..virtualenv
+        };
+        assert_eq!(
+            prefix.site_packages(&combined).collect::<Vec<_>>(),
+            [root.join("lib/python3.12/site-packages")]
+        );
+
+        Ok(())
     }
 }
