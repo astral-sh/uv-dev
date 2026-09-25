@@ -90,6 +90,7 @@ impl LockResult {
 pub(crate) async fn lock(
     project_dir: &Path,
     lock_check: LockCheck,
+    check_packages: &[PackageName],
     frozen: Option<FrozenSource>,
     dry_run: DryRun,
     refresh: Refresh,
@@ -144,6 +145,12 @@ pub(crate) async fn lock(
         .await?;
         LockTarget::Workspace(workspace.workspace())
     };
+
+    for name in check_packages {
+        if !target.packages().contains_key(name) {
+            anyhow::bail!("Package `{name}` not found in workspace");
+        }
+    }
 
     // Determine the lock mode.
     let interpreter;
@@ -222,6 +229,7 @@ pub(crate) async fn lock(
             preview,
         )
         .with_refresh(&refresh)
+        .with_check_packages(check_packages)
         .with_lockfile_contents_check(
             matches!(&refresh, Refresh::All(..))
                 && preview.is_enabled(PreviewFeature::LockfileFormatCheck),
@@ -269,9 +277,11 @@ pub(crate) async fn lock(
             Ok(ExitStatus::Success)
         }
         // Lock mismatches from `--check`/`--locked` are expected validation failures.
-        Err(err @ (ProjectError::LockMismatch(..) | ProjectError::LockFormat(..))) => {
-            Err(UvError::user(err).into())
-        }
+        Err(
+            err @ (ProjectError::LockMismatch(..)
+            | ProjectError::LockPackageMismatch(..)
+            | ProjectError::LockFormat(..)),
+        ) => Err(UvError::user(err).into()),
         Err(err) => Err(UvError::from(err).into()),
     }
 }
@@ -294,6 +304,7 @@ pub(crate) struct LockOperation<'env> {
     constraints: Vec<NameRequirementSpecification>,
     refresh: Option<&'env Refresh>,
     check_lockfile_contents: bool,
+    check_packages: &'env [PackageName],
     settings: &'env ResolverSettings,
     client_builder: &'env BaseClientBuilder<'env>,
     state: &'env UniversalState,
@@ -324,6 +335,7 @@ impl<'env> LockOperation<'env> {
             constraints: vec![],
             refresh: None,
             check_lockfile_contents: false,
+            check_packages: &[],
             settings,
             client_builder,
             state,
@@ -357,6 +369,13 @@ impl<'env> LockOperation<'env> {
     #[must_use]
     fn with_lockfile_contents_check(mut self, enabled: bool) -> Self {
         self.check_lockfile_contents = enabled;
+        self
+    }
+
+    /// Restrict a read-only lock check to the given workspace members.
+    #[must_use]
+    fn with_check_packages(mut self, packages: &'env [PackageName]) -> Self {
+        self.check_packages = packages;
         self
     }
 
@@ -400,6 +419,7 @@ impl<'env> LockOperation<'env> {
                     Some(existing),
                     self.mode,
                     check_lockfile_contents,
+                    self.check_packages,
                     self.constraints,
                     self.refresh,
                     self.settings,
@@ -454,6 +474,7 @@ impl<'env> LockOperation<'env> {
                     existing,
                     self.mode,
                     check_lockfile_contents,
+                    &[],
                     self.constraints,
                     self.refresh,
                     self.settings,
@@ -488,6 +509,7 @@ async fn do_lock(
     existing_lock: Option<Lock>,
     mode: LockMode<'_>,
     check_lockfile_contents: Option<String>,
+    check_packages: &[PackageName],
     external: Vec<NameRequirementSpecification>,
     refresh: Option<&Refresh>,
     settings: &ResolverSettings,
@@ -931,6 +953,7 @@ async fn do_lock(
             target.install_path(),
             packages,
             &members,
+            check_packages,
             required_members,
             &requirements,
             &dependency_groups,
@@ -957,6 +980,7 @@ async fn do_lock(
         .await
         {
             Ok(result) => Some(result),
+            Err(err) if !check_packages.is_empty() => return Err(err),
             Err(ProjectError::Lock(err)) if err.is_resolution() || err.is_no_build() => {
                 // Resolver errors are not recoverable, as such errors can leave the resolver in a
                 // broken state. Specifically, tasks that fail with an error can be left as pending.
@@ -983,6 +1007,17 @@ async fn do_lock(
     } else {
         None
     };
+
+    // A scoped check must not fall back to resolving the whole workspace: an unrelated stale
+    // member could make that resolution fail, and a subset resolution would produce a different
+    // lockfile. Only an existing lock that passes validation can satisfy the check.
+    if !check_packages.is_empty()
+        && existing_lock
+            .as_ref()
+            .is_none_or(|lock| !lock.is_satisfied())
+    {
+        return Err(ProjectError::LockPackageMismatch(check_packages.to_vec()));
+    }
 
     match existing_lock {
         // Resolution from the lockfile succeeded.
@@ -1186,6 +1221,7 @@ impl ValidatedLock {
         install_path: &Path,
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         members: &[PackageName],
+        check_packages: &[PackageName],
         required_members: &BTreeMap<PackageName, Editability>,
         requirements: &[Requirement],
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
@@ -1416,6 +1452,7 @@ impl ValidatedLock {
                 install_path,
                 packages,
                 members,
+                check_packages,
                 required_members,
                 requirements,
                 constraints,
