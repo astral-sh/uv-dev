@@ -179,7 +179,7 @@ impl InstalledTools {
                 }
                 Err(err) => return Err(err.into()),
             };
-            match ToolReceipt::from_string(contents) {
+            match ToolReceipt::from_string(&contents) {
                 Ok(tool_receipt) => tools.push((name, Ok(tool_receipt.tool))),
                 Err(err) => {
                     let err = Error::ReceiptRead(path, Box::new(err));
