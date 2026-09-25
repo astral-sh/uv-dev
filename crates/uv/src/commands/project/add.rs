@@ -558,6 +558,25 @@ pub(crate) async fn add(
         ),
     )?;
 
+    // Validate any indexes that were provided on the command-line before modifying the workspace.
+    let mut valid_indexes = Vec::with_capacity(indexes.len());
+    for index in indexes {
+        if let IndexUrl::Path(url) = &index.url {
+            let path = url
+                .to_file_path()
+                .map_err(|()| anyhow::anyhow!("Invalid file path in index URL: {url}"))?;
+            if !path.is_dir() {
+                bail!("Directory not found for index: {url}");
+            }
+            if fs_err::read_dir(&path)?.next().is_none() {
+                warn_user_once!("Index directory `{url}` is empty, skipping");
+                continue;
+            }
+        }
+        valid_indexes.push(index);
+    }
+    let indexes = valid_indexes;
+
     // If the user provides a single, named index, pin all requirements to that index.
     let index = indexes
         .first()
@@ -639,7 +658,7 @@ pub(crate) async fn add(
 
                 writeln!(
                     printer.stderr(),
-                    "Added `{}` to workspace members",
+                    "Adding `{}` to workspace members",
                     relative_path.user_display().cyan()
                 )?;
             }
@@ -709,26 +728,6 @@ pub(crate) async fn add(
             _ => {}
         }
     }
-
-    // Validate any indexes that were provided on the command-line to ensure
-    // they point to existing non-empty directories when using path URLs.
-    let mut valid_indexes = Vec::with_capacity(indexes.len());
-    for index in indexes {
-        if let IndexUrl::Path(url) = &index.url {
-            let path = url
-                .to_file_path()
-                .map_err(|()| anyhow::anyhow!("Invalid file path in index URL: {url}"))?;
-            if !path.is_dir() {
-                bail!("Directory not found for index: {url}");
-            }
-            if fs_err::read_dir(&path)?.next().is_none() {
-                warn_user_once!("Index directory `{url}` is empty, skipping");
-                continue;
-            }
-        }
-        valid_indexes.push(index);
-    }
-    let indexes = valid_indexes;
 
     // Add any indexes that were provided on the command-line, in priority order.
     if !raw {
