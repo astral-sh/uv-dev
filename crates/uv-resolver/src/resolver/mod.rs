@@ -243,6 +243,7 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
         provider: Provider,
         installed_packages: InstalledPackages,
     ) -> Self {
+        let env = env.with_conflicts(&conflicts);
         let state = ResolverState {
             index: index.clone(),
             git: git.clone(),
