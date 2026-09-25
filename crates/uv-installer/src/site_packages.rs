@@ -353,7 +353,7 @@ impl SitePackages {
                         named.push(Cow::Borrowed(requirement));
                     }
                     UnresolvedRequirement::Unnamed(requirement) => {
-                        match self.get_urls(requirement.url.verbatim.raw()).as_slice() {
+                        match self.get_urls(requirement.url.verbatim.inner()).as_slice() {
                             [] => {
                                 return Ok(SatisfiesResult::Unsatisfied(
                                     UnresolvedRequirement::Unnamed(requirement.clone()),
@@ -393,7 +393,7 @@ impl SitePackages {
                         named.push(Cow::Borrowed(requirement));
                     }
                     UnresolvedRequirement::Unnamed(requirement) => {
-                        match self.get_urls(requirement.url.verbatim.raw()).as_slice() {
+                        match self.get_urls(requirement.url.verbatim.inner()).as_slice() {
                             [] => {
                                 return Ok(SatisfiesResult::Unsatisfied(
                                     UnresolvedRequirement::Unnamed(requirement.clone()),
