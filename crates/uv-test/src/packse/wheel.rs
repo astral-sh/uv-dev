@@ -224,6 +224,7 @@ pub(super) fn generate_scenario_sdist(
                 name,
                 version,
                 &metadata.requires,
+                &metadata.raw_requires_dist,
                 &metadata.extras,
                 &scripts,
                 module_name,
@@ -319,6 +320,10 @@ fn build_metadata(name: &PackageName, version: &Version, package: &PackageMetada
     }
 
     for requirement in &package.requires {
+        writeln!(&mut metadata, "Requires-Dist: {requirement}")
+            .expect("writing metadata into a string should succeed");
+    }
+    for requirement in &package.raw_requires_dist {
         writeln!(&mut metadata, "Requires-Dist: {requirement}")
             .expect("writing metadata into a string should succeed");
     }
@@ -535,12 +540,17 @@ fn build_setup_py(
     name: &PackageName,
     version: &Version,
     requires: &[Requirement],
+    raw_requires_dist: &[String],
     extras: &BTreeMap<ExtraName, Vec<Requirement>>,
     scripts: &BTreeMap<String, String>,
     module_name: &str,
     requires_python: Option<&VersionSpecifiers>,
 ) -> String {
-    let mut dependencies = requires.iter().map(ToString::to_string).collect::<Vec<_>>();
+    let mut dependencies = requires
+        .iter()
+        .map(ToString::to_string)
+        .chain(raw_requires_dist.iter().cloned())
+        .collect::<Vec<_>>();
     dependencies.sort();
     let dependencies = python_string_list(&dependencies);
 
