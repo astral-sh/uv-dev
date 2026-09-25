@@ -47,8 +47,11 @@ on:
         default: dry-run
         type: string
 
+# Release actions must not consume shared GitHub Actions caches.
+cache-mode: none
+
 env:
-  # Release actions must not consume shared GitHub Actions caches.
+  # Also disable cache-aware clients on runners using other cache backends.
   ACTIONS_CACHE_MODE: none
   UV_LOCKED: 1
 
