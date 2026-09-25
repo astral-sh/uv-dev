@@ -16,10 +16,10 @@ use uv_auth::Service;
 use uv_cache::CacheArgs;
 use uv_configuration::RequirementsInput;
 use uv_configuration::{
-    AnnotationStyle, ExcludeNewerPackageEntry, ExportFormat, ForkStrategy, IndexStrategy,
-    KeyringProviderType, PackageNameSpecifier, PipCompileFormat, PrereleaseMode,
-    PrereleasePackageEntry, ProjectBuildBackend, ResolutionMode, TargetTriple, TrustedHost,
-    TrustedPublishing, VersionControlSystem,
+    AnnotationStyle, BuildPolicy, BuildPolicyPackageEntry, ExcludeNewerPackageEntry, ExportFormat,
+    ForkStrategy, IndexStrategy, KeyringProviderType, PackageNameSpecifier, PipCompileFormat,
+    PrereleaseMode, PrereleasePackageEntry, ProjectBuildBackend, ResolutionMode, TargetTriple,
+    TrustedHost, TrustedPublishing, VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, ExcludeNewerOverride, Index, IndexName,
@@ -1543,6 +1543,8 @@ fn parse_file_path(input: &str) -> Result<PathBuf, String> {
 #[derive(Args)]
 #[command(group = clap::ArgGroup::new("sources").required(true).multiple(true))]
 pub struct PipCompileArgs {
+    #[command(flatten)]
+    pub build_policy: BuildPolicyArgs,
     /// Include the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
@@ -1935,6 +1937,8 @@ pub struct PipCompileArgs {
 
 #[derive(Args)]
 pub struct PipSyncArgs {
+    #[command(flatten)]
+    pub build_policy: BuildPolicyArgs,
     /// Include the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
@@ -2223,6 +2227,8 @@ pub struct PipSyncArgs {
 #[derive(Args)]
 #[command(group = clap::ArgGroup::new("sources").required(true).multiple(true))]
 pub struct PipInstallArgs {
+    #[command(flatten)]
+    pub build_policy: BuildPolicyArgs,
     /// Install all listed packages.
     ///
     /// The order of the packages is used to determine priority during resolution.
@@ -7242,8 +7248,36 @@ pub struct RefreshArgs {
     refresh_package: Vec<PackageName>,
 }
 
+/// Arguments that configure source-build policies.
+#[derive(Args)]
+#[group(skip)]
+pub struct BuildPolicyArgs {
+    /// Control whether packages may be built from source.
+    ///
+    /// The policy also applies to build dependencies. Existing build and binary restrictions take
+    /// precedence over build policies.
+    ///
+    /// See <https://docs.astral.sh/uv/concepts/resolution/#source-build-policies> for details.
+    ///
+    /// This option is in preview and may change in any future release.
+    #[arg(long, value_enum, env = EnvVars::UV_BUILD_POLICY, help_heading = "Build options")]
+    pub build_policy: Option<BuildPolicy>,
+
+    /// Control source builds for a specific package.
+    ///
+    /// Accepts `PACKAGE=POLICY`, where `POLICY` is any value accepted by `--build-policy`.
+    /// May be provided multiple times for different packages. Package-specific policies override
+    /// the global policy.
+    ///
+    /// This option is in preview and may change in any future release.
+    #[arg(long, help_heading = "Build options", value_hint = ValueHint::Other)]
+    pub build_policy_package: Option<Vec<BuildPolicyPackageEntry>>,
+}
+
 #[derive(Args)]
 pub struct BuildOptionsArgs {
+    #[command(flatten)]
+    build_policy: BuildPolicyArgs,
     /// Don't build source distributions.
     ///
     /// When enabled, uv will reuse cached wheels from previously built source distributions, but
