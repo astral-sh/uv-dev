@@ -553,11 +553,12 @@ impl EnvVars {
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_CPYTHON_BUILD: &'static str = "UV_PYTHON_CPYTHON_BUILD";
 
-    /// Pin an explicitly requested managed Python build name to a specific build revision.
+    /// Pin a named managed Python build to a specific build revision.
     ///
-    /// This applies to publisher-defined build names, such as `3.13+custom`.
+    /// This applies to requests with a publisher-defined build name, such as `3.13+custom`,
+    /// and to reinstalls of existing named builds.
     ///
-    /// Version requests without an explicit build name, such as `3.13` or `3.13+freethreaded`,
+    /// Requests for unnamed builds, such as `3.13` or `3.13+freethreaded`,
     /// use implementation-specific variables such as `UV_PYTHON_CPYTHON_BUILD`.
     #[attr_added_in("next release")]
     pub const UV_PYTHON_BUILD_REVISION: &'static str = "UV_PYTHON_BUILD_REVISION";

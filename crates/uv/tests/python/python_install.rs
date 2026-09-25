@@ -5492,6 +5492,73 @@ fn python_install_build_name_revision_overlapping_requests() -> anyhow::Result<(
 }
 
 #[test]
+fn python_install_build_name_revision_reinstall_overlapping_requests() -> anyhow::Result<()> {
+    for requests in [["any", "3.13+custom"], ["3.13+custom", "any"]] {
+        let (context, installation) = python_build_name_revision_context("custom")?;
+        let unnamed_key = format!("cpython-3.13.7-{}", platform_key_from_env()?);
+        let unnamed = context.temp_dir.child("managed").child(&unnamed_key);
+        copy_dir_all(&installation, &unnamed)?;
+        let catalog: serde_json::Value = serde_json::from_str(&fs_err::read_to_string(
+            context.temp_dir.child("python-downloads.json"),
+        )?)?;
+        let unnamed_revision = catalog["downloads"][&unnamed_key]["build_revision"]
+            .as_str()
+            .context("Missing unnamed build revision")?;
+
+        // An unavailable explicit pin must fail before either installation is replaced.
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.python_install()
+                .args(requests)
+                .args(["--reinstall", "--no-bin"])
+                .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, unnamed_revision)
+                .env(EnvVars::UV_PYTHON_BUILD_REVISION, "99999999"), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: No download found for request: cpython-3.13+custom-[PLATFORM]
+            ");
+        }
+        for installation in [&unnamed, &installation] {
+            installation
+                .child("marker")
+                .assert(predicate::path::exists());
+            let build = fs_err::read_to_string(installation.child("BUILD"))?;
+            allow_duplicates! {
+                insta::assert_snapshot!(build, @"20260825");
+            }
+        }
+
+        // Expanding `any` uses each build's pin, agreeing with the explicit named request.
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.python_install()
+                .args(requests)
+                .args(["--reinstall", "--no-bin"])
+                .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, unnamed_revision)
+                .env(EnvVars::UV_PYTHON_BUILD_REVISION, "20260901"), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Installed 2 versions in [TIME]
+             ~ cpython-3.13.7+custom-[PLATFORM]
+             ~ cpython-3.13.7-[PLATFORM]
+            ");
+        }
+        let build = fs_err::read_to_string(installation.child("BUILD"))?;
+        allow_duplicates! {
+            insta::assert_snapshot!(build, @"20260901");
+        }
+        for installation in [&unnamed, &installation] {
+            installation
+                .child("marker")
+                .assert(predicate::path::missing());
+        }
+        assert_eq!(
+            fs_err::read_to_string(unnamed.child("BUILD"))?,
+            unnamed_revision
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn python_install_build_name_latest_revision() -> anyhow::Result<()> {
     let (context, installation) = python_build_name_multiple_revisions_context()?;
     let catalog = context.temp_dir.child("python-downloads.json");
