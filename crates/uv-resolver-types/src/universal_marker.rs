@@ -136,6 +136,37 @@ impl UniversalMarker {
         pep508: MarkerTree::FALSE,
     };
 
+    /// Restrict a locked graph to a named workspace resolution context.
+    pub fn workspace_group(group: &GroupName) -> Self {
+        let name = uv_pep508::MarkerValueExtra::Extra(encode_workspace_group(group));
+        Self::from_combined(MarkerTree::expression(MarkerExpression::Extra {
+            operator: ExtraOperator::Equal,
+            name,
+        }))
+    }
+
+    /// Evaluate only the workspace-group dimension of a locked marker.
+    #[must_use]
+    pub fn select_workspace_group(self, group: &GroupName) -> Self {
+        let selected = encode_workspace_group(group);
+        Self::from_combined(
+            self.marker
+                .simplify_extras_with(|candidate| *candidate == selected)
+                .simplify_not_extras_with(|candidate| {
+                    candidate.as_ref().starts_with("workspace-") && *candidate != selected
+                }),
+        )
+    }
+
+    /// Return whether this marker depends on a workspace-group selection.
+    pub fn has_workspace_group(self) -> bool {
+        let mut found = false;
+        self.marker.visit_extras(|_, extra| {
+            found |= extra.as_ref().starts_with("workspace-");
+        });
+        found
+    }
+
     /// Creates a new universal marker from its constituent pieces.
     pub fn new(mut pep508_marker: MarkerTree, conflict_marker: ConflictMarker) -> Self {
         pep508_marker = pep508_marker.and(conflict_marker.marker);
@@ -459,6 +490,10 @@ impl UniversalMarker {
 
         ConflictMarker { marker: remaining }
     }
+}
+
+fn encode_workspace_group(group: &GroupName) -> ExtraName {
+    ExtraName::from_str(&format!("workspace-{group}")).expect("normalized group is a valid extra")
 }
 
 impl std::fmt::Debug for UniversalMarker {

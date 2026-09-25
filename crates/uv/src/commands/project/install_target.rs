@@ -196,6 +196,42 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
 }
 
 impl<'lock> InstallTarget<'lock> {
+    /// Use a projected lock while retaining the installation target.
+    pub(crate) fn with_lock<'selected>(self, lock: &'selected Lock) -> InstallTarget<'selected>
+    where
+        'lock: 'selected,
+    {
+        match self {
+            Self::Project {
+                workspace, name, ..
+            } => InstallTarget::Project {
+                workspace,
+                name,
+                lock,
+            },
+            Self::Projects {
+                workspace, names, ..
+            } => InstallTarget::Projects {
+                workspace,
+                names,
+                lock,
+            },
+            Self::Workspace {
+                workspace,
+                project_name,
+                ..
+            } => InstallTarget::Workspace {
+                workspace,
+                project_name,
+                lock,
+            },
+            Self::NonProjectWorkspace { workspace, .. } => {
+                InstallTarget::NonProjectWorkspace { workspace, lock }
+            }
+            Self::Script { script, .. } => InstallTarget::Script { script, lock },
+        }
+    }
+
     /// Convert the target's locked packages to a [`Resolution`].
     pub(crate) fn to_resolution(
         self,
