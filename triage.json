@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 17416,
+        "title": "Exclude the project from `no-build` by default",
+        "url": "https://github.com/astral-sh/uv/issues/17416",
+        "state": "open",
+        "reason": "Canonical match: it asks for global `no-build` to protect external dependencies without blocking the first-party project, and its discussion specifically identifies VCS-derived dynamic versions as incompatible with that policy today."
+      },
+      {
+        "kind": "issue",
+        "number": 12607,
+        "title": "`uv build --no-build` fails",
+        "url": "https://github.com/astral-sh/uv/issues/12607",
+        "state": "open",
+        "reason": "Earlier local-source-tree design discussion. A maintainer confirms that `no-build` currently covers local projects and says separating local source trees would require distinct policy; unlike the new issue, its direct reproduction uses build and sync rather than lock-time metadata."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10622,
+        "title": "Omit dynamic versions from the lockfile",
+        "url": "https://github.com/astral-sh/uv/pull/10622",
+        "state": "merged",
+        "reason": "Historical partial support for dynamic project versions. The PR discussion explicitly confirms that locking still invokes the build backend, so the new result is not a regression of this fix."
+      }
+    ],
+    "search_scope": "Exact searches covered `no-build`, `dynamic version`, setuptools-scm, the emitted source-distribution error, and `uv lock`; conceptual searches covered first-party and local source trees, static versus dynamic metadata, backend metadata preparation, and excluding the project from build policy. Fix-oriented searches inspected astral-sh/uv#9776 and astral-sh/uv#9785 for static metadata, plus astral-sh/uv#7533, astral-sh/uv#10622, and astral-sh/uv#11046 for dynamic lockfile history. astral-sh/uv#9776 was ruled out as the canonical match because its project metadata is fully static. astral-sh/uv#17487 was also inspected but concerns an external dependency whose dependency metadata requires backend execution."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#17416 already tracks the same underlying capability: exempt the first-party project from global `no-build` so project operations can run its backend while dependency builds remain disabled. The new report adds a lock-specific setuptools-scm reproduction. This is not a regression of astral-sh/uv#10622; that pull request omitted dynamic versions from lockfiles but explicitly left backend invocation in place.",
+  "summary": "astral-sh/uv#17416 is the canonical open issue. astral-sh/uv#12607 provides the earlier local-source-tree policy context, and merged astral-sh/uv#10622 documents why dynamic versions can be omitted from the lockfile while backend metadata preparation still occurs.",
+  "draft_response": "Thanks for the minimal reproduction. This is the same underlying limitation tracked in astral-sh/uv#17416: `no-build` currently also blocks build-backend metadata preparation for the first-party project, while this dynamic version requires the backend during locking. astral-sh/uv#10622 added support for omitting dynamic project versions from the lockfile, but its discussion notes that locking still invokes the backend. We’ll use astral-sh/uv#17416 to track separating first-party project builds from dependency builds; your setuptools-scm example is a useful lock-specific reproduction."
+}
