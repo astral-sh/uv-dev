@@ -10,11 +10,11 @@ The reporter requests a package-scoped counterpart to `--no-cache` for `uv sync`
 
 The same underlying request is already tracked in astral-sh/uv#7642. Its second section asks for a way to mark a package so its compiled wheels are not cached when the build depends on the active HPC module or architecture. A maintainer explicitly identified `--no-cache-package <name>` as a possible interface in that discussion.
 
-In the current discussion, a maintainer asked why the existing `--refresh-package <name>` option would not satisfy the request. They also clarified that `--no-cache` works by constructing an entirely new temporary cache directory and indicated that doing so per package is unlikely. The remaining question is whether package refresh provides the reporter's required behavior—particularly rebuilding on every invocation and avoiding cache writes—or whether the requested strict cache isolation is materially different.
+In the current discussion, a maintainer asked why the existing `--refresh-package <name>` option would not satisfy the request. They also clarified that `--no-cache` works by constructing an entirely new temporary cache directory and indicated that doing so per package is unlikely. After agreeing to try `--refresh-package`, the reporter subsequently stated that the issue was resolved. They did not provide the command, configuration, observed behavior, or other verification details, so the discussion strongly suggests—but does not explicitly demonstrate—that package refresh satisfies the motivating use case.
 
-## Maintainer feedback and open question
+## Maintainer feedback and reported outcome
 
-The latest maintainer feedback narrows the design question from “add a package-scoped cache flag” to “identify behavior that `--refresh-package <name>` does not already provide.” No final decision was made. Before prioritizing a new option, the discussion needs a concrete explanation or reproduction showing why package refresh is insufficient for the motivating package and build conditions.
+The maintainer feedback narrowed the design question from “add a package-scoped cache flag” to “identify behavior that `--refresh-package <name>` does not already provide.” The reporter's follow-up indicates that no new option is needed for their case. No final maintainer decision was made about strict per-package cache isolation, and the reporter did not document whether package refresh reproduces every originally requested semantic, especially avoiding cache writes.
 
 ## Draft response
 
