@@ -471,6 +471,31 @@ fn python_pin_build_name() {
     ----- stderr -----
     error: No interpreter found for Python >=3.12, ==3.13.*+custom in virtual environments or managed installations
     ");
+
+    // Long-form variant components and build names can appear in any order.
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15+custom+debug+freethreaded"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `>=3.12, ==3.13.*+custom` -> `3.15+freethreaded+debug+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python 3.15+freethreaded+debug+custom in managed installations or search path
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+freethreaded+debug+custom");
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15+debug+custom+gil"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `3.15+freethreaded+debug+custom` -> `3.15+gil+debug+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python 3.15+gil+debug+custom in managed installations or search path
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+gil+debug+custom");
 }
 
 #[test]
