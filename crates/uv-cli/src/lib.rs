@@ -3567,6 +3567,17 @@ pub struct RunArgs {
     #[arg(short, long, conflicts_with_all = ["script", "gui_script"])]
     pub module: bool,
 
+    /// Profile a Python script or module with Python's sampling profiler.
+    ///
+    /// Requires CPython 3.15 or later. Writes an HTML flame graph to `profile.html` unless
+    /// `--profile-output` is provided. The exit status is supplied by the profiler.
+    #[arg(long)]
+    pub profile: bool,
+
+    /// Write the sampling profile to the given HTML file.
+    #[arg(long, requires = "profile", value_hint = ValueHint::FilePath)]
+    pub profile_output: Option<PathBuf>,
+
     /// Install any non-editable dependencies, including the project and any workspace members, as
     /// editable.
     #[arg(long, overrides_with = "no_editable", hide = true)]
