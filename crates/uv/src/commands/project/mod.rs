@@ -1109,6 +1109,7 @@ fn existing_project_environment(
 /// Discover a compatible project environment at `root`.
 fn discover_project_environment(
     root: &Path,
+    source: &PythonRequestSource,
     python_request: Option<&PythonRequest>,
     python_preference: PythonPreference,
     requires_python: Option<&RequiresPython>,
@@ -1169,6 +1170,13 @@ fn discover_project_environment(
             Ok(Some(environment))
         }
         Err(err) => {
+            if let ProjectEnvironmentPolicy::Compatible = policy
+                && !centralized
+                && let EnvironmentIncompatibilityError::PythonRequest(..) = &err
+                && let PythonRequestSource::DotPythonVersion(_) = source
+            {
+                warn_user!("{err} (from {source})");
+            }
             debug!("{err}");
             Ok(None)
         }
@@ -1455,6 +1463,7 @@ impl ProjectInterpreter {
                 );
                 if let Some(environment) = discover_project_environment(
                     &root,
+                    &source,
                     python_request.as_ref(),
                     python_preference,
                     requires_python.as_ref(),
@@ -1476,6 +1485,7 @@ impl ProjectInterpreter {
                     .is_ok_and(|target| is_centralized_environment_path(&target, cache)))
                 && let Some(environment) = discover_project_environment(
                     &project_environment_path,
+                    &source,
                     python_request.as_ref(),
                     python_preference,
                     requires_python.as_ref(),
@@ -1510,6 +1520,7 @@ impl ProjectInterpreter {
                 centralized_environment_root(workspace, python.interpreter(), upgradeable, cache);
             if let Some(environment) = discover_project_environment(
                 &root,
+                &source,
                 python_request.as_ref(),
                 python_preference,
                 requires_python.as_ref(),
