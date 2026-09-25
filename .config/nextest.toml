@@ -17,6 +17,7 @@ path = "junit.xml"
 
 [profile.ci-linux]
 inherits = "ci"
+test-threads = 40
 
 [profile.ci-macos]
 inherits = "ci"
