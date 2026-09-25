@@ -376,7 +376,7 @@ pub(crate) async fn add(
         requirements,
         constraints,
         ..
-    } = RequirementsSpecification::from_sources(
+    } = crate::commands::pylock::read_requirements_with_pylock_constraints(
         &requirements,
         &constraints,
         &[],
