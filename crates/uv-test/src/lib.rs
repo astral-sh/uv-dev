@@ -159,6 +159,9 @@ pub struct TestContext {
     /// on alternate filesystems created by [`TestContext::with_cache_on_cow_fs`]).
     #[allow(dead_code)]
     _extra_tempdirs: Vec<tempfile::TempDir>,
+
+    /// Local indexes kept alive for commands created by this context.
+    packse_servers: Vec<packse::PackseServer>,
 }
 
 impl TestContext {
@@ -213,6 +216,31 @@ impl TestContext {
     #[must_use]
     pub fn with_env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         self.extra_env.push((key.into(), value.into()));
+        self
+    }
+
+    /// Replace the implicit PyPI fallback for commands created by this context.
+    /// Explicit indexes from arguments, configuration, and tool receipts take precedence.
+    #[must_use]
+    pub fn with_default_index(self, index: &str) -> Self {
+        self.with_env(EnvVars::UV_INTERNAL__TEST_DEFAULT_INDEX, index)
+    }
+
+    /// Opt into the public PyPI service for tests of its real behavior.
+    #[must_use]
+    pub fn with_pypi_access(self) -> Self {
+        self.with_default_index("https://pypi.org/simple")
+    }
+
+    /// Serve a local Packse scenario as this context's default index.
+    #[must_use]
+    pub fn with_packse_index(mut self, scenario_path: &str) -> Self {
+        let server = packse::PackseServer::new(scenario_path);
+        self.extra_env.push((
+            EnvVars::UV_INTERNAL__TEST_DEFAULT_INDEX.into(),
+            server.index_url().into(),
+        ));
+        self.packse_servers.push(server);
         self
     }
 
@@ -1197,6 +1225,7 @@ impl TestContext {
             )],
             _root: root,
             _extra_tempdirs: vec![],
+            packse_servers: vec![],
         }
     }
 
