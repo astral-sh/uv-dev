@@ -35,6 +35,15 @@ fn get_script_launcher(entry_point: &Script, shebang: &str) -> String {
         module, function, ..
     } = entry_point;
 
+    if module.contains('-') {
+        warn_user_once!(
+            "The entry point `{}` has an invalid module name `{}` (hyphens are not allowed). \
+             The generated script will fail to run.",
+            entry_point.name.escape_debug(),
+            module.escape_debug()
+        );
+    }
+
     let import_name = entry_point.import_name();
 
     format!(
@@ -1228,8 +1237,38 @@ mod test {
 
     use super::{
         Error, RecordEntry, Script, WheelFile, format_shebang, get_script_executable,
-        parse_email_message_file, parse_scripts, read_record, write_installer_metadata,
+        get_script_launcher, parse_email_message_file, parse_scripts, read_record,
+        write_installer_metadata,
     };
+
+    #[test]
+    fn script_launcher_preserves_module_name() -> Result<()> {
+        for module in [
+            "uv-docker-example",
+            "α\u{200d}-β",
+            "package.module",
+            "package.a\u{301}",
+        ] {
+            let script = Script::from_value("hello", &format!("{module}:main"))?;
+            assert_eq!(script.module, module);
+            assert_eq!(
+                get_script_launcher(&script, "#!/python"),
+                formatdoc! {r#"
+                    #!/python
+                    # -*- coding: utf-8 -*-
+                    import sys
+                    from {module} import main
+                    if __name__ == "__main__":
+                        if sys.argv[0].endswith("-script.pyw"):
+                            sys.argv[0] = sys.argv[0][:-11]
+                        elif sys.argv[0].endswith(".exe"):
+                            sys.argv[0] = sys.argv[0][:-4]
+                        sys.exit(main())
+                "#},
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_parse_email_message_file() {
