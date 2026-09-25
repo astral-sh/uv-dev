@@ -347,9 +347,6 @@ pub(crate) enum ProjectError {
     Io(#[from] std::io::Error),
 
     #[error(transparent)]
-    RetryParsing(#[from] uv_client::RetryParsingError),
-
-    #[error(transparent)]
     Accelerator(#[from] uv_torch::AcceleratorError),
 
     #[error(transparent)]
