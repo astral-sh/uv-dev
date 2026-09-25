@@ -4,7 +4,7 @@ use reqwest_middleware::ClientWithMiddleware;
 use tracing::{debug, trace};
 use url::Url;
 use uv_client::BaseClient;
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 
 use crate::trusted_publishing::{
     Audience, BurnTokenRequest, MintTokenRequest, PublishToken, TrustedPublishingError,
@@ -23,6 +23,21 @@ impl<'a> PyPIPublishingService<'a> {
             registry,
         }
     }
+
+    fn oidc_url(&self, endpoint: &str) -> Result<DisplaySafeUrl, DisplaySafeUrlError> {
+        // `pypa/gh-action-pypi-publish` uses `netloc` (RFC 1808), which is deprecated for authority
+        // (RFC 3986).
+        // Prefer HTTPS for trusted publishing; allow HTTP only in test builds.
+        let scheme: &str = if cfg!(feature = "test") {
+            self.registry.scheme()
+        } else {
+            "https"
+        };
+        DisplaySafeUrl::parse(&format!(
+            "{scheme}://{}/_/oidc/{endpoint}",
+            self.registry.authority()
+        ))
+    }
 }
 
 impl TrustedPublishingService for PyPIPublishingService<'_> {
@@ -34,17 +49,7 @@ impl TrustedPublishingService for PyPIPublishingService<'_> {
         &self,
         token: &TrustedPublishingToken,
     ) -> Result<(), TrustedPublishingError> {
-        // Prefer HTTPS for token revocation; allow HTTP only in test builds.
-        let scheme = if cfg!(feature = "test") {
-            self.registry.scheme()
-        } else {
-            "https"
-        };
-        let burn_token_url = DisplaySafeUrl::parse(&format!(
-            "{}://{}/_/oidc/burn-token",
-            scheme,
-            self.registry.authority()
-        ))?;
+        let burn_token_url = self.oidc_url("burn-token")?;
         debug!("Requesting revocation of the trusted publishing upload token at {burn_token_url}");
         self.client
             .post(Url::from(burn_token_url.clone()))
@@ -60,19 +65,7 @@ impl TrustedPublishingService for PyPIPublishingService<'_> {
     }
 
     async fn audience(&self) -> Result<String, super::TrustedPublishingError> {
-        // `pypa/gh-action-pypi-publish` uses `netloc` (RFC 1808), which is deprecated for authority
-        // (RFC 3986).
-        // Prefer HTTPS for OIDC discovery; allow HTTP only in test builds
-        let scheme: &str = if cfg!(feature = "test") {
-            self.registry.scheme()
-        } else {
-            "https"
-        };
-        let audience_url = DisplaySafeUrl::parse(&format!(
-            "{}://{}/_/oidc/audience",
-            scheme,
-            self.registry.authority()
-        ))?;
+        let audience_url = self.oidc_url("audience")?;
         debug!("Querying the trusted publishing audience from {audience_url}");
         let response = self
             .client
@@ -94,17 +87,7 @@ impl TrustedPublishingService for PyPIPublishingService<'_> {
         &self,
         oidc_token: ambient_id::IdToken,
     ) -> Result<super::TrustedPublishingToken, super::TrustedPublishingError> {
-        // Prefer HTTPS for OIDC minting; allow HTTP only in test builds
-        let scheme: &str = if cfg!(feature = "test") {
-            self.registry.scheme()
-        } else {
-            "https"
-        };
-        let mint_token_url = DisplaySafeUrl::parse(&format!(
-            "{}://{}/_/oidc/mint-token",
-            scheme,
-            self.registry.authority()
-        ))?;
+        let mint_token_url = self.oidc_url("mint-token")?;
         debug!("Querying the trusted publishing upload token from {mint_token_url}");
         let mint_token_payload = MintTokenRequest {
             token: oidc_token.reveal().to_string(),
