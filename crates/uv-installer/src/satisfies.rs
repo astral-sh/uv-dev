@@ -51,10 +51,7 @@ impl RequirementSatisfaction {
         tags: &Tags,
         build_settings: Option<BuildSettings<'_>>,
     ) -> Self {
-        trace!(
-            "Comparing installed with source: {:?} {:?}",
-            distribution, source
-        );
+        trace!(%distribution, %source, "Comparing installed distribution with source");
 
         // If the distribution was built with other settings, it is out of date.
         if let Some(build_settings) = build_settings
