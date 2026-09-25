@@ -48,6 +48,9 @@ name = "uv_python"
 path = "benches/uv_python.rs"
 harness = false
 
+[dependencies]
+rmp-serde = { workspace = true }
+
 [dev-dependencies]
 uv = { workspace = true }
 uv-cache = { workspace = true }
