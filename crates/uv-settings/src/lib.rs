@@ -790,7 +790,7 @@ pub struct EnvironmentOptions {
     pub malware_check: EnvFlag,
     pub malware_check_url: Option<DisplaySafeUrl>,
     #[cfg(unix)]
-    pub run_rlimit_nofile: Option<u32>,
+    pub run_resource_limits: Vec<uv_unix::ResourceLimit>,
 }
 
 impl EnvironmentOptions {
@@ -822,6 +822,20 @@ impl EnvironmentOptions {
         } else {
             EnvFlag::new(EnvVars::UV_NATIVE_TLS)?
         };
+
+        #[cfg(unix)]
+        let run_resource_limits = uv_unix::SUPPORTED_RESOURCE_LIMITS
+            .iter()
+            .filter_map(|&(environment_variable, resource)| {
+                parse_integer_environment_variable(environment_variable, None)
+                    .map(|value| {
+                        value.map(|value| {
+                            uv_unix::ResourceLimit::new(environment_variable, resource, value)
+                        })
+                    })
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
             ruff_path: parse_path_environment_variable(EnvVars::RUFF),
@@ -940,10 +954,7 @@ impl EnvironmentOptions {
                 })
                 .transpose()?,
             #[cfg(unix)]
-            run_rlimit_nofile: parse_integer_environment_variable(
-                EnvVars::UV_RUN_RLIMIT_NOFILE,
-                None,
-            )?,
+            run_resource_limits,
         })
     }
 }
