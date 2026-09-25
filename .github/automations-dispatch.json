@@ -16,6 +16,19 @@
   },
   "rules": [
     {
+      "repository": "uv-dev",
+      "on": {
+        "issue_comment": ["created", "edited"]
+      },
+      "comment_app": { "id": 257293, "bot_id": 117304815 },
+      "allow_draft": true,
+      "workflow": "report-flaky-benchmark.yml",
+      "inputs": {
+        "comment_id": "/comment/id",
+        "updated_at": "/comment/updated_at"
+      }
+    },
+    {
       "repository": "uv",
       "on": {
         "workflow_run": ["completed"]
