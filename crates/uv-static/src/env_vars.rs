@@ -741,6 +741,11 @@ impl EnvVars {
     #[attr_added_in("0.8.0")]
     pub const UV_INTERNAL__TEST_PYTHON_MANAGED: &'static str = "UV_INTERNAL__TEST_PYTHON_MANAGED";
 
+    /// Stop virtual environment discovery at this directory during tests.
+    #[attr_hidden]
+    pub const UV_INTERNAL__TEST_VIRTUALENV_DISCOVERY_ROOT: &'static str =
+        "UV_INTERNAL__TEST_VIRTUALENV_DISCOVERY_ROOT";
+
     /// Replace the implicit PyPI index with a local index during tests.
     #[attr_hidden]
     pub const UV_INTERNAL__TEST_DEFAULT_INDEX: &'static str = "UV_INTERNAL__TEST_DEFAULT_INDEX";
