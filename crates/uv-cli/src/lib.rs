@@ -2678,7 +2678,7 @@ pub struct PipFreezeArgs {
     pub exclude_editable: bool,
 
     /// Exclude the specified package(s) from the output.
-    #[arg(long)]
+    #[arg(long, value_delimiter = ',')]
     pub r#exclude: Vec<PackageName>,
 
     /// Validate the Python environment, to detect packages with missing dependencies and other
@@ -2748,7 +2748,7 @@ pub struct PipListArgs {
     pub exclude_editable: bool,
 
     /// Exclude the specified package(s) from the output.
-    #[arg(long, value_hint = ValueHint::Other)]
+    #[arg(long, value_delimiter = ',', value_hint = ValueHint::Other)]
     pub r#exclude: Vec<PackageName>,
 
     /// Select the output format.

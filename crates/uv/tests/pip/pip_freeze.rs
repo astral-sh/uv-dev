@@ -2,6 +2,11 @@ use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
+use async_zip::base::write::ZipFileWriter;
+use async_zip::{Compression, ZipEntryBuilder};
+use fs_err as fs;
+use futures::executor::block_on;
+use insta::allow_duplicates;
 use url::Url;
 
 use uv_test::uv_snapshot;
@@ -661,4 +666,110 @@ fn freeze_exclude() {
     exit_code: 0 (success)
     "
     );
+}
+
+/// Freeze and list accept the same comma-separated and repeated package exclusions.
+#[test]
+fn freeze_and_list_exclude_comma_separated() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let names = ["tiny-alpha", "tiny-beta", "tiny-gamma"];
+    for name in names {
+        let normalized = name.replace('-', "_");
+        let dist_info = format!("{normalized}-1.0.0.dist-info");
+        let metadata = format!("Metadata-Version: 2.3\nName: {name}\nVersion: 1.0.0\n");
+        let wheel = "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n";
+        let mut archive = ZipFileWriter::new(Vec::new());
+        for (path, contents) in [
+            (format!("{dist_info}/METADATA"), metadata.as_bytes()),
+            (format!("{dist_info}/WHEEL"), wheel.as_bytes()),
+            (format!("{dist_info}/RECORD"), b""),
+        ] {
+            let entry = ZipEntryBuilder::new(path.into(), Compression::Stored);
+            block_on(archive.write_entry_whole(entry, contents))?;
+        }
+        fs::write(
+            links
+                .child(format!("{normalized}-1.0.0-py3-none-any.whl"))
+                .path(),
+            block_on(archive.close())?,
+        )?;
+    }
+    context
+        .pip_install()
+        .args([
+            "--no-config",
+            "--offline",
+            "--no-index",
+            "--no-build",
+            "--find-links",
+        ])
+        .arg(links.path())
+        .args(names)
+        .assert()
+        .success();
+
+    allow_duplicates! {
+        for freeze in [true, false] {
+            let command = || {
+                let mut command = if freeze {
+                    context.pip_freeze()
+                } else {
+                    let mut command = context.pip_list();
+                    command.args(["--format", "freeze"]);
+                    command
+                };
+                command.args(["--no-config", "--offline"]);
+                command
+            };
+
+            uv_snapshot!(context.filters(), command(), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            tiny-alpha==1.0.0
+            tiny-beta==1.0.0
+            tiny-gamma==1.0.0
+            ");
+
+            let repeated = uv_snapshot!(context.filters(), command()
+                .args(["--exclude", "tiny-alpha", "--exclude", "tiny-beta"]), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            tiny-gamma==1.0.0
+            ");
+
+            let comma_separated = uv_snapshot!(context.filters(), command()
+                .args(["--exclude", "Tiny_Alpha,tiny.beta"]), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            tiny-gamma==1.0.0
+            ");
+            assert_eq!(comma_separated.stdout, repeated.stdout);
+
+            uv_snapshot!(context.filters(), command()
+                .args(["--exclude", "tiny-alpha,tiny-beta", "--exclude", "tiny-gamma"]), @"exit_code: 0 (success)");
+
+            for empty in ["", ",", "tiny-alpha,", "tiny-alpha,,tiny-beta"] {
+                uv_snapshot!(context.filters(), command().arg("--exclude").arg(empty), @r#"
+                exit_code: 2 (failure)
+                ----- stderr -----
+                error: invalid value '' for '--exclude <EXCLUDE>': Not a valid package or extra name: "". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+
+                For more information, try '--help'.
+                "#);
+            }
+
+            uv_snapshot!(context.filters(), command()
+                .args(["--exclude", "tiny-alpha,not@valid"]), @r#"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: invalid value 'not@valid' for '--exclude <EXCLUDE>': Not a valid package or extra name: "not@valid". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+
+            For more information, try '--help'.
+            "#);
+        }
+    }
+
+    Ok(())
 }
