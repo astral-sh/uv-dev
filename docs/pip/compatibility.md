@@ -38,6 +38,13 @@ Instead, uv supports its own environment variables, like `UV_INDEX_URL`. uv also
 configuration in a `uv.toml` file or a `[tool.uv.pip]` section of `pyproject.toml`. For more
 information, see [Configuration files](../concepts/configuration-files.md).
 
+uv also gives an explicitly configured default index priority over an `--index-url` in a
+[requirements file](https://pip.pypa.io/en/stable/reference/requirements-file-format/#global-options).
+For example, a non-empty [`UV_DEFAULT_INDEX`](../reference/environment.md#uv_default_index) (or the
+deprecated [`UV_INDEX_URL`](../reference/environment.md#uv_index_url)) overrides the file's index,
+unlike pip. An empty value for either variable is treated as unset. To use the requirements file's
+default index, unset those variables and ensure no other default index is explicitly configured.
+
 ## Pre-release compatibility
 
 By default (`if-necessary`), uv prefers stable versions over pre-releases, falling back to
