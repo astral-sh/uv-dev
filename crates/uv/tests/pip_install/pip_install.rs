@@ -15698,6 +15698,7 @@ fn reject_invalid_double_zip() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_central_directory_offset() {
     let context = uv_test::test_context!("3.12");
 
@@ -15715,6 +15716,7 @@ fn reject_invalid_central_directory_offset() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_crc32_mismatch() {
     let context = uv_test::test_context!("3.12");
 
@@ -15731,6 +15733,7 @@ fn reject_invalid_crc32_mismatch() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_crc32_non_data_descriptor() {
     let context = uv_test::test_context!("3.12");
 
@@ -15747,6 +15750,7 @@ fn reject_invalid_crc32_non_data_descriptor() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_duplicate_extra_field() {
     let context = uv_test::test_context!("3.12");
 
@@ -15762,6 +15766,7 @@ fn reject_invalid_duplicate_extra_field() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_short_usize() {
     let context = uv_test::test_context!("3.12");
 
@@ -15778,6 +15783,7 @@ fn reject_invalid_short_usize() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_chained_extra_field() {
     let context = uv_test::test_context!("3.12");
 
@@ -15793,6 +15799,7 @@ fn reject_invalid_chained_extra_field() {
 }
 
 #[test]
+#[cfg(feature = "test-r2")]
 fn reject_invalid_short_usize_zip64() {
     let context = uv_test::test_context!("3.12");
 
