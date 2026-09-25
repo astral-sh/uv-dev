@@ -12,19 +12,20 @@ use uv_audit::Dependency;
 use uv_audit::osv::{self, Filter};
 use uv_cache::Cache;
 use uv_cli::SyncFormat;
-use uv_client::{BaseClientBuilder, CachedClient, FlatIndexClient, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, CachedClient, RegistryClientBuilder};
 use uv_configuration::{
-    Concurrency, Constraints, DependencyGroups, DependencyGroupsWithDefaults, DryRun, EditableMode,
-    ExtrasSpecification, ExtrasSpecificationWithDefaults, HashCheckingMode, InstallOptions,
-    TargetTriple, Upgrade,
+    ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DependencyGroupsWithDefaults,
+    DryRun, EditableMode, ExtrasSpecification, ExtrasSpecificationWithDefaults, HashCheckingMode,
+    InstallOptions, TargetTriple, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    Dist, Index, IndexUrl, Name, Requirement, Resolution, ResolvedDist, SourceDist,
+    Dist, IndexUrl, Name, NameRequirementSpecification, Resolution, ResolvedDist, SourceDist,
 };
 use uv_fs::{PortablePathBuf, Simplified};
 use uv_installer::{InstallationStrategy, SitePackages};
+use uv_lock::{Installable, Lock, PythonReport};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::{Preview, PreviewFeature};
@@ -33,9 +34,7 @@ use uv_python::{
     ConfigDiscovery, PythonDownloads, PythonEnvironment, PythonPreference, PythonRequest,
 };
 use uv_redacted::DisplaySafeUrl;
-use uv_resolver::{
-    FlatIndex, ForkStrategy, Installable, Lock, Prerelease, PythonReport, ResolutionMode,
-};
+use uv_resolver::{FlatIndex, ForkStrategy, Prerelease, ResolutionMode};
 use uv_scripts::Pep723Script;
 use uv_settings::{MalwareCheckSettings, PythonInstallMirrors};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
@@ -44,8 +43,9 @@ use uv_workspace::pyproject::Source;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache};
 
 use crate::commands::editable::apply_editable_mode;
+use crate::commands::install_report::{PackageChangesReport, SchemaReport};
 use crate::commands::pip::loggers::{DefaultInstallLogger, DefaultResolveLogger, InstallLogger};
-use crate::commands::pip::operations::{ChangedDist, Changelog, Modifications};
+use crate::commands::pip::operations::{Changelog, Modifications};
 use crate::commands::pip::resolution_markers;
 use crate::commands::pip::{operations, resolution_tags};
 use crate::commands::project::install_target::InstallTarget;
@@ -53,13 +53,13 @@ use crate::commands::project::lock::{LockMode, LockOperation, LockResult};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     EnvironmentUpdate, LinkErrorReporting, MalwareFindings, PlatformState, ProjectEnvironment,
-    ProjectError, ScriptEnvironment, UniversalState, default_dependency_groups, detect_conflicts,
-    script_extra_build_requires, script_specification, update_environment,
+    ProjectError, ScriptEnvironment, UniversalState, detect_conflicts, script_extra_build_requires,
+    script_specification, update_environment,
 };
-use crate::commands::{ExitStatus, UvError, diagnostics};
+use crate::commands::{ExitStatus, UvError};
 use crate::printer::Printer;
 use crate::settings::{
-    FrozenSource, InstallerSettingsRef, LockCheck, LockCheckSource, ResolverInstallerSettings,
+    FrozenSource, InstallerSettingsRef, LockCheck, LockedSource, ResolverInstallerSettings,
     ResolverSettings,
 };
 
@@ -69,7 +69,7 @@ pub(crate) async fn sync(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     dry_run: DryRun,
-    active: Option<bool>,
+    active: ActiveEnvironment,
     all_packages: bool,
     package: Vec<PackageName>,
     extras: ExtrasSpecification,
@@ -150,7 +150,7 @@ pub(crate) async fn sync(
 
     // Determine the groups and extras to include.
     let default_groups = match &target {
-        SyncTarget::Project(project) => default_dependency_groups(project.pyproject_toml())?,
+        SyncTarget::Project(project) => project.default_groups()?,
         SyncTarget::Script(..) => DefaultGroups::default(),
     };
     let default_extras = match &target {
@@ -271,10 +271,11 @@ pub(crate) async fn sync(
                         .and_then(|uv| uv.build_constraint_dependencies.as_ref())
                 })
                 .map(|constraints| {
-                    Constraints::from_requirements(
+                    Constraints::from_specifications(
                         constraints
                             .iter()
-                            .map(|constraint| Requirement::from(constraint.clone())),
+                            .cloned()
+                            .map(NameRequirementSpecification::from),
                     )
                 });
 
@@ -323,16 +324,11 @@ pub(crate) async fn sync(
                         output_format,
                         printer,
                     )?;
-                    return diagnostics::OperationDiagnostic::default()
-                        .report(operations::Error::OutdatedEnvironment(changelog))
-                        .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
+                    return Err(
+                        UvError::from(operations::Error::OutdatedEnvironment(changelog)).into(),
+                    );
                 }
-                Err(ProjectError::Operation(err)) => {
-                    return diagnostics::OperationDiagnostic::default()
-                        .report(err)
-                        .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
-                }
-                Err(err) => return Err(err.into()),
+                Err(err) => return Err(UvError::from(err).into()),
             }
         }
     }
@@ -375,9 +371,7 @@ pub(crate) async fn sync(
     {
         Ok(result) => Outcome::Success(result),
         Err(ProjectError::Operation(err)) => {
-            return diagnostics::OperationDiagnostic::default()
-                .report(err)
-                .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
+            return Err(UvError::from(err).into());
         }
         Err(err @ ProjectError::LockFormat(..)) => return Err(UvError::user(err).into()),
         Err(ProjectError::LockMismatch(prev, cur, lock_source)) => {
@@ -391,7 +385,7 @@ pub(crate) async fn sync(
                 );
             }
         }
-        Err(err) => return Err(err.into()),
+        Err(err) => return Err(UvError::from(err).into()),
     };
 
     let lock_report = LockReport::from((&lock_target, &mode, &outcome));
@@ -457,16 +451,9 @@ pub(crate) async fn sync(
                 output_format,
                 printer,
             )?;
-            return diagnostics::OperationDiagnostic::default()
-                .report(operations::Error::OutdatedEnvironment(changelog))
-                .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
+            return Err(UvError::from(operations::Error::OutdatedEnvironment(changelog)).into());
         }
-        Err(ProjectError::Operation(err)) => {
-            return diagnostics::OperationDiagnostic::default()
-                .report(err)
-                .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
-        }
-        Err(err) => return Err(err.into()),
+        Err(err) => return Err(UvError::from(err).into()),
     };
 
     write_sync_report(
@@ -494,7 +481,7 @@ enum Outcome {
     /// The `lock` operation was successful.
     Success(LockResult),
     /// The `lock` operation successfully resolved, but failed due to a mismatch (e.g., with `--locked`).
-    LockMismatch(Option<Box<Lock>>, Box<Lock>, LockCheckSource),
+    LockMismatch(Option<Box<Lock>>, Box<Lock>, LockedSource),
 }
 
 impl Outcome {
@@ -874,18 +861,19 @@ pub(crate) async fn do_sync<'a>(
     // Read the build constraints from the lockfile.
     let build_constraints = target.build_constraints();
 
-    // TODO(charlie): These are all default values. We should consider whether we want to make them
-    // optional on the downstream APIs.
-    let build_hasher = HashStrategy::default();
+    let build_hasher = HashStrategy::from_constraints(
+        &build_constraints,
+        Some(&venv.interpreter().to_resolver_marker_environment()),
+        uv_configuration::HashCheckingMode::Verify,
+    )?;
+    // Also verify artifacts in the full lockfile, including unselected extras and groups.
+    let build_hasher = target
+        .lock()
+        .hash_strategy(target.install_path())?
+        .with_constraint_hashes(&build_hasher)?;
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = {
-        let client = FlatIndexClient::new(client.cached_client(), client.connectivity(), cache);
-        let entries = client
-            .fetch_all(index_locations.flat_indexes().map(Index::url))
-            .await?;
-        FlatIndex::from_entries(entries, Some(&tags), &hasher, build_options)
-    };
+    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
 
     // Create a build dispatch.
     let build_dispatch = BuildDispatch::new(
@@ -1091,7 +1079,7 @@ async fn check_malware(
     let auditable = target.lock().auditable(
         &all_extras,
         &all_groups,
-        uv_resolver::Package::is_from_pypi_registry,
+        uv_lock::Package::is_from_pypi_registry,
     );
     if auditable.is_empty() {
         return Ok(());
@@ -1290,20 +1278,6 @@ impl From<&Pep723Script> for ScriptReport {
             path: script.path.as_path().into(),
         }
     }
-}
-
-#[derive(Serialize, Debug, Default)]
-#[serde(rename_all = "snake_case")]
-enum SchemaVersion {
-    /// An unstable, experimental schema.
-    #[default]
-    Preview,
-}
-
-#[derive(Serialize, Debug, Default)]
-struct SchemaReport {
-    /// The version of the schema.
-    version: SchemaVersion,
 }
 
 /// A report of the uv sync operation
@@ -1524,66 +1498,6 @@ impl SyncReport {
 
         Some(message)
     }
-}
-
-/// A summary of all package changes performed during sync.
-#[derive(Serialize, Debug, Clone, Default)]
-struct PackageChangesReport(Vec<PackageChangeReport>);
-
-impl PackageChangesReport {
-    fn from_changelog(changelog: &Changelog) -> Self {
-        let mut changes: Vec<_> =
-            changelog
-                .uninstalled
-                .iter()
-                .map(|dist| PackageChangeReport::from_dist(dist, PackageChangeAction::Uninstalled))
-                .chain(changelog.installed.iter().map(|dist| {
-                    PackageChangeReport::from_dist(dist, PackageChangeAction::Installed)
-                }))
-                .chain(changelog.reinstalled.iter().map(|dist| {
-                    PackageChangeReport::from_dist(dist, PackageChangeAction::Reinstalled)
-                }))
-                .collect();
-
-        changes.sort_by(|a, b| {
-            a.name
-                .cmp(&b.name)
-                .then_with(|| a.action.cmp(&b.action))
-                .then_with(|| a.version.cmp(&b.version))
-        });
-        Self(changes)
-    }
-}
-
-/// A summary of a single package change performed during sync.
-#[derive(Serialize, Debug, Clone)]
-struct PackageChangeReport {
-    /// The normalized package name.
-    name: PackageName,
-    /// The resolved version of the package.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    version: Option<uv_pep440::Version>,
-    /// The action that was taken for the package.
-    action: PackageChangeAction,
-}
-
-impl PackageChangeReport {
-    fn from_dist(dist: &ChangedDist, action: PackageChangeAction) -> Self {
-        Self {
-            name: dist.name().clone(),
-            version: dist.version().cloned(),
-            action,
-        }
-    }
-}
-
-/// The action taken on an individual package during sync.
-#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-enum PackageChangeAction {
-    Uninstalled,
-    Installed,
-    Reinstalled,
 }
 
 /// The report for a lock operation.

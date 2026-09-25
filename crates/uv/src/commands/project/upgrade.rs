@@ -8,9 +8,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use itertools::Itertools;
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
-use uv_configuration::{Concurrency, DependencyGroupsWithDefaults, DryRun, Upgrade};
+use uv_configuration::{
+    ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, Upgrade,
+};
 use uv_distribution::{ArchiveMetadata, Metadata};
 use uv_distribution_types::{Identifier, RequiresPython};
+use uv_lock::implicit_constraints_marker;
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Pep508ErrorSource, Requirement, VerbatimUrl, VersionOrUrl};
@@ -18,7 +21,7 @@ use uv_preview::Preview;
 use uv_pypi_types::{PyProjectToml, ResolutionMetadata, SupportedEnvironments, VerbatimParsedUrl};
 use uv_python::{ConfigDiscovery, Interpreter, PythonDownloads, PythonPreference};
 use uv_redacted::DisplaySafeUrl;
-use uv_resolver::{MetadataResponse, implicit_constraints_marker};
+use uv_resolver::MetadataResponse;
 use uv_settings::PythonInstallMirrors;
 use uv_workspace::pyproject::{DependencyType, Source};
 use uv_workspace::pyproject_mut::{DependencyTarget, PyProjectTomlMut};
@@ -29,8 +32,10 @@ use uv_workspace::{
 use crate::commands::pip::loggers::DefaultResolveLogger;
 use crate::commands::project::lock::{LockEvent, LockMode, LockOperation, LockResult};
 use crate::commands::project::lock_target::LockTarget;
-use crate::commands::project::{ProjectError, ProjectInterpreter, UniversalState, WorkspacePython};
-use crate::commands::{ExitStatus, diagnostics};
+use crate::commands::project::{
+    ProjectEnvironmentPolicy, ProjectInterpreter, UniversalState, WorkspacePython,
+};
+use crate::commands::{ExitStatus, UvError};
 use crate::printer::Printer;
 use crate::settings::ResolverSettings;
 
@@ -217,8 +222,8 @@ pub(crate) async fn upgrade(
             python_preference,
             python_downloads,
             &install_mirrors,
-            false,
-            Some(false),
+            ProjectEnvironmentPolicy::Optional,
+            ActiveEnvironment::Ignore,
             cache,
             printer,
         )
@@ -376,8 +381,8 @@ pub(crate) async fn upgrade(
             python_preference,
             python_downloads,
             &install_mirrors,
-            false,
-            Some(false),
+            ProjectEnvironmentPolicy::Optional,
+            ActiveEnvironment::Ignore,
             &cache,
             printer,
         )
@@ -413,12 +418,7 @@ pub(crate) async fn upgrade(
     .await
     {
         Ok(result) => result,
-        Err(ProjectError::Operation(err)) => {
-            return diagnostics::OperationDiagnostic::default()
-                .report(err)
-                .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
-        }
-        Err(err) => return Err(err.into()),
+        Err(err) => return Err(UvError::from(err).into()),
     };
 
     let lock = result.lock();
@@ -1111,6 +1111,7 @@ fn relax_requirement(
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
     use std::collections::BTreeSet;
     use std::str::FromStr;
 
@@ -1239,14 +1240,14 @@ mod tests {
         let error = propose_specifiers(&requirement, &resolved_versions(&["2.4"]))
             .expect_err("rewritten requirement must admit the resolved version");
 
-        assert!(matches!(
+        assert_matches!(
             &error,
             ProposeRequirementError::Unrepresentable {
                 package,
                 resolved_versions: actual_resolved_versions,
             } if package.as_ref() == "requests"
                 && *actual_resolved_versions == resolved_versions(&["2.4"])
-        ));
+        );
         assert_eq!(
             error.to_string(),
             "Dependency `requests` resolved to `2.4` which cannot be represented by the upgraded requirement; this is not supported yet"
@@ -1299,14 +1300,14 @@ mod tests {
         let error = propose_specifiers(&requirement, &resolved_versions(&["1.5.0", "2.4.0"]))
             .expect_err("wildcard cannot admit versions from different major lines");
 
-        assert!(matches!(
+        assert_matches!(
             &error,
             ProposeRequirementError::Unrepresentable {
                 package,
                 resolved_versions: actual_resolved_versions,
             } if package.as_ref() == "requests"
                 && *actual_resolved_versions == resolved_versions(&["1.5.0", "2.4.0"])
-        ));
+        );
         assert_eq!(
             error.to_string(),
             "Dependency `requests` resolved to `1.5.0`, `2.4.0` which cannot be represented by the upgraded requirement; this is not supported yet"

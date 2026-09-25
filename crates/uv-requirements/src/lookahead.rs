@@ -9,7 +9,7 @@ use uv_configuration::{Constraints, Excludes, Overrides};
 use uv_distribution::{DistributionDatabase, Reporter};
 use uv_distribution_types::{Dist, Identifier, Requirement, RequirementSource};
 use uv_resolver::{InMemoryIndex, MetadataResponse, ResolverEnvironment};
-use uv_types::{BuildContext, HashStrategy, RequestedRequirements};
+use uv_types::{BuildContext, HashStrategy, HashVerification, RequestedRequirements};
 
 use crate::{Error, required_dist};
 
@@ -112,15 +112,37 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
 
             while let Some(result) = futures.next().await {
                 if let Some(lookahead) = result? {
-                    hasher = hasher.augment_with_requirements(
-                        lookahead.requirements().iter().filter(|requirement| {
+                    // User-provided metadata can authorize dependencies even under required hashes.
+                    // An override may only match after the source's version has been discovered.
+                    // Read its hashes directly; the lookahead requirements may come from the archive.
+                    let trusted_requirements =
+                        if matches!(hasher.verification(), HashVerification::Required(_)) {
+                            self.database
+                                .dependency_metadata(lookahead.package(), Some(lookahead.version()))
+                                .map(|metadata| {
+                                    Box::into_iter(metadata.requires_dist)
+                                        .map(Requirement::from)
+                                        .collect::<Vec<_>>()
+                                })
+                        } else {
+                            None
+                        };
+                    let requirements = trusted_requirements
+                        .as_deref()
+                        .unwrap_or_else(|| lookahead.requirements())
+                        .iter()
+                        .filter(|requirement| {
                             !self.excludes.contains_for(
                                 lookahead.package(),
                                 lookahead.version(),
                                 &requirement.name,
                             )
-                        }),
-                    )?;
+                        });
+                    hasher = if trusted_requirements.is_some() {
+                        hasher.augment_with_requirements(requirements)?
+                    } else {
+                        hasher.augment_with_metadata_requirements(requirements)?
+                    };
                     for requirement in self.constraints.apply(self.overrides.apply_for(
                         lookahead.package(),
                         lookahead.version(),
@@ -165,6 +187,8 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
             false
         };
 
+        self.database.record_metadata(&dist);
+
         // Fetch the metadata for the distribution.
         let metadata = {
             let id = dist.distribution_id();
@@ -177,7 +201,7 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
                 // Run the PEP 517 build process to extract metadata from the source distribution.
                 let archive = self
                     .database
-                    .get_or_build_wheel_metadata(&dist, hasher.get(&dist))
+                    .get_or_build_wheel_metadata(&dist, hasher.metadata_policy(&dist))
                     .await
                     .map_err(|err| Error::from_dist(dist, err))?;
 

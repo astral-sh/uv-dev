@@ -15,6 +15,9 @@ reason = "developer binary shipped from this workspace"
 # Keep this list in sync with workspace packages that define doctests.
 
 [[doctest]]
+package = "uv-once-map"
+
+[[doctest]]
 package = "uv-pep440"
 
 [[doctest]]
@@ -64,6 +67,14 @@ item = "registry_client::RegistryClientBuilder::<'a>::proxy"
 kind = "inherent_method"
 level = "expect"
 reason = "retained for downstream uv-client consumers"
+
+[[override]]
+lint = "hawk::unnecessary_public"
+crate = "uv_resolver"
+item = "FlatDistributions"
+kind = "reexport"
+level = "expect"
+reason = "used by Pixi to construct a `VersionMap` from custom distributions"
 
 [[override]]
 lint = "hawk::unnecessary_public"
@@ -202,15 +213,6 @@ reason = "read by generated activation scripts"
 [[override]]
 lint = "hawk::dead_public"
 crate = "uv_static"
-item = "env_vars::EnvVars::PYVENV_LAUNCHER"
-kind = "inherent_associated_constant"
-level = "expect"
-target = "cfg(not(windows))"
-reason = "used by Windows trampoline launchers"
-
-[[override]]
-lint = "hawk::dead_public"
-crate = "uv_static"
 item = "env_vars::EnvVars::UV_UNMANAGED_INSTALL"
 kind = "inherent_associated_constant"
 level = "expect"
@@ -276,7 +278,7 @@ reason = "read by the AWS request signer"
 
 [[override]]
 lint = "hawk::dead_public"
-crate = "uv_resolver"
+crate = "uv_lock"
 item = "lock::Lock::is_empty"
 kind = "inherent_method"
 level = "expect"
@@ -284,8 +286,8 @@ reason = "kept public alongside Lock::len"
 
 [[override]]
 lint = "hawk::dead_public"
-crate = "uv_resolver"
-item = "resolution::output::ResolverOutput::is_empty"
+crate = "uv_resolver_types"
+item = "output::ResolverOutput::is_empty"
 kind = "inherent_method"
 level = "expect"
 reason = "kept public alongside ResolverOutput::len"

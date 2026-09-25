@@ -33,7 +33,6 @@ use uv_cli::{
     TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs, options::ArgumentError,
 };
 use uv_client::BaseClientBuilder;
-use uv_configuration::min_stack_size;
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
@@ -47,6 +46,7 @@ use uv_requirements_txt::RequirementsTxtRequirement;
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Script};
 use uv_settings::{Combine, EnvironmentOptions, FilesystemOptions, Options};
 use uv_static::EnvVars;
+use uv_threads::{RAYON_PARALLELISM, min_stack_size};
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
@@ -79,6 +79,7 @@ pub(crate) fn base_client_builder<'a>(globals: &GlobalSettings) -> BaseClientBui
         globals.network_settings.connect_timeout,
         globals.network_settings.retries,
     )
+    .metadata_range_request(globals.network_settings.metadata_range_request)
     .cache_read_concurrency(globals.concurrency.cache_reads)
     .http_proxy(globals.network_settings.http_proxy.clone())
     .https_proxy(globals.network_settings.https_proxy.clone())
@@ -116,7 +117,7 @@ struct ExternallyInstalledError {
 }
 
 #[cfg(not(feature = "self-update"))]
-impl uv_errors::Hint for ExternallyInstalledError {
+impl uv_errors::Hinted for ExternallyInstalledError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if let Some(source) = &self.install_source {
             uv_errors::Hints::from(format!(
@@ -130,22 +131,9 @@ impl uv_errors::Hint for ExternallyInstalledError {
     }
 }
 
+#[instrument(skip_all)]
 #[doc(hidden)]
 pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
-    Box::pin(run_with_workspace_cache(
-        cli,
-        global_initialization,
-        WorkspaceCache::default(),
-    ))
-    .await
-}
-
-#[instrument(name = "run", skip_all)]
-async fn run_with_workspace_cache(
-    cli: Cli,
-    global_initialization: GlobalInitialization,
-    workspace_cache: WorkspaceCache,
-) -> Result<ExitStatus> {
     let config_discovery = ConfigDiscovery::from_args(cli.top_level.no_config);
 
     // Configure color before resolving settings so argument errors retain their styling.
@@ -320,6 +308,7 @@ async fn run_with_workspace_cache(
         cli.top_level.cache_args.no_cache,
         cli.top_level.cache_args.cache_dir.clone(),
     )?;
+    let workspace_cache = WorkspaceCache::default();
     let filesystem = if let Some(config_file) = cli.top_level.config_file.as_ref() {
         if config_file
             .file_name()
@@ -487,14 +476,22 @@ async fn run_with_workspace_cache(
     };
 
     // If the target is a PEP 723 script, merge the metadata into the filesystem metadata.
-    let filesystem = script
+    let script_filesystem = script
         .as_ref()
         .map(Pep723Item::metadata)
         .and_then(|metadata| metadata.tool.as_ref())
         .and_then(|tool| tool.uv.as_ref())
         .map(|uv| Options::simple(uv.globals.clone(), uv.top_level.clone()))
-        .map(FilesystemOptions::from)
-        .combine(filesystem);
+        .map(FilesystemOptions::from);
+    let script_filesystem = if let Some(Pep723Item::Script(script)) = script.as_ref() {
+        let script_dir = script.path.parent().expect("script path has no parent");
+        script_filesystem
+            .map(|options| options.relative_to(script_dir))
+            .transpose()?
+    } else {
+        script_filesystem
+    };
+    let filesystem = script_filesystem.combine(filesystem);
 
     let custom_certificate_file = match &*cli.command {
         Commands::Pip(PipNamespace { cert, .. }) => cert.as_deref(),
@@ -566,21 +563,8 @@ async fn run_with_workspace_cache(
 
     anstream::ColorChoice::write_global(globals.color.into());
 
-    if global_initialization.needs_initialization() {
-        miette::set_hook(Box::new(|_| {
-            Box::new(
-                miette::MietteHandlerOpts::new()
-                    .break_words(false)
-                    .word_separator(textwrap::WordSeparator::AsciiSpace)
-                    .word_splitter(textwrap::WordSplitter::NoHyphenation)
-                    .wrap_lines(std::env::var(EnvVars::UV_NO_WRAP).is_err())
-                    .build(),
-            )
-        }))?;
-    }
-
     // Don't initialize the rayon threadpool yet, this is too costly when we're doing a noop sync.
-    uv_configuration::RAYON_PARALLELISM.store(globals.concurrency.installs, Ordering::Relaxed);
+    RAYON_PARALLELISM.store(globals.concurrency.installs, Ordering::Relaxed);
 
     // Write out any resolved settings.
     macro_rules! show_settings {
@@ -664,7 +648,6 @@ async fn run_with_workspace_cache(
                 args.username,
                 args.password,
                 args.token,
-                client_builder,
                 printer,
                 globals.preview,
             )
@@ -677,14 +660,7 @@ async fn run_with_workspace_cache(
             let args = settings::AuthLogoutSettings::resolve(args);
             show_settings!(args);
 
-            commands::auth_logout(
-                args.service,
-                args.username,
-                client_builder,
-                printer,
-                globals.preview,
-            )
-            .await
+            commands::auth_logout(args.service, args.username, printer, globals.preview).await
         }
         Commands::Auth(AuthNamespace {
             command: AuthCommand::Token(args),
@@ -693,19 +669,12 @@ async fn run_with_workspace_cache(
             let args = settings::AuthTokenSettings::resolve(args);
             show_settings!(args);
 
-            commands::auth_token(
-                args.service,
-                args.username,
-                client_builder,
-                printer,
-                globals.preview,
-            )
-            .await
+            commands::auth_token(args.service, args.username, printer, globals.preview).await
         }
         Commands::Auth(AuthNamespace {
-            command: AuthCommand::Dir(args),
+            command: AuthCommand::Dir,
         }) => {
-            commands::auth_dir(args.service.as_ref(), printer)?;
+            commands::auth_dir(printer)?;
             Ok(ExitStatus::Success)
         }
         Commands::Auth(AuthNamespace {
@@ -719,9 +688,7 @@ async fn run_with_workspace_cache(
             }
 
             match args.command {
-                AuthHelperCommand::Get => {
-                    commands::auth_helper(client_builder, globals.preview, printer).await
-                }
+                AuthHelperCommand::Get => commands::auth_helper(globals.preview, printer).await,
             }
         }
         Commands::Help(args) => commands::help(
@@ -793,6 +760,7 @@ async fn run_with_workspace_cache(
                 args.build_constraints_from_workspace,
                 args.environments,
                 args.required_environments,
+                args.minimum_libc_version,
                 args.settings.extras,
                 groups,
                 args.settings.output_file.as_deref(),
@@ -934,6 +902,7 @@ async fn run_with_workspace_cache(
                 cache,
                 workspace_cache,
                 args.dry_run,
+                args.output_format,
                 printer,
                 globals.preview,
             ))
@@ -1097,6 +1066,7 @@ async fn run_with_workspace_cache(
                 cache,
                 workspace_cache,
                 args.dry_run,
+                args.output_format,
                 printer,
                 globals.preview,
             ))
@@ -1337,6 +1307,7 @@ async fn run_with_workspace_cache(
 
             commands::build_frontend(
                 &project_dir,
+                args.skip_dependency_check,
                 args.src,
                 args.package,
                 args.all_packages,
@@ -2056,7 +2027,6 @@ async fn run_with_workspace_cache(
                 password,
                 dry_run,
                 no_attestations,
-                direct,
                 publish_url,
                 trusted_publishing,
                 keyring_provider,
@@ -2079,8 +2049,6 @@ async fn run_with_workspace_cache(
                 index_locations,
                 dry_run,
                 no_attestations,
-                direct,
-                globals.preview,
                 &cache,
                 printer,
             )
@@ -2113,7 +2081,6 @@ async fn run_with_workspace_cache(
                     &project_dir,
                     args.lock_check,
                     args.frozen,
-                    args.dry_run,
                     args.refresh,
                     args.sync,
                     args.active,
@@ -2501,7 +2468,7 @@ async fn run_project(
         }
         ProjectCommand::Upgrade(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::UpgradeSettings::resolve(args, filesystem, environment);
+            let args = settings::UpgradeSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Initialize the cache.
@@ -2836,6 +2803,7 @@ async fn run_project(
                 args.hashes,
                 args.install_options,
                 args.output_file,
+                args.batch,
                 args.extras,
                 args.groups,
                 args.editable,
@@ -2918,6 +2886,7 @@ async fn run_project(
                 args.lock_check,
                 args.frozen,
                 args.no_sync,
+                args.no_install_project,
                 args.isolated,
                 args.all_packages,
                 args.package,
@@ -2928,6 +2897,7 @@ async fn run_project(
                 args.settings,
                 args.ty_version,
                 args.show_version,
+                args.show_command,
                 script,
                 client_builder.subcommand(vec!["check".to_owned()]),
                 globals.python_preference,
@@ -2936,6 +2906,7 @@ async fn run_project(
                 globals.concurrency,
                 &cache,
                 workspace_cache,
+                globals.color,
                 printer,
                 globals.preview,
                 args.no_project,
@@ -3086,12 +3057,6 @@ where
         cli.top_level.global_args.no_progress,
     );
 
-    // Initialize the cache before spawning `main2`. Constructing its `papaya` map initializes
-    // `seize`, which registers a process-wide memory barrier on Linux. Once multiple threads share
-    // the address space, registration waits for an RCU (read-copy-update) grace period; while the
-    // process is single-threaded, it takes the kernel's inexpensive fast path instead.
-    let workspace_cache = WorkspaceCache::default();
-
     // See `min_stack_size` doc comment about `main2`
     let min_stack_size = min_stack_size();
     let main2 = move || {
@@ -3101,11 +3066,7 @@ where
             .build()
             .expect("Failed building the Runtime");
         // Box the large main future to avoid stack overflows.
-        let result = runtime.block_on(Box::pin(run_with_workspace_cache(
-            cli,
-            GlobalInitialization::Initialize,
-            workspace_cache,
-        )));
+        let result = runtime.block_on(Box::pin(run(cli, GlobalInitialization::Initialize)));
         // Avoid waiting for pending tasks to complete.
         //
         // The resolver may have kicked off HTTP requests during resolution that

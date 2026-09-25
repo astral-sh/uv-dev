@@ -1,6 +1,6 @@
 [package]
 name = "uv-build-backend"
-version = "0.0.70"
+version = "0.0.86"
 description = "This is an internal component crate of uv"
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -45,6 +45,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 spdx = { workspace = true }
+tar-codec = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

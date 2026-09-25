@@ -5,10 +5,11 @@ use anyhow::Result;
 use tracing::debug;
 
 use uv_cache::Cache;
+use uv_cli::ColorChoice;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun, ExtrasSpecification,
-    InstallOptions,
+    ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun,
+    ExtrasSpecification, InstallOptions,
 };
 use uv_fs::normalize_path;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
@@ -29,12 +30,12 @@ use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::LockMode;
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
-    LinkErrorReporting, ProjectEnvironment, ProjectError, ProjectInterpreter, ScriptEnvironment,
-    ScriptInterpreter, UniversalState, WorkspacePython, default_dependency_groups,
+    LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectInterpreter,
+    ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython,
     validate_project_requires_python,
 };
 use crate::commands::reporters::PythonDownloadReporter;
-use crate::commands::{ExitStatus, diagnostics, project};
+use crate::commands::{ExitStatus, UvError, project};
 use crate::printer::Printer;
 use crate::settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
 
@@ -49,6 +50,7 @@ pub(crate) async fn check(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     no_sync: bool,
+    no_install_project: bool,
     isolated: bool,
     all_packages: bool,
     package: Vec<PackageName>,
@@ -59,6 +61,7 @@ pub(crate) async fn check(
     settings: ResolverInstallerSettings,
     ty_version: Option<String>,
     show_version: bool,
+    show_command: bool,
     script: Option<Pep723Script>,
     client_builder: BaseClientBuilder<'_>,
     python_preference: PythonPreference,
@@ -67,6 +70,7 @@ pub(crate) async fn check(
     concurrency: Concurrency,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
+    color: ColorChoice,
     printer: Printer,
     preview: Preview,
     no_project: bool,
@@ -171,6 +175,13 @@ pub(crate) async fn check(
         .as_ref()
         .is_some_and(|project| project.project_name().is_none());
     let defacto_all_packages = all_packages || (is_virtual_workspace && package.is_empty());
+    // Running within a project selects that project, even if workspace configuration excludes it.
+    let explicit_targets = all_packages
+        || !package.is_empty()
+        || script.is_some()
+        || project
+            .as_ref()
+            .is_some_and(|project| project.project_name().is_some());
 
     let target_dir = script
         .as_ref()
@@ -271,7 +282,7 @@ pub(crate) async fn check(
     };
 
     let groups = if let Some(project) = &project {
-        groups.with_defaults(default_dependency_groups(project.pyproject_toml())?)
+        groups.with_defaults(project.default_groups()?)
     } else {
         DependencyGroupsWithDefaults::none()
     };
@@ -291,7 +302,7 @@ pub(crate) async fn check(
                 &install_mirrors,
                 false,
                 config_discovery,
-                Some(false),
+                ActiveEnvironment::Ignore,
                 cache,
                 printer,
             )
@@ -357,7 +368,7 @@ pub(crate) async fn check(
 
     // Select an environment and, if we found a project, sync it before running checks.
     let mut locked_ty_path = None;
-    let venv_path = if let Some(script) = &script {
+    let venv = if let Some(script) = &script {
         let extras = extras.with_defaults(DefaultExtras::default());
         let venv = if let Some(venv) = isolated_venv {
             venv
@@ -371,7 +382,7 @@ pub(crate) async fn check(
                 &install_mirrors,
                 no_sync,
                 config_discovery,
-                Some(false),
+                ActiveEnvironment::Ignore,
                 cache,
                 DryRun::Disabled,
                 printer,
@@ -418,12 +429,7 @@ pub(crate) async fn check(
         .await
         {
             Ok(result) => result,
-            Err(ProjectError::Operation(err)) => {
-                return diagnostics::OperationDiagnostic::default()
-                    .report(err)
-                    .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
-            }
-            Err(err) => return Err(err.into()),
+            Err(err) => return Err(UvError::from(err).into()),
         };
 
         let marker_environment = venv.interpreter().to_resolver_marker_environment();
@@ -475,12 +481,7 @@ pub(crate) async fn check(
         .await
         {
             Ok(_) => {}
-            Err(ProjectError::Operation(err)) => {
-                return diagnostics::OperationDiagnostic::default()
-                    .report(err)
-                    .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
-            }
-            Err(err) => return Err(err.into()),
+            Err(err) => return Err(UvError::from(err).into()),
         }
 
         if no_sync {
@@ -489,7 +490,7 @@ pub(crate) async fn check(
             );
         }
 
-        Some(venv.root().to_owned())
+        Some(venv)
     } else if let Some(project) = &project {
         let extras = extras.with_defaults(DefaultExtras::default());
         let mut malware_context = project::sync::MalwareCheckContext::from(&malware_settings);
@@ -507,7 +508,7 @@ pub(crate) async fn check(
                 python_downloads,
                 no_sync,
                 config_discovery,
-                None,
+                ActiveEnvironment::Warn,
                 cache,
                 DryRun::Disabled,
                 LinkErrorReporting::User,
@@ -537,8 +538,8 @@ pub(crate) async fn check(
                     python_preference,
                     python_downloads,
                     &install_mirrors,
-                    false,
-                    None,
+                    ProjectEnvironmentPolicy::Optional,
+                    ActiveEnvironment::Warn,
                     cache,
                     printer,
                 )
@@ -593,12 +594,7 @@ pub(crate) async fn check(
         .await
         {
             Ok(result) => result,
-            Err(ProjectError::Operation(err)) => {
-                return diagnostics::OperationDiagnostic::default()
-                    .report(err)
-                    .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
-            }
-            Err(err) => return Err(err.into()),
+            Err(err) => return Err(UvError::from(err).into()),
         };
 
         let target = project::sync::identify_project_installation_target(
@@ -661,12 +657,7 @@ pub(crate) async fn check(
                 .await
                 {
                     Ok(environment) => environment,
-                    Err(ProjectError::Operation(err)) => {
-                        return diagnostics::OperationDiagnostic::default()
-                            .report(err)
-                            .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
-                    }
-                    Err(err) => return Err(err.into()),
+                    Err(err) => return Err(UvError::from(err).into()),
                 };
                 malware_context.record_resolution(&resolution);
                 PythonEnvironment::from(environment)
@@ -685,7 +676,16 @@ pub(crate) async fn check(
                 &extras,
                 &groups,
                 None,
-                InstallOptions::default(),
+                InstallOptions::new(
+                    no_install_project,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Vec::new(),
+                    Vec::new(),
+                ),
                 Modifications::Sufficient,
                 None,
                 (&settings).into(),
@@ -704,25 +704,48 @@ pub(crate) async fn check(
             .await
             {
                 Ok(_) => {}
-                Err(ProjectError::Operation(err)) => {
-                    return diagnostics::OperationDiagnostic::default()
-                        .report(err)
-                        .map_or(Ok(ExitStatus::Failure), |err| Err(err.into()));
-                }
-                Err(err) => return Err(err.into()),
+                Err(err) => return Err(UvError::from(err).into()),
             }
         }
 
-        Some(venv.root().to_owned())
+        Some(venv)
     } else {
-        isolated_venv.map(|venv| venv.root().to_owned())
+        isolated_venv
+    };
+
+    // Forward the user's explicit Python request so ty can apply its own version selection rules.
+    let python_version = if let Some(python) = python {
+        let request = PythonRequest::parse(&python);
+        if let Some(venv) = venv.as_ref()
+            && request.satisfied(venv.interpreter(), cache)
+        {
+            Some(venv.interpreter().python_minor_version())
+        } else {
+            // Without syncing, the environment may not satisfy the explicit request.
+            let reporter = PythonDownloadReporter::single(printer);
+            let installation = PythonInstallation::find_or_download(
+                Some(&request),
+                EnvironmentPreference::Any,
+                python_preference,
+                python_downloads,
+                &client_builder,
+                cache,
+                Some(&reporter),
+                install_mirrors.python_install_mirror.as_deref(),
+                install_mirrors.pypy_install_mirror.as_deref(),
+                install_mirrors.python_downloads_json_url.as_deref(),
+            )
+            .await?;
+            Some(installation.interpreter().python_minor_version())
+        }
+    } else {
+        None
     };
 
     let exclude_newer = settings
         .resolver
         .exclude_newer
-        .global
-        .map(|value| value.timestamp());
+        .exclude_newer_package_for_index(&PackageName::from_str("ty")?, None);
 
     ty::run(
         ty_version,
@@ -732,13 +755,19 @@ pub(crate) async fn check(
         project
             .as_ref()
             .map(|project| project.workspace().install_path().as_path()),
+        lock_check,
+        frozen,
         &check_targets,
         &excluded_targets,
-        venv_path.as_deref(),
+        explicit_targets,
+        venv.as_ref().map(PythonEnvironment::root),
+        python_version.as_ref(),
         exclude_newer,
         show_version,
+        show_command,
         &client_builder,
         cache,
+        color,
         printer,
     )
     .await

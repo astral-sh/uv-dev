@@ -9,6 +9,7 @@ use insta::{allow_duplicates, assert_json_snapshot, assert_snapshot};
 use std::io::BufReader;
 use std::path::Path;
 use std::process::Command;
+use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
 use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
@@ -43,12 +44,11 @@ const BUILT_BY_UV_TEST_SCRIPT: &str = indoc! {r#"
 
 fn unpack_tar_gz(source_dist_path: &Path, target: &Path) -> Result<()> {
     let sdist_reader = BufReader::new(File::open(source_dist_path)?);
-    let mut source_dist =
-        tokio_tar::Archive::new(AllowStdIo::new(GzDecoder::new(sdist_reader)).compat());
+    let source_dist = TarArchive::new(AllowStdIo::new(GzDecoder::new(sdist_reader)).compat());
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?
-        .block_on(source_dist.unpack(target))?;
+        .block_on(source_dist.extract_in(target, ExtractPolicy::default()))?;
     Ok(())
 }
 
@@ -224,6 +224,7 @@ fn built_by_uv_editable() -> Result<()> {
 #[test]
 fn preserve_executable_bit() -> Result<()> {
     use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
 
     let context = uv_test::test_context!("3.12");
 
@@ -248,12 +249,45 @@ fn preserve_executable_bit() -> Result<()> {
         )?;
 
     fs_err::create_dir(project_dir.join("scripts"))?;
+    let script = project_dir.join("scripts").join("greet.sh");
     fs_err::write(
-        project_dir.join("scripts").join("greet.sh"),
+        &script,
         indoc! {r#"
         echo "Hi from the shell"
     "#},
     )?;
+    let mut permissions = fs_err::metadata(&script)?.permissions();
+    permissions.set_mode(0o755);
+    fs_err::set_permissions(&script, permissions)?;
+
+    context
+        .build_backend()
+        .arg("--preview-features")
+        .arg("tar-codec")
+        .arg("build-sdist")
+        .arg(context.temp_dir.path())
+        .current_dir(&project_dir)
+        .assert()
+        .success();
+
+    uv_snapshot!(context.python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            import sys
+            import tarfile
+
+            with tarfile.open(sys.argv[1], mode="r:gz") as archive:
+                member = archive.getmember(
+                    "preserve_executable_bit-0.1.0/scripts/greet.sh"
+                )
+                assert "path" in member.pax_headers
+                print(f"{member.name}: {member.mode:o}")
+        "#})
+        .arg(context.temp_dir.path().join("preserve_executable_bit-0.1.0.tar.gz")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    preserve_executable_bit-0.1.0/scripts/greet.sh: 755
+    ");
 
     context
         .build_backend()
@@ -511,6 +545,7 @@ fn build_module_name_normalization() -> Result<()> {
 #[test]
 fn build_sdist_with_long_path() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let default_dir = TempDir::new()?;
     let temp_dir = TempDir::new()?;
 
     context
@@ -533,16 +568,90 @@ fn build_sdist_with_long_path() -> Result<()> {
     let long_path = format!("src/foo/l{}ng/__init__.py", "o".repeat(100));
     context
         .temp_dir
-        .child(long_path)
+        .child(&long_path)
         .write_str(r#"print("Hi from foo")"#)?;
+
+    let large_path = "src/foo/large.bin";
+    File::create(context.temp_dir.join(large_path))?.set_len(5 * 1024 * 1024 + 1)?;
 
     uv_snapshot!(context
         .build_backend()
+        .arg("build-sdist")
+        .arg(default_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    foo-1.0.0.tar.gz
+    ");
+
+    uv_snapshot!(context.python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            import gzip
+            import sys
+            import tarfile
+
+            with gzip.open(sys.argv[1], mode="rb") as archive:
+                header = archive.read(512)
+                assert header[257:265] == b"ustar  \x00"
+
+            with tarfile.open(sys.argv[1], mode="r:gz") as archive:
+                members = archive.getmembers()
+                assert all(not member.pax_headers for member in members)
+                print(f"GNU members: {len(members)}")
+        "#})
+        .arg(default_dir.path().join("foo-1.0.0.tar.gz")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GNU members: 10
+    ");
+
+    uv_snapshot!(context
+        .build_backend()
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tar-codec")
         .arg("build-sdist")
         .arg(temp_dir.path()), @"
     exit_code: 0 (success)
     ----- stdout -----
     foo-1.0.0.tar.gz
+    ");
+
+    uv_snapshot!(context.python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            import sys
+            import tarfile
+
+            with tarfile.open(sys.argv[1], mode="r:gz") as archive:
+                members = archive.getmembers()
+                assert all("path" in member.pax_headers for member in members)
+                assert all(
+                    member.mode == (0o755 if member.isdir() else 0o644)
+                    for member in members
+                )
+
+                long_member = archive.getmember(sys.argv[2])
+                assert long_member.isfile()
+
+                large_member = archive.getmember(sys.argv[3])
+                with archive.extractfile(large_member) as payload:
+                    streamed = 0
+                    while chunk := payload.read(64 * 1024):
+                        assert not any(chunk)
+                        streamed += len(chunk)
+                assert streamed == large_member.size
+
+                print(f"PAX members: {len(members)}")
+                print(f"Long path bytes: {len(long_member.name.encode())}")
+                print(f"Streamed bytes: {streamed}")
+        "#})
+        .arg(temp_dir.path().join("foo-1.0.0.tar.gz"))
+        .arg(format!("foo-1.0.0/{long_path}"))
+        .arg(format!("foo-1.0.0/{large_path}")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    PAX members: 10
+    Long path bytes: 133
+    Streamed bytes: 5242881
     ");
 
     Ok(())
@@ -750,7 +859,7 @@ fn license_glob_without_matches_errors() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Invalid project metadata
-      Caused by: `project.license-files` glob `abc` did not match any files
+      cause: `project.license-files` glob `abc` did not match any files
     ");
 
     Ok(())
@@ -790,7 +899,7 @@ fn license_file_must_be_utf8() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Invalid project metadata
-      Caused by: License file `LICENSE.bin` must be UTF-8 encoded
+      cause: License file `LICENSE.bin` must be UTF-8 encoded
     ");
 
     Ok(())
@@ -937,7 +1046,7 @@ fn error_on_relative_module_root_outside_project_root() -> Result<()> {
     ----- stderr -----
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/`
-      Caused by: Module root must be inside the project: ..
+      cause: Module root must be inside the project: ..
     ");
 
     uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
@@ -945,7 +1054,7 @@ fn error_on_relative_module_root_outside_project_root() -> Result<()> {
     ----- stderr -----
     Building wheel...
     error: Failed to build `[TEMP_DIR]/`
-      Caused by: Module root must be inside the project: ..
+      cause: Module root must be inside the project: ..
     ");
 
     Ok(())
@@ -986,7 +1095,7 @@ fn error_on_relative_data_dir_outside_project_root() -> Result<()> {
     ----- stderr -----
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/project`
-      Caused by: The path for the data directory headers must be inside the project: ../header
+      cause: The path for the data directory headers must be inside the project: ../header
     ");
 
     uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel"), @"
@@ -994,7 +1103,7 @@ fn error_on_relative_data_dir_outside_project_root() -> Result<()> {
     ----- stderr -----
     Building wheel...
     error: Failed to build `[TEMP_DIR]/project`
-      Caused by: The path for the data directory headers must be inside the project: ../header
+      cause: The path for the data directory headers must be inside the project: ../header
     ");
 
     pyproject_toml.write_str(indoc! {r#"
@@ -1021,7 +1130,7 @@ fn error_on_relative_data_dir_outside_project_root() -> Result<()> {
     ----- stderr -----
     Building wheel...
     error: Failed to build `[TEMP_DIR]/project`
-      Caused by: The path for the data directory headers must be inside the project: ../outside
+      cause: The path for the data directory headers must be inside the project: ../outside
     ");
 
     Ok(())
@@ -1112,7 +1221,7 @@ fn wheel_data_symlink_containment() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to build `[TEMP_DIR]/project`
-      Caused by: The path for the data directory data must be inside the project: external-assets
+      cause: The path for the data directory data must be inside the project: external-assets
     ");
 
     project.child("assets/public.txt").touch()?;
@@ -1174,7 +1283,7 @@ fn venv_in_source_tree() {
     ----- stderr -----
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/`
-      Caused by: Virtual environments must not be added to source distributions or wheels, remove the directory or exclude it from the build: src/foo/.venv
+      cause: Virtual environments must not be added to source distributions or wheels, remove the directory or exclude it from the build: src/foo/.venv
     ");
 
     uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
@@ -1182,7 +1291,7 @@ fn venv_in_source_tree() {
     ----- stderr -----
     Building wheel...
     error: Failed to build `[TEMP_DIR]/`
-      Caused by: Virtual environments must not be added to source distributions or wheels, remove the directory or exclude it from the build: src/foo/.venv
+      cause: Virtual environments must not be added to source distributions or wheels, remove the directory or exclude it from the build: src/foo/.venv
     ");
 }
 
@@ -1271,12 +1380,12 @@ fn invalid_pyproject_toml() -> Result<()> {
     ----- stderr -----
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/child`
-      Caused by: Invalid metadata format in: child/pyproject.toml
-      Caused by: TOML parse error at line 2, column 8
-          |
-        2 | name = 1
-          |        ^
-        invalid type: integer `1`, expected a string
+      cause: Invalid metadata format in: child/pyproject.toml
+      cause: TOML parse error at line 2, column 8
+               |
+             2 | name = 1
+               |        ^
+             invalid type: integer `1`, expected a string
     ");
 
     Ok(())

@@ -4,24 +4,25 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
-use uv_configuration::{Concurrency, DependencyGroupsWithDefaults, DryRun};
+use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun};
+use uv_lock::Metadata;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{ConfigDiscovery, PythonDownloads, PythonPreference, PythonRequest};
-use uv_resolver::Metadata;
 use uv_scripts::Pep723Script;
 use uv_settings::{MalwareCheckSettings, PythonInstallMirrors};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::commands::pip::loggers::DefaultResolveLogger;
+use crate::commands::pip::operations::Modifications;
 use crate::commands::project::install_target::InstallTarget;
 use crate::commands::project::lock::{LockMode, LockOperation};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
-    LinkErrorReporting, ProjectEnvironment, ProjectError, ProjectInterpreter, ScriptEnvironment,
-    ScriptInterpreter, UniversalState, WorkspacePython,
+    LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectError,
+    ProjectInterpreter, ScriptEnvironment, ScriptInterpreter, UniversalState, WorkspacePython,
 };
-use crate::commands::{ExitStatus, UvError, diagnostics};
+use crate::commands::{ExitStatus, UvError};
 use crate::printer::{Printer, Stdout};
 use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
 
@@ -32,10 +33,9 @@ pub(crate) async fn metadata(
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
-    dry_run: DryRun,
     refresh: Refresh,
-    sync: bool,
-    active: bool,
+    sync: Option<Modifications>,
+    active: ActiveEnvironment,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
     malware_settings: MalwareCheckSettings,
@@ -90,7 +90,7 @@ pub(crate) async fn metadata(
                 &install_mirrors,
                 false,
                 config_discovery,
-                Some(active),
+                active,
                 cache,
                 printer,
             )
@@ -113,8 +113,12 @@ pub(crate) async fn metadata(
                     python_preference,
                     python_downloads,
                     &install_mirrors,
-                    false,
-                    Some(active),
+                    if sync.is_some() {
+                        ProjectEnvironmentPolicy::Compatible
+                    } else {
+                        ProjectEnvironmentPolicy::Optional
+                    },
+                    active,
                     cache,
                     printer,
                 )
@@ -125,7 +129,7 @@ pub(crate) async fn metadata(
 
         if let LockCheck::Enabled(lock_check) = lock_check {
             LockMode::Locked(&interpreter, lock_check)
-        } else if dry_run.enabled()
+        } else if sync.is_none()
             || (matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file())
         {
             LockMode::DryRun(&interpreter)
@@ -169,7 +173,7 @@ pub(crate) async fn metadata(
                 },
             };
             let mut export = metadata_for_target(install_target)?;
-            let environment = if sync {
+            let environment = if sync.is_some() {
                 Some(match target {
                     LockTarget::Workspace(workspace) => ProjectEnvironment::get_or_init(
                         workspace,
@@ -181,7 +185,7 @@ pub(crate) async fn metadata(
                         python_downloads,
                         false,
                         config_discovery,
-                        Some(active),
+                        active,
                         cache,
                         DryRun::Disabled,
                         LinkErrorReporting::User,
@@ -198,7 +202,7 @@ pub(crate) async fn metadata(
                         &install_mirrors,
                         false,
                         config_discovery,
-                        Some(active),
+                        active,
                         cache,
                         DryRun::Disabled,
                         printer,
@@ -209,10 +213,10 @@ pub(crate) async fn metadata(
             } else {
                 match target {
                     LockTarget::Workspace(workspace) => {
-                        ProjectInterpreter::discover_existing(workspace, Some(active), cache)?
+                        ProjectInterpreter::discover_existing(workspace, active, cache)?
                     }
                     LockTarget::Script(script) => {
-                        ScriptInterpreter::discover_existing(script.into(), Some(active), cache)
+                        ScriptInterpreter::discover_existing(script.into(), active, cache)
                     }
                 }
             };
@@ -248,10 +252,7 @@ pub(crate) async fn metadata(
             print_metadata(&export, printer)
         }
         Err(err @ ProjectError::LockMismatch(..)) => Err(UvError::user(err).into()),
-        Err(ProjectError::Operation(err)) => diagnostics::OperationDiagnostic::default()
-            .report(err)
-            .map_or(Ok(ExitStatus::Failure), |err| Err(err.into())),
-        Err(err) => Err(err.into()),
+        Err(err) => Err(UvError::from(err).into()),
     }
 }
 

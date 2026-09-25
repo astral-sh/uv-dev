@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::iter::Flatten;
+use std::iter::{Flatten, once};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use fs_err as fs;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
-use uv_configuration::{ExcludeDependency, Excludes, Override, Overrides};
+use uv_configuration::{DependencyMode, ExcludeDependency, Excludes, Override, Overrides};
 use uv_distribution_filename::EggInfoFilename;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, Diagnostic, ExtraBuildRequires, ExtraBuildVariables,
@@ -25,7 +25,7 @@ use uv_redacted::DisplaySafeUrl;
 use uv_types::InstalledPackagesProvider;
 use uv_warnings::warn_user;
 
-use crate::satisfies::RequirementSatisfaction;
+use crate::satisfies::{BuildSettings, RequirementSatisfaction};
 
 /// An index over the packages installed in an environment.
 ///
@@ -325,7 +325,8 @@ impl SitePackages {
         Ok(diagnostics)
     }
 
-    /// Returns if the installed packages satisfy the given requirements.
+    /// Returns if the installed packages satisfy the given requirements, including transitive
+    /// dependencies when requested by [`DependencyMode`].
     pub fn satisfies_spec(
         &self,
         requirements: &[UnresolvedRequirementSpecification],
@@ -333,6 +334,8 @@ impl SitePackages {
         overrides: &[UnresolvedRequirementSpecification],
         override_dependencies: &[Override<Requirement>],
         exclude_dependencies: &[ExcludeDependency],
+        dependency_metadata: &DependencyMetadata,
+        dependency_mode: DependencyMode,
         installation: InstallationStrategy,
         markers: &ResolverMarkerEnvironment,
         tags: &Tags,
@@ -340,7 +343,7 @@ impl SitePackages {
         config_settings_package: &PackageConfigSettings,
         extra_build_requires: &ExtraBuildRequires,
         extra_build_variables: &ExtraBuildVariables,
-    ) -> Result<SatisfiesResult> {
+    ) -> Result<SatisfiesResult<UnresolvedRequirement>> {
         // First, map all unnamed requirements to named requirements.
         let requirements = {
             let mut named = Vec::with_capacity(requirements.len());
@@ -353,7 +356,7 @@ impl SitePackages {
                         match self.get_urls(requirement.url.verbatim.raw()).as_slice() {
                             [] => {
                                 return Ok(SatisfiesResult::Unsatisfied(
-                                    requirement.url.verbatim.raw().to_string(),
+                                    UnresolvedRequirement::Unnamed(requirement.clone()),
                                 ));
                             }
                             [distribution] => {
@@ -370,7 +373,7 @@ impl SitePackages {
                             }
                             _ => {
                                 return Ok(SatisfiesResult::Unsatisfied(
-                                    requirement.url.verbatim.raw().to_string(),
+                                    UnresolvedRequirement::Unnamed(requirement.clone()),
                                 ));
                             }
                         }
@@ -393,7 +396,7 @@ impl SitePackages {
                         match self.get_urls(requirement.url.verbatim.raw()).as_slice() {
                             [] => {
                                 return Ok(SatisfiesResult::Unsatisfied(
-                                    requirement.url.verbatim.raw().to_string(),
+                                    UnresolvedRequirement::Unnamed(requirement.clone()),
                                 ));
                             }
                             [distribution] => {
@@ -410,7 +413,7 @@ impl SitePackages {
                             }
                             _ => {
                                 return Ok(SatisfiesResult::Unsatisfied(
-                                    requirement.url.verbatim.raw().to_string(),
+                                    UnresolvedRequirement::Unnamed(requirement.clone()),
                                 ));
                             }
                         }
@@ -435,36 +438,50 @@ impl SitePackages {
         )?;
         let excludes = Excludes::from_entries(exclude_dependencies.iter().cloned());
 
-        self.satisfies_requirements(
+        match self.satisfies_requirements(
             requirements.iter().map(Cow::as_ref),
             constraints.iter().map(|constraint| &constraint.requirement),
             &overrides,
             &excludes,
+            dependency_metadata,
+            dependency_mode,
             installation,
             markers,
             tags,
-            config_settings,
-            config_settings_package,
-            extra_build_requires,
-            extra_build_variables,
-        )
+            Some(BuildSettings {
+                config_settings,
+                config_settings_package,
+                extra_build_requires,
+                extra_build_variables,
+            }),
+        )? {
+            SatisfiesResult::Fresh {
+                recursive_requirements,
+            } => Ok(SatisfiesResult::Fresh {
+                recursive_requirements,
+            }),
+            SatisfiesResult::Unsatisfied(requirement) => Ok(SatisfiesResult::Unsatisfied(
+                UnresolvedRequirement::Named(requirement),
+            )),
+        }
     }
 
     /// Like [`SitePackages::satisfies_spec`], but with resolved names for all requirements.
-    pub fn satisfies_requirements<'a>(
+    ///
+    /// If `build_settings` is `None`, accept installed distributions regardless of their build settings.
+    pub fn satisfies_requirements<'a, 'b>(
         &self,
-        requirements: impl ExactSizeIterator<Item = &'a Requirement>,
-        constraints: impl Iterator<Item = &'a Requirement>,
-        overrides: &'a Overrides,
-        excludes: &'a Excludes,
+        requirements: impl Iterator<Item = &'a Requirement>,
+        constraints: impl Iterator<Item = &'b Requirement>,
+        overrides: &Overrides,
+        excludes: &Excludes,
+        dependency_metadata: &DependencyMetadata,
+        dependency_mode: DependencyMode,
         installation: InstallationStrategy,
         markers: &ResolverMarkerEnvironment,
         tags: &Tags,
-        config_settings: &ConfigSettings,
-        config_settings_package: &PackageConfigSettings,
-        extra_build_requires: &ExtraBuildRequires,
-        extra_build_variables: &ExtraBuildVariables,
-    ) -> Result<SatisfiesResult> {
+        build_settings: Option<BuildSettings<'_>>,
+    ) -> Result<SatisfiesResult<Requirement>> {
         // Collect the constraints by package name.
         let constraints: FxHashMap<&PackageName, Vec<&Requirement>> =
             constraints.fold(FxHashMap::default(), |mut constraints, constraint| {
@@ -474,12 +491,13 @@ impl SitePackages {
                     .push(constraint);
                 constraints
             });
-        let mut stack = Vec::with_capacity(requirements.len());
-        let mut seen = FxHashSet::with_capacity_and_hasher(requirements.len(), FxBuildHasher);
+        let mut stack = Vec::with_capacity(requirements.size_hint().0);
+        let mut seen =
+            FxHashSet::with_capacity_and_hasher(requirements.size_hint().0, FxBuildHasher);
 
         // Add the direct requirements to the queue.
-        for requirement in overrides
-            .apply(requirements)
+        for requirement in requirements
+            .flat_map(|requirement| overrides.apply(once(requirement)))
             .filter(|requirement| !excludes.contains(&requirement.name))
         {
             if requirement.evaluate_markers(Some(markers), &[]) {
@@ -497,30 +515,25 @@ impl SitePackages {
             match installed.as_slice() {
                 [] => {
                     // The package isn't installed.
-                    return Ok(SatisfiesResult::Unsatisfied(requirement.to_string()));
+                    return Ok(SatisfiesResult::Unsatisfied(requirement));
                 }
                 [distribution] => {
-                    // Validate that the requirement is satisfied.
-                    if requirement.evaluate_markers(Some(markers), &[]) {
-                        match RequirementSatisfaction::check(
-                            name,
-                            distribution,
-                            &requirement.source,
-                            None,
-                            installation,
-                            tags,
-                            config_settings,
-                            config_settings_package,
-                            extra_build_requires,
-                            extra_build_variables,
-                        ) {
-                            RequirementSatisfaction::Mismatch
-                            | RequirementSatisfaction::OutOfDate
-                            | RequirementSatisfaction::CacheInvalid => {
-                                return Ok(SatisfiesResult::Unsatisfied(requirement.to_string()));
-                            }
-                            RequirementSatisfaction::Satisfied => {}
+                    // Requirements were filtered with the parent extras before entering the stack.
+                    match RequirementSatisfaction::check(
+                        name,
+                        distribution,
+                        &requirement.source,
+                        None,
+                        installation,
+                        tags,
+                        build_settings,
+                    ) {
+                        RequirementSatisfaction::Mismatch
+                        | RequirementSatisfaction::OutOfDate
+                        | RequirementSatisfaction::CacheInvalid => {
+                            return Ok(SatisfiesResult::Unsatisfied(requirement));
                         }
+                        RequirementSatisfaction::Satisfied => {}
                     }
 
                     // Validate that the installed version satisfies the constraints.
@@ -533,27 +546,35 @@ impl SitePackages {
                                 None,
                                 installation,
                                 tags,
-                                config_settings,
-                                config_settings_package,
-                                extra_build_requires,
-                                extra_build_variables,
+                                build_settings,
                             ) {
                                 RequirementSatisfaction::Mismatch
                                 | RequirementSatisfaction::OutOfDate
                                 | RequirementSatisfaction::CacheInvalid => {
-                                    return Ok(SatisfiesResult::Unsatisfied(
-                                        requirement.to_string(),
-                                    ));
+                                    return Ok(SatisfiesResult::Unsatisfied((*constraint).clone()));
                                 }
                                 RequirementSatisfaction::Satisfied => {}
                             }
                         }
                     }
 
+                    // With `--no-deps`, only the requested requirements and their constraints
+                    // need to be satisfied. Avoid reading metadata for dependencies that the
+                    // resolver would not include either.
+                    if dependency_mode.is_direct() {
+                        continue;
+                    }
+
                     // Recurse into the dependencies.
-                    let metadata = distribution
-                        .read_metadata()
-                        .with_context(|| format!("Failed to read metadata for: {distribution}"))?;
+                    let metadata = if let Some(metadata) =
+                        dependency_metadata.get(name, Some(distribution.version()))
+                    {
+                        Cow::Owned(metadata)
+                    } else {
+                        Cow::Borrowed(distribution.read_metadata().with_context(|| {
+                            format!("Failed to read metadata for: {distribution}")
+                        })?)
+                    };
 
                     // Add the dependencies to the queue.
                     let dependencies = metadata
@@ -578,7 +599,7 @@ impl SitePackages {
                 }
                 _ => {
                     // There are multiple installed distributions for the same package.
-                    return Ok(SatisfiesResult::Unsatisfied(requirement.to_string()));
+                    return Ok(SatisfiesResult::Unsatisfied(requirement));
                 }
             }
         }
@@ -610,17 +631,17 @@ pub enum InstallationStrategy {
     Strict,
 }
 
-/// We check if all requirements are already satisfied, recursing through the requirements tree.
+/// Whether all requirements are already satisfied for the requested [`DependencyMode`].
 #[derive(Debug)]
-pub enum SatisfiesResult {
-    /// All requirements are recursively satisfied.
+pub enum SatisfiesResult<T> {
+    /// All requirements are satisfied, including transitive dependencies when requested.
     Fresh {
-        /// The flattened set (transitive closure) of all requirements checked.
+        /// The set of all requirements checked, including the transitive closure when requested.
         recursive_requirements: FxHashSet<Requirement>,
     },
     /// We found an unsatisfied requirement. Since we exit early, we only know about the first
     /// unsatisfied requirement.
-    Unsatisfied(String),
+    Unsatisfied(T),
 }
 
 /// Infer the package name from an installed distribution path without reading its metadata.

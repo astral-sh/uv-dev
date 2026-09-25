@@ -267,8 +267,6 @@ pub enum PreviewFeature {
     SbomExport,
     /// Allows using `uv auth helper` as a credential helper for external tools.
     AuthHelper,
-    /// Allows publishing directly to a package index.
-    DirectPublish,
     /// Uses the directory containing a local `uv run` target, rather than the current working
     /// directory, as the starting point for project and workspace discovery. This feature takes
     /// effect before configuration is loaded.
@@ -327,8 +325,31 @@ pub enum PreviewFeature {
     IndexHashAlgorithm,
     /// Rejects non-canonical lockfile formatting when using `--locked` or `--check`.
     LockfileFormatCheck,
-    /// Omit `package.metadata` from `uv.lock`.
+    /// Omit `package.metadata` from `uv.lock`, except for remote URL dependencies.
     LockWithoutMetadata,
+    /// Uses the new `tar-codec` encoding/decoding backend, instead of `astral-tokio-tar`.
+    TarCodec,
+    /// Allows selecting configured package indexes by name with `--index` and `--default-index`.
+    IndexByName,
+    /// Restricts generated requirement hashes to artifacts allowed by binary and build policies.
+    ArtifactHashFiltering,
+    /// Enables content-addressed wheel archives in the cache.
+    ContentAddressedCache,
+    /// Exclude `exclude-newer-package` entries from the lockfile when not included in the
+    /// project's resolved dependencies.
+    MissingExcludeNewerPackageLock,
+    /// Records runtime configuration consultations and omits unused constraints, overrides, exclusions,
+    /// dependency metadata, and package-specific upload cutoffs from the lockfile.
+    ResolutionInputs,
+    /// Allows using `uv export --batch`.
+    BatchExport,
+    /// Allows setting minimum libc versions for universal resolutions.
+    MinimumLibcVersion,
+    /// Checks build dependencies before nonisolated builds with `uv build`.
+    BuildDependencyCheck,
+    /// Enables lazy imports in build backend invocations on CPython 3.15 and later.
+    /// This can affect import-time side effects in third-party build backends.
+    BuildLazyImports,
 }
 
 impl Display for PreviewFeature {
@@ -519,6 +540,10 @@ mod tests {
                 assert_eq!(PreviewFeature::from_str(alias).unwrap(), feature);
             }
         }
+
+        let feature = PreviewFeature::from_str("tar-codec").unwrap();
+        assert_eq!(feature, PreviewFeature::TarCodec);
+        assert_eq!(feature.to_string(), "tar-codec");
     }
 
     #[test]
@@ -526,6 +551,9 @@ mod tests {
         // Test single feature
         let preview = Preview::from_str("python-install-default").unwrap();
         assert_eq!(preview.flags, PreviewFeature::PythonInstallDefault);
+
+        let preview = Preview::from_str("tar-codec").unwrap();
+        assert!(preview.is_enabled(PreviewFeature::TarCodec));
 
         // Test multiple features
         let preview = Preview::from_str("json-output,pylock").unwrap();
@@ -563,6 +591,7 @@ mod tests {
         // Test enabled (all features)
         let preview = Preview::all();
         assert_eq!(preview.to_string(), "enabled");
+        assert!(preview.is_enabled(PreviewFeature::TarCodec));
 
         // Test single feature
         let preview = Preview::new(&[PreviewFeature::PythonInstallDefault]);
