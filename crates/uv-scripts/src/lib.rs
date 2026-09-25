@@ -436,10 +436,6 @@ pub struct ToolUv {
 #[derive(Debug, Error)]
 pub enum Pep723Error {
     #[error(
-        "An opening tag (`# /// script`) was found without a closing tag (`# ///`). Ensure that every line between the opening and closing tags (including empty lines) starts with a leading `#`."
-    )]
-    UnclosedBlock,
-    #[error(
         "An opening tag (`# /// script`) was found, but the closing tag (`# ///`) has trailing content. Remove the trailing content so the line is exactly `# ///`."
     )]
     UnclosedBlockTrailingContent,
@@ -497,91 +493,105 @@ impl ScriptTag {
     ///
     /// See: <https://peps.python.org/pep-0723/>
     pub fn parse(contents: &[u8]) -> Result<Option<Self>, Pep723Error> {
-        // Identify the opening pragma.
-        let Some(index) = FINDER.find(contents) else {
-            return Ok(None);
-        };
-
-        // The opening pragma must be the first line, or immediately preceded by a newline.
-        if !(index == 0 || matches!(contents[index - 1], b'\r' | b'\n')) {
+        // Avoid decoding scripts that do not contain an opening pragma.
+        if FINDER.find(contents).is_none() {
             return Ok(None);
         }
 
-        // Extract the preceding content.
-        let prelude = std::str::from_utf8(&contents[..index])?;
-
-        // Decode as UTF-8.
-        let contents = &contents[index..];
+        // Decode once before scanning candidates. In particular, avoid repeatedly validating the
+        // entire suffix when an unclosed block is followed by many partial opening pragmas.
         let contents = std::str::from_utf8(contents)?;
-
-        let mut lines = contents.lines();
-
-        // Ensure that the first line is exactly `# /// script`.
-        if lines.next().is_none_or(|line| line != "# /// script") {
-            return Ok(None);
-        }
-
-        // > Every line between these two lines (# /// TYPE and # ///) MUST be a comment starting
-        // > with #. If there are characters after the # then the first character MUST be a space. The
-        // > embedded content is formed by taking away the first two characters of each line if the
-        // > second character is a space, otherwise just the first character (which means the line
-        // > consists of only a single #).
-        let mut toml = vec![];
-
-        for line in lines {
-            // Remove the leading `#`.
-            let Some(line) = line.strip_prefix('#') else {
-                break;
+        let mut search_start = 0;
+        let (prelude, contents, mut toml, index) = loop {
+            // Identify the opening pragma.
+            let Some(index) = FINDER.find(&contents.as_bytes()[search_start..]) else {
+                return Ok(None);
             };
+            let index = search_start + index;
 
-            // If the line is empty, continue.
-            if line.is_empty() {
-                toml.push("");
+            // The opening pragma must be the first line, or immediately preceded by a newline.
+            if !(index == 0 || matches!(contents.as_bytes()[index - 1], b'\r' | b'\n')) {
+                search_start = index + "# /// script".len();
                 continue;
             }
 
-            // Otherwise, the line _must_ start with ` `.
-            let Some(line) = line.strip_prefix(' ') else {
-                break;
+            // Extract the preceding content.
+            let prelude = &contents[..index];
+
+            let block = &contents[index..];
+            let mut lines = block.lines();
+
+            // Ensure that the first line is exactly `# /// script`.
+            if lines.next().is_none_or(|line| line != "# /// script") {
+                search_start = index + "# /// script".len();
+                continue;
+            }
+
+            // > Every line between these two lines (# /// TYPE and # ///) MUST be a comment starting
+            // > with #. If there are characters after the # then the first character MUST be a space. The
+            // > embedded content is formed by taking away the first two characters of each line if the
+            // > second character is a space, otherwise just the first character (which means the line
+            // > consists of only a single #).
+            let mut toml = vec![];
+
+            for line in lines {
+                // Remove the leading `#`.
+                let Some(line) = line.strip_prefix('#') else {
+                    break;
+                };
+
+                // If the line is empty, continue.
+                if line.is_empty() {
+                    toml.push("");
+                    continue;
+                }
+
+                // Otherwise, the line _must_ start with ` `.
+                let Some(line) = line.strip_prefix(' ') else {
+                    break;
+                };
+
+                toml.push(line);
+            }
+
+            // Find the closing `# ///`. The precedence is such that we need to identify the _last_ such
+            // line.
+            //
+            // For example, given:
+            // ```python
+            // # /// script
+            // #
+            // # ///
+            // #
+            // # ///
+            // ```
+            //
+            // The latter `///` is the closing pragma. Track malformed terminators while searching,
+            // but continue looking for an exact terminator so trailing comments cannot invalidate
+            // it.
+            let mut has_trailing_content = false;
+            let mut closing_index = None;
+
+            for (line_index, line) in toml.iter().enumerate().rev() {
+                if *line == "///" {
+                    closing_index = Some(line_index + 1);
+                    break;
+                }
+
+                if line.starts_with("///") {
+                    has_trailing_content = true;
+                }
+            }
+
+            let Some(closing_index) = closing_index else {
+                if has_trailing_content {
+                    return Err(Pep723Error::UnclosedBlockTrailingContent);
+                }
+                search_start = index + "# /// script".len();
+                continue;
             };
 
-            toml.push(line);
-        }
-
-        // Find the closing `# ///`. The precedence is such that we need to identify the _last_ such
-        // line.
-        //
-        // For example, given:
-        // ```python
-        // # /// script
-        // #
-        // # ///
-        // #
-        // # ///
-        // ```
-        //
-        // The latter `///` is the closing pragma. Track malformed terminators while searching, but
-        // continue looking for an exact terminator so trailing comments cannot invalidate it.
-        let mut has_trailing_content = false;
-        let mut closing_index = None;
-
-        for (index, line) in toml.iter().enumerate().rev() {
-            if *line == "///" {
-                closing_index = Some(index + 1);
-                break;
-            }
-
-            if line.starts_with("///") {
-                has_trailing_content = true;
-            }
-        }
-
-        let Some(index) = closing_index else {
-            return Err(if has_trailing_content {
-                Pep723Error::UnclosedBlockTrailingContent
-            } else {
-                Pep723Error::UnclosedBlock
-            });
+            break (prelude, block, toml, closing_index);
         };
 
         // Discard any lines after the closing `# ///`.
@@ -739,10 +749,7 @@ mod tests {
         # ///
     "};
 
-        assert_matches!(
-            ScriptTag::parse(contents.as_bytes()),
-            Err(Pep723Error::UnclosedBlock)
-        );
+        assert_matches!(ScriptTag::parse(contents.as_bytes()), Ok(None));
     }
 
     #[test]
@@ -756,10 +763,79 @@ mod tests {
         # ]
     "};
 
-        assert_matches!(
-            ScriptTag::parse(contents.as_bytes()),
-            Err(Pep723Error::UnclosedBlock)
+        assert_matches!(ScriptTag::parse(contents.as_bytes()), Ok(None));
+    }
+
+    #[test]
+    fn unclosed_block_before_closed_block() {
+        let contents = indoc::indoc! {r#"
+        # /// script
+        # dependencies = [
+        #     "ignored",
+        # ]
+
+        pass
+
+        # /// script
+        # dependencies = [
+        #     "iniconfig",
+        # ]
+        # ///
+
+        import iniconfig
+    "#};
+
+        let actual = ScriptTag::parse(contents.as_bytes()).unwrap().unwrap();
+
+        assert_eq!(
+            actual.prelude,
+            indoc::indoc! {r#"
+            # /// script
+            # dependencies = [
+            #     "ignored",
+            # ]
+
+            pass
+
+        "#}
         );
+        assert_eq!(
+            actual.metadata,
+            indoc::indoc! {r#"
+            dependencies = [
+                "iniconfig",
+            ]
+        "#}
+        );
+    }
+
+    #[test]
+    fn unclosed_block_and_partial_opening_pragmas_before_closed_block() {
+        let mut contents = indoc::indoc! {r#"
+        # /// script
+        # dependencies = ["ignored"]
+
+        pass
+    "#}
+        .to_string();
+
+        for _ in 0..1024 {
+            contents.push_str("pass # /// script\n");
+            contents.push_str("# /// script-extra\n");
+        }
+
+        contents.push_str(indoc::indoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig"]
+        # ///
+
+        import iniconfig
+    "#});
+
+        let actual = ScriptTag::parse(contents.as_bytes()).unwrap().unwrap();
+
+        assert_eq!(actual.metadata, "dependencies = [\"iniconfig\"]\n");
+        assert_eq!(actual.postlude, "\nimport iniconfig\n");
     }
 
     #[test]
