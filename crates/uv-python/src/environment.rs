@@ -20,13 +20,7 @@ use crate::{
 
 /// A Python environment, consisting of a Python [`Interpreter`] and its associated paths.
 #[derive(Debug, Clone)]
-pub struct PythonEnvironment(Arc<PythonEnvironmentShared>);
-
-#[derive(Debug, Clone)]
-struct PythonEnvironmentShared {
-    root: PathBuf,
-    interpreter: Interpreter,
-}
+pub struct PythonEnvironment(Arc<Interpreter>);
 
 /// The result of failed environment discovery.
 ///
@@ -217,10 +211,7 @@ impl PythonEnvironment {
 
         let interpreter = Interpreter::query(executable, cache)?;
 
-        Ok(Self(Arc::new(PythonEnvironmentShared {
-            root: interpreter.sys_prefix().to_path_buf(),
-            interpreter,
-        })))
+        Ok(Self::from_interpreter(interpreter))
     }
 
     /// Create a [`PythonEnvironment`] from an existing [`PythonInstallation`].
@@ -230,53 +221,44 @@ impl PythonEnvironment {
 
     /// Create a [`PythonEnvironment`] from an existing [`Interpreter`].
     pub fn from_interpreter(interpreter: Interpreter) -> Self {
-        Self(Arc::new(PythonEnvironmentShared {
-            root: interpreter.sys_prefix().to_path_buf(),
-            interpreter,
-        }))
+        Self(Arc::new(interpreter))
     }
 
     /// Create a [`PythonEnvironment`] from an existing [`Interpreter`] and `--target` directory.
     pub fn with_target(self, target: Target) -> std::io::Result<Self> {
-        let inner = Arc::unwrap_or_clone(self.0);
-        Ok(Self(Arc::new(PythonEnvironmentShared {
-            interpreter: inner.interpreter.with_target(target)?,
-            ..inner
-        })))
+        let interpreter = Arc::unwrap_or_clone(self.0).with_target(target)?;
+        Ok(Self::from_interpreter(interpreter))
     }
 
     /// Create a [`PythonEnvironment`] from an existing [`Interpreter`] and `--prefix` directory.
     pub fn with_prefix(self, prefix: Prefix) -> std::io::Result<Self> {
-        let inner = Arc::unwrap_or_clone(self.0);
-        Ok(Self(Arc::new(PythonEnvironmentShared {
-            interpreter: inner.interpreter.with_prefix(prefix)?,
-            ..inner
-        })))
+        let interpreter = Arc::unwrap_or_clone(self.0).with_prefix(prefix)?;
+        Ok(Self::from_interpreter(interpreter))
     }
 
     /// Returns the root (i.e., `prefix`) of the Python interpreter.
     pub fn root(&self) -> &Path {
-        &self.0.root
+        self.0.sys_prefix()
     }
 
     /// Return the [`Interpreter`] for this virtual environment.
     ///
     /// See also [`PythonEnvironment::into_interpreter`].
     pub fn interpreter(&self) -> &Interpreter {
-        &self.0.interpreter
+        &self.0
     }
 
     /// Return the [`PyVenvConfiguration`] for this environment, as extracted from the
     /// `pyvenv.cfg` file.
     pub fn cfg(&self) -> Result<PyVenvConfiguration, Error> {
-        Ok(PyVenvConfiguration::parse(self.0.root.join("pyvenv.cfg"))?)
+        Ok(PyVenvConfiguration::parse(self.root().join("pyvenv.cfg"))?)
     }
 
     /// Set a key-value pair in the `pyvenv.cfg` file.
     pub fn set_pyvenv_cfg(&self, key: &str, value: &str) -> Result<(), Error> {
-        let content = fs_err::read_to_string(self.0.root.join("pyvenv.cfg"))?;
+        let content = fs_err::read_to_string(self.root().join("pyvenv.cfg"))?;
         fs_err::write(
-            self.0.root.join("pyvenv.cfg"),
+            self.root().join("pyvenv.cfg"),
             PyVenvConfiguration::set(&content, key, value),
         )?;
         Ok(())
@@ -289,7 +271,7 @@ impl PythonEnvironment {
 
     /// Returns the location of the Python executable.
     pub fn python_executable(&self) -> &Path {
-        self.0.interpreter.sys_executable()
+        self.0.sys_executable()
     }
 
     /// Returns an iterator over the `site-packages` directories inside the environment.
@@ -300,24 +282,24 @@ impl PythonEnvironment {
     /// Some distributions also create symbolic links from `purelib` to `platlib`; in such cases, we
     /// still deduplicate the entries, returning a single path.
     pub fn site_packages(&self) -> impl Iterator<Item = Cow<'_, Path>> {
-        self.0.interpreter.site_packages()
+        self.0.site_packages()
     }
 
     /// Returns the path to the `bin` directory inside this environment.
     pub fn scripts(&self) -> &Path {
-        self.0.interpreter.scripts()
+        self.0.scripts()
     }
 
     /// Grab a file lock for the environment to prevent concurrent writes across processes.
     pub async fn lock(&self) -> Result<LockedFile, LockedFileError> {
-        self.0.interpreter.lock().await
+        self.0.lock().await
     }
 
     /// Return the [`Interpreter`] for this environment.
     ///
     /// See also [`PythonEnvironment::interpreter`].
     pub fn into_interpreter(self) -> Interpreter {
-        Arc::unwrap_or_clone(self.0).interpreter
+        Arc::unwrap_or_clone(self.0)
     }
 
     /// Returns `true` if the [`PythonEnvironment`] uses the same underlying [`Interpreter`].
