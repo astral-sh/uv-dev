@@ -694,7 +694,7 @@ impl PythonInstallationKey {
         &self.variant
     }
 
-    pub(crate) fn build_name(&self) -> Option<&PythonBuildName> {
+    pub fn build_name(&self) -> Option<&PythonBuildName> {
         self.build_name.as_ref()
     }
 
