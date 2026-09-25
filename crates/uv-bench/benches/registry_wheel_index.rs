@@ -114,12 +114,15 @@ impl RegistryCache {
             .enable_all()
             .build()
             .expect("Tokio runtime");
-        for version in 0..versions {
-            let version = format!("{version}.0");
-            let revision_id = format!("revision-{version}");
+        for version_index in 0..versions {
+            let version = format!("{version_index}.0");
+            let revision_id = format!("{version_index:016x}");
             let version_shard = package_shard.shard(&version);
             fs_err::create_dir_all(version_shard.as_ref()).expect("version shard");
-            let revision = (CacheInfo::default(), (&revision_id, Vec::<String>::new()));
+            let revision = (
+                CacheInfo::default(),
+                (&revision_id, Vec::<String>::new(), Option::<u64>::None),
+            );
             fs_err::write(
                 version_shard.entry("revision.rev"),
                 rmp_serde::to_vec(&revision).expect("revision bytes"),
