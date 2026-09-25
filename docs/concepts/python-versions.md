@@ -435,8 +435,8 @@ particular revision exactly, including an older revision retained in the catalog
 $ UV_PYTHON_BUILD_REVISION=20260825 uv python install 3.13+custom
 ```
 
-`UV_PYTHON_BUILD_REVISION` applies to requests with an explicit build name. For CPython requests
-without a build name, use
+`UV_PYTHON_BUILD_REVISION` applies to requests with an explicit build name and to reinstalls of
+existing named builds. For unnamed CPython builds, use
 [`UV_PYTHON_CPYTHON_BUILD`](../reference/environment.md#uv_python_cpython_build) to select a build
 revision.
 
