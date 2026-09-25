@@ -286,6 +286,14 @@ impl Interpreter {
         self.sys_prefix != self.sys_base_prefix
     }
 
+    /// Returns `true` for a non-virtual environment that is not redirected by `--target` or
+    /// `--prefix`.
+    ///
+    /// This includes uv-managed base interpreters, not just operating-system installations.
+    pub fn is_system(&self) -> bool {
+        !self.is_virtualenv() && !self.is_target() && !self.is_prefix()
+    }
+
     /// Returns `true` if the environment is a `--target` environment.
     fn is_target(&self) -> bool {
         self.target.is_some()
@@ -1371,7 +1379,7 @@ mod tests {
     use uv_cache_info::Timestamp;
     use uv_pep440::Version;
 
-    use crate::Interpreter;
+    use crate::{Interpreter, Prefix, Target};
 
     fn mocked_interpreter_response() -> &'static str {
         indoc! {r##"
@@ -1432,6 +1440,49 @@ mod tests {
             "debug_enabled": false
         }
     "##}
+    }
+
+    #[tokio::test]
+    async fn system_environment_classification() -> Result<()> {
+        let mock_dir = tempdir()?;
+        let mocked_interpreter = mock_dir.path().join("python");
+        let response_file = mocked_interpreter.with_extension("json");
+        let mut response = serde_json::from_str::<Value>(mocked_interpreter_response())?;
+        response["sys_executable"] = serde_json::to_value(&mocked_interpreter)?;
+        fs::write(&response_file, serde_json::to_vec(&response)?)?;
+        fs::write(
+            &mocked_interpreter,
+            "#!/bin/sh\nexec /bin/cat \"$0.json\"\n",
+        )?;
+        fs::set_permissions(
+            &mocked_interpreter,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+        let cache = Cache::temp()?.init().await?;
+        let interpreter = Interpreter::query(&mocked_interpreter, &cache)?;
+
+        for virtualenv in [false, true] {
+            for target in [false, true] {
+                for prefix in [false, true] {
+                    let environment = Interpreter {
+                        sys_prefix: if virtualenv {
+                            mock_dir.path().join("venv")
+                        } else {
+                            interpreter.sys_base_prefix.clone()
+                        },
+                        target: target.then(|| Target::from(mock_dir.path().join("target"))),
+                        prefix: prefix.then(|| Prefix::from(mock_dir.path().join("prefix"))),
+                        ..interpreter.clone()
+                    };
+                    assert_eq!(
+                        environment.is_system(),
+                        !virtualenv && !target && !prefix,
+                        "virtualenv={virtualenv}, target={target}, prefix={prefix}"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     #[tokio::test]
