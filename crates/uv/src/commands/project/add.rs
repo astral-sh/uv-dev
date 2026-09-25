@@ -61,7 +61,7 @@ use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     LinkErrorReporting, PlatformState, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectError,
     ProjectInterpreter, ScriptInterpreter, UniversalState, WorkspacePython,
-    init_script_python_requirement,
+    init_script_python_requirement, project_python_roots,
 };
 use crate::commands::reporters::{PythonDownloadReporter, ResolverReporter};
 use crate::commands::{ExitStatus, ScriptPath, UvError, project};
@@ -305,15 +305,18 @@ pub(crate) async fn add(
 
         // Enable the default groups of the project
         defaulted_groups = groups.with_defaults(project.default_groups()?);
+        let python_roots =
+            project_python_roots(project.workspace(), project.project_name(), false, &[]);
 
         if frozen.is_some() || no_sync {
             // Discover the interpreter.
-            let workspace_python = WorkspacePython::from_request(
+            let workspace_python = WorkspacePython::from_request_for_roots(
                 python.as_deref().map(PythonRequest::parse),
                 Some(project.workspace()),
                 &defaulted_groups,
                 project_dir,
                 config_discovery,
+                python_roots.as_deref(),
             )
             .await?;
             let interpreter = ProjectInterpreter::discover(
@@ -338,6 +341,7 @@ pub(crate) async fn add(
             // Discover or create the virtual environment.
             let environment = ProjectEnvironment::get_or_init(
                 project.workspace(),
+                python_roots.as_deref(),
                 &defaulted_groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
