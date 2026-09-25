@@ -68,13 +68,15 @@ pub(crate) async fn cache_clean(
             .with_context(|| format!("Failed to clear cache at: {}", root.user_display()))?
     } else {
         let reporter = CleaningPackageReporter::new(printer, Some(packages.len()));
-        let mut summary = cache.removal();
-
-        for package in packages {
-            let removed = cache.remove(package)?;
-            summary += removed;
+        let mut summary = if let [package] = packages {
+            let summary = cache.remove(package)?;
             reporter.on_clean(package.as_str(), &summary);
-        }
+            summary
+        } else {
+            cache.remove_packages(packages, |package, summary| {
+                reporter.on_clean(package.as_str(), summary);
+            })?
+        };
         summary += cache.prune_archive_files()?;
         reporter.on_complete();
 
