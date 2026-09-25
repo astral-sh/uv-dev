@@ -3818,6 +3818,7 @@ fn preview_features() {
     +            MinimumLibcVersion,
     +            BuildDependencyCheck,
     +            BuildLazyImports,
+    +            Jsonl,
     +        ],
          },
          python_preference: Managed,
