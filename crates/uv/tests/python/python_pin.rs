@@ -395,6 +395,168 @@ fn python_pin_no_python() {
     ");
 }
 
+/// Build names can be pinned without first resolving an interpreter.
+#[cfg(unix)]
+#[test]
+fn python_pin_build_name() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.13+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Pinned `.python-version` to `3.13+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python 3.13+custom in managed installations or search path
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.13+custom");
+
+    // Preserve the build name when pinning a version range.
+    uv_snapshot!(context.filters(), context.python_pin().arg(">=3.12+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `3.13+custom` -> `>=3.12+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python >=3.12+custom in managed installations or search path
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @">=3.12+custom");
+
+    // Reading the pin preserves the request, too.
+    uv_snapshot!(context.filters(), context.python_pin(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    >=3.12+custom
+    ");
+
+    // Preserve a composed Python variant and build name on a bounded range.
+    uv_snapshot!(context.filters(), context.python_pin().arg(">=3.13,<3.14+freethreaded+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `>=3.12+custom` -> `>=3.13, <3.14+freethreaded+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python >=3.13, <3.14+freethreaded+custom in managed installations or search path
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @">=3.13, <3.14+freethreaded+custom");
+
+    uv_snapshot!(context.filters(), context.python_pin(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    >=3.13, <3.14+freethreaded+custom
+    ");
+
+    // Sorting the constraints can place a wildcard immediately before the build name.
+    uv_snapshot!(context.filters(), context.python_pin().arg("==3.13.*,>=3.12+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `>=3.13, <3.14+freethreaded+custom` -> `>=3.12, ==3.13.*+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python >=3.12, ==3.13.*+custom in managed installations or search path
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @">=3.12, ==3.13.*+custom");
+
+    // Discovery must interpret the saved pin as a version request, not an executable name.
+    uv_snapshot!(context.filters(), context.python_find().arg("--managed-python"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python >=3.12, ==3.13.*+custom in virtual environments or managed installations
+    ");
+
+    // Long-form variant components and build names can appear in any order.
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15+custom+debug+freethreaded"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `>=3.12, ==3.13.*+custom` -> `3.15+freethreaded+debug+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python 3.15+freethreaded+debug+custom in managed installations or search path
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+freethreaded+debug+custom");
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15+debug+custom+gil"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `3.15+freethreaded+debug+custom` -> `3.15+gil+debug+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python 3.15+gil+debug+custom in managed installations or search path
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+gil+debug+custom");
+}
+
+/// Compact Python variants compose with build names and are saved in canonical form.
+#[test]
+fn python_pin_build_name_compact_variant() {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15t+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Pinned `.python-version` to `3.15+freethreaded+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python 3.15+freethreaded+custom in [PYTHON SOURCES]
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+freethreaded+custom");
+
+    // Discovery must parse the compact spelling as a version, not an executable name.
+    uv_snapshot!(context.filters(), context.python_find().arg("--managed-python").arg("3.15t+custom"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.15+freethreaded+custom in virtual environments or managed installations
+    ");
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15td+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `3.15+freethreaded+custom` -> `3.15+freethreaded+debug+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python 3.15+freethreaded+debug+custom in [PYTHON SOURCES]
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+freethreaded+debug+custom");
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15d+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `3.15+freethreaded+debug+custom` -> `3.15+debug+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python 3.15+debug+custom in [PYTHON SOURCES]
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+debug+custom");
+
+    // Short variant components must be complete; `t+d` is not a spelling of `td`.
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15+t+d"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Requests for arbitrary names (e.g., `3.15+t+d`) are not supported in version files
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+debug+custom");
+}
+
 #[test]
 fn python_pin_compatible_with_requires_python() -> Result<()> {
     let context =

@@ -193,6 +193,71 @@ pub enum PythonVariant {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PythonBuildName(String);
 
+/// The Python variant and build name requested for a Python version.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct PythonBuildRequest {
+    variant: PythonVariant,
+    build_name: Option<PythonBuildName>,
+}
+
+impl PythonBuildRequest {
+    pub(crate) const fn new(variant: PythonVariant, build_name: Option<PythonBuildName>) -> Self {
+        Self {
+            variant,
+            build_name,
+        }
+    }
+
+    pub(crate) const fn build_name(&self) -> Option<&PythonBuildName> {
+        self.build_name.as_ref()
+    }
+
+    fn matches_interpreter(&self, interpreter: &Interpreter) -> bool {
+        self.variant.matches_interpreter(interpreter)
+    }
+
+    fn matches_build_name(&self, key: &PythonInstallationKey) -> bool {
+        self.build_name.as_ref() == key.build_name()
+    }
+
+    pub(crate) fn matches_download_key(&self, key: &PythonInstallationKey) -> bool {
+        self.variant == *key.variant() && self.matches_build_name(key)
+    }
+
+    fn is_freethreaded(&self) -> bool {
+        self.variant.is_freethreaded()
+    }
+
+    fn is_debug(&self) -> bool {
+        self.variant.is_debug()
+    }
+}
+
+impl From<PythonVariant> for PythonBuildRequest {
+    fn from(variant: PythonVariant) -> Self {
+        Self::new(variant, None)
+    }
+}
+
+impl FromStr for PythonBuildRequest {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (variant, build_name) = parse_python_variant_and_build_name(s)?;
+        Ok(Self::new(variant, build_name))
+    }
+}
+
+impl fmt::Display for PythonBuildRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(self.variant.display_suffix())?;
+        if let Some(build_name) = &self.build_name {
+            write!(f, "+{build_name}")?;
+        }
+        Ok(())
+    }
+}
+
 /// A Python discovery version request.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum VersionRequest {
@@ -201,12 +266,12 @@ pub enum VersionRequest {
     Default,
     /// Allow any Python version.
     Any,
-    Major(u8, PythonVariant),
-    MajorMinor(u8, u8, PythonVariant),
-    MajorMinorPatch(u8, u8, u8, PythonVariant),
-    MajorMinorPrerelease(u8, u8, Prerelease, PythonVariant),
-    MajorMinorPatchPrerelease(u8, u8, u8, Prerelease, PythonVariant),
-    Range(VersionSpecifiers, PythonVariant),
+    Major(u8, PythonBuildRequest),
+    MajorMinor(u8, u8, PythonBuildRequest),
+    MajorMinorPatch(u8, u8, u8, PythonBuildRequest),
+    MajorMinorPrerelease(u8, u8, Prerelease, PythonBuildRequest),
+    MajorMinorPatchPrerelease(u8, u8, u8, Prerelease, PythonBuildRequest),
+    Range(VersionSpecifiers, PythonBuildRequest),
 }
 
 /// The result of an Python installation search.
@@ -1367,9 +1432,9 @@ fn find_python_installations_with_strategy<'a>(
 /// Find all Python installations that satisfy the given request, querying interpreters
 /// concurrently.
 ///
-/// Unlike [`find_python_installations`], this eagerly collects matching installations instead of
-/// returning a lazy iterator. Interpreter query failures produce warnings and are skipped. Other
-/// non-critical discovery errors are dropped, while critical errors are propagated in discovery order.
+/// This eagerly collects matching installations instead of returning a lazy iterator. Interpreter
+/// query failures produce warnings and are skipped. Other non-critical discovery errors are dropped,
+/// while critical errors are propagated in discovery order.
 pub fn find_all_python_installations(
     request: &PythonRequest,
     environments: EnvironmentPreference,
@@ -2362,6 +2427,24 @@ impl PythonRequest {
         }
     }
 
+    /// Return the owned build request carried by this request, if any.
+    #[cfg(test)]
+    fn build_request(&self) -> Option<PythonBuildRequest> {
+        match self {
+            Self::Version(version) | Self::ImplementationVersion(_, version) => {
+                version.build_request()
+            }
+            Self::Key(request) => request.version().and_then(VersionRequest::build_request),
+            Self::Default
+            | Self::Any
+            | Self::Directory(_)
+            | Self::File(_)
+            | Self::ExecutableName(_)
+            | Self::Implementation(_) => None,
+        }
+        .map(Cow::into_owned)
+    }
+
     /// Convert an interpreter request into [`VersionSpecifiers`] representing the range of
     /// compatible versions.
     ///
@@ -2665,7 +2748,7 @@ impl EnvironmentPreference {
     }
 }
 
-#[derive(Debug, Clone, Default, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ExecutableName {
     implementation: Option<ImplementationName>,
     major: Option<u8>,
@@ -2675,7 +2758,7 @@ pub(crate) struct ExecutableName {
     variant: PythonVariant,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ExecutableNameComparator<'a> {
     name: ExecutableName,
     request: &'a VersionRequest,
@@ -2738,6 +2821,12 @@ impl Ord for ExecutableNameComparator<'_> {
             } else {
                 ordering
             };
+        }
+        if let Some(requested) = self.request.variant() {
+            let ordering = (self.name.variant == requested).cmp(&(other.name.variant == requested));
+            if ordering != std::cmp::Ordering::Equal {
+                return ordering;
+            }
         }
         let ordering = self.name.variant.cmp(&other.name.variant);
         if ordering != std::cmp::Ordering::Equal {
@@ -2837,14 +2926,36 @@ impl VersionRequest {
     ///
     /// If the specifiers consist of a single `==` constraint, the version is parsed as a
     /// concrete version request (e.g., `MajorMinorPatch`) rather than a range.
-    pub fn from_specifiers(specifiers: VersionSpecifiers, variant: PythonVariant) -> Self {
+    pub fn from_specifiers(
+        specifiers: VersionSpecifiers,
+        build_request: impl Into<PythonBuildRequest>,
+    ) -> Self {
+        let build_request = build_request.into();
         if let [specifier] = specifiers.iter().as_slice()
             && specifier.operator() == &uv_pep440::Operator::Equal
             && let Ok(request) = Self::from_str(&specifier.version().to_string())
         {
-            return request;
+            return request.with_build_request(build_request);
         }
-        Self::Range(specifiers, variant)
+        Self::Range(specifiers, build_request)
+    }
+
+    pub(crate) fn with_build_request(self, build_request: PythonBuildRequest) -> Self {
+        match self {
+            Self::Major(major, _) => Self::Major(major, build_request),
+            Self::MajorMinor(major, minor, _) => Self::MajorMinor(major, minor, build_request),
+            Self::MajorMinorPatch(major, minor, patch, _) => {
+                Self::MajorMinorPatch(major, minor, patch, build_request)
+            }
+            Self::MajorMinorPrerelease(major, minor, prerelease, _) => {
+                Self::MajorMinorPrerelease(major, minor, prerelease, build_request)
+            }
+            Self::MajorMinorPatchPrerelease(major, minor, patch, prerelease, _) => {
+                Self::MajorMinorPatchPrerelease(major, minor, patch, prerelease, build_request)
+            }
+            Self::Range(specifiers, _) => Self::Range(specifiers, build_request),
+            Self::Any | Self::Default => self,
+        }
     }
 
     /// Drop any patch or prerelease information from the version request.
@@ -2945,7 +3056,7 @@ impl VersionRequest {
             }
         }
 
-        // Include free-threaded variants
+        // Build names use the Python variant's ordinary executable names.
         if let Some(variant) = self.variant()
             && variant != PythonVariant::Default
         {
@@ -3095,7 +3206,13 @@ impl VersionRequest {
     /// source.
     pub(crate) fn matches_installation(&self, installation: &PythonInstallation) -> bool {
         let request = self.clone().into_request_for_source(installation.source);
-        request.matches_interpreter(&installation.interpreter)
+        request.matches_build_name(installation.key())
+            && request.matches_interpreter(&installation.interpreter)
+    }
+
+    fn matches_build_name(&self, key: &PythonInstallationKey) -> bool {
+        self.build_request()
+            .is_none_or(|build_request| build_request.matches_build_name(key))
     }
 
     /// Check if a interpreter matches the request.
@@ -3304,6 +3421,7 @@ impl VersionRequest {
     /// avoid querying interpreters if it's clear it cannot fulfill the request.
     pub(crate) fn matches_installation_key(&self, key: &PythonInstallationKey) -> bool {
         self.matches_major_minor_patch_prerelease(key.major, key.minor, key.patch, key.prerelease())
+            && self.matches_build_name(key)
     }
 
     /// Whether a patch version segment is present in the request.
@@ -3383,16 +3501,30 @@ impl VersionRequest {
     }
 
     /// Return the [`PythonVariant`] of the request, if any.
-    pub(crate) fn variant(&self) -> Option<PythonVariant> {
+    fn variant(&self) -> Option<PythonVariant> {
         match self {
             Self::Any => None,
             Self::Default => Some(PythonVariant::Default),
+            Self::Major(_, build_request)
+            | Self::MajorMinor(_, _, build_request)
+            | Self::MajorMinorPatch(_, _, _, build_request)
+            | Self::MajorMinorPrerelease(_, _, _, build_request)
+            | Self::MajorMinorPatchPrerelease(_, _, _, _, build_request)
+            | Self::Range(_, build_request) => Some(build_request.variant),
+        }
+    }
+
+    /// Return the [`PythonBuildRequest`] carried by the version request, if any.
+    pub(crate) fn build_request(&self) -> Option<Cow<'_, PythonBuildRequest>> {
+        match self {
+            Self::Any => None,
+            Self::Default => Some(Cow::Owned(PythonBuildRequest::default())),
             Self::Major(_, variant)
             | Self::MajorMinor(_, _, variant)
             | Self::MajorMinorPatch(_, _, _, variant)
             | Self::MajorMinorPrerelease(_, _, _, variant)
             | Self::MajorMinorPatchPrerelease(_, _, _, _, variant)
-            | Self::Range(_, variant) => Some(*variant),
+            | Self::Range(_, variant) => Some(Cow::Borrowed(variant)),
         }
     }
 
@@ -3465,16 +3597,33 @@ impl FromStr for VersionRequest {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        /// Extract the variant from the end of a version request string, returning the prefix and
-        /// the variant type.
-        fn parse_variant(s: &str) -> Result<(&str, PythonVariant), Error> {
+        /// Extract a Python variant and build name from a version request string.
+        fn parse_build_request(s: &str) -> Result<(&str, PythonBuildRequest), Error> {
             // This cannot be a valid version, just error immediately
             if s.chars().all(char::is_alphabetic) {
                 return Err(Error::InvalidVersionRequest(s.to_string()));
             }
 
+            // Split an explicit Python variant or build name before looking for the end of the
+            // numeric version. Build names may themselves end in digits, e.g., `avx2`.
+            if let Some(start) = s.find('+') {
+                let prefix = &s[..start];
+                let version = prefix.trim_end_matches(['t', 'd']);
+                let compact_variant = &prefix[version.len()..];
+
+                // Validate compact variants together with the explicit components so that
+                // `3.13td+custom` is accepted, but split or conflicting variants are rejected.
+                let build_request = if compact_variant.is_empty() {
+                    PythonBuildRequest::from_str(&s[start + 1..])
+                } else {
+                    PythonBuildRequest::from_str(&format!("{compact_variant}{}", &s[start..]))
+                }
+                .map_err(|()| Error::InvalidVersionRequest(s.to_string()))?;
+                return Ok((version, build_request));
+            }
+
             let Some(mut start) = s.rfind(|c: char| c.is_ascii_digit()) else {
-                return Ok((s, PythonVariant::Default));
+                return Ok((s, PythonBuildRequest::default()));
             };
 
             // Advance past the first digit
@@ -3482,28 +3631,27 @@ impl FromStr for VersionRequest {
 
             // Ensure we're not out of bounds
             if start + 1 > s.len() {
-                return Ok((s, PythonVariant::Default));
+                return Ok((s, PythonBuildRequest::default()));
             }
 
             let variant = &s[start..];
             let prefix = &s[..start];
 
-            // Strip a leading `+` if present
-            let variant = variant.strip_prefix('+').unwrap_or(variant);
-
             // TODO(zanieb): Special-case error for use of `dt` instead of `td`
 
             // If there's not a valid variant, fallback to failure in [`Version::from_str`]
-            let Ok(variant) = PythonVariant::from_str(variant) else {
-                return Ok((s, PythonVariant::Default));
+            let variant = if let Ok(variant) = PythonVariant::from_str(variant) {
+                variant.into()
+            } else {
+                return Ok((s, PythonBuildRequest::default()));
             };
 
             Ok((prefix, variant))
         }
 
-        let (s, variant) = parse_variant(s)?;
+        let (s, build_request) = parse_build_request(s)?;
         let Ok(version) = Version::from_str(s) else {
-            return parse_version_specifiers_request(s, variant);
+            return parse_version_specifiers_request(s, build_request);
         };
 
         // Split the release component if it uses the wheel tag format (e.g., `38`)
@@ -3514,8 +3662,8 @@ impl FromStr for VersionRequest {
             return Err(Error::InvalidVersionRequest(s.to_string()));
         }
 
-        // We don't allow local version suffixes unless they're variants, in which case they'd
-        // already be stripped.
+        // Python variants and build names have already been removed, so any remaining local
+        // version is unsupported.
         if !version.local().is_empty() {
             return Err(Error::InvalidVersionRequest(s.to_string()));
         }
@@ -3534,30 +3682,40 @@ impl FromStr for VersionRequest {
                 if prerelease.is_some() {
                     return Err(Error::InvalidVersionRequest(s.to_string()));
                 }
-                Ok(Self::Major(*major, variant))
+                Ok(Self::Major(*major, build_request))
             }
             // e.g. `3.12` or `312` or `3.13rc1`
             [major, minor] => {
                 if let Some(prerelease) = prerelease {
                     return Ok(Self::MajorMinorPrerelease(
-                        *major, *minor, prerelease, variant,
+                        *major,
+                        *minor,
+                        prerelease,
+                        build_request,
                     ));
                 }
-                Ok(Self::MajorMinor(*major, *minor, variant))
+                Ok(Self::MajorMinor(*major, *minor, build_request))
             }
             // e.g. `3.12.1`, `3.13.0rc1`, or `3.14.5rc1`
             [major, minor, patch] => {
                 if let Some(prerelease) = prerelease {
                     if *patch == 0 {
                         return Ok(Self::MajorMinorPrerelease(
-                            *major, *minor, prerelease, variant,
+                            *major,
+                            *minor,
+                            prerelease,
+                            build_request,
                         ));
                     }
                     return Ok(Self::MajorMinorPatchPrerelease(
-                        *major, *minor, *patch, prerelease, variant,
+                        *major,
+                        *minor,
+                        *patch,
+                        prerelease,
+                        build_request,
                     ));
                 }
-                Ok(Self::MajorMinorPatch(*major, *minor, *patch, variant))
+                Ok(Self::MajorMinorPatch(*major, *minor, *patch, build_request))
             }
             _ => Err(Error::InvalidVersionRequest(s.to_string())),
         }
@@ -3656,7 +3814,7 @@ impl fmt::Display for PythonBuildName {
 
 fn parse_version_specifiers_request(
     s: &str,
-    variant: PythonVariant,
+    build_request: PythonBuildRequest,
 ) -> Result<VersionRequest, Error> {
     let Ok(specifiers) = VersionSpecifiers::from_str(s) else {
         return Err(Error::InvalidVersionRequest(s.to_string()));
@@ -3664,7 +3822,7 @@ fn parse_version_specifiers_request(
     if specifiers.is_empty() {
         return Err(Error::InvalidVersionRequest(s.to_string()));
     }
-    Ok(VersionRequest::from_specifiers(specifiers, variant))
+    Ok(VersionRequest::from_specifiers(specifiers, build_request))
 }
 
 impl From<&PythonVersion> for VersionRequest {
@@ -3679,24 +3837,22 @@ impl fmt::Display for VersionRequest {
         match self {
             Self::Any => f.write_str("any"),
             Self::Default => f.write_str("default"),
-            Self::Major(major, variant) => write!(f, "{major}{}", variant.display_suffix()),
-            Self::MajorMinor(major, minor, variant) => {
-                write!(f, "{major}.{minor}{}", variant.display_suffix())
+            Self::Major(major, build_request) => write!(f, "{major}{build_request}"),
+            Self::MajorMinor(major, minor, build_request) => {
+                write!(f, "{major}.{minor}{build_request}")
             }
-            Self::MajorMinorPatch(major, minor, patch, variant) => {
-                write!(f, "{major}.{minor}.{patch}{}", variant.display_suffix())
+            Self::MajorMinorPatch(major, minor, patch, build_request) => {
+                write!(f, "{major}.{minor}.{patch}{build_request}")
             }
-            Self::MajorMinorPrerelease(major, minor, prerelease, variant) => {
-                write!(f, "{major}.{minor}{prerelease}{}", variant.display_suffix())
+            Self::MajorMinorPrerelease(major, minor, prerelease, build_request) => {
+                write!(f, "{major}.{minor}{prerelease}{build_request}")
             }
-            Self::MajorMinorPatchPrerelease(major, minor, patch, prerelease, variant) => {
-                write!(
-                    f,
-                    "{major}.{minor}.{patch}{prerelease}{}",
-                    variant.display_suffix()
-                )
+            Self::MajorMinorPatchPrerelease(major, minor, patch, prerelease, build_request) => {
+                write!(f, "{major}.{minor}.{patch}{prerelease}{build_request}")
             }
-            Self::Range(specifiers, _) => write!(f, "{specifiers}"),
+            Self::Range(specifiers, build_request) => {
+                write!(f, "{specifiers}{build_request}")
+            }
         }
     }
 }
@@ -3918,6 +4074,7 @@ mod tests {
     use uv_pep440::{Prerelease, PrereleaseKind, Version, VersionSpecifiers};
 
     use crate::{
+        PythonInstallationKey,
         discovery::{PythonRequest, VersionRequest},
         downloads::{ArchRequest, PythonDownloadRequest},
         implementation::ImplementationName,
@@ -3926,8 +4083,8 @@ mod tests {
 
     use super::{
         DiscoveryPreferences, EnvironmentPreference, Error, InterpreterError, PythonBuildName,
-        PythonExecutableGroup, PythonPreference, PythonSource, PythonVariant, QueryStrategy,
-        python_installations_from_executables, sort_installations_by_key,
+        PythonBuildRequest, PythonExecutableGroup, PythonPreference, PythonSource, PythonVariant,
+        QueryStrategy, python_installations_from_executables, sort_installations_by_key,
     };
 
     // Testing this at a higher level would necessitate relying on filesystem ordering.
@@ -4049,7 +4206,7 @@ mod tests {
                     3,
                     13,
                     2,
-                    PythonVariant::Default
+                    PythonVariant::Default.into()
                 )),
                 implementation: Some(ImplementationName::CPython),
                 arch: None,
@@ -4066,7 +4223,7 @@ mod tests {
                     3,
                     13,
                     2,
-                    PythonVariant::Default
+                    PythonVariant::Default.into()
                 )),
                 implementation: Some(ImplementationName::CPython),
                 arch: Some(ArchRequest::Explicit(Arch::new(
@@ -4086,7 +4243,7 @@ mod tests {
                     3,
                     13,
                     2,
-                    PythonVariant::Default
+                    PythonVariant::Default.into()
                 )),
                 implementation: None,
                 arch: None,
@@ -4103,7 +4260,7 @@ mod tests {
                     3,
                     13,
                     2,
-                    PythonVariant::Default
+                    PythonVariant::Default.into()
                 )),
                 implementation: None,
                 arch: Some(ArchRequest::Explicit(Arch::new(
@@ -4414,35 +4571,185 @@ mod tests {
     }
 
     #[test]
+    fn python_build_request_matches_build_name() {
+        for (request, available, expected) in [
+            ("custom", "custom", true),
+            ("pgo", "pgo", true),
+            ("custom", "custompython", false),
+            ("other", "custom", false),
+            ("custom", "", false),
+            ("", "custom", false),
+            ("freethreaded+custom", "freethreaded+custom", true),
+            ("custom+freethreaded", "freethreaded+custom", true),
+            ("freethreaded+custom", "custom", false),
+            ("custom", "freethreaded+custom", false),
+        ] {
+            let key = if available.is_empty() {
+                "cpython-3.13.7-linux-x86_64-gnu".to_string()
+            } else {
+                format!("cpython-3.13.7+{available}-linux-x86_64-gnu")
+            };
+            let key = PythonInstallationKey::from_str(&key).expect("Valid installation key");
+            let request = PythonBuildRequest::from_str(request).expect("Valid build request");
+            assert_eq!(
+                request.matches_download_key(&key),
+                expected,
+                "{request:?}, {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn python_build_request_from_str() {
+        assert_eq!(
+            PythonBuildRequest::from_str("freethreaded+custom"),
+            Ok(PythonBuildRequest::new(
+                PythonVariant::Freethreaded,
+                Some(PythonBuildName::from_str("custom").unwrap())
+            ))
+        );
+        assert_eq!(
+            PythonBuildRequest::from_str("freethreaded+debug+custom"),
+            Ok(PythonBuildRequest::new(
+                PythonVariant::FreethreadedDebug,
+                Some(PythonBuildName::from_str("custom").unwrap())
+            ))
+        );
+        assert_eq!(
+            PythonBuildRequest::from_str("custom"),
+            Ok(PythonBuildRequest::new(
+                PythonVariant::Default,
+                Some(PythonBuildName::from_str("custom").unwrap())
+            ))
+        );
+        assert_eq!(
+            PythonBuildRequest::from_str("CUSTOM").map(|request| request.to_string()),
+            Ok("+custom".to_string())
+        );
+        assert!(PythonBuildRequest::from_str("gil+freethreaded").is_err());
+        assert!(PythonBuildRequest::from_str("custom+custom").is_err());
+    }
+
+    #[test]
+    fn version_request_build_variant_spellings() -> Result<(), Error> {
+        for (request, canonical) in [
+            ("3.15td", "3.15+freethreaded+debug"),
+            ("3.15+td", "3.15+freethreaded+debug"),
+            ("3.15+freethreaded+debug", "3.15+freethreaded+debug"),
+            ("3.15+debug+freethreaded", "3.15+freethreaded+debug"),
+            ("3.15+debug+gil", "3.15+gil+debug"),
+            ("3.15t+custom", "3.15+freethreaded+custom"),
+            ("3.15d+custom", "3.15+debug+custom"),
+            ("3.15td+custom", "3.15+freethreaded+debug+custom"),
+            ("315td+custom", "3.15+freethreaded+debug+custom"),
+            ("3.15.1t+custom", "3.15.1+freethreaded+custom"),
+            ("3.15rc1td+custom", "3.15rc1+freethreaded+debug+custom"),
+            (
+                "3.15td+custom20260825",
+                "3.15+freethreaded+debug+custom20260825",
+            ),
+            (">=3.15td+custom", ">=3.15+freethreaded+debug+custom"),
+            (">=3.13,<3.15t+custom", ">=3.13, <3.15+freethreaded+custom"),
+            ("3.15+td+custom", "3.15+freethreaded+debug+custom"),
+            ("3.15+custom+td", "3.15+freethreaded+debug+custom"),
+            (
+                "3.15+freethreaded+debug+custom",
+                "3.15+freethreaded+debug+custom",
+            ),
+            (
+                "3.15+freethreaded+custom+debug",
+                "3.15+freethreaded+debug+custom",
+            ),
+            (
+                "3.15+custom+freethreaded+debug",
+                "3.15+freethreaded+debug+custom",
+            ),
+            (
+                "3.15+debug+freethreaded+custom",
+                "3.15+freethreaded+debug+custom",
+            ),
+            (
+                "3.15+debug+custom+freethreaded",
+                "3.15+freethreaded+debug+custom",
+            ),
+            (
+                "3.15+custom+debug+freethreaded",
+                "3.15+freethreaded+debug+custom",
+            ),
+            ("3.15+debug+gil+custom", "3.15+gil+debug+custom"),
+            ("3.15+debug+custom+gil", "3.15+gil+debug+custom"),
+            ("3.15+custom+debug+gil", "3.15+gil+debug+custom"),
+            (">=3.15+td+custom", ">=3.15+freethreaded+debug+custom"),
+            (
+                ">=3.15+custom+debug+freethreaded",
+                ">=3.15+freethreaded+debug+custom",
+            ),
+        ] {
+            assert_eq!(
+                VersionRequest::from_str(request)?.to_string(),
+                canonical,
+                "request: {request}"
+            );
+        }
+        for request in [
+            "3.15+t+d",
+            "3.15+d+t",
+            "3.15+t+debug",
+            "3.15+debug+t",
+            "3.15+freethreaded+d",
+            "3.15+d+freethreaded",
+            "3.15+t+d+custom",
+            "3.15+custom+t+d",
+            "3.15+t+custom+d",
+            ">=3.15+t+d+custom",
+            "3.15t+d+custom",
+            "3.15t+debug+custom",
+            "3.15d+freethreaded+custom",
+            "3.15td+t+custom",
+            "3.15t+gil+custom",
+            "3.15dt+custom",
+            "3.15tt+custom",
+            "3.15td+",
+        ] {
+            assert_matches!(
+                VersionRequest::from_str(request),
+                Err(Error::InvalidVersionRequest(_)),
+                "request: {request}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn version_request_from_str() {
         assert_eq!(
             VersionRequest::from_str("3").unwrap(),
-            VersionRequest::Major(3, PythonVariant::Default)
+            VersionRequest::Major(3, PythonVariant::Default.into())
         );
         assert_eq!(
             VersionRequest::from_str("3.12").unwrap(),
-            VersionRequest::MajorMinor(3, 12, PythonVariant::Default)
+            VersionRequest::MajorMinor(3, 12, PythonVariant::Default.into())
         );
         assert_eq!(
             VersionRequest::from_str("3.12.1").unwrap(),
-            VersionRequest::MajorMinorPatch(3, 12, 1, PythonVariant::Default)
+            VersionRequest::MajorMinorPatch(3, 12, 1, PythonVariant::Default.into())
         );
         assert!(VersionRequest::from_str("1.foo.1").is_err());
         assert_eq!(
             VersionRequest::from_str("3").unwrap(),
-            VersionRequest::Major(3, PythonVariant::Default)
+            VersionRequest::Major(3, PythonVariant::Default.into())
         );
         assert_eq!(
             VersionRequest::from_str("38").unwrap(),
-            VersionRequest::MajorMinor(3, 8, PythonVariant::Default)
+            VersionRequest::MajorMinor(3, 8, PythonVariant::Default.into())
         );
         assert_eq!(
             VersionRequest::from_str("312").unwrap(),
-            VersionRequest::MajorMinor(3, 12, PythonVariant::Default)
+            VersionRequest::MajorMinor(3, 12, PythonVariant::Default.into())
         );
         assert_eq!(
             VersionRequest::from_str("3100").unwrap(),
-            VersionRequest::MajorMinor(3, 100, PythonVariant::Default)
+            VersionRequest::MajorMinor(3, 100, PythonVariant::Default.into())
         );
         assert_eq!(
             VersionRequest::from_str("3.13a1").unwrap(),
@@ -4453,7 +4760,7 @@ mod tests {
                     kind: PrereleaseKind::Alpha,
                     number: 1
                 },
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
         );
         assert_eq!(
@@ -4465,7 +4772,7 @@ mod tests {
                     kind: PrereleaseKind::Beta,
                     number: 1
                 },
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
         );
         assert_eq!(
@@ -4477,7 +4784,7 @@ mod tests {
                     kind: PrereleaseKind::Beta,
                     number: 2
                 },
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
         );
         assert_eq!(
@@ -4489,7 +4796,7 @@ mod tests {
                     kind: PrereleaseKind::Rc,
                     number: 3
                 },
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
         );
         assert_matches!(
@@ -4507,7 +4814,7 @@ mod tests {
                     kind: PrereleaseKind::Rc,
                     number: 1
                 },
-                PythonVariant::Default
+                PythonVariant::Default.into()
             ),
             "Pre-release version requests with a non-zero patch are allowed (e.g., `3.14.5rc1`)"
         );
@@ -4521,7 +4828,7 @@ mod tests {
                     kind: PrereleaseKind::Rc,
                     number: 1
                 },
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
         );
         assert_matches!(
@@ -4530,9 +4837,9 @@ mod tests {
             "Development version segments are not allowed"
         );
         assert_matches!(
-            VersionRequest::from_str("3.12+local"),
+            VersionRequest::from_str("3.12+custom-variant"),
             Err(Error::InvalidVersionRequest(_)),
-            "Local version segments are not allowed"
+            "Build names may not contain hyphens"
         );
         assert_matches!(
             VersionRequest::from_str("3.12.post0"),
@@ -4548,35 +4855,63 @@ mod tests {
         );
         assert_eq!(
             VersionRequest::from_str("3t").unwrap(),
-            VersionRequest::Major(3, PythonVariant::Freethreaded)
+            VersionRequest::Major(3, PythonVariant::Freethreaded.into())
         );
         assert_eq!(
             VersionRequest::from_str("313t").unwrap(),
-            VersionRequest::MajorMinor(3, 13, PythonVariant::Freethreaded)
+            VersionRequest::MajorMinor(3, 13, PythonVariant::Freethreaded.into())
         );
         assert_eq!(
             VersionRequest::from_str("3.13t").unwrap(),
-            VersionRequest::MajorMinor(3, 13, PythonVariant::Freethreaded)
+            VersionRequest::MajorMinor(3, 13, PythonVariant::Freethreaded.into())
+        );
+        assert_eq!(
+            VersionRequest::from_str("3.13+custom").unwrap(),
+            VersionRequest::MajorMinor(
+                3,
+                13,
+                PythonBuildRequest::new(
+                    PythonVariant::Default,
+                    Some(PythonBuildName::from_str("custom").unwrap())
+                )
+            )
+        );
+        assert_eq!(
+            VersionRequest::from_str("3.13+freethreaded+custom").unwrap(),
+            VersionRequest::MajorMinor(
+                3,
+                13,
+                PythonBuildRequest::new(
+                    PythonVariant::Freethreaded,
+                    Some(PythonBuildName::from_str("custom").unwrap())
+                )
+            )
+        );
+        assert_eq!(
+            VersionRequest::from_str("3.13+freethreaded+custom")
+                .unwrap()
+                .to_string(),
+            "3.13+freethreaded+custom"
         );
         assert_eq!(
             VersionRequest::from_str(">=3.13t").unwrap(),
             VersionRequest::Range(
                 VersionSpecifiers::from_str(">=3.13").unwrap(),
-                PythonVariant::Freethreaded
+                PythonVariant::Freethreaded.into()
             )
         );
         assert_eq!(
             VersionRequest::from_str(">=3.13").unwrap(),
             VersionRequest::Range(
                 VersionSpecifiers::from_str(">=3.13").unwrap(),
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
         );
         assert_eq!(
             VersionRequest::from_str(">=3.12,<3.14t").unwrap(),
             VersionRequest::Range(
                 VersionSpecifiers::from_str(">=3.12,<3.14").unwrap(),
-                PythonVariant::Freethreaded
+                PythonVariant::Freethreaded.into()
             )
         );
         assert_matches!(
@@ -4591,11 +4926,11 @@ mod tests {
         // `==` specifiers are parsed as concrete version requests via `from_specifiers`
         assert_eq!(
             VersionRequest::from_str("==3.12").unwrap(),
-            VersionRequest::MajorMinor(3, 12, PythonVariant::Default)
+            VersionRequest::MajorMinor(3, 12, PythonVariant::Default.into())
         );
         assert_eq!(
             VersionRequest::from_str("==3.12.1").unwrap(),
-            VersionRequest::MajorMinorPatch(3, 12, 1, PythonVariant::Default)
+            VersionRequest::MajorMinorPatch(3, 12, 1, PythonVariant::Default.into())
         );
     }
 
@@ -4607,14 +4942,14 @@ mod tests {
                 VersionSpecifiers::from_str("==3.12").unwrap(),
                 PythonVariant::Default
             ),
-            VersionRequest::MajorMinor(3, 12, PythonVariant::Default)
+            VersionRequest::MajorMinor(3, 12, PythonVariant::Default.into())
         );
         assert_eq!(
             VersionRequest::from_specifiers(
                 VersionSpecifiers::from_str("==3.12.1").unwrap(),
                 PythonVariant::Default
             ),
-            VersionRequest::MajorMinorPatch(3, 12, 1, PythonVariant::Default)
+            VersionRequest::MajorMinorPatch(3, 12, 1, PythonVariant::Default.into())
         );
 
         // Wildcard `==` specifiers remain as ranges
@@ -4625,7 +4960,7 @@ mod tests {
             ),
             VersionRequest::Range(
                 VersionSpecifiers::from_str("==3.12.*").unwrap(),
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
         );
 
@@ -4637,7 +4972,7 @@ mod tests {
             ),
             VersionRequest::Range(
                 VersionSpecifiers::from_str(">=3.12").unwrap(),
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
         );
 
@@ -4649,7 +4984,7 @@ mod tests {
             ),
             VersionRequest::Range(
                 VersionSpecifiers::from_str(">=3.12,<3.14").unwrap(),
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
         );
     }
@@ -4700,7 +5035,9 @@ mod tests {
 
         case("4", &["python4", "python"]);
 
-        case("3.13", &["python3.13", "python3", "python"]);
+        for request in ["3.13", "3.13+custom", "3.13+pgo", "3.13+lto", "3.13+noopt"] {
+            case(request, &["python3.13", "python3", "python"]);
+        }
 
         case("pypy", &["pypy", "pypy3", "python", "python3"]);
 
@@ -4716,17 +5053,24 @@ mod tests {
             ],
         );
 
-        case(
+        for request in [
             "3.13t",
-            &[
-                "python3.13t",
-                "python3.13",
-                "python3t",
-                "python3",
-                "pythont",
-                "python",
-            ],
-        );
+            "3.13t+custom",
+            "3.13+freethreaded+custom",
+            "3.13+custom+freethreaded",
+        ] {
+            case(
+                request,
+                &[
+                    "python3.13t",
+                    "python3.13",
+                    "python3t",
+                    "python3",
+                    "pythont",
+                    "python",
+                ],
+            );
+        }
         case("3t", &["python3t", "python3", "pythont", "python"]);
 
         case(
@@ -4780,19 +5124,20 @@ mod tests {
 
         // `VersionRequest::Major`
         assert_eq!(
-            VersionRequest::Major(3, PythonVariant::Default).as_pep440_version(),
+            VersionRequest::Major(3, PythonVariant::Default.into()).as_pep440_version(),
             Some(Version::from_str("3").unwrap())
         );
 
         // `VersionRequest::MajorMinor`
         assert_eq!(
-            VersionRequest::MajorMinor(3, 12, PythonVariant::Default).as_pep440_version(),
+            VersionRequest::MajorMinor(3, 12, PythonVariant::Default.into()).as_pep440_version(),
             Some(Version::from_str("3.12").unwrap())
         );
 
         // `VersionRequest::MajorMinorPatch`
         assert_eq!(
-            VersionRequest::MajorMinorPatch(3, 12, 5, PythonVariant::Default).as_pep440_version(),
+            VersionRequest::MajorMinorPatch(3, 12, 5, PythonVariant::Default.into())
+                .as_pep440_version(),
             Some(Version::from_str("3.12.5").unwrap())
         );
 
@@ -4805,7 +5150,7 @@ mod tests {
                     kind: PrereleaseKind::Alpha,
                     number: 1
                 },
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
             .as_pep440_version(),
             Some(Version::from_str("3.14.0a1").unwrap())
@@ -4818,7 +5163,7 @@ mod tests {
                     kind: PrereleaseKind::Beta,
                     number: 2
                 },
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
             .as_pep440_version(),
             Some(Version::from_str("3.14.0b2").unwrap())
@@ -4831,7 +5176,7 @@ mod tests {
                     kind: PrereleaseKind::Rc,
                     number: 3
                 },
-                PythonVariant::Default
+                PythonVariant::Default.into()
             )
             .as_pep440_version(),
             Some(Version::from_str("3.13.0rc3").unwrap())
@@ -4839,11 +5184,12 @@ mod tests {
 
         // Variant is ignored
         assert_eq!(
-            VersionRequest::Major(3, PythonVariant::Freethreaded).as_pep440_version(),
+            VersionRequest::Major(3, PythonVariant::Freethreaded.into()).as_pep440_version(),
             Some(Version::from_str("3").unwrap())
         );
         assert_eq!(
-            VersionRequest::MajorMinor(3, 13, PythonVariant::Freethreaded).as_pep440_version(),
+            VersionRequest::MajorMinor(3, 13, PythonVariant::Freethreaded.into())
+                .as_pep440_version(),
             Some(Version::from_str("3.13").unwrap())
         );
     }
@@ -4856,8 +5202,12 @@ mod tests {
 
         // `PythonRequest::Version` delegates to `VersionRequest`
         assert_eq!(
-            PythonRequest::Version(VersionRequest::MajorMinor(3, 11, PythonVariant::Default))
-                .as_pep440_version(),
+            PythonRequest::Version(VersionRequest::MajorMinor(
+                3,
+                11,
+                PythonVariant::Default.into()
+            ))
+            .as_pep440_version(),
             Some(Version::from_str("3.11").unwrap())
         );
 
@@ -4865,7 +5215,7 @@ mod tests {
         assert_eq!(
             PythonRequest::ImplementationVersion(
                 ImplementationName::CPython,
-                VersionRequest::MajorMinorPatch(3, 12, 1, PythonVariant::Default),
+                VersionRequest::MajorMinorPatch(3, 12, 1, PythonVariant::Default.into()),
             )
             .as_pep440_version(),
             Some(Version::from_str("3.12.1").unwrap())
@@ -4894,6 +5244,27 @@ mod tests {
             PythonRequest::Version(VersionRequest::from_str(">=3.10").unwrap()).as_pep440_version(),
             None
         );
+    }
+
+    #[test]
+    fn python_request_build_request() {
+        for (request, build) in [
+            ("3+custom", "custom"),
+            ("3+openssl3", "openssl3"),
+            ("cpython@3.12+avx2", "avx2"),
+            (
+                "cpython-3.13.2+custom20260825-linux-x86_64-gnu",
+                "custom20260825",
+            ),
+        ] {
+            assert_eq!(
+                PythonRequest::parse(request)
+                    .build_request()
+                    .and_then(|build_request| build_request.build_name().cloned()),
+                Some(PythonBuildName::from_str(build).unwrap()),
+                "request: {request}"
+            );
+        }
     }
 
     #[test]

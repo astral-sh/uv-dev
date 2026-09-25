@@ -489,7 +489,7 @@ impl PythonInstallation {
 
         let release = version.only_release();
 
-        let Ok(download_request) = PythonDownloadRequest::try_from(&interpreter.key()) else {
+        let Ok(download_request) = PythonDownloadRequest::try_from(self.key()) else {
             return;
         };
 
@@ -697,11 +697,7 @@ impl PythonInstallationKey {
         self.build_name.as_ref()
     }
 
-    fn executable_name_variant_suffix(&self) -> String {
-        self.variant.executable_suffix().to_string()
-    }
-
-    fn display_variant_suffix(&self) -> String {
+    fn display_variant_and_build_name(&self) -> String {
         let mut suffix = match self.variant {
             PythonVariant::Default => String::new(),
             _ => format!("+{}", self.variant),
@@ -720,7 +716,7 @@ impl PythonInstallationKey {
             name = self.implementation().executable_install_name(),
             maj = self.major,
             min = self.minor,
-            var = self.executable_name_variant_suffix(),
+            var = self.variant.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
@@ -731,7 +727,7 @@ impl PythonInstallationKey {
             "{name}{maj}{var}{exe}",
             name = self.implementation().executable_install_name(),
             maj = self.major,
-            var = self.executable_name_variant_suffix(),
+            var = self.variant.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
@@ -741,7 +737,7 @@ impl PythonInstallationKey {
         format!(
             "{name}{var}{exe}",
             name = self.implementation().executable_install_name(),
-            var = self.executable_name_variant_suffix(),
+            var = self.variant.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
@@ -749,7 +745,7 @@ impl PythonInstallationKey {
 
 impl fmt::Display for PythonInstallationKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let variant = self.display_variant_suffix();
+        let variant = self.display_variant_and_build_name();
         write!(
             f,
             "{}-{}.{}.{}{}{}-{}",
@@ -892,7 +888,7 @@ impl fmt::Display for PythonInstallationMinorVersionKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Display every field on the wrapped key except the patch
         // and prerelease (with special formatting for the variant).
-        let variant = self.0.display_variant_suffix();
+        let variant = self.0.display_variant_and_build_name();
         write!(
             f,
             "{}-{}.{}{}-{}",

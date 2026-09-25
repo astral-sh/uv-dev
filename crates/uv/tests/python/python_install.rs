@@ -12,12 +12,18 @@ use assert_fs::{
 use indoc::indoc;
 use predicates::prelude::predicate;
 use tracing::debug;
-use uv_test::{LATEST_PYTHON_3_12, uv_snapshot};
+use uv_test::{LATEST_PYTHON_3_12, TestContext, uv_snapshot};
 
-use uv_fs::Simplified;
-use uv_python::managed::platform_key_from_env;
+use uv_fs::{Simplified, copy_dir_all};
+use uv_python::managed::{
+    ManagedPythonInstallation, ManagedPythonInstallations, platform_key_from_env,
+};
 use uv_static::EnvVars;
 use walkdir::WalkDir;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 #[test]
 fn python_install() {
@@ -121,6 +127,425 @@ fn python_install() {
 
     // The executable should be removed
     bin_python.assert(predicate::path::missing());
+}
+
+fn python_build_name_context() -> anyhow::Result<(TestContext, ManagedPythonInstallation)> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_python_sources()
+        .with_filtered_python_install_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+    context.python_install().arg("3.13").assert().success();
+    let managed_dir = context.temp_dir.child("managed");
+    let installations = ManagedPythonInstallations::from_settings(Some(managed_dir.to_path_buf()))?;
+    let unnamed = installations
+        .find_all()?
+        .find(|installation| installation.key().major() == 3 && installation.key().minor() == 13)
+        .context("Missing unnamed installation")?;
+    Ok((context, unnamed))
+}
+
+fn python_build_name_catalog_context() -> anyhow::Result<(
+    TestContext,
+    ManagedPythonInstallation,
+    serde_json::Map<String, serde_json::Value>,
+)> {
+    let (context, unnamed) = python_build_name_context()?;
+    let context = context.with_filtered_latest_python_versions();
+    let managed_dir = context.temp_dir.child("managed");
+    let unnamed_path = unnamed.path();
+    let key = unnamed.key();
+    let unnamed_name = key.to_string();
+    let platform = platform_key_from_env()?;
+    let version = unnamed_name
+        .strip_suffix(&format!("-{platform}"))
+        .context("Missing platform suffix")?;
+    let mut downloads = serde_json::Map::new();
+    let arch = key.arch().to_string();
+    let arch_family = key.arch().family().to_string();
+    let arch_variant = arch.strip_prefix(&format!("{arch_family}_"));
+    for build_name in [None, Some("custom"), Some("other")] {
+        let name = build_name.map_or_else(
+            || unnamed_name.clone(),
+            |build_name| format!("{version}+{build_name}-{platform}"),
+        );
+        if build_name.is_some() {
+            copy_dir_all(unnamed_path, managed_dir.join(&name))?;
+        }
+        let mut download = serde_json::json!({
+                "name": "cpython",
+                "arch": {"family": arch_family, "variant": arch_variant},
+                "os": key.os().to_string(),
+                "libc": key.libc().to_string(),
+                "major": key.major(),
+                "minor": key.minor(),
+                "patch": key.version().patch().unwrap_or_default(),
+                "prerelease": "",
+                "variant": null,
+                "build_revision": "20260825",
+                "url": "https://custom.example/cpython.tar.gz",
+                "sha256": null
+        });
+        if let Some(build_name) = build_name {
+            download["build_name"] = serde_json::json!(build_name);
+        }
+        downloads.insert(name, download);
+    }
+    Ok((context, unnamed, downloads))
+}
+
+async fn mount_python_build_name_catalog(
+    server: &MockServer,
+    downloads: serde_json::Map<String, serde_json::Value>,
+) {
+    Mock::given(method("GET"))
+        .and(path("/metadata"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "max-age=0")
+                .set_body_json(serde_json::json!({"version": 1, "downloads": downloads})),
+        )
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+#[cfg(feature = "test-python-managed")]
+async fn python_install_build_name() -> anyhow::Result<()> {
+    let (context, unnamed) = python_build_name_context()?;
+    let managed_dir = context.temp_dir.child("managed");
+    let unnamed_name = unnamed.key().to_string();
+    let platform = platform_key_from_env()?;
+    let version = unnamed_name
+        .strip_suffix(&format!("-{platform}"))
+        .context("Missing platform suffix")?;
+    let custom_name = format!("{version}+custom-{platform}");
+    let custom_build_path = managed_dir.join(&custom_name);
+    fs_err::rename(unnamed.path(), &custom_build_path)?;
+    let key = unnamed.key();
+    let arch = key.arch().to_string();
+    let arch_family = key.arch().family().to_string();
+    let arch_variant = arch.strip_prefix(&format!("{arch_family}_"));
+
+    let server = MockServer::start().await;
+    let metadata = serde_json::json!({
+        (custom_name): {
+            "name": "cpython",
+            "arch": {
+                "family": arch_family,
+                "variant": arch_variant
+            },
+            "os": key.os().to_string(),
+            "libc": key.libc().to_string(),
+            "major": key.major(),
+            "minor": key.minor(),
+            "patch": key.version().patch().unwrap_or_default(),
+            "prerelease": "",
+            "url": "https://custom.example/cpython.tar.gz",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "variant": null,
+            "build_name": "custom",
+            "build_revision": "20260825"
+        }
+    });
+    Mock::given(method("GET"))
+        .and(path("/metadata"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"version": 1, "downloads": metadata})),
+        )
+        .mount(&server)
+        .await;
+
+    context
+        .python_install()
+        .arg("3.13+custom")
+        .arg("--default")
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/metadata", server.uri()))
+        .assert()
+        .success();
+
+    context
+        .bin_dir
+        .child(format!("python3.13{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+    context
+        .bin_dir
+        .child(format!("python3.13+custom{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::missing());
+
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_find_build_name() -> anyhow::Result<()> {
+    let (context, unnamed) = python_build_name_context()?;
+    let context = context.with_filtered_latest_python_versions();
+    let managed_dir = context.temp_dir.child("managed");
+    let unnamed_name = unnamed.key().to_string();
+    let platform = platform_key_from_env()?;
+    let version = unnamed_name
+        .strip_suffix(&format!("-{platform}"))
+        .context("Missing platform suffix")?;
+    let custom_build_path = managed_dir.join(format!("{version}+custom-{platform}"));
+    fs_err::rename(unnamed.path(), &custom_build_path)?;
+
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom_internal"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13+custom_internal in [PYTHON SOURCES]
+    ");
+
+    let custom_internal_path = managed_dir.join(format!("{version}+custom_internal-{platform}"));
+    copy_dir_all(&custom_build_path, &custom_internal_path)?;
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom_internal"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom_internal-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_find_prerelease_build_name_warning() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.14.0rc3").assert().success();
+    let managed_dir = context.temp_dir.child("managed");
+    let installations = ManagedPythonInstallations::from_settings(Some(managed_dir.to_path_buf()))?;
+    let unnamed = installations
+        .find_all()?
+        .next()
+        .context("Missing prerelease installation")?;
+    let key = unnamed.key();
+    let platform = platform_key_from_env()?;
+    fs_err::rename(
+        unnamed.path(),
+        managed_dir.child(format!("cpython-3.14.0rc3+custom-{platform}")),
+    )?;
+
+    let arch = key.arch().to_string();
+    let arch_family = key.arch().family().to_string();
+    let arch_variant = arch.strip_prefix(&format!("{arch_family}_"));
+    let stable = serde_json::json!({
+        "name": "cpython",
+        "arch": {"family": arch_family, "variant": arch_variant},
+        "os": key.os().to_string(),
+        "libc": key.libc().to_string(),
+        "major": 3,
+        "minor": 14,
+        "patch": 0,
+        "build_revision": "20260825",
+        "url": "https://custom.example/cpython.tar.gz"
+    });
+    let mut other = stable.clone();
+    other["build_name"] = serde_json::json!("other");
+    let catalog = context.temp_dir.child("downloads.json");
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1,
+        "downloads": {"unnamed": stable, "other": other}
+    }))?)?;
+
+    // Stable releases of other builds cannot upgrade the selected named prerelease.
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["3.14+custom", "--show-version"])
+        .arg("--python-downloads-json-url").arg(catalog.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.14.0rc3
+    ");
+
+    let mut custom = stable;
+    custom["build_name"] = serde_json::json!("custom");
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1,
+        "downloads": {"custom": custom}
+    }))?)?;
+
+    // The upgrade hint must select the same build as the installed prerelease.
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["3.14+custom", "--show-version"])
+        .arg("--python-downloads-json-url").arg(catalog.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.14.0rc3
+
+    ----- stderr -----
+    warning: You're using a pre-release version of Python (3.14.0rc3) but a stable version is available. Use `uv python upgrade 3.14+custom` to upgrade.
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "test-python-managed")]
+async fn python_build_name_catalog_selection() -> anyhow::Result<()> {
+    let (context, unnamed, downloads) = python_build_name_catalog_context()?;
+    let server = MockServer::start().await;
+    mount_python_build_name_catalog(&server, downloads).await;
+    let managed_dir = context.temp_dir.child("managed");
+    let unnamed_name = unnamed.key().to_string();
+    let platform = platform_key_from_env()?;
+    let version = unnamed_name
+        .strip_suffix(&format!("-{platform}"))
+        .context("Missing platform suffix")?;
+    let metadata_url = format!("{}/metadata", server.uri());
+    let find = |request| {
+        let mut command = context.python_find();
+        command
+            .arg(request)
+            .arg("--python-downloads-json-url")
+            .arg(&metadata_url);
+        command
+    };
+
+    for variant in ["custom", "other"] {
+        let executable = managed_dir
+            .join(format!("{version}+{variant}-{platform}"))
+            .join(unnamed.executable(false).strip_prefix(unnamed.path())?);
+        Command::new(executable)
+            .arg("-c")
+            .arg("import sys; assert sys.version_info[:2] == (3, 13)")
+            .assert()
+            .success();
+    }
+
+    // Unqualified requests select the unnamed build; explicit requests match one build name.
+    uv_snapshot!(context.filters(), find("3.13"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    uv_snapshot!(context.filters(), find("3.13+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    uv_snapshot!(context.filters(), find("3.13+other"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+other-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "test-python-managed")]
+async fn python_build_name_missing_unnamed() -> anyhow::Result<()> {
+    let (context, unnamed, downloads) = python_build_name_catalog_context()?;
+    let server = MockServer::start().await;
+    mount_python_build_name_catalog(&server, downloads).await;
+    let metadata_url = format!("{}/metadata", server.uri());
+    let find = |request| {
+        let mut command = context.python_find();
+        command
+            .arg(request)
+            .arg("--python-downloads-json-url")
+            .arg(&metadata_url);
+        command
+    };
+
+    // Verify selection before removing the unnamed installation.
+    find("3.13").assert().success();
+
+    // Removing the unnamed installation must not make a named build match.
+    let unnamed_path = unnamed.path();
+    let hidden_path = context.temp_dir.join("unnamed");
+    fs_err::rename(unnamed_path, &hidden_path)?;
+    uv_snapshot!(context.filters(), find("3.13"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13 in [PYTHON SOURCES]
+    ");
+    uv_snapshot!(context.filters(), find("3.13+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    uv_snapshot!(context.filters(), context.python_install().arg("3.13")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .arg("--python-downloads-json-url").arg(&metadata_url), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Python downloads are not allowed (`python-downloads = "never"`). Change to `python-downloads = "manual"` to allow explicit installs.
+    "#);
+    fs_err::rename(&hidden_path, unnamed_path)?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "test-python-managed")]
+async fn python_build_name_catalog_absent_entries() -> anyhow::Result<()> {
+    let (context, unnamed, _downloads) = python_build_name_catalog_context()?;
+    let server = MockServer::start().await;
+    mount_python_build_name_catalog(&server, serde_json::Map::new()).await;
+    let metadata_url = format!("{}/metadata", server.uri());
+
+    // Installed builds remain discoverable when the catalog no longer lists their version.
+    for catalog in [metadata_url.as_str(), "missing-catalog.json"] {
+        for request in ["3.13", &unnamed.key().to_string()] {
+            context
+                .python_find()
+                .arg(request)
+                .arg("--offline")
+                .arg("--python-downloads-json-url")
+                .arg(catalog)
+                .assert()
+                .success();
+        }
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom")
+                .arg("--offline")
+                .arg("--python-downloads-json-url").arg(catalog), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+            ");
+        }
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("Mock server requests")?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_build_name_catalog_explicit_path() -> anyhow::Result<()> {
+    let (context, unnamed) = python_build_name_context()?;
+    let context = context.with_filtered_latest_python_versions();
+
+    // An explicitly requested path remains usable without a catalog.
+    let executable = unnamed.executable(false);
+    uv_snapshot!(context.filters(), context.python_find().arg(&executable)
+        .arg("--python-downloads-json-url").arg("missing-catalog.json"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+
+    Ok(())
 }
 
 #[test]
@@ -1476,6 +1901,20 @@ fn python_install_invalid_request() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: `foobar` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions
+    ");
+
+    // Short variant spellings cannot be split into independent components.
+    uv_snapshot!(context.filters(), context.python_install().arg("3.15+t+d"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `3.15+t+d` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions
+    ");
+
+    // Adding a build name does not broaden the accepted variant spellings.
+    uv_snapshot!(context.filters(), context.python_install().arg("3.15+t+d+custom"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `3.15+t+d+custom` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions
     ");
 
     // Request a version we don't have a download for
