@@ -104,9 +104,8 @@ impl CandidateSelector {
         // If `--reinstall` is provided, we should omit any already-installed packages from here,
         // since we can't reinstall already-installed packages.
         //
-        // If `--upgrade` is provided, we should still search for a matching preference. In
-        // practice, preferences should be empty if `--upgrade` is provided, but it's the caller's
-        // responsibility to ensure that.
+        // The caller removes the current lockfile's preferences for packages selected by
+        // `--upgrade`. Preferences inherited from another workspace remain applicable.
         if let Some(preferred) = self.get_preferred(
             package_name,
             range,
@@ -173,15 +172,15 @@ impl CandidateSelector {
         compatible
     }
 
-    /// If the package has a preference, an existing version from an existing lockfile or a version
-    /// from a sibling fork, and the preference satisfies the current range, use that.
+    /// If the package has an applicable preference that satisfies the current range, use it.
     ///
     /// We try to find a resolution that, depending on the input, does not diverge from the
     /// lockfile or matches a sibling fork. We try an exact match for the current markers (fork
     /// or specific) first, to ensure stability with repeated locking. If that doesn't work, we
-    /// fall back to preferences that don't match in hopes of still resolving different forks into
-    /// the same version; A solution with less different versions is more desirable than one where
-    /// we may have more recent version in some cases, but overall more versions.
+    /// fall back to current-lock and sibling-fork preferences that don't match in hopes of still
+    /// resolving different forks into the same version. Inherited preferences require a matching
+    /// registry and an overlapping marker; they do not split a fork solely to reproduce another
+    /// workspace's version choices.
     fn get_preferred<'a, InstalledPackages: InstalledPackagesProvider>(
         &'a self,
         package_name: &'a PackageName,
@@ -196,27 +195,36 @@ impl CandidateSelector {
         tags: Option<&'a Tags>,
     ) -> Option<Candidate<'a>> {
         let preferences = preferences.get(package_name);
+        let applicable = |entry: &Entry| {
+            index.is_none_or(|index| entry.index().matches(index))
+                && (!entry.source().is_inherited()
+                    || (range.contains(entry.pin().version())
+                        && env.included_by_marker(entry.marker().pep508())))
+        };
 
         // If there are multiple preferences for the same package, we need to sort them by priority.
         let preferences = match preferences {
             [] => return None,
             [entry] => {
-                // Filter out preferences that map to a conflicting index.
-                if index.is_some_and(|index| !entry.index().matches(index)) {
+                if !applicable(entry) {
                     return None;
                 }
-                Either::Left(std::iter::once((entry.pin().version(), entry.source())))
+                Either::Left(std::iter::once(entry))
             }
             [..] => {
                 type Entries<'a> = SmallVec<[&'a Entry; 3]>;
 
                 let mut preferences = preferences.iter().collect::<Entries>();
 
-                // Filter out preferences that map to a conflicting index.
-                preferences.retain(|entry| index.is_none_or(|index| entry.index().matches(index)));
+                preferences.retain(|entry| applicable(entry));
 
                 // Sort the preferences by priority.
                 let highest = self.use_highest_version(package_name, env);
+                // Existing lockfiles and sibling forks use marker/version ordering when there
+                // is no inherited baseline for this package.
+                let prioritize_sources = preferences
+                    .iter()
+                    .any(|entry| entry.source().is_inherited());
                 preferences.sort_by_key(|entry| {
                     let marker = entry.marker();
 
@@ -230,14 +238,11 @@ impl CandidateSelector {
                         Either::Right(std::cmp::Reverse(entry.pin().version()))
                     };
 
-                    std::cmp::Reverse((matches_env, version))
+                    let source = prioritize_sources.then(|| entry.source().priority());
+                    std::cmp::Reverse((matches_env, source, version))
                 });
 
-                Either::Right(
-                    preferences
-                        .into_iter()
-                        .map(|entry| (entry.pin().version(), entry.source())),
-                )
+                Either::Right(preferences.into_iter())
             }
         };
 
@@ -255,7 +260,7 @@ impl CandidateSelector {
 
     /// Return the first preference that satisfies the current range and is allowed.
     fn get_preferred_from_iter<'a, InstalledPackages: InstalledPackagesProvider>(
-        preferences: impl Iterator<Item = (&'a Version, PreferenceSource)>,
+        preferences: impl Iterator<Item = &'a Entry>,
         package_name: &'a PackageName,
         range: &Range<Version>,
         version_maps: &'a [VersionMap],
@@ -264,7 +269,10 @@ impl CandidateSelector {
         prerelease_selection: PrereleaseSelection,
         tags: Option<&Tags>,
     ) -> Option<Candidate<'a>> {
-        for (version, source) in preferences {
+        for preference in preferences {
+            let version = preference.pin().version();
+            let source = preference.source();
+
             // Respect the version range for this requirement.
             if !range.contains(version) {
                 continue;
@@ -272,7 +280,9 @@ impl CandidateSelector {
 
             // Check for a locally installed distribution that matches the preferred version, unless
             // we have to reinstall, in which case we can't reuse an already-installed distribution.
-            if !reinstall {
+            // Installed registry distributions do not retain their index identity, so they
+            // cannot establish that an inherited registry preference matches the source.
+            if !reinstall && !source.is_inherited() {
                 let installed_dists = installed_packages.get_packages(package_name);
                 match installed_dists.as_slice() {
                     [] => {}
@@ -323,6 +333,7 @@ impl CandidateSelector {
                     PrereleaseSelection::PreferStable => match source {
                         PreferenceSource::Resolver => false,
                         PreferenceSource::Lock
+                        | PreferenceSource::InheritedLock
                         | PreferenceSource::Environment
                         | PreferenceSource::RequirementsTxt => true,
                     },
@@ -333,12 +344,16 @@ impl CandidateSelector {
             }
 
             // Check for a remote distribution that matches the preferred version
-            if let Some((version_map, file)) = version_maps
-                .iter()
-                .find_map(|version_map| version_map.get(version).map(|dist| (version_map, dist)))
-            {
-                // If the preferred version has a local variant, prefer that.
-                if version_map.local() {
+            if let Some((version_map, file)) = version_maps.iter().find_map(|version_map| {
+                let dist = version_map.get(version)?;
+                if source.is_inherited() && !Self::matches_inherited_index(preference, dist) {
+                    return None;
+                }
+                Some((version_map, dist))
+            }) {
+                // An inherited lock records a literal version. A local variant remains a
+                // candidate through ordinary selection, but is not the inherited pin itself.
+                if version_map.local() && !source.is_inherited() {
                     for local in version_map
                         .versions()
                         .rev()
@@ -374,6 +389,21 @@ impl CandidateSelector {
             }
         }
         None
+    }
+
+    /// Check both artifact and metadata sources for an inherited registry preference.
+    fn matches_inherited_index(preference: &Entry, dist: &PrioritizedDist) -> bool {
+        let Some(dist) = dist.get() else {
+            return false;
+        };
+
+        dist.for_resolution()
+            .index()
+            .is_some_and(|index| preference.index().matches(index))
+            && dist
+                .for_installation()
+                .index()
+                .is_some_and(|index| preference.index().matches(index))
     }
 
     /// Check for an installed distribution that satisfies the current range and is allowed.
@@ -814,10 +844,320 @@ fn is_after(version: &Version, bound: Bound<&Version>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use uv_configuration::{Prerelease, PrereleaseMode};
+    use uv_distribution_filename::SourceDistExtension;
+    use uv_distribution_types::{
+        File, FileLocation, HashComparison, RegistrySourceDist, SourceDistCompatibility,
+    };
+    use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder, MarkerTree};
+    use uv_pypi_types::{HashDigests, ResolverMarkerEnvironment};
+    use uv_types::EmptyInstalledPackages;
+
+    use crate::{Preference, UniversalMarker};
+
     use super::*;
 
     fn version(value: &str) -> Version {
         value.parse().expect("valid test version")
+    }
+
+    fn package_name() -> PackageName {
+        "example".parse().expect("valid test package name")
+    }
+
+    fn index(value: &str) -> IndexUrl {
+        value.parse().expect("valid test index")
+    }
+
+    fn version_map(index: &IndexUrl, values: &[&str]) -> VersionMap {
+        VersionMap::from_test_distributions(values.iter().map(|value| {
+            let version = version(value);
+            let filename = format!("example-{version}.tar.gz");
+            let mut dist = PrioritizedDist::default();
+            dist.insert_source(
+                RegistrySourceDist {
+                    name: package_name(),
+                    version: version.clone(),
+                    file: Box::new(File {
+                        dist_info_metadata: None,
+                        filename: filename.clone().into(),
+                        hashes: HashDigests::empty(),
+                        requires_python: None,
+                        size: None,
+                        upload_time_utc_ms: None,
+                        url: FileLocation::new(
+                            filename.into(),
+                            &"https://example.org/files/".into(),
+                        ),
+                        yanked: None,
+                    }),
+                    ext: SourceDistExtension::TarGz,
+                    index: index.clone(),
+                    wheels: Vec::new(),
+                    size_is_authoritative: false,
+                },
+                [],
+                SourceDistCompatibility::Compatible(HashComparison::Matched),
+            );
+            (version, dist)
+        }))
+    }
+
+    fn inherited(index: &IndexUrl, value: &str) -> Preference {
+        Preference::from_inherited_locked(package_name(), version(value), index.clone(), Vec::new())
+    }
+
+    fn selected_version(
+        preferences: &Preferences,
+        version_maps: &[VersionMap],
+        range: &Range<Version>,
+        index: Option<&IndexUrl>,
+        env: &ResolverEnvironment,
+        prerelease: PrereleaseMode,
+    ) -> Version {
+        let options = Options {
+            prerelease: Prerelease {
+                global: prerelease,
+                ..Prerelease::default()
+            },
+            ..Options::default()
+        };
+        let selector =
+            CandidateSelector::for_resolution(&options, &Manifest::simple(Vec::new()), env);
+        selector
+            .select(
+                &package_name(),
+                range,
+                version_maps,
+                preferences,
+                &EmptyInstalledPackages,
+                &Exclusions::default(),
+                index,
+                env,
+                None,
+            )
+            .expect("test has a selectable version")
+            .version()
+            .clone()
+    }
+
+    #[test]
+    fn inherited_lock_preferences_use_source_tiers() {
+        let index = index("https://pypi.org/simple");
+        let env = ResolverEnvironment::universal(Vec::new());
+        let version_maps = [version_map(&index, &["1", "2", "3"])];
+
+        let mut preferences = Preferences::from_iter(
+            [
+                inherited(&index, "1"),
+                Preference::from_locked(
+                    package_name(),
+                    version("2"),
+                    Some(index.clone()),
+                    Vec::new(),
+                ),
+            ],
+            &env,
+        );
+        preferences.insert(
+            package_name(),
+            Some(index.clone()),
+            UniversalMarker::TRUE,
+            version("3"),
+            PreferenceSource::Resolver,
+        );
+
+        assert_eq!(
+            selected_version(
+                &preferences,
+                &version_maps,
+                &Range::full(),
+                None,
+                &env,
+                PrereleaseMode::IfNecessary,
+            ),
+            version("2")
+        );
+        assert_eq!(
+            selected_version(
+                &preferences,
+                &version_maps,
+                &Range::full().difference(&Range::singleton(version("2"))),
+                None,
+                &env,
+                PrereleaseMode::IfNecessary,
+            ),
+            version("1")
+        );
+    }
+
+    #[test]
+    fn non_inherited_preferences_use_version_order() {
+        let index = index("https://pypi.org/simple");
+        let env = ResolverEnvironment::universal(Vec::new());
+        let mut preferences = Preferences::from_iter(
+            [Preference::from_locked(
+                package_name(),
+                version("1"),
+                Some(index.clone()),
+                Vec::new(),
+            )],
+            &env,
+        );
+        preferences.insert(
+            package_name(),
+            Some(index.clone()),
+            UniversalMarker::TRUE,
+            version("2"),
+            PreferenceSource::Resolver,
+        );
+        let version_maps = [version_map(&index, &["1", "2"])];
+
+        assert_eq!(
+            selected_version(
+                &preferences,
+                &version_maps,
+                &Range::full(),
+                None,
+                &env,
+                PrereleaseMode::IfNecessary,
+            ),
+            version("2")
+        );
+    }
+
+    #[test]
+    fn inherited_lock_preferences_fall_back_to_ordinary_candidates() {
+        let index = index("https://pypi.org/simple");
+        let env = ResolverEnvironment::universal(Vec::new());
+        let preferences = Preferences::from_iter([inherited(&index, "1")], &env);
+        let version_maps = [version_map(&index, &["1", "2"])];
+
+        assert_eq!(
+            selected_version(
+                &preferences,
+                &version_maps,
+                &Range::singleton(version("2")),
+                None,
+                &env,
+                PrereleaseMode::IfNecessary,
+            ),
+            version("2")
+        );
+    }
+
+    #[test]
+    fn inherited_lock_preferences_respect_registry_identity() {
+        let parent_index = index("https://parent.example.org/simple");
+        let child_index = index("https://child.example.org/simple");
+        let env = ResolverEnvironment::universal(Vec::new());
+        let preferences = Preferences::from_iter([inherited(&parent_index, "1")], &env);
+        let version_maps = [version_map(&child_index, &["1", "2"])];
+
+        for explicit_index in [None, Some(&child_index)] {
+            assert_eq!(
+                selected_version(
+                    &preferences,
+                    &version_maps,
+                    &Range::full(),
+                    explicit_index,
+                    &env,
+                    PrereleaseMode::IfNecessary,
+                ),
+                version("2")
+            );
+        }
+    }
+
+    #[test]
+    fn inherited_lock_preferences_are_literal_versions() {
+        let index = index("https://pypi.org/simple");
+        let env = ResolverEnvironment::universal(Vec::new());
+        let preferences = Preferences::from_iter([inherited(&index, "1")], &env);
+        let version_maps = [version_map(&index, &["1", "1+local"])];
+
+        assert_eq!(
+            selected_version(
+                &preferences,
+                &version_maps,
+                &Range::full(),
+                None,
+                &env,
+                PrereleaseMode::IfNecessary,
+            ),
+            version("1")
+        );
+    }
+
+    #[test]
+    fn inherited_lock_preferences_respect_prerelease_policy() {
+        let index = index("https://pypi.org/simple");
+        let env = ResolverEnvironment::universal(Vec::new());
+        let preferences = Preferences::from_iter([inherited(&index, "2rc1")], &env);
+        let version_maps = [version_map(&index, &["1", "2rc1"])];
+
+        for (prerelease, expected) in [
+            (PrereleaseMode::IfNecessary, "2rc1"),
+            (PrereleaseMode::Disallow, "1"),
+        ] {
+            assert_eq!(
+                selected_version(
+                    &preferences,
+                    &version_maps,
+                    &Range::full(),
+                    None,
+                    &env,
+                    prerelease,
+                ),
+                version(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn inherited_lock_preferences_respect_markers() {
+        let index = index("https://pypi.org/simple");
+        let env = ResolverEnvironment::specific(ResolverMarkerEnvironment::from(
+            MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+                implementation_name: "cpython",
+                implementation_version: "3.12.0",
+                os_name: "posix",
+                platform_machine: "x86_64",
+                platform_python_implementation: "CPython",
+                platform_release: "test",
+                platform_system: "Linux",
+                platform_version: "test",
+                python_full_version: "3.12.0",
+                python_version: "3.12",
+                sys_platform: "linux",
+            })
+            .expect("valid test environment"),
+        ));
+        let marker = "sys_platform == 'win32'"
+            .parse::<MarkerTree>()
+            .expect("valid test marker");
+        let preferences = Preferences::from_iter(
+            [Preference::from_inherited_locked(
+                package_name(),
+                version("1"),
+                index.clone(),
+                vec![UniversalMarker::from_combined(marker)],
+            )],
+            &env,
+        );
+        let version_maps = [version_map(&index, &["1", "2"])];
+
+        assert_eq!(
+            selected_version(
+                &preferences,
+                &version_maps,
+                &Range::full(),
+                None,
+                &env,
+                PrereleaseMode::IfNecessary,
+            ),
+            version("2")
+        );
     }
 
     fn assert_range_cursor(highest: bool, values: &[&str]) {

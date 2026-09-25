@@ -1853,6 +1853,7 @@
             "workspace-metadata",
             "workspace-dir",
             "workspace-list",
+            "nested-workspaces",
             "sbom-export",
             "auth-helper",
             "target-workspace-discovery",
@@ -2770,6 +2771,13 @@
         },
         "members": {
           "description": "Packages to include as workspace members.\n\nSupports both globs and explicit paths.\n\nFor more information on the glob syntax, refer to the [`glob` documentation](https://docs.rs/glob/latest/glob/struct.Pattern.html).",
+          "type": ["array", "null"],
+          "items": {
+            "$ref": "#/definitions/SerdePattern"
+          }
+        },
+        "workspaces": {
+          "description": "Independently locked child workspaces.\n\nSupports globs and explicit paths relative to this workspace root. Each selected directory\nmust be a strict descendant of this workspace and contain a `tool.uv.workspace` table.\nChild workspace roots and their packages must not also be included in `members`.\nChild workspaces have their own lockfiles and environments, and prefer versions from the\nnearest registered parent's lockfile when resolving dependencies.",
           "type": ["array", "null"],
           "items": {
             "$ref": "#/definitions/SerdePattern"
