@@ -138,3 +138,104 @@ fn migrate_windows_cache(source: &Path, destination: &Path) -> Result<(), io::Er
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::migrate_windows_cache;
+
+    #[test]
+    fn legacy_windows_cache_migrates_expected_entries() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("uv");
+        let destination = source.join("cache");
+
+        // These are the v0.3.0 names, not the current cache bucket versions.
+        let directories = [
+            "built-wheels-v3",
+            "flat-index-v0",
+            "git-v0",
+            "interpreter-v2",
+            "simple-v12",
+            "wheels-v1",
+            "archive-v0",
+            "builds-v0",
+            "environments-v1",
+        ];
+        let files = [(".gitignore", "*"), ("CACHEDIR.TAG", "legacy cache tag")];
+        for directory in directories {
+            let path = source.join(directory);
+            fs_err::create_dir_all(&path)?;
+            fs_err::write(path.join("payload"), directory)?;
+        }
+        for (file, contents) in files {
+            fs_err::write(source.join(file), contents)?;
+        }
+        let unrelated_directory = source.join("python");
+        fs_err::create_dir(&unrelated_directory)?;
+        fs_err::write(unrelated_directory.join("payload"), "keep directory")?;
+        fs_err::write(source.join("unrelated.txt"), "keep file")?;
+        assert!(!destination.exists());
+
+        // A second migration must leave the already-moved entries unchanged.
+        for _ in 0..2 {
+            migrate_windows_cache(&source, &destination)?;
+
+            for directory in directories {
+                assert!(!source.join(directory).exists());
+                assert_eq!(
+                    fs_err::read_to_string(destination.join(directory).join("payload"))?,
+                    directory
+                );
+            }
+            for (file, contents) in files {
+                assert!(!source.join(file).exists());
+                assert_eq!(fs_err::read_to_string(destination.join(file))?, contents);
+            }
+            assert_eq!(
+                fs_err::read_dir(&destination)?
+                    .collect::<io::Result<Vec<_>>>()?
+                    .len(),
+                directories.len() + files.len()
+            );
+            assert_eq!(
+                fs_err::read_to_string(unrelated_directory.join("payload"))?,
+                "keep directory"
+            );
+            assert_eq!(
+                fs_err::read_to_string(source.join("unrelated.txt"))?,
+                "keep file"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_windows_cache_migrates_base_file_without_buckets() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("uv");
+        let destination = source.join("cache");
+
+        migrate_windows_cache(&source, &destination)?;
+        assert!(!source.exists());
+        assert!(!destination.exists());
+
+        fs_err::create_dir(&source)?;
+        fs_err::write(source.join("CACHEDIR.TAG"), "legacy cache tag")?;
+        migrate_windows_cache(&source, &destination)?;
+
+        assert!(!source.join("CACHEDIR.TAG").exists());
+        assert_eq!(
+            fs_err::read_to_string(destination.join("CACHEDIR.TAG"))?,
+            "legacy cache tag"
+        );
+        assert_eq!(
+            fs_err::read_dir(&destination)?
+                .collect::<io::Result<Vec<_>>>()?
+                .len(),
+            1
+        );
+        Ok(())
+    }
+}
