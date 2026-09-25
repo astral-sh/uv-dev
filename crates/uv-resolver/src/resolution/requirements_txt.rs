@@ -41,7 +41,15 @@ impl<'dist> RequirementsTxtDist<'dist> {
         if self.dist.is_editable() {
             if let VersionOrUrlRef::Url(url) = self.dist.version_or_url() {
                 let given = url.verbatim();
-                return Cow::Owned(format!("-e {given}"));
+                return if let Some(markers) =
+                    SimplifiedMarkerTree::new(requires_python, self.markers)
+                        .try_to_string()
+                        .filter(|_| include_markers)
+                {
+                    Cow::Owned(format!("-e {given} ; {markers}"))
+                } else {
+                    Cow::Owned(format!("-e {given}"))
+                };
             }
         }
 
