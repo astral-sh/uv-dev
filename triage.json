@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 17036,
+        "title": "Fix relocatable nushell activation script",
+        "url": "https://github.com/astral-sh/uv/pull/17036",
+        "state": "merged",
+        "reason": "astral-sh/uv#17036 introduced the exact path self expression now failing. It enabled relocatable activate.nu scripts, but does not track this new parse-time regression."
+      },
+      {
+        "kind": "issue",
+        "number": 16973,
+        "title": "Make a genuinely relocatable variant of --relocatable (i.e. fix or remove activate.csh/nu)",
+        "url": "https://github.com/astral-sh/uv/issues/16973",
+        "state": "closed",
+        "reason": "astral-sh/uv#16973 established relocatable Nushell activation as intended behavior and was closed by astral-sh/uv#17036; it predates and does not track the current parser error."
+      },
+      {
+        "kind": "issue",
+        "number": 15294,
+        "title": "add integration tests for venv activation scripts",
+        "url": "https://github.com/astral-sh/uv/issues/15294",
+        "state": "open",
+        "reason": "This broader testing issue is adjacent: the existing Nushell integration test creates a non-relocatable environment and therefore misses the reported path self branch."
+      }
+    ],
+    "search_scope": "Searched exact diagnostic text, path self, activate.nu, and overlay use, plus conceptual queries for Nushell activation, shell compatibility, relocatable environments, and activation testing. Closed issues, merged fixes, referenced discussions, comments, and activation-script history were inspected. No existing tracker for this exact failure was found. astral-sh/uv#14888 was ruled out because it concerns get -i deprecation, while astral-sh/uv#18940 was caused by Windows Path/PATH casing."
+  },
+  "type": "bug",
+  "type_reason": "uv emits the rejected let virtual_env = (path self | path dirname | path dirname) expression for relocatable activate.nu scripts. Relocatable Nushell activation is intended behavior established by astral-sh/uv#16973 and astral-sh/uv#17036, so the generated script's failure is incorrect behavior. The Nushell version and environment-creation command are still needed to identify the compatibility boundary, but no open issue or pull request already tracks this regression.",
+  "summary": "No duplicate was found. astral-sh/uv#17036 introduced the failing path self implementation for the capability requested in astral-sh/uv#16973, while astral-sh/uv#15294 tracks the adjacent activation-test coverage gap.",
+  "draft_response": "Thanks for the report. uv’s source confirms that this path self expression is emitted specifically for relocatable Nushell activation scripts; astral-sh/uv#17036 introduced it so those scripts could locate the environment after it was moved. Our current Nushell integration check creates a non-relocatable environment, so it does not exercise this branch; broader activation-script coverage is tracked in astral-sh/uv#15294.\n\nCould you share the output of nu --version and the exact command that created this .venv, including whether --relocatable was used? That will let us establish the affected Nushell versions and reproduce the same generated script. Changing let to const is a plausible fix based on the diagnostic, but it still needs validation across the supported Nushell versions."
+}
