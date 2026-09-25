@@ -18,14 +18,14 @@ use uv_cache::{CacheArgs, Refresh};
 use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
 use uv_configuration::{
     ActiveEnvironment, AddBoundsKind, AnnotationStyle, BuildIsolation, BuildOptions,
-    BuildPolicyPackage, Concurrency, DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode,
-    EnvFile, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, ExportFormat,
+    BuildPolicyPackage, Concurrency, DependencyGroups, DependencyMode, DevMode, DryRun,
+    EditableMode, EnvFile, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, ExportFormat,
     ExtrasSpecification, ForkStrategy, GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind,
-    InitProjectKind, InstallOptions, KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources,
-    Override, PackageOverride, PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl,
-    PythonUpgrade,
-    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
-    TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
+    InitProjectKind, InstallOptions, KeyringProviderType, Modifications, NoBinary, NoBuild,
+    NoSources, Override, PackageOverride, PipCompileFormat, Prerelease, ProjectBuildBackend,
+    ProxyUrl, PythonUpgrade, PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput,
+    ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade,
+    VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
