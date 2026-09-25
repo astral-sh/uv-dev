@@ -27,6 +27,7 @@ use uv_distribution_types::{
     RegistryBuiltWheel,
 };
 use uv_extract::hash::Hasher;
+use uv_fs::LockedFile;
 use uv_git::{GIT_LFS, GitError, GitHttpSettings, GitResolver, Reporter};
 use uv_metadata::{read_archive_metadata, read_metadata_async_stream};
 use uv_normalize::PackageName;
@@ -1061,6 +1062,26 @@ impl RegistryClient {
         .map_err(|err| ErrorKind::Io(err.into()))?
     }
 
+    /// Acquire an advisory lock for a wheel metadata cache entry.
+    ///
+    /// Callers hold the lock across freshness checks, HTTP requests, and cache publication so
+    /// a process that waited for another request can reuse the completed metadata entry.
+    async fn lock_wheel_metadata(
+        cache_entry: &CacheEntry,
+        filename: &WheelFilename,
+    ) -> Result<LockedFile, Error> {
+        // For backwards compatibility, use the full wheel stem on Windows, matching wheel
+        // downloads, local extraction, and older uv versions sharing the cache.
+        #[cfg(windows)]
+        let lock_key = filename.stem();
+        // Match remote wheel downloads while avoiding filesystem filename limits elsewhere.
+        #[cfg(not(windows))]
+        let lock_key = filename.cache_key();
+
+        let lock_entry = cache_entry.with_file(format!("{lock_key}.lock"));
+        Ok(lock_entry.lock().await.map_err(ErrorKind::CacheLock)?)
+    }
+
     /// Fetch the metadata from a wheel file.
     async fn wheel_metadata_registry(
         &self,
@@ -1086,6 +1107,10 @@ impl RegistryClient {
                 WheelCache::Index(index).wheel_dir(filename.name.as_ref()),
                 format!("{}.msgpack", filename.cache_key()),
             );
+
+            // Acquire an advisory lock, to guard against concurrent writes.
+            let _lock = Self::lock_wheel_metadata(&cache_entry, filename).await?;
+
             let cache_control = match self.connectivity {
                 Connectivity::Online
                     if let Some(header) = self.indexes.artifact_cache_control_for(index) =>
@@ -1098,13 +1123,6 @@ impl RegistryClient {
                         .map_err(ErrorKind::Io)?,
                 ),
                 Connectivity::Offline => CacheControl::AllowStale,
-            };
-
-            // Acquire an advisory lock, to guard against concurrent writes.
-            #[cfg(windows)]
-            let _lock = {
-                let lock_entry = cache_entry.with_file(format!("{}.lock", filename.stem()));
-                lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
             };
 
             let response_callback = async |response: Response, _: &mut RetryState| {
@@ -1176,6 +1194,10 @@ impl RegistryClient {
             cache_shard.wheel_dir(filename.name.as_ref()),
             format!("{}.msgpack", filename.cache_key()),
         );
+
+        // Acquire an advisory lock, to guard against concurrent writes.
+        let _lock = Self::lock_wheel_metadata(&cache_entry, filename).await?;
+
         let cache_control = match self.connectivity {
             Connectivity::Online
                 if let Some(index) = index
@@ -1189,13 +1211,6 @@ impl RegistryClient {
                     .map_err(ErrorKind::Io)?,
             ),
             Connectivity::Offline => CacheControl::AllowStale,
-        };
-
-        // Acquire an advisory lock, to guard against concurrent writes.
-        #[cfg(windows)]
-        let _lock = {
-            let lock_entry = cache_entry.with_file(format!("{}.lock", filename.stem()));
-            lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
         };
 
         // Attempt to fetch via a range request.
