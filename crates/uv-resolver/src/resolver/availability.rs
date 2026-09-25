@@ -20,6 +20,8 @@ pub enum UnavailableReason {
     Package(UnavailablePackage),
     /// A single version cannot be used.
     Version(UnavailableVersion),
+    /// Versions other than the given sibling-fork version are excluded in a coordination trial.
+    Coordinated(Version),
 }
 
 impl Display for UnavailableReason {
@@ -27,6 +29,12 @@ impl Display for UnavailableReason {
         match self {
             Self::Version(version) => Display::fmt(version, f),
             Self::Package(package) => Display::fmt(package, f),
+            Self::Coordinated(version) => {
+                write!(
+                    f,
+                    "a coordinated backtracking trial requires version {version}"
+                )
+            }
         }
     }
 }

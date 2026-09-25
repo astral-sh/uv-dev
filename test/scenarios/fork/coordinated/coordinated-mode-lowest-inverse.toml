@@ -1,0 +1,51 @@
+name = "coordinated-mode-lowest-inverse"
+description = '''
+The `lowest` mode finishes the earlier fork with `switchable==1` and `shared==1`.
+A delayed sibling then requires `shared==2`. The completed fork must backtrack
+the parent to `switchable==2` so both environments can use `shared==2`, even
+though that moves the earlier decisions upward in version order.
+'''
+
+[testgen]
+kind = "lock"
+
+[environment]
+python = "3.12"
+
+[resolver_options]
+universal = true
+fork_strategy = "fewest"
+resolution = "lowest"
+environments = ["python_version == '3.12'", "python_version == '3.13'"]
+
+[expected]
+satisfiable = true
+explanation = "Both forks use `shared==2`, and the earlier fork selects `switchable==2`."
+
+[root]
+requires_python = ">=3.12,<3.14"
+requires = [
+  "switchable>=1.0.0; python_version < '3.13'",
+  "later-entry>=1.0.0; python_version >= '3.13'",
+]
+
+[packages.switchable.versions."1.0.0"]
+requires = ["shared==1.0.0"]
+
+[packages.switchable.versions."2.0.0"]
+requires = ["shared==2.0.0"]
+
+[packages.later-entry.versions."1.0.0"]
+requires = ["delay-one>=1.0.0"]
+
+[packages.delay-one.versions."1.0.0"]
+requires = ["delay-two>=1.0.0"]
+
+[packages.delay-two.versions."1.0.0"]
+requires = ["constrained>=1.0.0"]
+
+[packages.constrained.versions."1.0.0"]
+requires = ["shared==2.0.0"]
+
+[packages.shared.versions."1.0.0"]
+[packages.shared.versions."2.0.0"]

@@ -1,0 +1,74 @@
+name = "coordinated-backtracking-index-miss"
+description = '''
+A completed fork can switch to shared 1 only by selecting index-switchable 1,
+which also needs q. The implicit index has no q. Another, more delayed fork
+requires q from an explicit index, so the speculative implicit miss must not
+make that later explicit lookup unavailable.
+'''
+
+[testgen]
+disable = true
+
+[resolver_options]
+universal = true
+
+[expected]
+satisfiable = true
+
+[root]
+requires_python = ">=3.11,<3.14"
+requires = [
+  "index-switchable; python_version < '3.12'",
+  "delayed; python_version >= '3.12'",
+  "real-delayed; python_version >= '3.13'",
+]
+
+[packages.index-switchable.versions."1.0.0"]
+requires_python = ">=3.11"
+requires = ["shared==1.0.0", "q"]
+
+[packages.index-switchable.versions."2.0.0"]
+requires_python = ">=3.11"
+requires = ["shared==2.0.0"]
+
+[packages.delayed.versions."1.0.0"]
+requires_python = ">=3.11"
+requires = ["delay-one"]
+
+[packages.delay-one.versions."1.0.0"]
+requires_python = ">=3.11"
+requires = ["delay-two"]
+
+[packages.delay-two.versions."1.0.0"]
+requires_python = ">=3.11"
+requires = ["constrained"]
+
+[packages.constrained.versions."1.0.0"]
+requires_python = ">=3.11"
+requires = ["shared==1.0.0"]
+
+[packages.real-delayed.versions."1.0.0"]
+requires_python = ">=3.11"
+requires = ["real-delay-one"]
+
+[packages.real-delay-one.versions."1.0.0"]
+requires_python = ">=3.11"
+requires = ["real-delay-two"]
+
+[packages.real-delay-two.versions."1.0.0"]
+requires_python = ">=3.11"
+requires = ["real-delay-three"]
+
+[packages.real-delay-three.versions."1.0.0"]
+requires_python = ">=3.11"
+requires = ["real-delay-four"]
+
+[packages.real-delay-four.versions."1.0.0"]
+requires_python = ">=3.11"
+requires = ["q"]
+
+[packages.shared.versions."1.0.0"]
+requires_python = ">=3.11"
+
+[packages.shared.versions."2.0.0"]
+requires_python = ">=3.11"
