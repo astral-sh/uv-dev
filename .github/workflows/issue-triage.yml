@@ -27,7 +27,7 @@ jobs:
       id-token: write # for the cross-repository issue-context credential broker
       issues: read
     outputs:
-      issue-context: ${{ steps.issue.outputs.context }}
+      issue-context: ${{ steps.issue.outputs.issue-json }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,25 +35,10 @@ jobs:
 
       - name: "Collect issue context"
         id: issue
-        run: |
-          gh issue view "$ISSUE" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json number,title,body,author,url \
-            > "$RUNNER_TEMP/issue.json"
-
-          if ! jq --exit-status \
-            --arg repository "$GITHUB_REPOSITORY" \
-            '.url | startswith("https://github.com/\($repository)/issues/")' \
-            "$RUNNER_TEMP/issue.json" > /dev/null; then
-            echo "The issue must belong to $GITHUB_REPOSITORY." >&2
-            exit 1
-          fi
-
-          jq --raw-output '"context=\(tojson)"' \
-            "$RUNNER_TEMP/issue.json" >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE: ${{ inputs.issue || github.event.issue.number }}
+        uses: ./.github/actions/fetch-issue
+        with:
+          issue: ${{ inputs.issue || github.event.issue.number }}
+          path: ${{ runner.temp }}/issue.json
 
       - name: "Get issue context token"
         id: token
