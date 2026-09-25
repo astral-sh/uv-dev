@@ -26,13 +26,22 @@ If there is a personal access token (PAT) available (e.g.,
 credentials can be provided via "Basic" HTTP authentication scheme. Include the PAT in the password
 field of the URL. A username must be included as well, but can be any string.
 
-For example, with the token stored in the `$AZURE_ARTIFACTS_TOKEN` environment variable, set
+For example, with the token stored in the `AZURE_ARTIFACTS_TOKEN` environment variable, set
 credentials for the index with:
 
-```bash
-export UV_INDEX_PRIVATE_REGISTRY_USERNAME=dummy
-export UV_INDEX_PRIVATE_REGISTRY_PASSWORD="$AZURE_ARTIFACTS_TOKEN"
-```
+=== "macOS and Linux"
+
+    ```bash
+    export UV_INDEX_PRIVATE_REGISTRY_USERNAME=dummy
+    export UV_INDEX_PRIVATE_REGISTRY_PASSWORD="$AZURE_ARTIFACTS_TOKEN"
+    ```
+
+=== "Windows"
+
+    ```pwsh-session
+    PS> $env:UV_INDEX_PRIVATE_REGISTRY_USERNAME = "dummy"
+    PS> $env:UV_INDEX_PRIVATE_REGISTRY_PASSWORD = $env:AZURE_ARTIFACTS_TOKEN
+    ```
 
 !!! note
 
@@ -56,16 +65,31 @@ uv only supports using the `keyring` package in
 the `PATH`, i.e., installed globally or in the active environment. The `keyring` CLI requires a
 username in the URL, and it must be `VssSessionToken`.
 
-```bash
-# Pre-install keyring and the Artifacts plugin from the public PyPI
-uv tool install keyring --with artifacts-keyring
+=== "macOS and Linux"
 
-# Enable keyring authentication
-export UV_KEYRING_PROVIDER=subprocess
+    ```bash
+    # Pre-install keyring and the Artifacts plugin from the public PyPI
+    uv tool install keyring --with artifacts-keyring
 
-# Set the username for the index
-export UV_INDEX_PRIVATE_REGISTRY_USERNAME=VssSessionToken
-```
+    # Enable keyring authentication
+    export UV_KEYRING_PROVIDER=subprocess
+
+    # Set the username for the index
+    export UV_INDEX_PRIVATE_REGISTRY_USERNAME=VssSessionToken
+    ```
+
+=== "Windows"
+
+    ```pwsh-session
+    PS> # Pre-install keyring and the Artifacts plugin from the public PyPI
+    PS> uv tool install keyring --with artifacts-keyring
+
+    PS> # Enable keyring authentication
+    PS> $env:UV_KEYRING_PROVIDER = "subprocess"
+
+    PS> # Set the username for the index
+    PS> $env:UV_INDEX_PRIVATE_REGISTRY_USERNAME = "VssSessionToken"
+    ```
 
 !!! note
 
@@ -90,10 +114,19 @@ publish-url = "https://pkgs.dev.azure.com/<ORGANIZATION>/<PROJECT>/_packaging/<F
 
 Then, configure credentials (if not using keyring):
 
-```console
-$ export UV_PUBLISH_USERNAME=dummy
-$ export UV_PUBLISH_PASSWORD="$AZURE_ARTIFACTS_TOKEN"
-```
+=== "macOS and Linux"
+
+    ```console
+    $ export UV_PUBLISH_USERNAME=dummy
+    $ export UV_PUBLISH_PASSWORD="$AZURE_ARTIFACTS_TOKEN"
+    ```
+
+=== "Windows"
+
+    ```pwsh-session
+    PS> $env:UV_PUBLISH_USERNAME = "dummy"
+    PS> $env:UV_PUBLISH_PASSWORD = $env:AZURE_ARTIFACTS_TOKEN
+    ```
 
 And publish the package:
 
@@ -103,10 +136,19 @@ $ uv publish --index private-registry
 
 To use `uv publish` without adding the `publish-url` to the project, you can set `UV_PUBLISH_URL`:
 
-```console
-$ export UV_PUBLISH_URL=https://pkgs.dev.azure.com/<ORGANIZATION>/<PROJECT>/_packaging/<FEED>/pypi/upload/
-$ uv publish
-```
+=== "macOS and Linux"
+
+    ```console
+    $ export UV_PUBLISH_URL=https://pkgs.dev.azure.com/<ORGANIZATION>/<PROJECT>/_packaging/<FEED>/pypi/upload/
+    $ uv publish
+    ```
+
+=== "Windows"
+
+    ```pwsh-session
+    PS> $env:UV_PUBLISH_URL = "https://pkgs.dev.azure.com/<ORGANIZATION>/<PROJECT>/_packaging/<FEED>/pypi/upload/"
+    PS> uv publish
+    ```
 
 Note this method is not preferable because uv cannot check if the package is already published
 before uploading artifacts.
