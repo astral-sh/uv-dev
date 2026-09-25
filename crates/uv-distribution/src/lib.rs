@@ -8,7 +8,7 @@ pub use metadata::{
     SourcedDependencyGroups,
 };
 pub use reporter::Reporter;
-pub use source::{StaticMetadataDatabase, prune};
+pub use source::{StaticMetadataDatabase, prune, validate_wheel_metadata};
 
 mod archive;
 mod distribution_database;
