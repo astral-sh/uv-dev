@@ -1410,7 +1410,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 on_existing,
                 args.settings.exclude_newer,
                 globals.concurrency,
-                args.no_project,
+                args.project_discovery,
                 config_discovery,
                 &cache,
                 &workspace_cache,
@@ -1951,7 +1951,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     args.request,
                     args.show_version,
                     args.resolve_links,
-                    args.no_project,
+                    args.project_discovery,
                     args.system,
                     config_discovery,
                     globals.python_preference,
@@ -1979,7 +1979,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.resolved,
                 globals.python_preference,
                 globals.python_downloads,
-                args.no_project,
+                args.project_discovery,
                 args.global,
                 args.rm,
                 args.install_mirrors,
@@ -2330,7 +2330,7 @@ async fn run_project(
                 args.isolated,
                 args.all_packages,
                 args.package,
-                args.no_project,
+                args.project_discovery,
                 config_discovery,
                 args.extras,
                 args.groups,
@@ -2853,7 +2853,7 @@ async fn run_project(
                 workspace_cache,
                 printer,
                 globals.preview,
-                args.no_project,
+                args.project_discovery,
             ))
             .await
         }
@@ -2909,7 +2909,7 @@ async fn run_project(
                 globals.color,
                 printer,
                 globals.preview,
-                args.no_project,
+                args.project_discovery,
                 config_discovery,
                 args.malware_settings,
             ))
