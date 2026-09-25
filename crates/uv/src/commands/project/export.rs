@@ -546,7 +546,7 @@ async fn render_export<'output>(
 
     // Skip conflict detection for CycloneDX exports, as SBOMs are meant to document all dependencies including conflicts.
     if !matches!(format, ExportFormat::CycloneDX1_5) {
-        detect_conflicts(&target, extras, groups)?;
+        detect_conflicts(&target, extras, groups, None)?;
     }
 
     // If the user is exporting to PEP 751, ensure the filename matches the specification.
