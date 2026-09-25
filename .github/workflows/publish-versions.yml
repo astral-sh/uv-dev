@@ -55,6 +55,14 @@ jobs:
           token: ${{ steps.token.outputs.token }}
           persist-credentials: false
 
+      - name: "Pin versions repo checkout"
+        working-directory: astral-versions
+        env:
+          ASTRAL_VERSIONS_REF: bfaa684f15a3024c938f151df91df5ad0f9af8ba
+        run: |
+          git fetch --depth 1 origin "$ASTRAL_VERSIONS_REF"
+          git reset --hard "$ASTRAL_VERSIONS_REF"
+
       - name: "Install uv"
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
