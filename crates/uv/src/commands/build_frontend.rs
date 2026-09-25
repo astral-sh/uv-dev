@@ -12,7 +12,7 @@ use tracing::{debug, instrument};
 
 use uv_auth::CredentialsCache;
 use uv_build_backend::check_direct_build;
-use uv_build_frontend::SourceBuild;
+use uv_build_frontend::{SourceBuild, warn_for_bundled_backend};
 use uv_cache::{Cache, CacheBucket};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
@@ -1130,12 +1130,12 @@ async fn build_sdist(
     let build_result = match action {
         BuildAction::List => {
             let source_tree_ = source_tree.to_path_buf();
-            let sources_enabled = sources.is_none();
+            let show_warnings = warn_for_bundled_backend(sources);
             let (filename, file_list) = tokio::task::spawn_blocking(move || {
                 uv_build_backend::list_source_dist(
                     &source_tree_,
                     uv_version::version(),
-                    sources_enabled,
+                    show_warnings,
                 )
             })
             .await??;
@@ -1160,13 +1160,13 @@ async fn build_sdist(
             )?;
             let source_tree = source_tree.to_path_buf();
             let output_dir_ = output_dir.to_path_buf();
-            let sources_enabled = sources.is_none();
+            let show_warnings = warn_for_bundled_backend(sources);
             let filename = tokio::task::spawn_blocking(move || {
                 uv_build_backend::build_source_dist(
                     &source_tree,
                     &output_dir_,
                     uv_version::version(),
-                    sources_enabled,
+                    show_warnings,
                 )
             })
             .await??
@@ -1249,9 +1249,9 @@ async fn build_wheel(
     let build_message = match action {
         BuildAction::List => {
             let source_tree_ = source_tree.to_path_buf();
-            let sources_enabled = sources.is_none();
+            let show_warnings = warn_for_bundled_backend(&sources);
             let (filename, file_list) = tokio::task::spawn_blocking(move || {
-                uv_build_backend::list_wheel(&source_tree_, uv_version::version(), sources_enabled)
+                uv_build_backend::list_wheel(&source_tree_, uv_version::version(), show_warnings)
             })
             .await??;
             let raw_filename = filename.to_string();
@@ -1275,14 +1275,14 @@ async fn build_wheel(
             )?;
             let source_tree = source_tree.to_path_buf();
             let output_dir_ = output_dir.to_path_buf();
-            let sources_enabled = sources.is_none();
+            let show_warnings = warn_for_bundled_backend(&sources);
             let filename = tokio::task::spawn_blocking(move || {
                 uv_build_backend::build_wheel(
                     &source_tree,
                     &output_dir_,
                     None,
                     uv_version::version(),
-                    sources_enabled,
+                    show_warnings,
                 )
             })
             .await??;
