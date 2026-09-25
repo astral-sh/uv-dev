@@ -13,6 +13,131 @@ use uv_test::uv_snapshot;
 // They are split from `lock.rs` somewhat arbitrarily. Mostly because there are
 // a lot of them, and `lock.rs` was growing large enough as it is.
 
+/// Virtual workspace members can constrain the same application to different library versions.
+#[test]
+fn project_conflicts_between_virtual_library_roots() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(
+        r#"
+        name = "virtual-library-roots"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.shared-leaf.versions."1.0.0"]
+        sdist = false
+        [packages.shared-leaf.versions."2.0.0"]
+        sdist = false
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "application"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared-leaf"]
+
+        [tool.uv]
+        package = false
+        preview-features = ["package-conflicts"]
+        conflicts = [[{ package = "virtual-lib1" }, { package = "virtual-lib2" }]]
+
+        [tool.uv.workspace]
+        members = ["virtual-lib1", "virtual-lib2"]
+
+        [tool.uv.sources]
+        application = { workspace = true }
+        "#,
+    )?;
+
+    for (name, dependency) in [
+        ("virtual-lib1", "shared-leaf<2"),
+        ("virtual-lib2", "shared-leaf>=2"),
+    ] {
+        context
+            .temp_dir
+            .child(name)
+            .child("pyproject.toml")
+            .write_str(&format!(
+                r#"
+                [project]
+                name = "{name}"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+                dependencies = ["application", "{dependency}"]
+
+                [tool.uv]
+                package = false
+                "#,
+            ))?;
+    }
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url()).arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("virtual-lib1")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen").arg("--package").arg("virtual-lib2")
+        .arg("--no-header").arg("--no-hashes").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared-leaf==2.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("virtual-lib1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + shared-leaf==1.0.0
+    ");
+    context
+        .assert_command(
+            "from importlib.metadata import version; assert version('shared-leaf') == '1.0.0'",
+        )
+        .success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("virtual-lib2"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - shared-leaf==1.0.0
+     + shared-leaf==2.0.0
+    ");
+    context
+        .assert_command(
+            "from importlib.metadata import version; assert version('shared-leaf') == '2.0.0'",
+        )
+        .success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--all-packages"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `virtual-lib1` and package `virtual-lib2` are incompatible with the declared conflicts: {virtual-lib1, virtual-lib2}
+    ");
+
+    Ok(())
+}
+
 /// Conflict discovery can provisionally visit a package that is later excluded after all
 /// transitive extras have been activated. Its dependencies must be evaluated under the package's
 /// reachability marker during that preliminary traversal.
