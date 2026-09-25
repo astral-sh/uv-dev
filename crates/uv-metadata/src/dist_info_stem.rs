@@ -91,6 +91,18 @@ mod tests {
     }
 
     #[test]
+    fn normalize_version_spellings() {
+        for (input, expected) in [
+            ("friendly_bard-1.0-1", "friendly-bard-1-0-1"),
+            ("friendly_bard-1.0.post1", "friendly-bard-1-0-post1"),
+            ("Friendly.Bard-1.0+LOCAL_1", "friendly-bard-1-0+local-1"),
+            ("friendly-bard-1+local", "friendly-bard-1+local"),
+        ] {
+            assert_eq!(super::normalize(input), expected, "{input}");
+        }
+    }
+
+    #[test]
     fn normalize_borrowed() {
         for input in ["", "-", "friendly-bard", "friendly+local!", "café"] {
             assert_eq!(
