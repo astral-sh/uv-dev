@@ -3607,9 +3607,19 @@ impl FromStr for VersionRequest {
             // Split an explicit Python variant or build name before looking for the end of the
             // numeric version. Build names may themselves end in digits, e.g., `avx2`.
             if let Some(start) = s.find('+') {
-                let variant = PythonBuildRequest::from_str(&s[start + 1..])
-                    .map_err(|()| Error::InvalidVersionRequest(s.to_string()))?;
-                return Ok((&s[..start], variant));
+                let prefix = &s[..start];
+                let version = prefix.trim_end_matches(['t', 'd']);
+                let compact_variant = &prefix[version.len()..];
+
+                // Validate compact variants together with the explicit components so that
+                // `3.13td+custom` is accepted, but split or conflicting variants are rejected.
+                let build_request = if compact_variant.is_empty() {
+                    PythonBuildRequest::from_str(&s[start + 1..])
+                } else {
+                    PythonBuildRequest::from_str(&format!("{compact_variant}{}", &s[start..]))
+                }
+                .map_err(|()| Error::InvalidVersionRequest(s.to_string()))?;
+                return Ok((version, build_request));
             }
 
             let Some(mut start) = s.rfind(|c: char| c.is_ascii_digit()) else {
@@ -4628,6 +4638,18 @@ mod tests {
             ("3.15+freethreaded+debug", "3.15+freethreaded+debug"),
             ("3.15+debug+freethreaded", "3.15+freethreaded+debug"),
             ("3.15+debug+gil", "3.15+gil+debug"),
+            ("3.15t+custom", "3.15+freethreaded+custom"),
+            ("3.15d+custom", "3.15+debug+custom"),
+            ("3.15td+custom", "3.15+freethreaded+debug+custom"),
+            ("315td+custom", "3.15+freethreaded+debug+custom"),
+            ("3.15.1t+custom", "3.15.1+freethreaded+custom"),
+            ("3.15rc1td+custom", "3.15rc1+freethreaded+debug+custom"),
+            (
+                "3.15td+custom20260825",
+                "3.15+freethreaded+debug+custom20260825",
+            ),
+            (">=3.15td+custom", ">=3.15+freethreaded+debug+custom"),
+            (">=3.13,<3.15t+custom", ">=3.13, <3.15+freethreaded+custom"),
             ("3.15+td+custom", "3.15+freethreaded+debug+custom"),
             ("3.15+custom+td", "3.15+freethreaded+debug+custom"),
             (
@@ -4680,6 +4702,14 @@ mod tests {
             "3.15+custom+t+d",
             "3.15+t+custom+d",
             ">=3.15+t+d+custom",
+            "3.15t+d+custom",
+            "3.15t+debug+custom",
+            "3.15d+freethreaded+custom",
+            "3.15td+t+custom",
+            "3.15t+gil+custom",
+            "3.15dt+custom",
+            "3.15tt+custom",
+            "3.15td+",
         ] {
             assert_matches!(
                 VersionRequest::from_str(request),
@@ -5025,6 +5055,7 @@ mod tests {
 
         for request in [
             "3.13t",
+            "3.13t+custom",
             "3.13+freethreaded+custom",
             "3.13+custom+freethreaded",
         ] {
