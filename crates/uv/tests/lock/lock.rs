@@ -13714,7 +13714,7 @@ fn lock_build_policy_configuration() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <4"
 
         [options]
@@ -13883,7 +13883,7 @@ fn lock_build_policy_configuration() -> Result<()> {
         +++ new
         @@ -1,37 +1,40 @@
          version = 1
-         revision = 3
+         revision = 5
          requires-python = ">=3.12, <4"
 
          [options]
@@ -13958,7 +13958,7 @@ fn lock_build_policy_configuration() -> Result<()> {
         +++ new
         @@ -1,37 +1,39 @@
          version = 1
-         revision = 3
+         revision = 5
          requires-python = ">=3.12, <4"
 
          [options]
@@ -14029,7 +14029,7 @@ fn lock_build_policy_configuration() -> Result<()> {
         +++ new
         @@ -1,19 +1,16 @@
          version = 1
-         revision = 3
+         revision = 5
          requires-python = ">=3.12, <4"
 
          [options]
@@ -14117,7 +14117,7 @@ fn lock_build_policy_normalizes_legacy_restrictions() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12"
 
         [options]
