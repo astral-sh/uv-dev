@@ -498,6 +498,65 @@ fn python_pin_build_name() {
     assert_snapshot!(python_version, @"3.15+gil+debug+custom");
 }
 
+/// Compact Python variants compose with build names and are saved in canonical form.
+#[test]
+fn python_pin_build_name_compact_variant() {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15t+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Pinned `.python-version` to `3.15+freethreaded+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python 3.15+freethreaded+custom in [PYTHON SOURCES]
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+freethreaded+custom");
+
+    // Discovery must parse the compact spelling as a version, not an executable name.
+    uv_snapshot!(context.filters(), context.python_find().arg("--managed-python").arg("3.15t+custom"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.15+freethreaded+custom in virtual environments or managed installations
+    ");
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15td+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `3.15+freethreaded+custom` -> `3.15+freethreaded+debug+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python 3.15+freethreaded+debug+custom in [PYTHON SOURCES]
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+freethreaded+debug+custom");
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15d+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `3.15+freethreaded+debug+custom` -> `3.15+debug+custom`
+
+    ----- stderr -----
+    warning: No interpreter found for Python 3.15+debug+custom in [PYTHON SOURCES]
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+debug+custom");
+
+    // Short variant components must be complete; `t+d` is not a spelling of `td`.
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.15+t+d"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Requests for arbitrary names (e.g., `3.15+t+d`) are not supported in version files
+    ");
+
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.15+debug+custom");
+}
+
 #[test]
 fn python_pin_compatible_with_requires_python() -> Result<()> {
     let context =
