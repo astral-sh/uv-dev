@@ -2195,17 +2195,13 @@ pub fn venv_bin_path(venv: impl AsRef<Path>) -> PathBuf {
 /// Get the path to the python interpreter for a specific python version.
 fn get_python(version: &PythonVersion) -> PathBuf {
     ManagedPythonInstallations::from_settings(None)
-        .map(|installed_pythons| {
-            installed_pythons
-                .find_version(version)
-                .expect("Tests are run on a supported platform")
-                .next()
-                .as_ref()
-                .map(|python| python.executable(false))
-        })
+        .find_version(version)
+        .expect("Tests are run on a supported platform")
+        .next()
+        .as_ref()
+        .map(|python| python.executable(false))
         // We'll search for the request Python on the PATH if not found in the python versions
         // We hack this into a `PathBuf` to satisfy the compiler but it's just a string
-        .unwrap_or_default()
         .unwrap_or(PathBuf::from(version.to_string()))
 }
 

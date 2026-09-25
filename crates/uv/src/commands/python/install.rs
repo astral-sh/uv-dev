@@ -346,7 +346,7 @@ async fn perform_install(
     }
 
     // Read the existing installations, lock the directory for the duration
-    let installations = ManagedPythonInstallations::from_settings(install_dir.clone())?.init()?;
+    let installations = ManagedPythonInstallations::from_settings(install_dir.clone()).init()?;
     let installations_dir = installations.root();
     let scratch_dir = installations.scratch();
     let _lock = installations.lock().await?;

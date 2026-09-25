@@ -47,18 +47,18 @@ impl StateStore {
     /// 3. A `.uv` directory in the current working directory.
     ///
     /// Returns an absolute cache dir.
-    pub fn from_settings(state_dir: Option<PathBuf>) -> Result<Self, io::Error> {
+    pub fn from_settings(state_dir: Option<PathBuf>) -> Self {
         if let Some(state_dir) = state_dir {
-            Ok(Self::from_path(state_dir))
+            Self::from_path(state_dir)
         } else if let Some(data_dir) = uv_dirs::legacy_user_state_dir().filter(|dir| dir.exists()) {
             // If the user has an existing directory at (e.g.) `/Users/user/Library/Application Support/uv`,
             // respect it for backwards compatibility. Otherwise, prefer the XDG strategy, even on
             // macOS.
-            Ok(Self::from_path(data_dir))
+            Self::from_path(data_dir)
         } else if let Some(data_dir) = uv_dirs::user_state_dir() {
-            Ok(Self::from_path(data_dir))
+            Self::from_path(data_dir)
         } else {
-            Ok(Self::from_path(".uv"))
+            Self::from_path(".uv")
         }
     }
 }
