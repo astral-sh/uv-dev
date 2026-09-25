@@ -462,7 +462,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 // dependencies gated by the activated extra would not evaluate to `true`
                 // during the graph traversals below.
                 for key in additional_activated_extras {
+                    activated_extras_set.insert(key);
                     activated_extras.push(key);
+                    activated_markers.insert_extra(key.0, key.1);
                 }
 
                 // Push its dependencies on the queue.
@@ -610,8 +612,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 // would not evaluate to `true` during the graph traversals below.
                 for extra in &dependency.extras {
                     let key = (&dist.id.name, extra);
-                    if !activated_extras.contains(&key) {
+                    if activated_extras_set.insert(key) {
                         activated_extras.push(key);
+                        activated_markers.insert_extra(key.0, key.1);
                     }
                 }
 
