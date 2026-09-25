@@ -1,7 +1,10 @@
 """Prepare, validate, and publish pull-request label recommendations."""
 
 import json
-from collections.abc import Collection
+import logging
+import subprocess
+import time
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -20,6 +23,7 @@ from uv_automations.models import (
 )
 
 MAX_LABELS = 3
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +111,22 @@ def _replace_context_file(path: Path, content: str) -> None:
         output.write("\n")
 
 
+def _read_context[T](read: Callable[[], T]) -> T:
+    attempt = 1
+    while True:
+        try:
+            return read()
+        except subprocess.CalledProcessError:
+            if attempt == 3:
+                raise
+            logger.info(
+                "Retrying pull request label context read (attempt %s/3)...",
+                attempt,
+            )
+            time.sleep(attempt * 5)
+            attempt += 1
+
+
 def prepare_labels(
     github: LabelContextReader,
     reference: PullRequestRef,
@@ -118,12 +138,12 @@ def prepare_labels(
     checked_out_head = git.head(checkout)
     if expected_head is not None and checked_out_head != expected_head:
         return SkippedLabels("The checkout does not match the dispatched head")
-    context = github.get_label_context(reference)
+    context = _read_context(lambda: github.get_label_context(reference))
     if context.head_sha != checked_out_head:
         return SkippedLabels("The pull request head changed before labeling")
     labels = [
         {"name": label.name, "description": label.description}
-        for label in github.list_labels(reference.repository)
+        for label in _read_context(lambda: github.list_labels(reference.repository))
         if label.name in allowed
     ]
     _replace_context_file(
