@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15581,
+        "title": "Windows uv python install should also provide python and python3 binaries (symlinks)",
+        "url": "https://github.com/astral-sh/uv/issues/15581",
+        "state": "closed",
+        "reason": "Closest observed behavior: `--default` created the unversioned executables, but WindowsApps still resolved first because of PATH ordering. The reporter corrected it manually, and the maintainer treated PATH correction as outside uv's control."
+      },
+      {
+        "kind": "issue",
+        "number": 7710,
+        "title": "uv python install at fixed location?",
+        "url": "https://github.com/astral-sh/uv/issues/7710",
+        "state": "closed",
+        "reason": "Conceptually related request for a stable, authoritative `python` at the front of PATH. Maintainers said uv could not guarantee PATH precedence; `--default` later addressed only the stable executable portion."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8650,
+        "title": "Add `uv python install --default`",
+        "url": "https://github.com/astral-sh/uv/pull/8650",
+        "state": "merged",
+        "reason": "Defines `--default` as installing unversioned executables and leaves warning when they are not at the front of PATH as future work. It does not add system-wide PATH mutation."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests. Literal searches covered `--default`, `system PATH`, `user PATH`, `WindowsApps`, `app execution alias`, `DesktopAppInstaller`, `python.exe`, `HKEY_CURRENT_USER`, and `update-shell`. Conceptual and fix-oriented searches covered machine PATH, elevation, PATH order and precedence, executable directories, Microsoft Store shims, global/default Python, stable shims, `python-install-default`, and Windows registry PATH handling. astral-sh/uv#15237 was ruled out because it concerns prerelease executable selection on macOS. astral-sh/uv#6348 and astral-sh/uv#2264 concern interpreter discovery or spawning, not shell resolution of uv-installed executables. No exact system-PATH tracker was found."
+  },
+  "type": "enhancement",
+  "type_reason": "This requests new machine-wide PATH behavior. `--default` installs additional executable names but does not modify PATH; Windows PATH updates are handled separately by `uv python update-shell`, which currently writes the current-user registry environment. No existing system-PATH feature is failing or has regressed.",
+  "summary": "No exact existing tracker was found. astral-sh/uv#15581 is the closest WindowsApps ordering report, astral-sh/uv#7710 covers the broader PATH-precedence goal, and astral-sh/uv#8650 establishes the implemented scope of `--default`.",
+  "draft_response": "Thanks. `--default` currently only adds the unversioned `python.exe` and `python3.exe` launchers to uv's Python executable directory; it does not update PATH itself. On Windows, `uv python update-shell` prepends that directory to the current user's PATH in `HKEY_CURRENT_USER\\Environment\\PATH`.\n\nWriting the machine-wide PATH would be new behavior, would require elevation, and would affect every user, so it is not a direct replacement for the current per-user update. The same WindowsApps ordering problem appeared in astral-sh/uv#15581 and was handled by correcting PATH order manually.\n\nCould you share the output of `uv python dir --bin` and `where.exe python` from a newly opened shell, plus whether WindowsApps is present in the user or system PATH? That will show whether uv's per-user entry is being outranked or the shell has not picked up the update."
+}
