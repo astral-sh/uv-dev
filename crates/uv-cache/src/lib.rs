@@ -593,8 +593,8 @@ impl Cache {
         if let Some(lock) = lock_file {
             drop(lock);
             fs_err::remove_file(root.join(".lock"))?;
+            removal.num_files += 1;
         }
-        removal.num_files += 1;
 
         // Remove the root directory
         match fs_err::remove_dir(root) {
