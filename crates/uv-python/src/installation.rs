@@ -489,7 +489,7 @@ impl PythonInstallation {
 
         let release = version.only_release();
 
-        let Ok(download_request) = PythonDownloadRequest::try_from(&interpreter.key()) else {
+        let Ok(download_request) = PythonDownloadRequest::try_from(self.key()) else {
             return;
         };
 
