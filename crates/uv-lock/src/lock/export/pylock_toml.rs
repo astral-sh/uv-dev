@@ -1253,55 +1253,7 @@ impl<'lock> PylockToml {
                 .into());
             }
 
-            match (
-                package.wheels.is_some(),
-                package.sdist.is_some(),
-                package.directory.is_some(),
-                package.vcs.is_some(),
-                package.archive.is_some(),
-            ) {
-                // `packages.wheels` is mutually exclusive with `packages.directory`, `packages.vcs`, and `packages.archive`.
-                (true, _, true, _, _) => {
-                    return Err(
-                        PylockTomlErrorKind::WheelWithDirectory(package.name.clone()).into(),
-                    );
-                }
-                (true, _, _, true, _) => {
-                    return Err(PylockTomlErrorKind::WheelWithVcs(package.name.clone()).into());
-                }
-                (true, _, _, _, true) => {
-                    return Err(PylockTomlErrorKind::WheelWithArchive(package.name.clone()).into());
-                }
-                // `packages.sdist` is mutually exclusive with `packages.directory`, `packages.vcs`, and `packages.archive`.
-                (_, true, true, _, _) => {
-                    return Err(
-                        PylockTomlErrorKind::SdistWithDirectory(package.name.clone()).into(),
-                    );
-                }
-                (_, true, _, true, _) => {
-                    return Err(PylockTomlErrorKind::SdistWithVcs(package.name.clone()).into());
-                }
-                (_, true, _, _, true) => {
-                    return Err(PylockTomlErrorKind::SdistWithArchive(package.name.clone()).into());
-                }
-                // `packages.directory` is mutually exclusive with `packages.vcs`, and `packages.archive`.
-                (_, _, true, true, _) => {
-                    return Err(PylockTomlErrorKind::DirectoryWithVcs(package.name.clone()).into());
-                }
-                (_, _, true, _, true) => {
-                    return Err(
-                        PylockTomlErrorKind::DirectoryWithArchive(package.name.clone()).into(),
-                    );
-                }
-                // `packages.vcs` is mutually exclusive with `packages.archive`.
-                (_, _, _, true, true) => {
-                    return Err(PylockTomlErrorKind::VcsWithArchive(package.name.clone()).into());
-                }
-                (false, false, false, false, false) => {
-                    return Err(PylockTomlErrorKind::MissingSource(package.name.clone()).into());
-                }
-                _ => {}
-            }
+            package.validate_sources()?;
 
             // Validate every active wheel before selecting the compatible candidate. Otherwise an
             // incompatible or malformed wheel can be silently ignored when an sdist is present.
@@ -1440,6 +1392,31 @@ impl<'lock> PylockToml {
 }
 
 impl PylockTomlPackage {
+    /// Validate the mutually exclusive package source fields.
+    fn validate_sources(&self) -> Result<(), PylockTomlErrorKind> {
+        let error: fn(PackageName) -> PylockTomlErrorKind = match (
+            self.wheels.is_some(),
+            self.sdist.is_some(),
+            self.directory.is_some(),
+            self.vcs.is_some(),
+            self.archive.is_some(),
+        ) {
+            // Registry wheels and source distributions can coexist.
+            (true, _, true, _, _) => PylockTomlErrorKind::WheelWithDirectory,
+            (true, _, _, true, _) => PylockTomlErrorKind::WheelWithVcs,
+            (true, _, _, _, true) => PylockTomlErrorKind::WheelWithArchive,
+            (_, true, true, _, _) => PylockTomlErrorKind::SdistWithDirectory,
+            (_, true, _, true, _) => PylockTomlErrorKind::SdistWithVcs,
+            (_, true, _, _, true) => PylockTomlErrorKind::SdistWithArchive,
+            (_, _, true, true, _) => PylockTomlErrorKind::DirectoryWithVcs,
+            (_, _, true, _, true) => PylockTomlErrorKind::DirectoryWithArchive,
+            (_, _, _, true, true) => PylockTomlErrorKind::VcsWithArchive,
+            (false, false, false, false, false) => PylockTomlErrorKind::MissingSource,
+            _ => return Ok(()),
+        };
+        Err(error(self.name.clone()))
+    }
+
     /// Convert the [`PylockTomlPackage`] to a TOML [`Table`].
     fn to_toml(&self) -> Result<Table, toml_edit::ser::Error> {
         let mut table = Table::new();
@@ -2053,4 +2030,73 @@ where
         .to_timestamp(DateTime::from_parts(date, time))
         .map_err(serde::de::Error::custom)?;
     Ok(Some(timestamp))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PylockTomlPackage;
+
+    #[test]
+    fn package_source_presence() -> Result<(), toml::de::Error> {
+        // Bits are ordered as wheels, sdist, directory, vcs, archive.
+        let fields = [
+            "wheels = []",
+            r#"sdist = { hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }"#,
+            r#"directory = { path = "." }"#,
+            r#"vcs = { type = "git", commit-id = "0000000000000000000000000000000000000000" }"#,
+            r#"archive = { hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }"#,
+        ];
+        let mut outcomes = Vec::new();
+        for presence in 0_u8..32 {
+            let mut document = String::from("name = \"example\"\n");
+            for (index, field) in fields.iter().enumerate() {
+                if presence & (1 << (4 - index)) != 0 {
+                    document.push_str(field);
+                    document.push('\n');
+                }
+            }
+            let package: PylockTomlPackage = toml::from_str(&document)?;
+            let outcome = match package.validate_sources() {
+                Ok(()) => "ok".to_string(),
+                Err(err) => err.to_string(),
+            };
+            outcomes.push(format!("{presence:05b}: {outcome}"));
+        }
+
+        insta::assert_snapshot!(outcomes.join("\n"), @"
+        00000: Package `example` must include one of: `wheels`, `directory`, `archive`, `sdist`, or `vcs`
+        00001: ok
+        00010: ok
+        00011: Package `example` includes both a VCS (`packages.vcs`) and an archive source (`packages.archive`)
+        00100: ok
+        00101: Package `example` includes both a directory (`packages.directory`) and an archive source (`packages.archive`)
+        00110: Package `example` includes both a directory (`packages.directory`) and a VCS source (`packages.vcs`)
+        00111: Package `example` includes both a directory (`packages.directory`) and a VCS source (`packages.vcs`)
+        01000: ok
+        01001: Package `example` includes both a registry (`packages.sdist`) and an archive source (`packages.archive`)
+        01010: Package `example` includes both a registry (`packages.sdist`) and a VCS source (`packages.vcs`)
+        01011: Package `example` includes both a registry (`packages.sdist`) and a VCS source (`packages.vcs`)
+        01100: Package `example` includes both a registry (`packages.sdist`) and a directory source (`packages.directory`)
+        01101: Package `example` includes both a registry (`packages.sdist`) and a directory source (`packages.directory`)
+        01110: Package `example` includes both a registry (`packages.sdist`) and a directory source (`packages.directory`)
+        01111: Package `example` includes both a registry (`packages.sdist`) and a directory source (`packages.directory`)
+        10000: ok
+        10001: Package `example` includes both a registry (`packages.wheels`) and an archive source (`packages.archive`)
+        10010: Package `example` includes both a registry (`packages.wheels`) and a VCS source (`packages.vcs`)
+        10011: Package `example` includes both a registry (`packages.wheels`) and a VCS source (`packages.vcs`)
+        10100: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        10101: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        10110: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        10111: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        11000: ok
+        11001: Package `example` includes both a registry (`packages.wheels`) and an archive source (`packages.archive`)
+        11010: Package `example` includes both a registry (`packages.wheels`) and a VCS source (`packages.vcs`)
+        11011: Package `example` includes both a registry (`packages.wheels`) and a VCS source (`packages.vcs`)
+        11100: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        11101: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        11110: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        11111: Package `example` includes both a registry (`packages.wheels`) and a directory source (`packages.directory`)
+        ");
+        Ok(())
+    }
 }
