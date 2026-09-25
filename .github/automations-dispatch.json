@@ -25,6 +25,25 @@
       "conditions": {
         "/workflow_run/event": "push",
         "/workflow_run/head_branch": "main",
+        "/workflow_run/conclusion": "success",
+        "/workflow/path": ".github/workflows/ci.yml"
+      },
+      "workflow": "import-rust-caches.yml",
+      "inputs": {
+        "source-run": "/workflow_run/id",
+        "source-sha": "/workflow_run/head_sha"
+      }
+    },
+    {
+      "repository": "uv",
+      "on": {
+        "workflow_run": ["completed"]
+      },
+      "target_repository": "uv-dev",
+      "head_repositories": ["uv"],
+      "conditions": {
+        "/workflow_run/event": "push",
+        "/workflow_run/head_branch": "main",
         "/workflow/path": ".github/workflows/ci.yml"
       },
       "workflow": "import-codspeed-profiles.yml",
