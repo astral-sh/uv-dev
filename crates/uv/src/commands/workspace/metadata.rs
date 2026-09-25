@@ -26,7 +26,7 @@ use crate::commands::{ExitStatus, UvError};
 use crate::printer::{Printer, Stdout};
 use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
 
-use super::module_owners::collect_module_owners;
+use super::environment::collect_environment;
 
 /// Display metadata about the workspace.
 pub(crate) async fn metadata(
@@ -229,7 +229,7 @@ pub(crate) async fn metadata(
                         tracing::warn!("Failed to acquire environment lock: {err}");
                     })
                     .ok();
-                let module_owners = collect_module_owners(
+                let collected = collect_environment(
                     install_target,
                     &environment,
                     &settings,
@@ -245,8 +245,8 @@ pub(crate) async fn metadata(
                 .await
                 .context("Failed to collect module owners")?;
                 export = export
-                    .with_environment(&environment)
-                    .with_module_owners(module_owners);
+                    .with_environment(&environment, collected.packages.iter())
+                    .with_module_owners(collected.module_owners);
             }
 
             print_metadata(&export, printer)
