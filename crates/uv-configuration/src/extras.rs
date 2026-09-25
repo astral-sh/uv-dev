@@ -15,12 +15,6 @@ pub struct ExtrasSpecificationInner {
     include: IncludeExtras,
     /// Extras to exclude (always wins over include).
     exclude: Vec<ExtraName>,
-    /// Whether an `--only` flag was passed.
-    ///
-    /// If true, users of this API should refrain from looking at packages
-    /// that *aren't* specified by the extras. This is exposed
-    /// via [`ExtrasSpecificationInner::prod`][].
-    only_extras: bool,
     /// The "raw" flags/settings we were passed for diagnostics.
     history: ExtrasSpecificationHistory,
 }
@@ -70,7 +64,6 @@ impl ExtrasSpecification {
         Self(Arc::new(ExtrasSpecificationInner {
             include,
             exclude: no_extra,
-            only_extras,
             history,
         }))
     }
@@ -130,18 +123,6 @@ impl std::ops::Deref for ExtrasSpecification {
 }
 
 impl ExtrasSpecificationInner {
-    /// Returns `true` if packages other than the ones referenced by these
-    /// extras should be considered.
-    ///
-    /// That is, if I tell you to install a project and this is false,
-    /// you should ignore the project itself and all its dependencies,
-    /// and instead just install the extras.
-    ///
-    /// (This is really just asking if an --only flag was passed.)
-    fn prod(&self) -> bool {
-        !self.only_extras
-    }
-
     /// Returns `true` if the specification includes the given extra.
     pub fn contains(&self, extra: &ExtraName) -> bool {
         // exclude always trumps include
@@ -177,7 +158,7 @@ impl ExtrasSpecificationInner {
 
     /// Returns `true` if the specification will have no effect.
     pub fn is_empty(&self) -> bool {
-        self.prod() && self.exclude.is_empty() && self.include.is_empty()
+        self.exclude.is_empty() && self.include.is_empty()
     }
 
     /// Get the raw history for diagnostics
