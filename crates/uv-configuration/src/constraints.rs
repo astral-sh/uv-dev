@@ -7,7 +7,6 @@ use uv_distribution_types::{
     NameRequirementSpecification, Requirement, RequirementSource, ResolutionRecorder,
 };
 use uv_normalize::PackageName;
-use uv_pep508::MarkerTree;
 
 /// A set of constraints for a set of requirements.
 #[derive(Debug, Default, Clone)]
@@ -94,14 +93,13 @@ impl Constraints {
                 return Either::Left(std::iter::once(requirement));
             };
 
-            // ASSUMPTION: There is one `extra = "..."`, and it's either the only marker or part
-            // of the main conjunction.
-            let Some(extra_expression) = requirement.marker.top_level_extra() else {
+            let extra_marker = requirement.marker.only_extras();
+            if extra_marker.is_true() {
                 // Case 2: A non-optional dependency with constraint(s).
                 return Either::Right(Either::Right(
                     std::iter::once(requirement).chain(constraints.iter().map(Cow::Borrowed)),
                 ));
-            };
+            }
 
             // Case 3: An optional dependency with constraint(s).
             //
@@ -109,9 +107,8 @@ impl Constraints {
             // be optional for the same extra, otherwise we activate extras that should be inactive.
             Either::Right(Either::Left(std::iter::once(requirement).chain(
                 constraints.iter().cloned().map(move |constraint| {
-                    // Add the extra to the override marker.
-                    let joint_marker =
-                        MarkerTree::expression(extra_expression.clone()).and(constraint.marker);
+                    // Add the extra to the constraint marker.
+                    let joint_marker = extra_marker.and(constraint.marker);
                     Cow::Owned(Requirement {
                         marker: joint_marker,
                         ..constraint
