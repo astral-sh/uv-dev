@@ -153,21 +153,18 @@ async fn do_uninstall(
     // Find and remove all relevant Python executables
     let mut uninstalled_executables: FxHashMap<PythonInstallationKey, FxHashSet<PathBuf>> =
         FxHashMap::default();
-    let mut executable_installations: FxHashMap<String, Vec<_>> = FxHashMap::default();
-    for installation in &matching_installations {
-        for name in [
-            installation.key().executable_name_minor(),
-            installation.key().executable_name_major(),
-            installation.key().executable_name(),
-        ] {
-            executable_installations
-                .entry(name)
-                .or_default()
-                .push(installation);
-        }
-    }
+    let executable_names: FxHashSet<_> = matching_installations
+        .iter()
+        .flat_map(|installation| {
+            [
+                installation.key().executable_name_minor(),
+                installation.key().executable_name_major(),
+                installation.key().executable_name(),
+            ]
+        })
+        .collect();
 
-    for (executable, installations) in python_executable_dir()?
+    for executable in python_executable_dir()?
         .read_dir()
         .into_iter()
         .flatten()
@@ -183,14 +180,17 @@ async fn do_uninstall(
         // Only include files that match the expected Python executable names
         // TODO(zanieb): This is a minor optimization to avoid opening more files, but we could
         // leave broken links behind, i.e., if the user created them.
-        .filter_map(|path| {
-            let name = path.file_name()?.to_str()?;
-            let installations = executable_installations.get(name)?;
-            Some((path, installations))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| executable_names.contains(name))
         })
-        .sorted_by(|(left, _), (right, _)| left.cmp(right))
+        .sorted()
     {
-        let Some(installation) = installations
+        // The filename only narrows which files to inspect. A user-created link can point to a
+        // different selected installation, and multiple installations can name the same file.
+        // Search in installation order so the first owner receives the changelog entry.
+        let Some(installation) = matching_installations
             .iter()
             .find(|installation| installation.is_bin_link(executable.as_path()))
         else {
