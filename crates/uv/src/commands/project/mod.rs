@@ -19,7 +19,9 @@ use uv_configuration::{
     TargetTriple, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, LoweredRequirement};
+use uv_distribution::{
+    DistributionDatabase, IndexLookup, LoweredExtraBuildDependencies, LoweredRequirement,
+};
 use uv_distribution_types::{
     ExtraBuildRequirement, ExtraBuildRequires, HashCollection, Index, IndexCredentialsError,
     IndexUrlError, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
@@ -3281,6 +3283,7 @@ pub(crate) async fn script_specification(
         .map(|index| index.relative_to(&script_dir))
         .collect::<Result<Vec<_>, _>>()?;
     let script_sources = script.sources(&settings.sources);
+    let indexes = IndexLookup::new(&settings.index_locations, &script_indexes, &[]);
 
     let mut requirements = Vec::new();
     for requirement in dependencies.iter().cloned() {
@@ -3289,8 +3292,7 @@ pub(crate) async fn script_specification(
                 requirement,
                 script_dir.as_ref(),
                 script_sources.as_ref(),
-                &script_indexes,
-                &settings.index_locations,
+                &indexes,
                 cache,
                 workspace_cache,
                 credentials_cache,
@@ -3316,8 +3318,7 @@ pub(crate) async fn script_specification(
                 requirement,
                 script_dir.as_ref(),
                 script_sources.as_ref(),
-                &script_indexes,
-                &settings.index_locations,
+                &indexes,
                 cache,
                 workspace_cache,
                 credentials_cache,
@@ -3346,8 +3347,7 @@ pub(crate) async fn script_specification(
                             requirement,
                             script_dir.as_ref(),
                             script_sources.as_ref(),
-                            &script_indexes,
-                            &settings.index_locations,
+                            &indexes,
                             cache,
                             workspace_cache,
                             credentials_cache,
@@ -3366,8 +3366,7 @@ pub(crate) async fn script_specification(
                                 requirement,
                                 script_dir.as_ref(),
                                 script_sources.as_ref(),
-                                &script_indexes,
-                                &settings.index_locations,
+                                &indexes,
                                 cache,
                                 workspace_cache,
                                 credentials_cache,
@@ -3420,6 +3419,7 @@ pub(crate) async fn script_extra_build_requires(
         .map(|index| index.relative_to(&script_dir))
         .collect::<Result<Vec<_>, _>>()?;
     let script_sources = script.sources(&settings.sources);
+    let indexes = IndexLookup::new(&settings.index_locations, &script_indexes, &[]);
 
     // Collect any `tool.uv.extra-build-dependencies` from the script.
     let empty = BTreeMap::default();
@@ -3445,8 +3445,7 @@ pub(crate) async fn script_extra_build_requires(
                     requirement,
                     script_dir.as_ref(),
                     script_sources.as_ref(),
-                    &script_indexes,
-                    &settings.index_locations,
+                    &indexes,
                     cache,
                     workspace_cache,
                     credentials_cache,
