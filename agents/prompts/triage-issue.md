@@ -90,3 +90,13 @@ and supporting evidence. Format related issues and pull requests in the `## Rela
 Markdown bullet list with one item per issue or pull request. If none were found, say so without
 using a list. Add or adjust sections when that makes the document clearer, and keep the README
 consistent with the structured JSON result.
+
+Write for a maintainer scanning the issue, not an investigation transcript. Aim for roughly 200
+words outside essential code or command blocks; include more only when needed to explain a complex
+issue accurately. Lead `## Summary` with the confirmed problem or cause and the most useful next
+step. Keep the classification, draft response, and related items brief, and avoid repeating the same
+explanation across sections; the reporter-facing draft response may restate the essential answer.
+Include only evidence that changes the diagnosis or maintainer decision. Omit exhaustive search
+logs, eliminated hypotheses, lengthy background, and generic caveats unless they explain a material
+uncertainty or distinction. Keep detailed search coverage in `related.search_scope` rather than
+reproducing it in the README.

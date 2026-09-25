@@ -64,3 +64,12 @@ one `## Reproduction` section containing the reproduction outcome and relevant c
 configuration, versions, observed behavior, existing test coverage, or missing information. Adjust
 or add sections when that makes the overall document clearer; do not simply append duplicate or
 contradictory information. Keep the README and the structured JSON result consistent.
+
+Keep the handoff concise: aim for roughly 200 words outside essential code or command blocks,
+expanding only when additional detail is necessary for an accurate diagnosis. Lead `## Summary` with
+the confirmed behavior or cause and the practical next step. Include the smallest working
+reproduction, versions or platform differences that matter, and the strongest direct evidence.
+Summarize controls, diagnostic output, stack traces, and existing test coverage briefly instead of
+copying them in full. Remove exhaustive search summaries, full dependency lists, disproven
+hypotheses, and redundant explanations unless they materially affect the conclusion. State the
+diagnosis once; only the concise reporter-facing draft response should intentionally repeat it.
