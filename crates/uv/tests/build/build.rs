@@ -2342,6 +2342,39 @@ fn build_hide_build_output_on_failure() -> Result<()> {
     Ok(())
 }
 
+/// Report the failing requirements hook instead of incorrectly naming `build_wheel`.
+#[test]
+fn build_requires_hook_failure() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        def get_requires_for_build_wheel(config_settings=None):
+            raise RuntimeError("requirements hook failed")
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            raise RuntimeError("build hook must not run")
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").env(EnvVars::UV_HIDE_BUILD_OUTPUT, "1").current_dir(&project), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/project`
+      cause: The build backend returned an error
+      cause: Call to `backend.get_requires_for_build_wheel` failed (exit status: 1)
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn build_tool_uv_sources() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((r"\\\.", ""));
