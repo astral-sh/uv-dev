@@ -29,7 +29,7 @@ impl Service {
     }
 
     /// Validate that the URL scheme is supported.
-    fn check_scheme(url: &Url) -> Result<(), ServiceParseError> {
+    pub(crate) fn check_scheme(url: &Url) -> Result<(), ServiceParseError> {
         match url.scheme() {
             "https" => Ok(()),
             "http" if matches!(url.host_str(), Some("localhost" | "127.0.0.1")) => Ok(()),
