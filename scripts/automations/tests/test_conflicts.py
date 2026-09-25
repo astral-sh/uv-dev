@@ -130,6 +130,93 @@ class ConflictTests(unittest.TestCase):
             ["GitHub could not determine mergeability for 1 pull requests."],
         )
 
+    def test_retries_failed_github_request(self) -> None:
+        failed_request = subprocess.CalledProcessError(1, ["gh", "pr", "list"])
+        sleeps: list[float] = []
+        with patch("uv_automations.github.subprocess.run") as run:
+            run.side_effect = [
+                failed_request,
+                subprocess.CompletedProcess([], 0, json.dumps([github_payload()])),
+            ]
+            self.assertEqual(
+                find_conflicted_pull_requests(
+                    GitHub(),
+                    REPOSITORY,
+                    author="app/astral-automations-bot",
+                    sleep=sleeps.append,
+                ),
+                (pull_request(123, Mergeability.CONFLICTING),),
+            )
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_args_list[0], run.call_args_list[1])
+        self.assertEqual(sleeps, [5])
+
+    def test_request_failures_share_mergeability_retry_budget(self) -> None:
+        failed_request = subprocess.CalledProcessError(1, ["gh", "pr", "list"])
+        unknown = subprocess.CompletedProcess(
+            [], 0, json.dumps([github_payload(mergeability="UNKNOWN")])
+        )
+        sleeps: list[float] = []
+        with patch("uv_automations.github.subprocess.run") as run:
+            run.side_effect = [
+                unknown,
+                failed_request,
+                unknown,
+                failed_request,
+                subprocess.CompletedProcess([], 0, json.dumps([github_payload()])),
+            ]
+            self.assertEqual(
+                find_conflicted_pull_requests(
+                    GitHub(), REPOSITORY, sleep=sleeps.append
+                ),
+                (pull_request(123, Mergeability.CONFLICTING),),
+            )
+            self.assertEqual(run.call_count, 5)
+        self.assertEqual(sleeps, [5] * 4)
+
+    def test_request_failure_exhaustion_raises_last_error(self) -> None:
+        failed_request = subprocess.CalledProcessError(1, ["gh", "pr", "list"])
+        final_request = subprocess.CalledProcessError(4, ["gh", "pr", "list"])
+        sleeps: list[float] = []
+        with (
+            patch("uv_automations.github.subprocess.run") as run,
+            self.assertRaises(subprocess.CalledProcessError) as error,
+        ):
+            run.side_effect = [failed_request] * 4 + [final_request]
+            find_conflicted_pull_requests(GitHub(), REPOSITORY, sleep=sleeps.append)
+        self.assertIs(error.exception, final_request)
+        self.assertEqual(run.call_count, 5)
+        self.assertEqual(sleeps, [5] * 4)
+
+    def test_malformed_github_response_is_not_retried(self) -> None:
+        for response in [
+            "not JSON",
+            "{}",
+            json.dumps([github_payload(mergeability="NEW_STATE")]),
+        ]:
+            sleeps: list[float] = []
+            with (
+                self.subTest(response=response),
+                patch("uv_automations.github.subprocess.run") as run,
+                self.assertRaises((TypeError, ValueError)),
+            ):
+                run.return_value = subprocess.CompletedProcess([], 0, response)
+                find_conflicted_pull_requests(GitHub(), REPOSITORY, sleep=sleeps.append)
+            run.assert_called_once()
+            self.assertEqual(sleeps, [])
+
+    def test_github_request_timeout_is_not_retried(self) -> None:
+        timed_out = subprocess.TimeoutExpired(["gh", "pr", "list"], 60)
+        sleeps: list[float] = []
+        with (
+            patch("uv_automations.github.subprocess.run", side_effect=timed_out) as run,
+            self.assertRaises(subprocess.TimeoutExpired) as error,
+        ):
+            find_conflicted_pull_requests(GitHub(), REPOSITORY, sleep=sleeps.append)
+        self.assertIs(error.exception, timed_out)
+        run.assert_called_once()
+        self.assertEqual(sleeps, [])
+
     def test_invalid_retry_policy(self) -> None:
         for max_attempts, retry_delay in [(0, 5), (-1, 5), (1, -1)]:
             with (

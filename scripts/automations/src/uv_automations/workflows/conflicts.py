@@ -1,6 +1,7 @@
 """Find conflicted pull requests after GitHub computes mergeability."""
 
 import logging
+import subprocess
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -65,17 +66,28 @@ def find_conflicted_pull_requests(
     query = OpenPullRequestQuery(repository, base="main", author=author)
     attempt = 1
     while True:
-        summary = summarize_mergeability(github.list_open_pull_requests(query))
-        if summary.pending == 0 or attempt == max_attempts:
-            break
+        try:
+            pull_requests = github.list_open_pull_requests(query)
+        except subprocess.CalledProcessError:
+            if attempt == max_attempts:
+                raise
+            logger.warning(
+                "GitHub mergeability request failed (attempt %s/%s); retrying...",
+                attempt,
+                max_attempts,
+            )
+        else:
+            summary = summarize_mergeability(pull_requests)
+            if summary.pending == 0 or attempt == max_attempts:
+                break
 
-        logger.info(
-            "Waiting for GitHub to calculate mergeability for %s pull requests "
-            "(attempt %s/%s)...",
-            summary.pending,
-            attempt,
-            max_attempts,
-        )
+            logger.info(
+                "Waiting for GitHub to calculate mergeability for %s pull requests "
+                "(attempt %s/%s)...",
+                summary.pending,
+                attempt,
+                max_attempts,
+            )
         sleep(retry_delay)
         attempt += 1
 
