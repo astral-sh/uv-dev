@@ -18,7 +18,7 @@ use uv_configuration::{
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, Name,
     NameRequirementSpecification, Origin, PackageConfigSettings, Requirement, Resolution,
@@ -139,6 +139,8 @@ pub(crate) async fn pip_install(
     let start = std::time::Instant::now();
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
+    let lowering_context =
+        LoweringContext::new(&cache, &workspace_cache, client_builder.credentials_cache());
 
     // Read all requirements from the provided sources.
     let RequirementsSpecification {
@@ -168,6 +170,7 @@ pub(crate) async fn pip_install(
         extras,
         Some(groups),
         &client_builder,
+        lowering_context,
     )
     .await?;
 
@@ -201,7 +204,7 @@ pub(crate) async fn pip_install(
 
     // Read build constraints.
     let build_constraints = Constraints::from_specifications(
-        operations::read_constraints(build_constraints, &client_builder)
+        operations::read_constraints(build_constraints, &client_builder, lowering_context)
             .await?
             .into_iter()
             .chain(build_constraints_from_workspace.iter().cloned()),
