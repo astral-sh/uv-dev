@@ -31,21 +31,19 @@ fn split_glob(pattern: impl AsRef<str>) -> GlobParts {
     let pattern: &Path = pattern.as_ref().as_ref();
 
     let mut glob = GlobParts::default();
+    let mut current = &mut glob.base;
     let mut globbing = false;
     let mut last = None;
 
     for part in pattern.components() {
         if let Some(last) = last {
             if last != Component::CurDir {
-                if globbing {
-                    glob.pattern.push(last);
-                } else {
-                    glob.base.push(last);
-                }
+                current.push(last);
             }
         }
-        if !globbing {
-            globbing = is_glob_like(part);
+        if !globbing && is_glob_like(part) {
+            globbing = true;
+            current = &mut glob.pattern;
         }
         // we don't know if this part is the last one, defer handling it by one iteration
         last = Some(part);
@@ -53,11 +51,10 @@ fn split_glob(pattern: impl AsRef<str>) -> GlobParts {
 
     if let Some(last) = last {
         // defer handling the last component to prevent draining entire pattern into base
-        if globbing || matches!(last, Component::Normal(_)) {
-            glob.pattern.push(last);
-        } else {
-            glob.base.push(last);
+        if !globbing && matches!(last, Component::Normal(_)) {
+            current = &mut glob.pattern;
         }
+        current.push(last);
     }
     glob
 }
