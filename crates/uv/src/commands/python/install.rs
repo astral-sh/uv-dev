@@ -487,17 +487,15 @@ async fn perform_install(
         return Ok(ExitStatus::Success);
     }
 
-    let requested_minor_versions = requests
+    let minor_version_requests = requests
         .iter()
-        .filter_map(|request| {
-            if let PythonRequest::Version(VersionRequest::MajorMinor(..)) = request.python_request()
-            {
-                Some(PythonInstallationMinorVersionKey::ref_cast(request.download.key()).clone())
-            } else {
-                None
-            }
+        .filter(|request| {
+            matches!(
+                request.python_request(),
+                PythonRequest::Version(VersionRequest::MajorMinor(..))
+            )
         })
-        .collect::<IndexSet<_>>();
+        .collect::<Vec<_>>();
 
     if let PythonUpgrade::Enabled(source) = upgrade {
         if let Some(request) = requests.iter().find(|request| {
@@ -779,7 +777,9 @@ async fn perform_install(
 
     for installation in &installations {
         let upgradeable = (default || is_default_install)
-            || requested_minor_versions.contains(installation.minor_version_key());
+            || minor_version_requests
+                .iter()
+                .any(|request| request.matches_installation(installation));
 
         if let Some(bin_dir) = bin_dir.as_ref() {
             create_bin_links(
