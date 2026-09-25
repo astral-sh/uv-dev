@@ -403,10 +403,16 @@ pub(crate) async fn pip_sync(
             .collect::<Vec<_>>();
 
         let groups = pylock_groups.with_defaults(DefaultGroups::List(lock.default_groups.clone()));
-        let groups = groups
-            .group_names(lock.dependency_groups.iter())
-            .cloned()
-            .collect::<Vec<_>>();
+        let groups =
+            groups
+                .group_names(lock.dependency_groups.iter().chain(
+                    lock.default_groups.iter().filter(|group| {
+                        !lock.dependency_groups.contains(group)
+                            && groups.contains_because_default(group)
+                    }),
+                ))
+                .cloned()
+                .collect::<Vec<_>>();
 
         resolve_pylock_toml(
             lock,
