@@ -19,7 +19,7 @@ pub(crate) struct PyPIPublishingService<'a> {
 impl<'a> PyPIPublishingService<'a> {
     pub(crate) fn new(registry: &'a DisplaySafeUrl, client: &'a BaseClient) -> Self {
         Self {
-            client: client.for_host(registry).raw_client(),
+            client: client.for_host(registry),
             registry,
         }
     }
