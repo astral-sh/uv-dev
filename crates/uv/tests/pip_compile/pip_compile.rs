@@ -39,7 +39,7 @@ use uv_test::archive::write_tar_gz;
 #[cfg(feature = "test-universal")]
 use uv_test::diff_snapshot;
 use uv_test::packse::PackseServer;
-use uv_test::packse::scenario::{ArtifactMetadata, Package, PackageMetadata, Scenario};
+use uv_test::packse::scenario::{ArtifactMetadata, Package, PackageMetadata, Scenario, Yanked};
 use uv_test::{DEFAULT_PYTHON_VERSION, TestContext, download_to_disk, uv_snapshot};
 
 #[test]
@@ -12004,7 +12004,7 @@ fn shadowed_scoped_override_candidate_policy() -> Result<()> {
                     Version::from_str("2.0.0")?,
                     PackageMetadata {
                         wheel: Some(ArtifactMetadata::default()),
-                        yanked: true,
+                        yanked: Yanked::Yes,
                         ..PackageMetadata::default()
                     },
                 ),

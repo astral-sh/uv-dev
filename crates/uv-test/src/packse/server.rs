@@ -24,7 +24,7 @@ use uv_pep440::VersionSpecifiers;
 use crate::http_server::{HttpServer, content_type_for_filename};
 use crate::vendor::{VendorArtifact, vendor_artifacts};
 
-use super::scenario::{Scenario, WheelTag};
+use super::scenario::{Scenario, WheelTag, Yanked};
 use super::scenarios_dir;
 use super::wheel::{generate_scenario_sdist, generate_scenario_wheel, sha256_hex};
 
@@ -36,7 +36,7 @@ struct DistInfo {
     sha256: String,
     requires_python: Option<VersionSpecifiers>,
     upload_time: Option<String>,
-    yanked: bool,
+    yanked: Yanked,
 }
 
 /// All distributions for a given package name, across versions.
@@ -158,8 +158,11 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
                         filename,
                         sha256,
                         requires_python: meta.requires_python.clone(),
-                        upload_time: wheel_metadata.upload_time.clone(),
-                        yanked: meta.yanked,
+                        upload_time: wheel_metadata
+                            .upload_time
+                            .clone()
+                            .or_else(|| meta.upload_time.clone()),
+                        yanked: meta.yanked.clone(),
                     });
                 }
             }
@@ -172,8 +175,11 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
                     filename,
                     sha256,
                     requires_python: meta.requires_python.clone(),
-                    upload_time: sdist_metadata.upload_time.clone(),
-                    yanked: meta.yanked,
+                    upload_time: sdist_metadata
+                        .upload_time
+                        .clone()
+                        .or_else(|| meta.upload_time.clone()),
+                    yanked: meta.yanked.clone(),
                 });
             }
         }
@@ -196,8 +202,8 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
             filename: artifact.filename.to_string(),
             sha256: artifact.sha256.to_string(),
             requires_python: None,
-            upload_time: None,
-            yanked: false,
+            upload_time: artifact.upload_time.map(str::to_owned),
+            yanked: Yanked::No,
         });
     }
 
@@ -356,8 +362,8 @@ fn build_simple_api_response(
             if let Some(rp) = &dist.requires_python {
                 file_obj["requires-python"] = json!(rp);
             }
-            if dist.yanked {
-                file_obj["yanked"] = json!(true);
+            if let Some(yanked) = dist.yanked.simple_api_value() {
+                file_obj["yanked"] = yanked;
             }
             file_obj
         })
