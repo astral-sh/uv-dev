@@ -3679,6 +3679,47 @@ fn run_module_stdin() {
     ");
 }
 
+#[tokio::test]
+async fn run_module_stdin_before_eof() -> Result<()> {
+    use std::process::Stdio;
+    use std::time::Duration;
+
+    use anyhow::Context;
+
+    let context = uv_test::test_context_with_versions!(&[]);
+    let mut child = tokio::process::Command::from(context.run())
+        .args(["-m", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .context("failed to spawn `uv run -m -`")?;
+
+    // Keep the writer open so `read_to_end` cannot complete by observing EOF.
+    let stdin = child.stdin.take();
+    let result = if stdin.is_some() {
+        tokio::time::timeout(Duration::from_mins(1), child.wait())
+            .await
+            .context("`uv run -m -` did not exit before stdin EOF")
+            .and_then(|status| status.context("failed to wait for `uv run -m -`"))
+    } else {
+        Err(anyhow::anyhow!("missing piped stdin"))
+    };
+    let status = match result {
+        Ok(status) => status,
+        Err(err) => {
+            let kill = child.start_kill();
+            drop(stdin);
+            let reap = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+            return Err(err.context(format!("child cleanup: kill={kill:?}, wait={reap:?}")));
+        }
+    };
+    drop(stdin);
+    assert_eq!(status.code(), Some(2), "{status}");
+    Ok(())
+}
+
 /// Test for how run reacts to a pyproject.toml without a `[project]`
 #[test]
 fn virtual_empty() -> Result<()> {
