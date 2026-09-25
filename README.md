@@ -6,49 +6,88 @@ Classification: bug
 
 ## Summary
 
-Running `overlay use .venv/bin/activate.nu` fails when Nushell parses the generated script. The
-diagnostic points to line 72:
+The reported failure is reproducible for a relocatable virtual environment. Nushell rejects line 72
+of the generated `activate.nu` while parsing `overlay use`:
 
 ```nu
 let virtual_env = (path self | path dirname | path dirname)
 ```
 
 Nushell reports that `path self` can only run during parse time and suggests assigning its output to
-a constant. The reporter says that changing `let` to `const` makes activation work. The report is
-from macOS arm64 with uv 0.12.18 and Python 3.14.7, but it does not include the Nushell version or
-the command that created the environment.
+a constant. Although the report omits the virtual-environment creation command, uv emits this exact
+line only for `uv venv --relocatable`, so that was the targeted fixture. With uv 0.12.18, CPython
+3.12.3, and Nushell 0.115.1 on Linux x86_64, the relocatable script failed with the same diagnostic
+and exit status 1. A non-relocatable control created by the same uv version activated successfully,
+printed its environment path, and exited with status 0.
 
-The repository source confirms that uv substitutes this exact expression only for a relocatable
-`activate.nu`; a non-relocatable script receives a quoted absolute environment path. Relocatable
-Nushell activation was implemented by astral-sh/uv#17036 to satisfy astral-sh/uv#16973. That makes
-the generated script's failure a bug in intended behavior, although the missing Nushell version and
-creation command are needed to establish the precise compatibility boundary.
+Relocatable Nushell activation was implemented by astral-sh/uv#17036 to satisfy
+astral-sh/uv#16973, so successful activation after moving an environment is intended behavior.
 
-No existing issue or pull request tracks this exact parse-time failure. The current Nushell
-integration workflow installs the latest stable Nushell but creates a standard, non-relocatable
-environment, so it does not execute the reported `path self` branch. astral-sh/uv#15294 tracks the
+No existing issue or pull request tracks this exact parse-time failure. The existing Rust test only
+checks that the problematic text is generated, while the Nushell integration workflow executes a
+standard, non-relocatable script and does not reach this branch. astral-sh/uv#15294 tracks the
 broader need for activation-script integration coverage.
+
+## Reproduction
+
+Outcome: **reproducible**.
+
+The reproduction used a temporary directory for the virtual environments, uv tool installation,
+configuration, and caches. The installed uv 0.12.13 was used to launch the reporter's exact uv
+version through `uvx`; the resulting uv reported `uv 0.12.18 (x86_64-unknown-linux-gnu)`. The other
+relevant versions were Nushell 0.115.1, CPython 3.12.3 at `/usr/bin/python3`, and Linux x86_64.
+
+Minimal reproduction (with `repro_root` set to a fresh temporary directory and Nushell 0.115.1 on
+`PATH`):
+
+```bash
+export UV_CACHE_DIR="$repro_root/uv-cache"
+export UV_TOOL_DIR="$repro_root/uv-tools"
+export UV_TOOL_BIN_DIR="$repro_root/uv-tool-bin"
+export UV_PYTHON_DOWNLOADS=never
+uvx --from uv==0.12.18 uv venv --python /usr/bin/python3 --relocatable "$repro_root/relocatable"
+nu --no-config-file -c "overlay use '$repro_root/relocatable/bin/activate.nu'; print \$env.VIRTUAL_ENV"
+```
+
+The generated line was:
+
+```nu
+let virtual_env = (path self | path dirname | path dirname)
+```
+
+The `nu` command exited with status 1 and produced the reported `this command can only run during
+parse-time` error at `activate.nu:72:24`, with the same suggestion to assign the output to a
+constant. As a control, omitting `--relocatable` generated an absolute path at line 72; that script
+activated successfully, printed the expected environment path, and exited with status 0.
+
+Existing test coverage does not exercise the failure. In `crates/uv/tests/python/venv.rs`,
+`verify_pyvenv_cfg_relocatable` asserts that `activate.nu` contains the failing `let virtual_env =
+(path self | path dirname | path dirname)` text but never runs Nushell. The Nushell job in
+`.github/workflows/test-integration.yml` does run `overlay use`, but its `Create venv` step calls
+`./uv venv` without `--relocatable`, so it tests only the successful control branch.
 
 ## Draft response
 
 Thanks for the report. uv's source confirms that this `path self` expression is emitted
 specifically for relocatable Nushell activation scripts; astral-sh/uv#17036 introduced it so those
-scripts could locate the environment after it was moved. Our current Nushell integration check
-creates a non-relocatable environment, so it does not exercise this branch; broader
-activation-script coverage is tracked in astral-sh/uv#15294.
+scripts could locate the environment after it was moved. I reproduced the same parser error with uv
+0.12.18 and Nushell 0.115.1 by creating the environment with `uv venv --relocatable`; a standard
+environment activated successfully. Our Rust test checks only the generated text, and the current
+Nushell integration check creates a non-relocatable environment, so neither catches this failure.
+Broader activation-script coverage is tracked in astral-sh/uv#15294.
 
-Could you share the output of `nu --version` and the exact command that created this `.venv`,
-including whether `--relocatable` was used? That will let us establish the affected Nushell versions
-and reproduce the same generated script. Changing `let` to `const` is a plausible fix based on the
-diagnostic, but it still needs validation across the supported Nushell versions.
+Could you still share the output of `nu --version` and confirm that the environment was created with
+`--relocatable`? The bug itself is reproduced, but that information would identify the reporter's
+exact compatibility boundary.
 
 ## Classification
 
-`bug` is the appropriate classification. The source-generated line and Nushell diagnostic match
-exactly, and relocatable Nushell activation is explicitly intended behavior. The report therefore
-establishes incorrect behavior even though the exact Nushell release that triggers it remains to be
-identified. It is not a duplicate: no open issue or pull request was found for this parse-time
-failure. The historical work enabled this code path; it does not already track the new failure.
+`bug` is the appropriate classification. A targeted execution with the reported uv version produces
+the exact diagnostic, while the non-relocatable control works, and relocatable Nushell activation is
+explicitly intended behavior. The reporter's Nushell version remains unknown, but current Nushell
+0.115.1 is affected. It is not a duplicate: no open issue or pull request was found for this
+parse-time failure. The historical work enabled this code path; it does not already track the new
+failure.
 
 ## Related
 

@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using Linux x86_64, CPython 3.12.3, uv 0.12.18, and Nushell 0.115.1, `uv venv --python /usr/bin/python3 --relocatable <tmp>/venv` followed by `nu --no-config-file -c 'overlay use <tmp>/venv/bin/activate.nu'` exited 1 with the reported parse-time error at `let virtual_env = (path self | path dirname | path dirname)`. An equivalent non-relocatable environment activated successfully and exited 0. The existing `crates/uv/tests/python/venv.rs::verify_pyvenv_cfg_relocatable` only asserts that this line is generated; the Nushell integration workflow executes only a non-relocatable script. The issue-context README was updated with these findings."
+}
