@@ -37,7 +37,7 @@ use crate::commands::project::{
 };
 use crate::commands::{ExitStatus, OutputWriter, UvError};
 use crate::printer::Printer;
-use crate::settings::{FrozenSource, LockCheck, ResolverSettings};
+use crate::settings::{ExportPackageSelection, FrozenSource, LockCheck, ResolverSettings};
 
 #[derive(Debug, Clone)]
 #[expect(clippy::large_enum_variant)]
@@ -131,8 +131,7 @@ impl ExportBatch {
 pub(crate) async fn export(
     project_dir: &Path,
     format: Option<ExportFormat>,
-    all_packages: bool,
-    package: Vec<PackageName>,
+    packages: ExportPackageSelection,
     prune: Vec<PackageName>,
     hashes: bool,
     install_options: InstallOptions,
@@ -162,6 +161,11 @@ pub(crate) async fn export(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
+    let package = match &packages {
+        ExportPackageSelection::All => &[],
+        ExportPackageSelection::Selected(package) => package.as_slice(),
+    };
+
     let batch = if let Some(path) = batch {
         if !preview.is_enabled(PreviewFeature::BatchExport) {
             warn_user!(
@@ -191,7 +195,7 @@ pub(crate) async fn export(
                 ..DiscoveryOptions::default()
             };
 
-            if let [name] = package.as_slice() {
+            if let [name] = package {
                 VirtualProject::discover_with_package(
                     project_dir,
                     &options,
@@ -203,7 +207,7 @@ pub(crate) async fn export(
             } else {
                 VirtualProject::discover(project_dir, &options, cache, workspace_cache).await?
             }
-        } else if let [name] = package.as_slice() {
+        } else if let [name] = package {
             VirtualProject::discover_with_package(
                 project_dir,
                 &DiscoveryOptions::default(),
@@ -221,7 +225,7 @@ pub(crate) async fn export(
             )
             .await?;
 
-            for name in &package {
+            for name in package {
                 if !project.workspace().packages().contains_key(name) {
                     return Err(anyhow::anyhow!("Package `{name}` not found in workspace"));
                 }
@@ -334,6 +338,11 @@ pub(crate) async fn export(
         };
         let mut writers = Vec::with_capacity(batch.export.len());
         for entry in &batch.export {
+            let packages = if entry.all_packages {
+                ExportPackageSelection::All
+            } else {
+                ExportPackageSelection::Selected(entry.package.clone())
+            };
             let default_groups = project.default_groups_for_packages(&entry.package)?;
             let groups = DependencyGroups::from_args(
                 None,
@@ -357,8 +366,7 @@ pub(crate) async fn export(
                     &target,
                     &lock,
                     format,
-                    entry.all_packages,
-                    &entry.package,
+                    &packages,
                     &prune,
                     hashes,
                     &install_options,
@@ -399,8 +407,7 @@ pub(crate) async fn export(
         &target,
         &lock,
         format,
-        all_packages,
-        &package,
+        &packages,
         &prune,
         hashes,
         &install_options,
@@ -432,8 +439,7 @@ async fn render_export<'output>(
     target: &ExportTarget,
     lock: &Lock,
     format: Option<ExportFormat>,
-    all_packages: bool,
-    package: &[PackageName],
+    packages: &ExportPackageSelection,
     prune: &[PackageName],
     hashes: bool,
     install_options: &InstallOptions,
@@ -452,10 +458,15 @@ async fn render_export<'output>(
     cache: &Cache,
     preview: Preview,
 ) -> Result<OutputWriter<'output>> {
+    let package = match packages {
+        ExportPackageSelection::All => &[],
+        ExportPackageSelection::Selected(package) => package.as_slice(),
+    };
+
     // Identify the installation target.
     let target = match target {
         ExportTarget::Project(VirtualProject::Project(project)) => {
-            if all_packages {
+            if matches!(packages, ExportPackageSelection::All) {
                 InstallTarget::Workspace {
                     workspace: project.workspace(),
                     lock,
@@ -482,7 +493,7 @@ async fn render_export<'output>(
             }
         }
         ExportTarget::Project(VirtualProject::NonProject(workspace)) => {
-            if all_packages {
+            if matches!(packages, ExportPackageSelection::All) {
                 InstallTarget::NonProjectWorkspace { workspace, lock }
             } else {
                 match package {
@@ -674,7 +685,7 @@ async fn render_export<'output>(
                 hashes,
                 install_options,
                 preview,
-                all_packages,
+                matches!(packages, ExportPackageSelection::All),
             )?;
 
             export.output_as_json_v1_5(&mut writer)?;
