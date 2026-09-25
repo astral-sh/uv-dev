@@ -170,8 +170,8 @@ pub struct Index {
     /// aren't found elsewhere. To disable the PyPI default, set `default = true` on at least one
     /// other index.
     ///
-    /// Marking an index as default will move it to the front of the list of indexes, such that it
-    /// is given the highest priority when resolving packages.
+    /// Marking an index as default will move it to the end of the list of indexes, such that it
+    /// is given the lowest priority when resolving packages.
     #[serde(default)]
     pub default: bool,
     /// The origin of the index (e.g., a CLI flag, a user-level configuration file, etc.).
