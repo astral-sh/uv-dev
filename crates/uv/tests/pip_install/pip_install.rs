@@ -122,6 +122,83 @@ fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
 }
 
 #[test]
+fn install_http_wheel_rejects_deflated_directory_with_data_descriptor() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let filename = "descriptor_directory-1.0.0-py3-none-any.whl";
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            import io
+            import pathlib
+            import sys
+            import zipfile
+
+
+            class StreamingBuffer(io.BytesIO):
+                def seekable(self):
+                    return False
+
+                def seek(self, *args):
+                    raise io.UnsupportedOperation("streaming output")
+
+
+            output = StreamingBuffer()
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as wheel:
+                wheel.writestr("descriptor_directory/", b"")
+                wheel.writestr("descriptor_directory/__init__.py", b"")
+                wheel.writestr(
+                    "descriptor_directory-1.0.0.dist-info/METADATA",
+                    b"Metadata-Version: 2.1\nName: descriptor-directory\nVersion: 1.0.0\n",
+                )
+                wheel.writestr(
+                    "descriptor_directory-1.0.0.dist-info/WHEEL",
+                    b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+                )
+                wheel.writestr(
+                    "descriptor_directory-1.0.0.dist-info/RECORD",
+                    b"descriptor_directory/__init__.py,,\n"
+                    b"descriptor_directory-1.0.0.dist-info/METADATA,,\n"
+                    b"descriptor_directory-1.0.0.dist-info/WHEEL,,\n"
+                    b"descriptor_directory-1.0.0.dist-info/RECORD,,\n",
+                )
+
+            contents = output.getvalue()
+            with zipfile.ZipFile(io.BytesIO(contents)) as wheel:
+                assert wheel.testzip() is None
+                directory = wheel.getinfo("descriptor_directory/")
+                assert directory.compress_size == 2
+                assert directory.file_size == 0
+                assert directory.flag_bits & 8
+
+            pathlib.Path(sys.argv[1]).write_bytes(contents)
+        "#})
+        .arg(context.temp_dir.join(filename))
+        .assert()
+        .success();
+    let server = FindLinksServer::new(context.temp_dir.path());
+    let context = context.with_filter((server.url().to_string(), "http://[LOCALHOST]"));
+
+    // This valid empty directory is rejected because its DEFLATE stream is two bytes; see
+    // astral-sh/uv#21644.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-cache")
+        .arg("--target")
+        .arg(context.temp_dir.child("target").path())
+        .arg(format!("{}/{filename}", server.url())), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/bin/python
+    Resolved 1 package in [TIME]
+    error: Failed to download `descriptor-directory @ http://[LOCALHOST]/descriptor_directory-1.0.0-py3-none-any.whl`
+      cause: Failed to extract archive: descriptor_directory-1.0.0-py3-none-any.whl
+      cause: Bad compressed size (got 00000000, expected 00000002) for file: descriptor_directory
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
     allow_duplicates! {
         for version in ["0.11.1", "0.12.0"] {
