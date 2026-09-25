@@ -4573,6 +4573,142 @@ fn add_error() -> Result<()> {
     Ok(())
 }
 
+/// Avoid persisting `remove` calls when resolution fails.
+#[test]
+fn remove_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio", "xyz"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.remove().arg("anyio").arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because xyz was not found in the cache and your project depends on xyz, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio", "xyz"]
+        "#);
+    });
+
+    Ok(())
+}
+
+/// Revert a removal if interpreter discovery fails after writing the manifest.
+#[test]
+fn remove_discovery_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_python_sources();
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.100"
+        dependencies = ["anyio"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.remove().arg("anyio"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python >=3.100 in [PYTHON SOURCES]
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.100"
+    dependencies = ["anyio"]
+    "#);
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}
+
+/// Revert the manifest and a newly-written lockfile if syncing a removal fails.
+#[test]
+fn remove_sync_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio", "broken"]
+
+        [tool.uv.sources]
+        broken = { path = "./broken" }
+    "#})?;
+    context
+        .temp_dir
+        .child("broken/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "broken"
+        version = "0.1.0"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context
+        .temp_dir
+        .child("broken/backend.py")
+        .write_str(indoc! {r#"
+        def build_wheel(*args, **kwargs):
+            raise RuntimeError("broken")
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.remove().arg("anyio").arg("--offline"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Failed to build `broken @ file://[TEMP_DIR]/broken`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_wheel` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/broken/backend.py", line 2, in build_wheel
+                 raise RuntimeError("broken")
+             RuntimeError: broken
+
+    hint: `broken` was included because `project` (v0.1.0) depends on `broken`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = ["anyio", "broken"]
+
+    [tool.uv.sources]
+    broken = { path = "./broken" }
+    "#);
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}
+
 /// Suggest avoiding dependencies for modules in the Python standard library.
 #[test]
 fn add_standard_library_error() -> Result<()> {
