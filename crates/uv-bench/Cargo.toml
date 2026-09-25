@@ -68,6 +68,9 @@ name = "uv_pep508"
 path = "benches/uv_pep508.rs"
 harness = false
 
+[dependencies]
+rmp-serde = { workspace = true }
+
 [dev-dependencies]
 uv = { workspace = true }
 uv-cache = { workspace = true }

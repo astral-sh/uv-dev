@@ -205,7 +205,7 @@ fn registry_wheel_build_shard(c: &mut Criterion<WallTime>) {
     ] {
         let registry = RegistryCache::new(versions, settings);
         let input = format!("{versions}x{settings}");
-        let hasher = HashStrategy::None;
+        let hasher = HashStrategy::default();
         let mut index = RegistryWheelIndex::new(
             &registry.cache,
             &registry.tags,
@@ -259,7 +259,7 @@ fn registry_wheel_build_shard(c: &mut Criterion<WallTime>) {
         });
         group.bench_function(BenchmarkId::new("full_scan", &input), |benchmark| {
             benchmark.iter(|| {
-                let hasher = HashStrategy::None;
+                let hasher = HashStrategy::default();
                 let mut index = RegistryWheelIndex::new(
                     &registry.cache,
                     &registry.tags,
@@ -277,7 +277,7 @@ fn registry_wheel_build_shard(c: &mut Criterion<WallTime>) {
 
     let registry = RegistryCache::new(64, 64);
     registry.invalidate_revisions();
-    let hasher = HashStrategy::None;
+    let hasher = HashStrategy::default();
     let mut index = RegistryWheelIndex::new(
         &registry.cache,
         &registry.tags,
@@ -291,7 +291,7 @@ fn registry_wheel_build_shard(c: &mut Criterion<WallTime>) {
     assert_eq!(index.get(&registry.package).count(), 0);
     group.bench_function("full_scan/64x64_invalid", |benchmark| {
         benchmark.iter(|| {
-            let hasher = HashStrategy::None;
+            let hasher = HashStrategy::default();
             let mut index = RegistryWheelIndex::new(
                 &registry.cache,
                 &registry.tags,

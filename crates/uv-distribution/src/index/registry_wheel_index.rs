@@ -487,7 +487,7 @@ mod tests {
             (3, 12),
             TagsOptions::default(),
         )?;
-        let hasher = HashStrategy::None;
+        let hasher = HashStrategy::default();
 
         let config_settings = ["global=enabled", "shared=global"]
             .into_iter()
@@ -603,7 +603,7 @@ mod tests {
             (3, 12),
             TagsOptions::default(),
         )?;
-        let hasher = HashStrategy::None;
+        let hasher = HashStrategy::default();
         let config_settings = ConfigSettings::default();
         let config_settings_package = PackageConfigSettings::default();
         let extra_build_requires = ExtraBuildRequires::default();
