@@ -147,6 +147,7 @@ mod tests {
         - <a id="package-conflicts" href="#package-conflicts"><code>package-conflicts</code></a>: Allows defining workspace conflicts at the package level.
         - <a id="packaged-init" href="#packaged-init"><code>packaged-init</code></a>: Makes `uv init` create a packaged application with a `src/` layout, build system, and script
           entry point by default.
+        - <a id="pip-build-dependencies" href="#pip-build-dependencies"><code>pip-build-dependencies</code></a>: Allows including build dependencies in `uv pip compile` output.
         - <a id="project-directory-must-exist" href="#project-directory-must-exist"><code>project-directory-must-exist</code></a>: Rejects an invalid `--project` path instead of warning and continuing. Except for `uv init`,
           the path must already exist as a directory or point to a `pyproject.toml` file. This feature
           takes effect before configuration is loaded.
