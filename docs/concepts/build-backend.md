@@ -1,33 +1,31 @@
 # The uv build backend
 
-A build backend transforms a source tree (i.e., a directory) into a source distribution or a wheel.
+A build backend converts a source directory into a source distribution or a wheel.
 
-uv supports all build backends (as specified by [PEP 517](https://peps.python.org/pep-0517/)), but
-also provides a native build backend (`uv_build`) that integrates tightly with uv to improve
-performance and user experience.
+uv supports all build backends that follow [PEP 517](https://peps.python.org/pep-0517/). It also
+provides a native build backend, `uv_build`, that integrates with uv to improve performance and
+usability.
 
 ## Choosing a build backend
 
-The uv build backend is a great choice for most Python projects. It has reasonable defaults, with
-the goal of requiring zero configuration for most users, but provides flexible configuration to
-accommodate most Python project structures. It integrates tightly with uv, to improve messaging and
-user experience. It validates project metadata and structures, preventing common mistakes. And,
-finally, it's very fast.
+The uv build backend works well for most Python projects. Its defaults require no configuration for
+most projects. Configuration options support other common project structures. The backend integrates
+with uv to provide clear messages and fast builds. It also validates project metadata and structure
+to prevent common mistakes.
 
-The uv build backend currently **only supports pure Python code**. An alternative backend is
-required to build a
-[library with extension modules](../concepts/projects/init.md#projects-with-extension-modules).
+The uv build backend **supports pure Python code only**. A
+[library with extension modules](../concepts/projects/init.md#projects-with-extension-modules)
+requires another backend.
 
 !!! tip
 
-    While the backend supports a number of options for configuring your project structure, when build scripts or
-    a more flexible project layout are required, consider using the
+    If a project requires build scripts or a more flexible layout, consider the
     [hatchling](https://hatch.pypa.io/latest/config/build/#build-system) build backend instead.
 
 ## Using the uv build backend
 
 To use uv as a build backend in an existing project, add `uv_build` to the
-[`[build-system]`](../concepts/projects/config.md#build-systems) section in your `pyproject.toml`:
+[`[build-system]`](../concepts/projects/config.md#build-systems) section in `pyproject.toml`:
 
 ```toml title="pyproject.toml"
 [build-system]
@@ -38,8 +36,8 @@ build-backend = "uv_build"
 !!! note
 
     The uv build backend follows the same [versioning policy](../reference/policies/versioning.md)
-    as uv. Including an upper bound on the `uv_build` version ensures that your package continues to
-    build correctly as new versions are released.
+    as uv. Include an upper bound on the `uv_build` version to keep builds compatible with future
+    releases.
 
 To create a new project that uses the uv build backend, use `uv init`:
 
@@ -47,24 +45,23 @@ To create a new project that uses the uv build backend, use `uv init`:
 $ uv init
 ```
 
-When the project is built, e.g., with [`uv build`](../guides/package.md), the uv build backend will
-be used to create the source distribution and wheel.
+Commands such as [`uv build`](../guides/package.md) then use this backend to create the source
+distribution and wheel.
 
 ## Bundled build backend
 
-The build backend is published as a separate package (`uv_build`) that is optimized for portability
-and small binary size. However, the `uv` executable also includes a copy of the build backend, which
-will be used during builds performed by uv, e.g., during `uv build`, if its version is compatible
-with the `uv_build` requirement. If it's not compatible, a compatible version of the `uv_build`
-package will be used. Other build frontends, such as `python -m build`, will always use the
-`uv_build` package, typically choosing the latest compatible version.
+The `uv_build` package contains a portable build backend with a small binary. The `uv` executable
+also includes a copy of this backend. During commands such as `uv build`, uv uses the bundled copy
+if its version satisfies the `uv_build` requirement. Otherwise, uv uses a compatible version of the
+`uv_build` package. Other build frontends, such as `python -m build`, always use the `uv_build`
+package. They usually select its latest compatible version.
 
 ## Modules
 
-Python packages are expected to contain one or more Python modules, which are directories containing
-an `__init__.py`. By default, a single root module is expected at `src/<package_name>/__init__.py`.
+The uv build backend expects Python packages to contain one or more modules. By default, it expects
+one root package module with an `__init__.py` file at `src/<package_name>/__init__.py`.
 
-For example, the structure for a project named `foo` would be:
+For example, a project named `foo` has this structure:
 
 ```text
 pyproject.toml
@@ -73,13 +70,13 @@ src
     └── __init__.py
 ```
 
-uv normalizes the package name to determine the default module name: the package name is lowercased
-and dots and dashes are replaced with underscores, e.g., `Foo-Bar` would be converted to `foo_bar`.
+uv normalizes the package name to determine the default module name. It converts the name to
+lowercase and replaces dots and dashes with underscores. For example, `Foo-Bar` becomes `foo_bar`.
 
 The `src/` directory is the default directory for module discovery.
 
-These defaults can be changed with the `module-name` and `module-root` settings. For example, to use
-a `FOO` module in the root directory, as in the project structure:
+Use the `module-name` and `module-root` settings to change these defaults. For example, a `FOO`
+module in the root directory has this structure:
 
 ```text
 pyproject.toml
@@ -87,7 +84,7 @@ FOO
 └── __init__.py
 ```
 
-The correct build configuration would be:
+Use this build configuration:
 
 ```toml title="pyproject.toml"
 [tool.uv.build-backend]
@@ -97,11 +94,10 @@ module-root = ""
 
 ## Namespace packages
 
-Namespace packages are intended for use-cases where multiple packages write modules into a shared
-namespace.
+Namespace packages let multiple packages place modules in a shared namespace.
 
-Namespace package modules are identified by a `.` in the `module-name`. For example, to package the
-module `bar` in the shared namespace `foo`, the project structure would be:
+A `.` in `module-name` identifies a namespace package module. For example, use this structure to
+package the `bar` module in the shared `foo` namespace:
 
 ```text
 pyproject.toml
@@ -111,7 +107,7 @@ src
         └── __init__.py
 ```
 
-And the `module-name` configuration would be:
+Set `module-name` as follows:
 
 ```toml title="pyproject.toml"
 [tool.uv.build-backend]
@@ -120,10 +116,9 @@ module-name = "foo.bar"
 
 !!! important
 
-    The `__init__.py` file is not included in `foo`, since it's the shared namespace module.
+    Do not add `__init__.py` to `foo` because `foo` is the shared namespace module.
 
-It's also possible to have a complex namespace package with more than one root module, e.g., with
-the project structure:
+A namespace package can also contain more than one root module:
 
 ```text
 pyproject.toml
@@ -134,16 +129,16 @@ src
     └── __init__.py
 ```
 
-While we do not recommend this structure (i.e., you should use a workspace with multiple packages
-instead), it is supported by setting `module-name` to a list of names:
+Use a workspace with multiple packages when possible. If this structure is necessary, set
+`module-name` to a list of names:
 
 ```toml title="pyproject.toml"
 [tool.uv.build-backend]
 module-name = ["foo", "bar"]
 ```
 
-For packages with many modules or complex namespaces, the `namespace = true` option can be used to
-avoid explicitly declaring each module name, e.g.:
+For packages with many modules or complex namespaces, set `namespace = true` to avoid listing every
+module name:
 
 ```toml title="pyproject.toml"
 [tool.uv.build-backend]
@@ -152,11 +147,11 @@ namespace = true
 
 !!! warning
 
-    Using `namespace = true` disables safety checks. Using an explicit list of module names is
-    strongly recommended outside of legacy projects.
+    `namespace = true` disables safety checks. Use an explicit list of module names unless the
+    project requires this legacy behavior.
 
-The `namespace` option can also be used with `module-name` to explicitly declare the root, e.g., for
-the project structure:
+Combine `namespace` with `module-name` to declare the root explicitly. For example, consider this
+project structure:
 
 ```text
 pyproject.toml
@@ -168,7 +163,7 @@ src
         └── __init__.py
 ```
 
-The recommended configuration would be:
+Use this configuration:
 
 ```toml title="pyproject.toml"
 [tool.uv.build-backend]
@@ -178,10 +173,10 @@ namespace = true
 
 ## Stub packages
 
-The build backend also supports building type stub packages, which are identified by the `-stubs`
-suffix on the package or module name, e.g., `foo-stubs`. The module name for type stub packages must
-end in `-stubs`, so uv will not normalize the `-` to an underscore. Additionally, uv will search for
-a `__init__.pyi` file. For example, the project structure would be:
+The build backend also builds type stub packages. These packages have a `-stubs` suffix in the
+package or module name, such as `foo-stubs`. Because type stub module names must end in `-stubs`, uv
+does not replace the `-` with an underscore. uv also searches for an `__init__.pyi` file. For
+example, use this project structure:
 
 ```text
 pyproject.toml
@@ -190,26 +185,24 @@ src
     └── __init__.pyi
 ```
 
-Type stub modules are also supported for [namespace packages](#namespace-packages).
+uv also supports type stub modules in [namespace packages](#namespace-packages).
 
 ## File inclusion and exclusion
 
-The build backend is responsible for determining which files in a source tree should be packaged
-into the distributions.
+The build backend determines which source files to package in distributions.
 
-To determine which files to include in a source distribution, uv first adds the included files and
-directories, then removes the excluded files and directories. This means that exclusions always take
-precedence over inclusions.
+To build a source distribution, uv first adds included files and directories. It then removes
+excluded files and directories. Exclusions therefore take precedence over inclusions.
 
 By default, uv excludes `__pycache__`, `*.pyc`, and `*.pyo`.
 
-When building a source distribution, the following files and directories are included:
+uv includes these files and directories in source distributions:
 
-- The `pyproject.toml`. If uv detects TOML 1.1-only syntax, it issues a warning and automatically
-  enables the `toml-backwards-compatibility` preview feature: the `pyproject.toml` is reformatted
-  for backwards compatibility, and the original file is preserved as `pyproject.toml.orig`. Pass
-  `--preview-feature toml-backwards-compatibility` to enable the feature explicitly and suppress the
-  warning.
+- The `pyproject.toml` file. If uv detects TOML 1.1-only syntax, it warns and enables the
+  `toml-backwards-compatibility` preview feature. uv reformats `pyproject.toml` for backwards
+  compatibility and saves the original as `pyproject.toml.orig`. Pass
+  `--preview-feature toml-backwards-compatibility` to enable this feature explicitly and suppress
+  the warning.
 - The [module](#modules) under
   [`tool.uv.build-backend.module-root`](../reference/settings.md#build-backend_module-root).
 - The files referenced by `project.license-files` and `project.readme`.
@@ -217,11 +210,11 @@ When building a source distribution, the following files and directories are inc
 - All files matching patterns from
   [`tool.uv.build-backend.source-include`](../reference/settings.md#build-backend_source-include).
 
-From these, items matching
-[`tool.uv.build-backend.source-exclude`](../reference/settings.md#build-backend_source-exclude) and
-the [default excludes](../reference/settings.md#build-backend_default-excludes) are removed.
+uv then removes files that match
+[`tool.uv.build-backend.source-exclude`](../reference/settings.md#build-backend_source-exclude) or
+the [default excludes](../reference/settings.md#build-backend_default-excludes).
 
-When building a wheel, the following files and directories are included:
+uv includes these files and directories in wheels:
 
 - The [module](#modules) under
   [`tool.uv.build-backend.module-root`](../reference/settings.md#build-backend_module-root)
@@ -230,39 +223,39 @@ When building a wheel, the following files and directories are included:
 - All directories under [`tool.uv.build-backend.data`](../reference/settings.md#build-backend_data),
   which are copied into the `.data` directory.
 
-From these,
+uv then removes files that match
 [`tool.uv.build-backend.source-exclude`](../reference/settings.md#build-backend_source-exclude),
-[`tool.uv.build-backend.wheel-exclude`](../reference/settings.md#build-backend_wheel-exclude) and
-the default excludes are removed. The source dist excludes are applied to avoid source tree to wheel
-builds including more files than source tree to source distribution to wheel build.
+[`tool.uv.build-backend.wheel-exclude`](../reference/settings.md#build-backend_wheel-exclude), or
+the default excludes. Source exclusions keep direct wheel builds consistent with wheels built from
+source distributions.
 
-There are no specific wheel includes. There must only be one top level module, and all data files
-must either be under the module root or in the appropriate
-[data directory](../reference/settings.md#build-backend_data). Most packages store small data in the
-module root alongside the source code.
+The uv build backend does not support separate wheel include settings. By default, it includes one
+top-level module. Additional modules require explicit configuration. Data files must appear under
+the module root or in the appropriate [data directory](../reference/settings.md#build-backend_data).
+Most packages store small data files beside the source code in the module root.
 
 !!! tip
 
-    When using the uv build backend through a frontend that is not uv, such as pip or
-    `python -m build`, debug logging can be enabled through environment variables with
-    `RUST_LOG=uv=debug` or `RUST_LOG=uv=verbose`. When used through uv, the uv build backend shares
-    the verbosity level of uv.
+    For other build frontends, such as pip or `python -m build`, set `RUST_LOG=uv=debug` or
+    `RUST_LOG=uv=verbose` to enable debug logging. When uv invokes the backend, the backend uses uv's
+    verbosity level.
 
 ### Include and exclude syntax
 
-Includes are anchored, which means that `pyproject.toml` includes only `<root>/pyproject.toml` and
-not `<root>/bar/pyproject.toml`. To recursively include all files under a directory, use a `/**`
-suffix, e.g. `src/**`. Recursive inclusions are also anchored, e.g., `assets/**/sample.csv` includes
-all `sample.csv` files in `<root>/assets` or any of its children.
+Include patterns are anchored to the project root. For example, `pyproject.toml` includes
+`<root>/pyproject.toml`, but not `<root>/bar/pyproject.toml`. Add `/**` to include every file in a
+directory and its subdirectories, such as `src/**`. Recursive patterns are also anchored. For
+example, `assets/**/sample.csv` includes every `sample.csv` file in `<root>/assets` and its
+subdirectories.
 
 !!! note
 
     For performance and reproducibility, avoid patterns without an anchor such as `**/sample.csv`.
 
-Excludes are not anchored, which means that `__pycache__` excludes all directories named
-`__pycache__` regardless of its parent directory. All children of an exclusion are excluded as well.
-To anchor a directory, use a `/` prefix, e.g., `/dist` will exclude only `<root>/dist`.
+Exclude patterns are not anchored. For example, `__pycache__` excludes every directory with that
+name, regardless of its parent. uv also excludes all files and subdirectories in an excluded
+directory. Add a `/` prefix to anchor a pattern. For example, `/dist` excludes only `<root>/dist`.
 
-All fields accepting patterns use the reduced portable glob syntax from
-[PEP 639](https://peps.python.org/pep-0639/#add-license-FILES-key), with the addition that
-characters can be escaped with a backslash.
+All pattern fields use the reduced portable glob syntax from
+[PEP 639](https://peps.python.org/pep-0639/#add-license-FILES-key). A backslash also escapes special
+characters.

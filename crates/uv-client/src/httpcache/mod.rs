@@ -1,121 +1,76 @@
 /*!
-A somewhat simplistic implementation of HTTP cache semantics.
+A focused implementation of HTTP cache semantics.
 
-This implementation was guided by the following things:
+This implementation uses:
 
 * RFCs 9110 and 9111.
-* The `http-cache-semantics` crate. (The implementation here is completely
-  different, but the source of `http-cache-semantics` helped guide the
-  implementation here and understanding of HTTP caching.)
-* A desire for our cache policy to support zero-copy deserialization. That
-  is, we want the cached response fast path (where no revalidation request is
-  necessary) to avoid any costly deserialization for the cache policy at all.
+* Guidance from the `http-cache-semantics` crate, with a separate implementation.
+* Zero-copy deserialization to avoid unnecessary work when a cached response is fresh.
 
 # Flow
 
-While one has to read the relevant RFCs to get a full understanding of HTTP
-caching, doing so is... difficult to say the least. It is at the very least
-not quick to do because the semantics are scattered all over the place. But, I
-think we can do a quick overview here.
+HTTP caching avoids network requests. When a request is necessary, it can reduce
+bandwidth use. The `Cache-Control` header controls caching on requests and
+responses. Its directives include:
 
-Let's start with the obvious. HTTP caching exists to avoid network requests,
-and, if a request is unavoidable, bandwidth. The central actor in HTTP
-caching is the `Cache-Control` header, which can exist on *both* requests and
-responses. The value of this header is a list of directives that control caching
-behavior. They can outright disable it (`no-store`), force cache invalidation
-(`no-cache`) or even permit the cache to return responses that are explicitly
-stale (`max-stale`).
+* `no-store`, which prevents caching.
+* `no-cache`, which requires revalidation before reuse.
+* `max-stale`, which permits a cached response to be stale.
+* `max-age`, which sets how long a response remains fresh.
 
-The main thing that typically drives cache interactions is `max-age`. When set
-on a response, this means that the server is willing to let clients hold on to
-a response for up to the amount of time in `max-age` before the client must ask
-the server for a fresh response. In our case, the main utility of `max-age` is
-two fold:
+The `max-age` directive is especially useful in these cases:
 
-* PyPI sets a `max-age` of 600 seconds (10 minutes) on its responses. As long
-  as our cached responses have an age less than this, we can completely avoid
-  talking to PyPI at all when we need access to the full set of versions for a
-  package.
-* Most other assets, like wheels, are forever immutable. They will never
-  change. So servers will typically set a very high `max-age`, which means we
-  will almost never need to ask the server for permission to reuse our cached
-  wheel.
+* PyPI responses use `max-age=600`. For 10 minutes, uv can reuse cached package
+  versions without contacting PyPI.
+* Wheel files usually do not change. Servers can give them a long `max-age`, so
+  uv rarely needs to revalidate a cached wheel.
 
-When a cached response exceeds the `max-age` configured on a response, then
-we call that response stale. Generally speaking, we won't return responses
-from the cache that are known to be stale. (This can be overridden in the
-request by adding a `max-stale` cache-control directive, but nothing in uv
-does this at time of writing.) When a response is stale, we don't necessarily
-need to give up completely. It is at this point that we can send something
-called a re-validation request.
+A response becomes stale when its age exceeds `max-age`. uv usually does not
+return stale responses. A request can override this with `max-stale`, but uv
+does not currently use that directive. Instead, uv can send a revalidation
+request.
 
-A re-validation request includes with it some metadata (usually an "entity tag"
-or `etag` for short) that was on the cached response (which is now stale).
-When we send this request, the server can compare it with its most up-to-date
-version of the resource. If its entity tag matches the one we gave it (among
-other possible criteria), then the server can skip returning the body and
-instead just return a small HTTP 304 NOT MODIFIED response. When we get this
-type of response, it's the server telling us that our cached response which we
-*thought* was stale is no longer stale. It's fresh again and we needn't get a
-new copy. We will need to update our stored `CachePolicy` though, since the
-HTTP 304 NOT MODIFIED response we got might included updated metadata relevant
-to the behavior of caching (like a new `Age` header).
+A revalidation request includes metadata from the cached response, usually an
+entity tag or `ETag`. The server compares that metadata with its current
+resource. If the resource still matches, the server can return HTTP 304 NOT
+MODIFIED without a response body. uv can then reuse the cached response.
+However, uv must update its stored `CachePolicy` because the 304 response can
+include new caching metadata, such as an updated `Age` header.
 
 # Scope
 
-In general, the cache semantics implemented below are targeted toward uv's
-use case: a private client cache for custom data objects. This constraint
-results in a modest simplification in what we need to support. That is, we
-don't need to cache the entirety of the request's or response's headers (like
-what `http-cache-semantics`) does. Instead, we only need to cache the data
-necessary to *make decisions* about HTTP caching.
+This module implements a private client cache for uv data. Unlike
+`http-cache-semantics`, it does not store every request and response header.
+It stores only the information needed to make HTTP caching decisions.
 
-One example of this is the `Vary` response header. This requires checking the
-the headers listed in a cached response have the same value in the original
-request and the new request. If the new request has different values for those
-headers (as specified in the cached response) than what was in the original
-request, then the new request cannot used our cached response. Normally, this
-would seemingly require storing all of the original request's headers. But we
-only store the headers listed in the response.
+For example, a `Vary` response header lists request headers that affect a
+response. A new request can reuse the cached response only when those header
+values match the original request. The cache stores only the listed headers.
 
-Also, since we aren't a proxy, there are a host of proxy-specific rules for
-managing headers and data that we needn't care about.
+Because uv is not a proxy, this module does not implement proxy-specific cache
+rules.
 
 # Zero-copy deserialization
 
-As mentioned above, we would really like our fast path (that is, a cached
-response that we deem "fresh" and thus don't need to send a re-validation
-request for) to avoid needing to actually deserialize a `CachePolicy`. While a
-`CachePolicy` isn't particularly big, it is in our critical path. Yet, we still
-need a `CachePolicy` to be able to decide whether a cached response is still
-fresh or not. (This decision procedure is non-trivial, so it *probably* doesn't
-make too much sense to hack around it with something simpler.)
+The fast path reuses a fresh response without sending a revalidation request.
+It also avoids deserializing a `CachePolicy`. The cache still needs policy data
+to determine whether a response is fresh.
 
-We attempt to achieve this by implementing the `rkyv` traits for all of our
-types. This means that if we read a `Vec<u8>` from a file, then we can very
-cheaply turn that into a `rkyvutil::OwnedArchive<CachePolicy>`. Creating that
-only requires a quick validation step, but is otherwise free. We can then
-use that as-if it were an `Archived<CachePolicy>` (which is an alias for the
-`ArchivedCachePolicy` type implicitly introduced by `derive(rkyv::Archive)`).
-Crucially, this is why we implement all of our HTTP cache semantics logic on
-`ArchivedCachePolicy` and *not* `CachePolicy`. It can be easy to forget this
-because `rkyv` does such an amazing job of making its use of archived types
-very closely resemble that of the standard types. For example, whenever the
-methods below are accessing a field whose type is a `Vec` in the normal type,
-what's actually being accessed is a [`rkyv::vec::ArchivedVec`]. Similarly,
-for strings, it's [`rkyv::string::ArchivedString`] and not a standard library
-`String`. This all works somewhat seamlessly because all of the cache semantics
-are generally just read-only operations, but if you stray from the path, you're
-likely to get whacked over the head.
+Each cache type implements the `rkyv` traits. This permits cached bytes to
+become a `rkyvutil::OwnedArchive<CachePolicy>` after a short validation step.
+The archive provides an `ArchivedCachePolicy`, which
+`derive(rkyv::Archive)` creates. All HTTP cache decisions therefore use
+`ArchivedCachePolicy`, not `CachePolicy`.
 
-One catch here is that we actually want the HTTP cache semantics to be
-available on `CachePolicy` too. At least, at time of writing, we do. To
-achieve this `CachePolicy::to_archived` is provided, which will serialize the
-`CachePolicy` to its archived representation in bytes, and then turn that
-into an `OwnedArchive<CachePolicy>` which derefs to `ArchivedCachePolicy`.
-This is a little extra cost, but the idea is that a `CachePolicy` (not an
-`ArchivedCachePolicy`) should only be used in the slower path (i.e., when you
-actually need to make an HTTP request).
+Archived fields use archived types. For example, a `Vec` becomes an
+[`rkyv::vec::ArchivedVec`], and a `String` becomes an
+[`rkyv::string::ArchivedString`]. These types support the read-only operations
+that cache decisions require.
+
+When a caller has a `CachePolicy`, `CachePolicy::to_archived` serializes it into
+an `OwnedArchive<CachePolicy>`. The archive dereferences to
+`ArchivedCachePolicy`. This extra work occurs only on the slower path, when uv
+must send an HTTP request.
 
 [`rkyv::vec::ArchivedVec`]: https://docs.rs/rkyv/0.7.43/rkyv/vec/struct.ArchivedVec.html
 [`rkyv::string::ArchivedString`]: https://docs.rs/rkyv/0.7.43/rkyv/string/struct.ArchivedString.html
@@ -145,11 +100,10 @@ use self::control::CacheControl;
 
 mod control;
 
-/// Knobs to configure uv's cache behavior.
+/// Settings that control uv's cache behavior.
 ///
-/// At time of writing, we don't expose any way of modifying these since I
-/// suspect we won't ever need to. We split them out into their own type so
-/// that they can be shared between `CachePolicyBuilder` and `CachePolicy`.
+/// These settings cannot currently be modified. A separate type lets
+/// `CachePolicyBuilder` and `CachePolicy` share the same settings.
 #[derive(
     Clone,
     Debug,
@@ -160,49 +114,38 @@ mod control;
     rkyv::Serialize,
     bytecheck::CheckBytes,
 )]
-// Since `CacheConfig` is so simple, we can use itself as the archived type.
-// But note that this will fall apart if even something like an Option<u8> is
-// added.
+// `CacheConfig` can use itself as its archived type because its fields are simple.
+// Adding a field such as `Option<u8>` would require a separate archived type.
 #[rkyv(as = Self)]
 #[repr(C)]
 struct CacheConfig {
     shared: bool,
 }
 
-/// A builder for constructing a `CachePolicy`.
+/// A builder for a [`CachePolicy`].
 ///
-/// A builder can be used directly when spawning fresh HTTP requests
-/// without a cached response. A builder is also constructed for you via
-/// [`CachePolicy::before_request`] when a cached response exists but is stale.
+/// Use a builder directly for an HTTP request that has no cached response.
+/// [`CachePolicy::before_request`] also creates a builder when a cached response is stale.
 ///
-/// The main idea of a builder is that it manages the flow of data needed to
-/// construct a `CachePolicy`. That is, you start with an HTTP request, then
-/// you get a response and finally a new `CachePolicy`.
+/// The builder collects data from an HTTP request and its response to create a [`CachePolicy`].
 #[derive(Debug)]
 pub(crate) struct CachePolicyBuilder {
-    /// The configuration controlling the behavior of the cache.
+    /// The settings that control cache behavior.
     config: CacheConfig,
-    /// A subset of information from the HTTP request that we will store. This
-    /// is needed to make future decisions about cache behavior.
+    /// The HTTP request data needed for future cache decisions.
     request: Request,
-    /// The full set of request headers. This copy is necessary because the
-    /// headers are needed in order to correctly capture the values necessary
-    /// to implement the `Vary` check, as per [RFC 9111 S4.1]. The upside is
-    /// that this is not actually persisted in a `CachePolicy`. We only need it
-    /// until we have the response.
+    /// All request headers needed to implement the `Vary` check in [RFC 9111 S4.1].
+    /// Keep these headers only until the response arrives. Do not store them in [`CachePolicy`].
     ///
-    /// The precise reason why this copy is intrinsically needed is because
-    /// sending a request requires ownership of the request. Yet, we don't know
-    /// which header values we need to store in our cache until we get the
-    /// response back. Thus, these headers must be persisted until after the
-    /// point we've given up ownership of the request.
+    /// Sending the request transfers ownership. The response then determines which request
+    /// headers must be cached, so this copy must remain available until that response arrives.
     ///
     /// [RFC 9111 S4.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.1
     request_headers: http::HeaderMap,
 }
 
 impl CachePolicyBuilder {
-    /// Create a new builder of a cache policy, starting with the request.
+    /// Create a cache policy builder from an HTTP request.
     pub(crate) fn new(request: &reqwest::Request) -> Self {
         let config = CacheConfig::default();
         let request_headers = request.headers().clone();
@@ -214,8 +157,7 @@ impl CachePolicyBuilder {
         }
     }
 
-    /// Return a new policy given the response to the request that this builder
-    /// was created with.
+    /// Create a policy from the response to the builder's original request.
     pub(crate) fn build(self, response: &reqwest::Response) -> CachePolicy {
         let vary = Vary::from_request_response_headers(&self.request_headers, response.headers());
         CachePolicy {
@@ -227,95 +169,71 @@ impl CachePolicyBuilder {
     }
 }
 
-/// A value encapsulating the data needed to implement HTTP caching behavior
-/// for uv.
+/// The data needed to implement HTTP caching in uv.
 ///
-/// A cache policy is meant to be stored and persisted with the data being
-/// cached. It is specifically meant to capture the smallest amount of
-/// information needed to determine whether a cached response is stale or not,
-/// and the information required to issue a re-validation request.
+/// Store a cache policy with its cached data. The policy contains the information needed to detect
+/// stale responses and send revalidation requests.
 ///
-/// This does not provide a complete set of HTTP cache semantics. Notably
-/// absent from this (among other things that uv probably doesn't care
-/// about it) are proxy cache semantics.
+/// This type does not implement every HTTP cache rule. In particular, it excludes proxy caching.
 #[derive(Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 pub(crate) struct CachePolicy {
-    /// The configuration controlling the behavior of the cache.
+    /// The settings that control cache behavior.
     config: CacheConfig,
-    /// A subset of information from the HTTP request that we will store. This
-    /// is needed to make future decisions about cache behavior.
+    /// The HTTP request data needed for future cache decisions.
     request: Request,
-    /// A subset of information from the HTTP response that we will store. This
-    /// is needed to make future decisions about cache behavior.
+    /// The HTTP response data needed for future cache decisions.
     response: Response,
-    /// This contains the set of vary header names (from the cached response)
-    /// and the corresponding values (from the original request) used to verify
-    /// whether a new request can utilize a cached response or not. This is
-    /// placed outside of `request` and `response` because it contains bits
-    /// from both!
+    /// Header names from the cached response's `Vary` header and values from the original request.
+    /// Use these pairs to determine whether a new request can reuse the cached response.
     vary: Vary,
 }
 
 impl CachePolicy {
-    /// Convert this to an owned archive value.
+    /// Convert this policy to an owned archive.
     ///
-    /// It's necessary to call this in order to make decisions with this cache
-    /// policy. Namely, all of the cache semantics logic is implemented on the
-    /// archived types.
+    /// Cache decisions use archived types, so archive the policy before evaluating it.
     ///
-    /// These do incur an extra cost, but this should only be needed when you
-    /// don't have an `ArchivedCachePolicy`. And that should only occur when
-    /// you're actually performing an HTTP request. In that case, the extra
-    /// cost that is done here to convert a `CachePolicy` to its archived form
-    /// should be marginal.
+    /// This conversion adds a small cost when no [`ArchivedCachePolicy`] is available.
+    /// That case should occur only when uv sends an HTTP request.
     pub(crate) fn to_archived(&self) -> OwnedArchive<Self> {
-        // There's no way (other than OOM) for serializing this type to fail.
+        // Serialization can fail only if the process runs out of memory.
         OwnedArchive::from_unarchived(self).expect("all possible values can be archived")
     }
 }
 
 impl ArchivedCachePolicy {
-    /// Returns whether this cached response matches a request that permits stale data.
+    /// Return whether this cached response matches a request that permits stale data.
     ///
-    /// This applies only the conditions from [`Self::before_request`] that produce
-    /// [`BeforeRequest::NoMatch`]. It intentionally skips freshness, `Vary`, and `no-cache`
-    /// checks because those produce [`BeforeRequest::Stale`], which an allow-stale caller accepts.
+    /// Apply only the [`Self::before_request`] conditions that produce [`BeforeRequest::NoMatch`].
+    /// Skip freshness, `Vary`, and `no-cache` checks because they produce
+    /// [`BeforeRequest::Stale`], which the caller accepts.
     pub(crate) fn matches_stale_request(&self, request: &reqwest::Request) -> bool {
         self.is_storable()
             && self.request.uri == request.url().as_str()
             && (request.method() == http::Method::GET || request.method() == http::Method::HEAD)
     }
 
-    /// Determines what caching behavior is correct given an existing
-    /// `CachePolicy` and a new HTTP request for the resource managed by this
-    /// cache policy. This is done as per [RFC 9111 S4].
+    /// Determine how to handle a new request under an existing cache policy.
+    /// Follow [RFC 9111 S4].
     ///
-    /// Calling this method conceptually corresponds to asking the following
-    /// question: "I have a cached response for an incoming HTTP request. May I
-    /// return that cached response, or do I need to go back to the progenitor
-    /// of that response to determine whether it's still the latest thing?"
+    /// This method determines whether the caller can reuse a cached response or must contact
+    /// the origin server.
     ///
-    /// This returns one of three possible behaviors:
+    /// Return one of these results:
     ///
-    /// 1. The cached response is still fresh, and the caller may return
-    ///    the cached response without issuing an HTTP requests.
-    /// 2. The cached response is stale. The caller should send a re-validation
-    ///    request and then call `CachePolicy::after_response` to determine whether
-    ///    the cached response is actually fresh, or if it's stale and needs to
-    ///    be updated.
-    /// 3. The given request does not match the cache policy identification.
-    ///    Generally speaking, this usually implies a bug with the cache in that
-    ///    it loaded a cache policy that does not match the request.
+    /// 1. The response is fresh. Return it without sending an HTTP request.
+    /// 2. The response is stale. Send a revalidation request, then call
+    ///    `CachePolicy::after_response` to determine whether to update the response.
+    /// 3. The request does not match the cache policy. This usually means the cache loaded the
+    ///    wrong policy.
     ///
-    /// In the case of (2), the given request is modified in place such that
-    /// it is suitable as a revalidation request.
+    /// For a stale response, modify the request in place to prepare it for revalidation.
     ///
     /// [RFC 9111 S4]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4
     pub(crate) fn before_request(&self, request: &mut reqwest::Request) -> BeforeRequest {
         let now = SystemTime::now();
-        // If the response was never storable, then we just bail out
-        // completely.
+        // Reject a response that the cache cannot store.
         if !self.is_storable() {
             tracing::trace!(
                 "Request {} does not match cache request {} because it isn't storable",
@@ -350,8 +268,7 @@ impl ArchivedCachePolicy {
         // "Request header fields nominated by the stored response (if any)
         // match those presented, and..."
         //
-        // We don't support the `Vary` header, so if it was set, we
-        // conservatively require revalidation.
+        // Require revalidation if the request does not match the cached `Vary` header.
         if !self.vary.matches(request.headers()) {
             tracing::trace!(
                 "Request {} does not match cached request because of the 'Vary' header",
@@ -375,29 +292,21 @@ impl ArchivedCachePolicy {
         }
         // "successfully validated."
         //
-        // In this case, callers will need to send a revalidation request.
+        // The caller must send a revalidation request.
         self.set_revalidation_headers(request);
         BeforeRequest::Stale(self.new_cache_policy_builder(request))
     }
 
-    /// This implements the logic for handling the response to a request that
-    /// may be a revalidation request, as per [RFC 9111 S4.3.3] and [RFC 9111
-    /// S4.3.4]. That is, the cache policy builder given here should be the one
-    /// returned by `CachePolicy::before_request` with the response received
-    /// from the origin server for the possibly-revalidating request.
+    /// Handle a response to a request that can revalidate cached data.
+    /// Follow [RFC 9111 S4.3.3] and [RFC 9111 S4.3.4].
     ///
-    /// Even if the request is new (in that there is no response cached
-    /// for it), callers may use this routine. But generally speaking,
-    /// callers are only supposed to use this routine after getting a
-    /// [`BeforeRequest::Stale`].
+    /// Use the policy builder from `CachePolicy::before_request` and the origin server's response.
+    /// Call this method after [`BeforeRequest::Stale`], although new requests are also supported.
     ///
-    /// The return value indicates whether the cached response is still fresh
-    /// (that is, `AfterResponse::NotModified`) or if it has changed (that is,
-    /// `AfterResponse::Modified`). In the latter case, the cached response has
-    /// been invalidated and the caller should cache the new response. In the
-    /// former case, the cached response is still considered fresh.
+    /// [`AfterResponse::NotModified`] means the cached response remains fresh.
+    /// [`AfterResponse::Modified`] means the caller must cache the new response.
     ///
-    /// In either case, callers should update their cache with the new policy.
+    /// Update the cache with the new policy in both cases.
     ///
     /// [RFC 9111 S4.3.3]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.3
     /// [RFC 9111 S4.3.4]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.4
@@ -421,8 +330,7 @@ impl ArchivedCachePolicy {
         // "A 304 (Not Modified) response status code indicates that the stored
         // response can be updated and reused"
         //
-        // So if we don't get a 304, then we know our cached response is seen
-        // as stale by the origin server.
+        // If the status is not 304, the origin server treats the cached response as stale.
         //
         // [RFC 9111 S4.3.3]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.3
         if new_policy.response.status != 304 {
@@ -432,14 +340,12 @@ impl ArchivedCachePolicy {
             );
             return true;
         }
-        // As per [RFC 9111 S4.3.4], we need to confirm that our validators match. Here,
-        // we check `ETag`.
+        // Check that the `ETag` validators match, as required by [RFC 9111 S4.3.4].
         //
         // [RFC 9111 S4.3.4]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.4
         if let Some(old_etag) = self.response.headers.etag.as_ref() {
             if let Some(new_etag) = new_policy.response.headers.etag.as_ref() {
-                // We don't support weak validators, so only match if they're
-                // both strong.
+                // Weak validators are not supported. Match only if both validators are strong.
                 if !old_etag.weak && !new_etag.weak && old_etag.value == new_etag.value {
                     tracing::trace!(
                         "Resource is not modified because old and new etag values ({:?}) match",
@@ -449,8 +355,7 @@ impl ArchivedCachePolicy {
                 }
             }
         }
-        // As per [RFC 9111 S4.3.4], we need to confirm that our validators match. Here,
-        // we check `Last-Modified`.
+        // Check that the `Last-Modified` validators match, as required by [RFC 9111 S4.3.4].
         //
         // [RFC 9111 S4.3.4]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.4
         if let Some(old_last_modified) = self.response.headers.last_modified_unix_timestamp.as_ref()
@@ -469,9 +374,7 @@ impl ArchivedCachePolicy {
                 }
             }
         }
-        // As per [RFC 9111 S4.3.4], if we have no validators anywhere, then
-        // we can just rely on the HTTP 304 status code and reuse the cached
-        // response.
+        // If neither response has validators, [RFC 9111 S4.3.4] permits reuse after HTTP 304.
         //
         // [RFC 9111 S4.3.4]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.4
         if self.response.headers.etag.is_none()
@@ -492,46 +395,35 @@ impl ArchivedCachePolicy {
         true
     }
 
-    /// Sets the relevant headers on the given request so that it can be used
-    /// as a revalidation request. As per [RFC 9111 S4.3.1], this permits the
-    /// origin server to check if the content is different from our cached
-    /// response. If it isn't, then the origin server can return an HTTP 304
-    /// NOT MODIFIED status, which avoids the need to re-transmit the response
-    /// body. That is, it indicates that our cached response is still fresh.
+    /// Add the headers needed to revalidate the request under [RFC 9111 S4.3.1].
+    /// If the content has not changed, the origin server can return HTTP 304 NOT MODIFIED.
+    /// This avoids sending the response body again and permits reuse of the cached response.
     ///
-    /// This will always use a strong etag validator if it's present on the
-    /// cached response. If the given request already has an etag validator
-    /// on it, this routine will add to it and not replace it.
+    /// Add a strong `ETag` validator when the cached response has one.
+    /// Preserve any `ETag` validator that the request already contains.
     ///
-    /// In contrast, if the request already has the `If-Modified-Since` header
-    /// set, then this will not change or replace it. If it's not set, then one
-    /// is added if the cached response had a valid `Last-Modified` header.
+    /// Preserve an existing `If-Modified-Since` header.
+    /// If that header is absent, add it when the cached response has a valid `Last-Modified`
+    /// header.
     ///
     /// [RFC 9111 S4.3.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.1
     fn set_revalidation_headers(&self, request: &mut reqwest::Request) {
-        // As per [RFC 9110 13.1.2] and [RFC 9111 S4.3.1], if our stored
-        // response has an etag, we should send it back via the `If-None-Match`
-        // header. The idea is that the server should only "do" the request if
-        // none of the tags match. If there is a match, then the server can
-        // return HTTP 304 indicating that our stored response is still fresh.
+        // Send the stored `ETag` in `If-None-Match`, as required by [RFC 9110 S13.1.2] and
+        // [RFC 9111 S4.3.1]. If a tag matches, the server can return HTTP 304.
         //
         // [RFC 9110 S13.1.2]: https://www.rfc-editor.org/rfc/rfc9110#section-13.1.2
         // [RFC 9111 S4.3.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.1
         if let Some(etag) = self.response.headers.etag.as_ref() {
-            // We don't support weak validation principally because we want to
-            // be notified if there was a change in the content. Namely, from
-            // RFC 9110 S13.1.2: "... weak entity tags can be used for cache
-            // validation even if there have been changes to the representation
-            // data."
+            // Do not use weak validation because it can accept changed content.
+            // RFC 9110 S13.1.2 permits weak entity tags to validate changed representation data.
             if !etag.weak {
                 if let Ok(header) = HeaderValue::from_bytes(&etag.value) {
                     request.headers_mut().append("if-none-match", header);
                 }
             }
         }
-        // We also set `If-Modified-Since` as per [RFC 9110 S13.1.3] and [RFC
-        // 9111 S4.3.1]. Generally, `If-None-Match` will override this, but we
-        // set it in case `If-None-Match` is not supported.
+        // Set `If-Modified-Since` under [RFC 9110 S13.1.3] and [RFC 9111 S4.3.1].
+        // This provides a fallback if the server does not support `If-None-Match`.
         //
         // [RFC 9110 S13.1.3]: https://www.rfc-editor.org/rfc/rfc9110#section-13.1.3
         // [RFC 9111 S4.3.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.1
@@ -550,25 +442,21 @@ impl ArchivedCachePolicy {
         }
     }
 
-    /// Returns true if and only if the response is storable as per
-    /// [RFC 9111 S3].
+    /// Return `true` if [RFC 9111 S3] permits the response to be cached.
     ///
     /// [RFC 9111 S3]: https://www.rfc-editor.org/rfc/rfc9111.html#section-3
     pub(crate) fn is_storable(&self) -> bool {
-        // In the absence of other signals, we are limited to caching responses
-        // with a code that is heuristically cacheable as per [RFC 9110 S15.1].
+        // Without other signals, cache only status codes that [RFC 9110 S15.1] treats as cacheable.
         //
         // [RFC 9110 S15.1]: https://www.rfc-editor.org/rfc/rfc9110#section-15.1
         const HEURISTICALLY_CACHEABLE_STATUS_CODES: &[u16] =
             &[200, 203, 204, 206, 300, 301, 308, 404, 405, 410, 414, 501];
 
-        // N.B. This routine could be "simpler", but we bias toward
-        // following the flow of logic as closely as possible as written
-        // in RFC 9111 S3.
+        // Follow the order of the rules in RFC 9111 S3.
 
         // "the request method is understood by the cache"
         //
-        // We just don't bother with anything that isn't GET.
+        // Support only GET and HEAD requests.
         if !matches!(
             self.request.method,
             ArchivedMethod::Get | ArchivedMethod::Head
@@ -582,8 +470,7 @@ impl ArchivedCachePolicy {
         }
         // "the response status code is final"
         //
-        // ... and we'll put more restrictions on status code
-        // below, but we can bail out early here.
+        // Reject non-final status codes before checking additional restrictions.
         if !self.response.has_final_status() {
             tracing::trace!(
                 "Response from {} is not storable because it has \
@@ -597,9 +484,8 @@ impl ArchivedCachePolicy {
         // cache directive (see Section 5.2.2.3) is present: the cache
         // understands the response status code"
         //
-        // We don't currently support `must-understand`. We also don't support
-        // partial content (206). And 304 not modified shouldn't be cached
-        // itself.
+        // The cache does not support `must-understand` or partial content (206).
+        // Do not cache a 304 response itself.
         if self.response.status == 206 || self.response.status == 304 {
             tracing::trace!(
                 "Response from {} is not storable because it has \
@@ -612,8 +498,7 @@ impl ArchivedCachePolicy {
         // "The no-store request directive indicates that a cache MUST NOT
         // store any part of either this request or any response to it."
         //
-        // (This is from RFC 9111 S5.2.1.5, and doesn't seem to be mentioned in
-        // S3.)
+        // RFC 9111 S5.2.1.5 defines this rule separately from S3.
         if self.request.headers.cc.no_store {
             tracing::trace!(
                 "Response from {} is not storable because its request has \
@@ -636,10 +521,8 @@ impl ArchivedCachePolicy {
             // "if the cache is shared: the private response directive is either
             // not present or allows a shared cache to store a modified response"
             //
-            // We don't support more granular "private" directives (which allow
-            // caching all of a private HTTP response in a shared cache only after
-            // removing some subset of the response's headers that are deemed
-            // private).
+            // The cache does not support `private` directives that remove selected response
+            // headers before shared caching.
             if self.response.headers.cc.private {
                 tracing::trace!(
                     "Response from {} is not storable because this is a shared \
@@ -711,7 +594,7 @@ impl ArchivedCachePolicy {
             return true;
         }
         // "a cache extension that allows it to be cached"
-        // ... we don't support any extensions.
+        // The cache does not support extensions.
         //
         // "a status code that is defined as heuristically cacheable"
         if HEURISTICALLY_CACHEABLE_STATUS_CODES.contains(&self.response.status.into()) {
@@ -732,8 +615,7 @@ impl ArchivedCachePolicy {
         false
     }
 
-    /// Returns true when a response is storable even if it has an
-    /// `Authorization` header, as per [RFC 9111 S3.5].
+    /// Return `true` if [RFC 9111 S3.5] permits caching a request with an `Authorization` header.
     ///
     /// [RFC 9111 S3.5]: https://www.rfc-editor.org/rfc/rfc9111.html#section-3.5
     fn allows_authorization_storage(&self) -> bool {
@@ -742,26 +624,19 @@ impl ArchivedCachePolicy {
             || self.response.headers.cc.s_maxage_seconds.is_some()
     }
 
-    /// Returns true if the response is considered fresh as per [RFC 9111
-    /// S4.2]. If the response is not fresh, then it considered stale and ought
-    /// to be revalidated with the origin server.
+    /// Return `true` if the response is fresh under [RFC 9111 S4.2].
+    /// Revalidate stale responses with the origin server.
     ///
     /// [RFC 9111 S4.2]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2
     fn is_fresh(&self, now: SystemTime, request: &reqwest::Request) -> bool {
         let freshness_lifetime = self.freshness_lifetime().as_secs();
         let age = self.age(now).as_secs();
 
-        // Per RFC 8246, the `immutable` directive means that a reload from an
-        // end user should not result in a revalidation request. Indeed, the
-        // `immutable` directive seems to imply that clients should never talk
-        // to the origin server until the cached response is stale with respect
-        // to its freshness lifetime (as set by the server).
+        // Under RFC 8246, `immutable` prevents a normal reload from sending a revalidation request.
+        // Contact the origin server only after the cached response exceeds its freshness lifetime.
         //
-        // A *force* reload from an end user should override this, but we
-        // currently have no path for that in this implementation. Instead, we
-        // just interpret `immutable` as meaning that any directives on the
-        // new request that would otherwise result in sending a revalidation
-        // request are ignored.
+        // A forced reload should override this rule, but this implementation does not support one.
+        // Ignore request directives that would otherwise require revalidation.
         //
         // [RFC 8246]: https://httpwg.org/specs/rfc8246.html
         if !self.response.headers.cc.immutable {
@@ -771,8 +646,7 @@ impl ArchivedCachePolicy {
                 .iter()
                 .collect::<CacheControl>();
 
-            // As per [RFC 9111 S5.2.1.4], if the request has `no-cache`, then we should
-            // respect that.
+            // Honor the request's `no-cache` directive under [RFC 9111 S5.2.1.4].
             //
             // [RFC 9111 S5.2.1.4]: https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.1.4
             if reqcc.no_cache {
@@ -784,8 +658,7 @@ impl ArchivedCachePolicy {
                 return false;
             }
 
-            // If the request has a max-age directive, then we should respect that
-            // as per [RFC 9111 S5.2.1.1].
+            // Honor the request's `max-age` directive under [RFC 9111 S5.2.1.1].
             //
             // [RFC 9111 S5.2.1.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.1.1
             if let Some(&max_age) = reqcc.max_age_seconds.as_ref() {
@@ -802,9 +675,8 @@ impl ArchivedCachePolicy {
                 }
             }
 
-            // If the request has a min-fresh directive, then we only consider a
-            // cached response fresh if the remaining time it has to live exceeds
-            // the threshold provided, as per [RFC 9111 S5.2.1.3].
+            // Honor `min-fresh` under [RFC 9111 S5.2.1.3]. The response must remain fresh for at
+            // least the requested time.
             //
             // [RFC 9111 S5.2.1.3]: https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.1.3
             if let Some(&min_fresh) = reqcc.min_fresh_seconds.as_ref() {
@@ -819,8 +691,7 @@ impl ArchivedCachePolicy {
                         time_to_live,
                         min_fresh,
                     );
-                    // Note that S5.2.1.3 does not say that max-stale overrides
-                    // this, so we ignore it here.
+                    // S5.2.1.3 does not permit `max-stale` to override this rule.
                     return false;
                 }
             }
@@ -847,16 +718,13 @@ impl ArchivedCachePolicy {
         true
     }
 
-    /// Returns true if we're allowed to serve a stale response, as per [RFC
-    /// 9111 S4.2.4].
+    /// Return `true` if [RFC 9111 S4.2.4] permits a stale response.
     ///
     /// [RFC 9111 S4.2.4]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.4
     fn allows_stale(&self, now: SystemTime) -> bool {
-        // As per [RFC 9111 S5.2.2.2], if `must-revalidate` is present, then
-        // caches cannot reuse a stale response without talking to the server
-        // first. Note that RFC 9111 doesn't seem to say anything about the
-        // interaction between must-revalidate and max-stale, so we assume that
-        // must-revalidate takes precedent.
+        // Under [RFC 9111 S5.2.2.2], `must-revalidate` requires the cache to contact the server
+        // before it reuses a stale response. Assume `must-revalidate` takes precedence over
+        // `max-stale` because RFC 9111 does not define their interaction.
         //
         // [RFC 9111 S5.2.2.2]: https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.2.2
         if self.response.headers.cc.must_revalidate {
@@ -869,9 +737,8 @@ impl ArchivedCachePolicy {
             return false;
         }
         if let Some(&max_stale) = self.request.headers.cc.max_stale_seconds.as_ref() {
-            // As per [RFC 9111 S5.2.1.2], if the client has max-stale set,
-            // then stale responses are allowed, but only if they are stale
-            // within a given threshold.
+            // Under [RFC 9111 S5.2.1.2], `max-stale` permits responses that exceed their freshness
+            // lifetime by no more than the specified threshold.
             //
             // [RFC 9111 S5.2.1.2]: https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.1.2
             let stale_amount = self
@@ -891,8 +758,7 @@ impl ArchivedCachePolicy {
                 return true;
             }
         }
-        // As per [RFC 9111 S4.2.4], we shouldn't use stale responses unless
-        // we're explicitly allowed to (e.g., via `max-stale` above):
+        // Under [RFC 9111 S4.2.4], use stale responses only when explicitly permitted:
         //
         // "A cache MUST NOT generate a stale response unless it is
         // disconnected or doing so is explicitly permitted by the client or
@@ -906,12 +772,10 @@ impl ArchivedCachePolicy {
         false
     }
 
-    /// Returns the age of the HTTP response as per [RFC 9111 S4.2.3].
+    /// Return the age of the HTTP response under [RFC 9111 S4.2.3].
     ///
-    /// The age of a response, essentially, refers to how long it has been
-    /// since the response was created by the origin server. The age is used
-    /// to compare with the freshness lifetime of the response to determine
-    /// whether the response is fresh or stale.
+    /// Response age measures the time since the origin server created the response.
+    /// Compare this age with the freshness lifetime to determine whether the response is stale.
     ///
     /// [RFC 9111 S4.2.3]: https://www.rfc-editor.org/rfc/rfc9111.html#name-calculating-age
     fn age(&self, now: SystemTime) -> Duration {
@@ -927,13 +791,10 @@ impl ArchivedCachePolicy {
         Duration::from_secs(current_age)
     }
 
-    /// Returns how long a response should be considered "fresh" as per
-    /// [RFC 9111 S4.2.1]. When this returns false, the response should be
-    /// considered stale and the client should revalidate with the server.
+    /// Return how long a response remains fresh under [RFC 9111 S4.2.1].
     ///
-    /// If there are no indicators of a response's freshness lifetime, then
-    /// this returns `0`. That is, the response will be considered stale in all
-    /// cases.
+    /// If the response does not indicate a freshness lifetime, return `0`.
+    /// A zero lifetime means the response is always stale.
     ///
     /// [RFC 9111 S4.2.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.1
     fn freshness_lifetime(&self) -> Duration {
@@ -961,21 +822,14 @@ impl ArchivedCachePolicy {
             return duration;
         }
         if self.response.headers.last_modified_unix_timestamp.is_some() {
-            // We previously computed this heuristic freshness lifetime by
-            // looking at the difference between the last modified header and
-            // the response's date header. We then asserted that the cached
-            // response ought to be "fresh" for 10% of that interval.
+            // The previous heuristic used 10% of the interval between `Last-Modified` and `Date`.
             //
-            // It turns out that this can result in very long freshness
-            // lifetimes[1] that lead to uv caching too aggressively.
+            // That interval can produce a long freshness lifetime and cache responses too
+            // aggressively[1].
             //
-            // Since PyPI sets a max-age of 600 seconds and since we're
-            // principally just interacting with Python package indices here,
-            // we just assume a freshness lifetime equal to what PyPI has.
+            // Use the same 600-second lifetime as PyPI because uv mainly accesses package indexes.
             //
-            // Note though that a better solution here is for the index to
-            // support proper HTTP caching headers (ideally Cache-Control, but
-            // Expires also works too, as above).
+            // Indexes should instead provide a `Cache-Control` or `Expires` header.
             //
             // [1]: https://github.com/astral-sh/uv/issues/5351#issuecomment-2260588764
             let duration = Duration::from_mins(10);
@@ -985,9 +839,7 @@ impl ArchivedCachePolicy {
             );
             return duration;
         }
-        // Without any indicators as to the freshness lifetime, we act
-        // conservatively and use a value that will always result in a response
-        // being treated as stale.
+        // Without a freshness indicator, treat the response as stale.
         tracing::trace!("Could not determine freshness lifetime, assuming none exists");
         Duration::ZERO
     }
@@ -1004,37 +856,28 @@ impl ArchivedCachePolicy {
 
 /// The result of calling [`CachePolicy::before_request`].
 ///
-/// This dictates what the caller should do next by indicating whether the
-/// cached response is stale or not.
+/// This result tells the caller whether the cached response is fresh, stale, or unrelated.
 #[derive(Debug)]
 #[expect(clippy::large_enum_variant)]
 pub(crate) enum BeforeRequest {
-    /// The cached response is still fresh, and the caller may return the
-    /// cached response without issuing an HTTP requests.
+    /// The response is fresh and can be returned without an HTTP request.
     Fresh,
-    /// The cached response is stale. The caller should send a re-validation
-    /// request and then call `CachePolicy::after_response` to determine
-    /// whether the cached response is actually fresh, or if it's stale and
-    /// needs to be updated.
+    /// The response is stale. Send a revalidation request, then call
+    /// `CachePolicy::after_response` to determine whether the cached response must be updated.
     Stale(CachePolicyBuilder),
-    /// The given request does not match the cache policy identification.
-    /// Generally speaking, this is usually implies a bug with the cache in
-    /// that it loaded a cache policy that does not match the request.
+    /// The request does not match the cache policy. This usually indicates an incorrect policy.
     NoMatch,
 }
 
-/// The result of called [`CachePolicy::after_response`].
+/// The result of calling [`CachePolicy::after_response`].
 ///
-/// This is meant to report whether a revalidation request was successful or
-/// not. If it was, then a `AfterResponse::NotModified` is returned. Otherwise,
-/// the server determined the cached response was truly stale and in need of
-/// updated.
+/// [`AfterResponse::NotModified`] means revalidation succeeded.
+/// [`AfterResponse::Modified`] means the cached response must be updated.
 #[derive(Debug)]
 pub(crate) enum AfterResponse {
     /// The cached response is still fresh.
     NotModified(CachePolicy),
-    /// The cached response has been invalidated and needs to be updated with
-    /// the new data in the response to the revalidation request.
+    /// The cached response is invalid and must be updated with the new response.
     Modified(CachePolicy),
 }
 
@@ -1061,10 +904,9 @@ impl<'a> From<&'a reqwest::Request> for Request {
 #[derive(Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 struct RequestHeaders {
-    /// The cache control directives from the `Cache-Control` header.
+    /// The cache directives from the `Cache-Control` header.
     cc: CacheControl,
-    /// This is set to `true` only when an `Authorization` header is present.
-    /// We don't need to record the value.
+    /// Whether an `Authorization` header is present. Do not store the header value.
     authorization: bool,
 }
 
@@ -1079,9 +921,7 @@ impl<'a> From<&'a http::HeaderMap> for RequestHeaders {
 
 /// The HTTP method used on a request.
 ///
-/// We don't both representing methods of requests whose responses we won't
-/// cache. Instead, we treat them as "unrecognized" and consider the responses
-/// not-storable.
+/// Treat methods that cannot produce cached responses as unrecognized.
 #[derive(Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 #[repr(u8)]
@@ -1112,12 +952,11 @@ struct Response {
 }
 
 impl ArchivedResponse {
-    /// Returns the "age" header value on this response, with a fallback of `0`
-    /// if the header doesn't exist or is invalid, as per [RFC 9111 S4.2.3].
+    /// Return the response's `Age` header value under [RFC 9111 S4.2.3].
+    /// Return `0` if the header is absent or invalid.
     ///
-    /// Note that this does not reflect the true "age" of a response. That
-    /// is computed via `ArchivedCachePolicy::age` as it may need additional
-    /// information (such as the request time).
+    /// This value is not the complete response age. `ArchivedCachePolicy::age` calculates that
+    /// age from additional information, such as the request time.
     ///
     /// [RFC 9111 S4.2.3]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.3
     fn header_age(&self) -> u64 {
@@ -1128,8 +967,8 @@ impl ArchivedResponse {
             .unwrap_or(0)
     }
 
-    /// Returns the "date" header value on this response, with a fallback to
-    /// the time the response was received as per [RFC 9110 S6.6.1].
+    /// Return the response's `Date` header value under [RFC 9110 S6.6.1].
+    /// If the header is absent, use the time when the response arrived.
     ///
     /// [RFC 9110 S6.6.1]: https://www.rfc-editor.org/rfc/rfc9110#section-6.6.1
     fn header_date(&self) -> u64 {
@@ -1139,8 +978,7 @@ impl ArchivedResponse {
             .into()
     }
 
-    /// Returns true when this response has a status code that is considered
-    /// "final" as per [RFC 9110 S15].
+    /// Return `true` if the response has a final status code under [RFC 9110 S15].
     ///
     /// [RFC 9110 S15]: https://www.rfc-editor.org/rfc/rfc9110#section-15
     fn has_final_status(&self) -> bool {
@@ -1163,40 +1001,32 @@ impl<'a> From<&'a reqwest::Response> for Response {
 struct ResponseHeaders {
     /// The directives from the `Cache-Control` header.
     cc: CacheControl,
-    /// The value of the `Age` header corresponding to `age_value` as defined
-    /// in [RFC 9111 S4.2.3]. If the `Age` header is not present, it should be
-    /// interpreted at `0`.
+    /// The `Age` header value, called `age_value` in [RFC 9111 S4.2.3].
+    /// Treat an absent `Age` header as `0`.
     ///
     /// [RFC 9111 S4.2.3]: https://www.rfc-editor.org/rfc/rfc9111.html#name-calculating-age
     age_seconds: Option<u64>,
-    /// This is `date_value` from [RFC 9111 S4.2.3], which says it corresponds
-    /// to the `Date` header on a response as defined in [RFC 7231 S7.1.1.2].
-    /// In RFC 7231, if the `Date` header is not present, then the recipient
-    /// should treat its value as equivalent to the time the response was
-    /// received. In this case, that would be `Response::unix_timestamp`.
+    /// The `date_value` from [RFC 9111 S4.2.3] and the `Date` header from [RFC 7231 S7.1.1.2].
+    /// If the `Date` header is absent, use the response time in `Response::unix_timestamp`.
     ///
     /// [RFC 9111 S4.2.3]: https://www.rfc-editor.org/rfc/rfc9111.html#name-calculating-age
     /// [RFC 7231 S7.1.1.2]: https://httpwg.org/specs/rfc7231.html#header.date
     date_unix_timestamp: Option<u64>,
-    /// This is from the `Expires` header as per [RFC 9111 S5.3]. Note that this
-    /// is overridden by the presence of either the `max-age` or `s-maxage` cache
-    /// control directives.
+    /// The `Expires` header value from [RFC 9111 S5.3].
+    /// The `max-age` and `s-maxage` cache directives take precedence over this value.
     ///
-    /// If an `Expires` header was present but did not contain a valid RFC 2822
-    /// datetime, then this is set to `Some(0)`. (That is, some time in the
-    /// past, which implies the response has already expired.)
+    /// If an `Expires` header contains an invalid RFC 2822 date, use `Some(0)`.
+    /// This represents a time in the past and treats the response as expired.
     ///
     /// [RFC 9111 S5.3]: https://www.rfc-editor.org/rfc/rfc9111.html#section-5.3
     expires_unix_timestamp: Option<u64>,
-    /// The date from the `Last-Modified` header as specified in [RFC 9110 S8.8.2]
-    /// in RFC 2822 format. It's used to compute a heuristic freshness lifetime for
-    /// the response when other indicators are missing as per [RFC 9111 S4.2.2].
+    /// The RFC 2822 date from the `Last-Modified` header in [RFC 9110 S8.8.2].
+    /// If other freshness indicators are absent, use this value under [RFC 9111 S4.2.2].
     ///
     /// [RFC 9110 S8.8.2]: https://www.rfc-editor.org/rfc/rfc9110#section-8.8.2
     /// [RFC 9111 S4.2.2]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.2
     last_modified_unix_timestamp: Option<u64>,
-    /// The "entity tag" from the response as per [RFC 9110 S8.8.3], which is
-    /// used in revalidation requests.
+    /// The response's entity tag from [RFC 9110 S8.8.3], used for revalidation requests.
     ///
     /// [RFC 9110 S8.8.3]: https://www.rfc-editor.org/rfc/rfc9110#section-8.8.3
     etag: Option<ETag>,
@@ -1233,14 +1063,10 @@ impl<'a> From<&'a http::HeaderMap> for ResponseHeaders {
 struct ETag {
     /// The actual `ETag` validator value.
     ///
-    /// This is received in the response, recorded as part of the cache policy
-    /// and then sent back in a re-validation request. This is the "best"
-    /// way for an HTTP server to return an HTTP 304 NOT MODIFIED status,
-    /// indicating that our cached response is still fresh.
+    /// Store the response's validator in the cache policy and include it in revalidation requests.
+    /// A matching validator lets the server return HTTP 304 NOT MODIFIED.
     value: Vec<u8>,
-    /// When `weak` is true, this etag is considered a "weak" validator. In
-    /// effect, it provides weaker semantics than a "strong" validator. As per
-    /// [RFC 9110 S8.8.1]:
+    /// When `weak` is true, this entity tag is a weak validator under [RFC 9110 S8.8.1]:
     ///
     /// "In contrast, a "weak validator" is representation metadata that might
     /// not change for every change to the representation data. This weakness
@@ -1250,17 +1076,16 @@ struct ETag {
     /// group representations by some self-determined set of equivalency rather
     /// than unique sequences of data."
     ///
-    /// We don't currently support weak validation.
+    /// Weak validation is not currently supported.
     ///
     /// [RFC 9110 S8.8.1]: https://www.rfc-editor.org/rfc/rfc9110#section-8.8.1-6
     weak: bool,
 }
 
 impl ETag {
-    /// Parses an `ETag` from a header value.
+    /// Parse an `ETag` from a header value.
     ///
-    /// We are a little permissive here and allow arbitrary bytes,
-    /// where as [RFC 9110 S8.8.3] is a bit more restrictive.
+    /// Accept arbitrary bytes, even though [RFC 9110 S8.8.3] is more restrictive.
     ///
     /// [RFC 9110 S8.8.3]: https://www.rfc-editor.org/rfc/rfc9110#section-8.8.3
     fn parse(header_value: &[u8]) -> Self {
@@ -1276,12 +1101,10 @@ impl ETag {
     }
 }
 
-/// Represents the `Vary` header on a cached response, as per [RFC 9110
-/// S12.5.5] and [RFC 9111 S4.1].
+/// The `Vary` header from a cached response under [RFC 9110 S12.5.5] and [RFC 9111 S4.1].
 ///
-/// This permits responses from the server to express things like, "only used
-/// an existing cached response if the request from the client has the same
-/// header values for the headers listed in `Vary` as in the original request."
+/// Reuse a cached response only when the new request matches the original values of the listed
+/// headers.
 ///
 /// [RFC 9110 S12.5.5]: https://www.rfc-editor.org/rfc/rfc9110#section-12.5.5
 /// [RFC 9111 S4.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.1
@@ -1292,7 +1115,7 @@ struct Vary {
 }
 
 impl Vary {
-    /// Returns a `Vary` header value that will never match any request.
+    /// Return a `Vary` header value that never matches a request.
     fn always_fails_to_match() -> Self {
         Self {
             fields: vec![VaryField {
@@ -1306,7 +1129,7 @@ impl Vary {
         request: &http::HeaderMap,
         response: &http::HeaderMap,
     ) -> Self {
-        // Parses the `Vary` header as per [RFC 9110 S12.5.5].
+        // Parse the `Vary` header under [RFC 9110 S12.5.5].
         //
         // [RFC 9110 S12.5.5]: https://www.rfc-editor.org/rfc/rfc9110#section-12.5.5
         let mut fields = vec![];
@@ -1314,9 +1137,7 @@ impl Vary {
             let Ok(csv) = header.to_str() else { continue };
             for header_name in csv.split(',') {
                 let header_name = header_name.trim().to_ascii_lowercase();
-                // When we see a `*`, that means a failed match is an
-                // inevitability, regardless of anything else. So just give up
-                // and return a `Vary` that will never match.
+                // A `*` matches no request. Return a `Vary` value that always fails.
                 if header_name == "*" {
                     return Self::always_fails_to_match();
                 }
@@ -1335,8 +1156,7 @@ impl Vary {
 }
 
 impl ArchivedVary {
-    /// Returns true only when the `Vary` header on a cached response satisfies
-    /// the request header values given, as per [RFC 9111 S4.1].
+    /// Return `true` if the cached `Vary` header matches the request under [RFC 9111 S4.1].
     ///
     /// [RFC 9111 S4.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.1
     fn matches(&self, request_headers: &http::HeaderMap) -> bool {
@@ -1356,14 +1176,10 @@ impl ArchivedVary {
     }
 }
 
-/// A single field and value in a `Vary` header set by the response,
-/// as per [RFC 9111 S4.1].
+/// One field and value from a response's `Vary` header under [RFC 9111 S4.1].
 ///
-/// The `name` of the field comes from the `Vary` header in the response,
-/// while the value of the field comes from the value of the header with the
-/// same `name` in the original request. These field and value pairs are then
-/// compared with new incoming requests. If there is a mismatch, then the
-/// cached response cannot be used.
+/// Get the field name from the response's `Vary` header and its value from the original request.
+/// A new request can reuse the cached response only if its field value matches.
 ///
 /// [RFC 9111 S4.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.1
 #[derive(Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
@@ -1435,14 +1251,11 @@ mod tests {
             .to_archived()
     }
 
-    /// A server or proxy is free to send an arbitrarily large `Age` header, up
-    /// to `u64::MAX`. Combined with the resident age of a cached response, the
-    /// RFC 9111 S4.2.3 age computation must not overflow. Every term uses
-    /// saturating arithmetic, so the age saturates to `Duration::from_secs`
-    /// `(u64::MAX)` and the response is treated as stale rather than panicking
-    /// (debug) or wrapping around to a bogus "fresh" age (release). This must
-    /// remain stale even if the response's freshness lifetime also reaches
-    /// `u64::MAX`.
+    /// A server or proxy can send an `Age` header as large as `u64::MAX`.
+    /// RFC 9111 S4.2.3 age calculations must not overflow when they include the response's
+    /// resident age. Saturating arithmetic limits the age to `Duration::from_secs(u64::MAX)`.
+    /// The response must remain stale without a debug panic or release-mode overflow.
+    /// This also applies when the freshness lifetime reaches `u64::MAX`.
     #[test]
     fn age_saturates_on_huge_age_header() {
         let request =
@@ -1458,9 +1271,8 @@ mod tests {
         let policy = CachePolicyBuilder::new(&request).build(&response);
         let archived = policy.to_archived();
 
-        // `now` must be strictly after the response timestamp so that
-        // `resident_age` is non-zero, which is the term that triggers the
-        // overflow when added to a `u64::MAX`-derived initial age.
+        // Set `now` after the response timestamp so `resident_age` is nonzero.
+        // Adding that value to the initial `u64::MAX` age would otherwise overflow.
         let now = SystemTime::now() + Duration::from_secs(5);
         assert_eq!(archived.age(now), Duration::from_secs(u64::MAX));
         assert!(!archived.is_fresh(now, &request));
