@@ -1,0 +1,50 @@
+name: "Load commit"
+description: "Import an immutable commit artifact without checking out or executing its contents."
+
+inputs:
+  artifact-id:
+    description: "The immutable artifact ID from persist-commit in this workflow run."
+    required: true
+  base-sha:
+    description: "The trusted full ancestor SHA, already present in this checkout."
+    required: true
+  head-sha:
+    description: "The exact full commit SHA returned by persist-commit."
+    required: true
+
+outputs:
+  head-sha:
+    description: "The imported commit SHA, after ref, object, and ancestry validation."
+    value: ${{ steps.load.outputs.head-sha }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Prepare commit download"
+      id: source
+      shell: bash
+      env:
+        ARTIFACT_ID: ${{ inputs.artifact-id }}
+      run: |
+        if ! [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+          echo "The commit artifact ID is invalid." >&2
+          exit 1
+        fi
+        printf 'path=%s\n' "$(mktemp -d "$RUNNER_TEMP/load-commit.XXXXXX")" >> "$GITHUB_OUTPUT"
+
+    - name: "Download commit"
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        artifact-ids: ${{ inputs.artifact-id }}
+        path: ${{ steps.source.outputs.path }}
+        merge-multiple: true
+
+    - name: "Validate and import commit"
+      id: load
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        BUNDLE: ${{ steps.source.outputs.path }}/commit.bundle
+        HEAD_SHA: ${{ inputs.head-sha }}
+      run: bash "$ACTION_PATH/load.sh"
