@@ -27,7 +27,7 @@ use uv_configuration::{
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::NameRequirementSpecification;
 use uv_fs::which::is_executable;
-use uv_fs::{PythonExt, Simplified, create_symlink};
+use uv_fs::{ClearNonVirtualenv, PythonExt, Simplified, create_symlink};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
@@ -482,9 +482,10 @@ pub(crate) async fn run(
                     interpreter,
                     uv_virtualenv::Prompt::None,
                     false,
-                    uv_virtualenv::OnExisting::Remove(
-                        uv_virtualenv::RemovalReason::TemporaryEnvironment,
-                    ),
+                    uv_virtualenv::OnExisting::Replace {
+                        reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
+                        clear_non_virtualenv: ClearNonVirtualenv::Allow,
+                    },
                     false,
                     uv_virtualenv::Seed::Disabled,
                     false,
@@ -691,9 +692,10 @@ pub(crate) async fn run(
                     interpreter,
                     uv_virtualenv::Prompt::None,
                     false,
-                    uv_virtualenv::OnExisting::Remove(
-                        uv_virtualenv::RemovalReason::TemporaryEnvironment,
-                    ),
+                    uv_virtualenv::OnExisting::Replace {
+                        reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
+                        clear_non_virtualenv: ClearNonVirtualenv::Allow,
+                    },
                     false,
                     uv_virtualenv::Seed::Disabled,
                     false,
@@ -927,9 +929,10 @@ pub(crate) async fn run(
                     interpreter,
                     uv_virtualenv::Prompt::None,
                     false,
-                    uv_virtualenv::OnExisting::Remove(
-                        uv_virtualenv::RemovalReason::TemporaryEnvironment,
-                    ),
+                    uv_virtualenv::OnExisting::Replace {
+                        reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
+                        clear_non_virtualenv: ClearNonVirtualenv::Allow,
+                    },
                     false,
                     uv_virtualenv::Seed::Disabled,
                     false,
@@ -1058,9 +1061,10 @@ pub(crate) async fn run(
                 base_interpreter.clone(),
                 uv_virtualenv::Prompt::None,
                 false,
-                uv_virtualenv::OnExisting::Remove(
-                    uv_virtualenv::RemovalReason::TemporaryEnvironment,
-                ),
+                uv_virtualenv::OnExisting::Replace {
+                    reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
+                    clear_non_virtualenv: ClearNonVirtualenv::Allow,
+                },
                 false,
                 uv_virtualenv::Seed::Disabled,
                 false,
