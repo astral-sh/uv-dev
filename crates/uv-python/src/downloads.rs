@@ -1485,16 +1485,15 @@ impl ManagedPythonDownload {
         let target = if let Some(reporter) = reporter {
             let progress_key = reporter.on_request_start(direction, &self.key, size);
             let mut reader = ProgressReader::new(&mut hasher, progress_key, reporter);
-            let (target, _) = uv_extract::stream::archive(&mut reader, ext, target)
+            let target = uv_extract::stream::archive(&mut reader, ext, target)
                 .await
                 .map_err(|err| Error::ExtractError(filename.to_owned(), err))?;
             reporter.on_request_complete(direction, progress_key);
             target
         } else {
-            let (target, _) = uv_extract::stream::archive(&mut hasher, ext, target)
+            uv_extract::stream::archive(&mut hasher, ext, target)
                 .await
-                .map_err(|err| Error::ExtractError(filename.to_owned(), err))?;
-            target
+                .map_err(|err| Error::ExtractError(filename.to_owned(), err))?
         };
         hasher.finish().await.map_err(Error::HashExhaustion)?;
 
