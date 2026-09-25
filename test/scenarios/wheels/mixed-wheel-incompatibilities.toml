@@ -1,0 +1,28 @@
+name = "mixed-wheel-incompatibilities"
+description = "Different releases only provide wheels with incompatible ABI and platform tags."
+
+[root]
+requires = ["package"]
+
+[expected]
+satisfiable = false
+explanation = "Distinct wheel ABI and platform incompatibilities must both remain visible."
+
+[packages.package.versions."1.0.0"]
+wheel_tags = ["py3-graalpy240_310_native-any"]
+sdist = false
+
+[packages.package.versions."1.5.0"]
+wheel_tags = ["py3-graalpy240_310_native-any"]
+sdist = false
+
+[packages.package.versions."2.0.0"]
+wheel_tags = ["py3-none-macosx_10_0_ppc64"]
+sdist = false
+
+[packages.package.versions."2.5.0"]
+wheel_tags = ["py3-none-macosx_10_0_ppc64"]
+sdist = false
+
+[resolver_options]
+python_platform = "x86_64-manylinux2014"
