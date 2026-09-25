@@ -1,10 +1,7 @@
 use std::fmt::Display;
 
 use uv_distribution::Metadata;
-use uv_distribution_types::{
-    BuiltDist, Dist, DistributionMetadata, IndexUrl, Name, ResolvedDist, SourceDist,
-    VersionOrUrlRef,
-};
+use uv_distribution_types::{DistributionMetadata, IndexUrl, Name, ResolvedDist, VersionOrUrlRef};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
 use uv_pypi_types::HashDigests;
@@ -71,25 +68,7 @@ impl AnnotatedDist {
 
     /// Returns the [`IndexUrl`] of the distribution, if it is from a registry.
     pub fn index(&self) -> Option<&IndexUrl> {
-        match &self.dist {
-            ResolvedDist::Installed { .. } => None,
-            ResolvedDist::Installable { dist, .. } => match dist.as_ref() {
-                Dist::Built(dist) => match dist {
-                    BuiltDist::Registry(dist) => Some(&dist.best_wheel().index),
-                    BuiltDist::DirectUrl(_) => None,
-                    BuiltDist::Path(_) => None,
-                    BuiltDist::GitPath(_) => None,
-                },
-                Dist::Source(dist) => match dist {
-                    SourceDist::Registry(dist) => Some(&dist.index),
-                    SourceDist::DirectUrl(_) => None,
-                    SourceDist::Path(_) => None,
-                    SourceDist::Directory(_) => None,
-                    SourceDist::GitPath(_) => None,
-                    SourceDist::GitDirectory(_) => None,
-                },
-            },
-        }
+        self.dist.index()
     }
 }
 
