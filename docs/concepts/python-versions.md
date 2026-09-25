@@ -442,6 +442,31 @@ supported formats.
 
 uv supports downloading and installing CPython, PyPy, and Pyodide distributions.
 
+### Download mirrors
+
+To download CPython from a mirror, use
+[`uv python install --mirror`](../reference/cli.md#uv-python-install--mirror):
+
+```console
+$ uv python install --mirror https://python.example.com 3.12
+```
+
+For other uv commands, configure the
+[`python-install-mirror`](../reference/settings.md#python-install-mirror) setting or
+[`UV_PYTHON_INSTALL_MIRROR`](../reference/environment.md#uv_python_install_mirror) environment
+variable. The mirror replaces
+`https://github.com/astral-sh/python-build-standalone/releases/download` in the download URL, so it
+must preserve the release-tag directory and archive filename. A `file://` URL can be used to read
+archives from a local directory. An explicitly configured mirror is used without automatically
+falling back to the upstream source.
+
+To inspect the archive URLs selected by your configuration, use
+`uv python list --only-downloads --show-urls`. PyPy has a separate
+[`UV_PYPY_INSTALL_MIRROR`](../reference/environment.md#uv_pypy_install_mirror) environment variable.
+To replace the available-download catalog itself, use
+[`UV_PYTHON_DOWNLOADS_JSON_URL`](../reference/environment.md#uv_python_downloads_json_url) with a
+local path or URL instead of uv's bundled catalog.
+
 ### CPython distributions
 
 As Python does not publish official distributable CPython binaries, uv instead uses pre-built
