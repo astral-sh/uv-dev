@@ -3818,6 +3818,7 @@ fn preview_features() {
     +            MinimumLibcVersion,
     +            BuildDependencyCheck,
     +            BuildLazyImports,
+    +            RemotePythonDownloadMetadata,
     +        ],
          },
          python_preference: Managed,
