@@ -1264,9 +1264,9 @@ fn group_requires_python_useful_defaults() -> Result<()> {
     Using CPython 3.8.[X] interpreter at: [PYTHON-3.8]
     Creating virtual environment at: .venv
     error: No solution found when resolving dependencies for split (markers: python_full_version == '3.8.*')
-      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
-             And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
-             And because pharaohs-tomp:dev depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:dev, we can conclude that your project's requirements are unsatisfiable.
+      cause: the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, so sphinx==7.2.6 cannot be used.
+             And only sphinx<=7.2.6 is available, so sphinx>=7.2.6 cannot be used.
+             And pharaohs-tomp:dev depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:dev.
 
     hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
@@ -1276,9 +1276,9 @@ fn group_requires_python_useful_defaults() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: python_full_version == '3.8.*')
-      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
-             And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
-             And because pharaohs-tomp:dev depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:dev, we can conclude that your project's requirements are unsatisfiable.
+      cause: the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, so sphinx==7.2.6 cannot be used.
+             And only sphinx<=7.2.6 is available, so sphinx>=7.2.6 cannot be used.
+             And pharaohs-tomp:dev depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:dev.
 
     hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
@@ -1396,9 +1396,9 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
     Using CPython 3.8.[X] interpreter at: [PYTHON-3.8]
     Creating virtual environment at: .venv
     error: No solution found when resolving dependencies for split (markers: python_full_version == '3.8.*')
-      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
-             And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
-             And because pharaohs-tomp:mygroup depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:mygroup, we can conclude that your project's requirements are unsatisfiable.
+      cause: the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, so sphinx==7.2.6 cannot be used.
+             And only sphinx<=7.2.6 is available, so sphinx>=7.2.6 cannot be used.
+             And pharaohs-tomp:mygroup depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:mygroup.
 
     hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
@@ -1409,9 +1409,9 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: python_full_version == '3.8.*')
-      cause: Because the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, we can conclude that sphinx==7.2.6 cannot be used.
-             And because only sphinx<=7.2.6 is available, we can conclude that sphinx>=7.2.6 cannot be used.
-             And because pharaohs-tomp:mygroup depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:mygroup, we can conclude that your project's requirements are unsatisfiable.
+      cause: the requested Python version (>=3.8) does not satisfy Python>=3.9 and sphinx==7.2.6 depends on Python>=3.9, so sphinx==7.2.6 cannot be used.
+             And only sphinx<=7.2.6 is available, so sphinx>=7.2.6 cannot be used.
+             And pharaohs-tomp:mygroup depends on sphinx>=7.2.6 and your project requires pharaohs-tomp:mygroup.
 
     hint: The `requires-python` value (>=3.8) includes Python versions that are not supported by your dependencies (e.g., sphinx==7.2.6 only supports >=3.9). Consider using a more restrictive `requires-python` value (like >=3.9).
     ");
@@ -12268,7 +12268,7 @@ fn sync_script_with_incompatible_build_constraints() -> Result<()> {
     error: Failed to download and build `requests==1.2.0`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
-      cause: Because you require setuptools>=40.8.0 and setuptools==1, we can conclude that your requirements are unsatisfiable.
+      cause: you require setuptools>=40.8.0 and setuptools==1.
     ");
 
     Ok(())
@@ -15405,8 +15405,8 @@ async fn sync_non_pep625_sdist() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because basic-package==0.1.0 has a non-PEP 625-compliant source distribution filename and only basic-package==0.1.0 is available, we can conclude that all versions of basic-package cannot be used.
-             And because your project depends on basic-package, we can conclude that your project's requirements are unsatisfiable.
+      cause: basic-package==0.1.0 has a non-PEP 625-compliant source distribution filename and only basic-package==0.1.0 is available, so all versions of basic-package cannot be used.
+             And your project depends on basic-package.
 
     hint: `basic-package` was found on http://[LOCALHOST]/simple, but not at the requested version (basic-package==0.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
     ");

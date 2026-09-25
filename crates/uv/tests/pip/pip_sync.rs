@@ -981,7 +981,7 @@ fn install_no_index() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because iniconfig was not found in the provided package locations and you require iniconfig==2.0.0, we can conclude that your requirements are unsatisfiable.
+      cause: iniconfig was not found in the provided package locations and you require iniconfig==2.0.0.
 
     hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     "
@@ -1024,7 +1024,7 @@ fn install_no_index_cached() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because iniconfig was not found in the provided package locations and you require iniconfig==2.0.0, we can conclude that your requirements are unsatisfiable.
+      cause: iniconfig was not found in the provided package locations and you require iniconfig==2.0.0.
 
     hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     "
@@ -1511,7 +1511,7 @@ fn mismatched_name() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because foo has an invalid package format and you require foo, we can conclude that your requirements are unsatisfiable.
+      cause: foo has an invalid package format and you require foo.
 
     hint: The structure of `foo` was invalid
       Caused by: The .dist-info directory tomli-2.0.1 does not start with the normalized package name: foo
@@ -2081,7 +2081,7 @@ fn duplicate_package_overlap() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because you require markupsafe==2.1.3 and markupsafe==2.1.2, we can conclude that your requirements are unsatisfiable.
+      cause: you require markupsafe==2.1.3 and markupsafe==2.1.2.
     "
     );
 
@@ -2681,7 +2681,7 @@ fn incompatible_wheel() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because foo has an invalid package format and you require foo, we can conclude that your requirements are unsatisfiable.
+      cause: foo has an invalid package format and you require foo.
 
     hint: The structure of `foo` was invalid
       Caused by: Failed to read from zip file
@@ -2819,7 +2819,7 @@ fn find_links_offline_no_match() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because numpy was not found in the cache and you require numpy, we can conclude that your requirements are unsatisfiable.
+      cause: numpy was not found in the cache and you require numpy.
 
     hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     "
@@ -2929,7 +2929,7 @@ fn offline() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because black was not found in the cache and you require black==23.10.1, we can conclude that your requirements are unsatisfiable.
+      cause: black was not found in the cache and you require black==23.10.1.
 
     hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     "
@@ -3008,7 +3008,7 @@ fn incompatible_constraint() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because you require anyio==3.7.0 and anyio==3.6.0, we can conclude that your requirements are unsatisfiable.
+      cause: you require anyio==3.7.0 and anyio==3.6.0.
     "
     );
 
@@ -3093,7 +3093,7 @@ fn repeat_requirement_incompatible() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because you require anyio<4.0.0 and anyio==4.0.0, we can conclude that your requirements are unsatisfiable.
+      cause: you require anyio<4.0.0 and anyio==4.0.0.
     ");
 
     Ok(())
@@ -3364,8 +3364,8 @@ requires-python = ">=3.13"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because the current Python version (3.12.[X]) does not satisfy Python>=3.13 and example==0.0.0 depends on Python>=3.13, we can conclude that example==0.0.0 cannot be used.
-             And because only example==0.0.0 is available and you require example, we can conclude that your requirements are unsatisfiable.
+      cause: the current Python version (3.12.[X]) does not satisfy Python>=3.13 and example==0.0.0 depends on Python>=3.13, so example==0.0.0 cannot be used.
+             And only example==0.0.0 is available and you require example.
     "
     );
 
@@ -3401,8 +3401,8 @@ requires-python = ">=3.13"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because the current Python version (3.12.[X]) does not satisfy Python>=3.13 and example==0.0.0 depends on Python>=3.13, we can conclude that example==0.0.0 cannot be used.
-             And because only example==0.0.0 is available and you require example, we can conclude that your requirements are unsatisfiable.
+      cause: the current Python version (3.12.[X]) does not satisfy Python>=3.13 and example==0.0.0 depends on Python>=3.13, so example==0.0.0 cannot be used.
+             And only example==0.0.0 is available and you require example.
     "
     );
 
@@ -4709,7 +4709,7 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
     error: Failed to download and build `basic-package==0.1.0`
       cause: Failed to resolve requirements from `build-system.requires`
       cause: No solution found when resolving: `uv-build>=0.8.3, <0.9.0`
-      cause: Because uv-build was not found in the package registry and you require uv-build>=0.8.3,<0.9.0, we can conclude that your requirements are unsatisfiable.
+      cause: uv-build was not found in the package registry and you require uv-build>=0.8.3,<0.9.0.
     "
     );
 
@@ -4918,7 +4918,7 @@ fn require_hashes_registry_valid_hash() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because example-a-961b4c22 was not found in the package registry and you require example-a-961b4c22==1.0.0, we can conclude that your requirements are unsatisfiable.
+      cause: example-a-961b4c22 was not found in the package registry and you require example-a-961b4c22==1.0.0.
     "
     );
 
@@ -5573,7 +5573,7 @@ fn incompatible_build_constraint() -> Result<()> {
     error: Failed to download and build `requests==1.2.0`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
-      cause: Because you require setuptools>=40.8.0 and setuptools==1, we can conclude that your requirements are unsatisfiable.
+      cause: you require setuptools>=40.8.0 and setuptools==1.
     "
     );
 
