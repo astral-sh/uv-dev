@@ -2417,15 +2417,15 @@ pub fn run_and_format_silent<T: AsRef<str>>(
         if let Some(windows_filters) = windows_filters {
             // The optional leading +/-/~ is for install logs, the optional next line is for lockfiles
             let windows_only_deps = [
-                (r"( ?[-+~] ?)?colorama==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"),
-                (r"( ?[-+~] ?)?colorama==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
-                (r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"),
-                (r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
+                regex!(
+                    r"( ?[-+~] ?)?colorama==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"
+                ),
+                regex!(r"( ?[-+~] ?)?colorama==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
+                regex!(r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"),
+                regex!(r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
             ];
             let mut removed_packages = 0;
-            for windows_only_dep in windows_only_deps {
-                // TODO(konstin): Cache regex compilation
-                let re = Regex::new(windows_only_dep).unwrap();
+            for re in windows_only_deps {
                 if re.is_match(&snapshot) {
                     snapshot = re.replace(&snapshot, "").to_string();
                     removed_packages += 1;
