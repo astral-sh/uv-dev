@@ -8,6 +8,9 @@ mod python_find;
 #[cfg(feature = "test-python-managed")]
 mod python_install;
 
+#[cfg(all(unix, feature = "test-python-managed"))]
+mod python_install_pyodide;
+
 #[cfg(feature = "test-python")]
 mod python_list;
 
