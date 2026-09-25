@@ -519,8 +519,8 @@ async fn perform_install(
         }
     }
 
-    // Find requests that are already satisfied. Retain the original requests alongside their
-    // selections so revision constraints survive expansion of reinstall requests.
+    // Find requests that are already satisfied. Retain original requests for diagnostics alongside
+    // effective reinstall requests, which select revision pins for each expanded build identity.
     let mut changelog = Changelog::default();
     let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall {
         // In the reinstall case, we want to iterate over all matching installations instead of
@@ -652,16 +652,24 @@ async fn perform_install(
     // An installation directory can contain only one build revision. Include satisfied requests
     // so replacing an installation cannot invalidate another request's revision requirement.
     let mut requested_revisions = FxHashMap::default();
-    for (request, key) in satisfied
+    for (request, key, build_revision) in satisfied
         .iter()
-        .map(|(request, installation)| (*request, installation.key()))
-        .chain(
-            unsatisfied
-                .iter()
-                .map(|(request, install_request)| (*request, install_request.download.key())),
-        )
+        .map(|(request, installation)| {
+            (
+                *request,
+                installation.key(),
+                request.download_request.build_revision(),
+            )
+        })
+        .chain(unsatisfied.iter().map(|(request, install_request)| {
+            (
+                *request,
+                install_request.download.key(),
+                install_request.download_request.build_revision(),
+            )
+        }))
     {
-        let Some(build_revision) = request.download_request.build_revision() else {
+        let Some(build_revision) = build_revision else {
             continue;
         };
         if let Some((previous_request, previous_build_revision)) =
@@ -711,19 +719,19 @@ async fn perform_install(
 
     // Find downloads for the requests
     let mut downloads = IndexMap::new();
-    for (request, install_request) in &unsatisfied {
+    for (_, install_request) in &unsatisfied {
         debug!(
             "Found download `{}` for request `{}`",
             install_request.download, install_request,
         );
         let (previous_request, download) = downloads
             .entry(install_request.download.key())
-            .or_insert((*request, install_request.download));
+            .or_insert((install_request.as_ref(), install_request.download));
         // A pinned revision also satisfies an unpinned request for the same installation.
-        if request.download_request.build_revision().is_some()
+        if install_request.download_request.build_revision().is_some()
             && previous_request.download_request.build_revision().is_none()
         {
-            *previous_request = *request;
+            *previous_request = install_request.as_ref();
             *download = install_request.download;
         }
     }
