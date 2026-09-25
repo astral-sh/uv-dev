@@ -84,14 +84,24 @@ pub enum Error {
     MacOsDylib(#[from] macos_dylib::Error),
 }
 
-/// Compare two build version strings.
+/// Compare two build revision strings.
 ///
-/// Build versions are typically YYYYMMDD date strings. Comparison is done numerically
-/// if both values parse as integers, otherwise falls back to lexicographic comparison.
-pub fn compare_build_versions(a: &str, b: &str) -> Ordering {
-    match (a.parse::<u64>(), b.parse::<u64>()) {
-        (Ok(a_num), Ok(b_num)) => a_num.cmp(&b_num),
-        _ => a.cmp(b),
+/// Build revisions are typically YYYYMMDD date strings. Comparison is done numerically
+/// for digit-only values, without a fixed integer size limit. Legacy nonnumeric revisions
+/// fall back to lexicographic comparison.
+pub fn compare_build_revisions(left: &str, right: &str) -> Ordering {
+    match (left.parse::<u64>(), right.parse::<u64>()) {
+        (Ok(left), Ok(right)) => left.cmp(&right),
+        _ if !left.is_empty()
+            && !right.is_empty()
+            && left.bytes().all(|character| character.is_ascii_digit())
+            && right.bytes().all(|character| character.is_ascii_digit()) =>
+        {
+            let left = left.trim_start_matches('0');
+            let right = right.trim_start_matches('0');
+            left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+        }
+        _ => left.cmp(right),
     }
 }
 
@@ -309,10 +319,10 @@ pub struct ManagedPythonInstallation {
     ///
     /// Empty when self was constructed from a path.
     sha256: Option<Digest<32>>,
-    /// The build version of the Python installation.
+    /// The build revision of the Python installation.
     ///
     /// Empty when self was constructed from a path without a BUILD file.
-    build: Option<Cow<'static, str>>,
+    build_revision: Option<Cow<'static, str>>,
 }
 
 impl ManagedPythonInstallation {
@@ -322,7 +332,7 @@ impl ManagedPythonInstallation {
             key: download.key().clone(),
             url: Some(download.url().clone()),
             sha256: download.sha256().cloned(),
-            build: download.build().map(Cow::Borrowed),
+            build_revision: download.build_revision().map(Cow::Borrowed),
         }
     }
 
@@ -343,20 +353,24 @@ impl ManagedPythonInstallation {
         let path = std::path::absolute(path)
             .map_err(|err| Error::AbsolutePath(path.to_path_buf(), err))?;
 
-        // Try to read the BUILD file if it exists
-        let build = match fs::read_to_string(path.join("BUILD")) {
-            Ok(content) => Some(Cow::Owned(content.trim().to_string())),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-            Err(err) => return Err(err.into()),
-        };
+        let build_revision = Self::read_build_revision(&path)?.map(Cow::Owned);
 
         Ok(Self {
             path,
             key,
             url: None,
             sha256: None,
-            build,
+            build_revision,
         })
+    }
+
+    /// Read the build revision recorded in a managed installation's `BUILD` file, if present.
+    pub(crate) fn read_build_revision(path: &Path) -> io::Result<Option<String>> {
+        match fs::read_to_string(path.join("BUILD")) {
+            Ok(content) => Ok(Some(content.trim().to_owned())),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
     }
 
     /// Try to create a [`ManagedPythonInstallation`] from an [`Interpreter`].
@@ -377,7 +391,7 @@ impl ManagedPythonInstallation {
 
     /// Return the managed installation path and [`PythonInstallationKey`] for an interpreter,
     /// without reading its build revision.
-    fn path_and_key_from_interpreter(
+    pub(crate) fn path_and_key_from_interpreter(
         interpreter: &Interpreter,
     ) -> Option<(PathBuf, PythonInstallationKey)> {
         let managed_root = ManagedPythonInstallations::from_settings(None).ok()?;
@@ -515,9 +529,9 @@ impl ManagedPythonInstallation {
         self.key.platform()
     }
 
-    /// The build version of this installation, if available.
-    pub fn build(&self) -> Option<&str> {
-        self.build.as_deref()
+    /// The build revision of this installation, if available.
+    pub fn build_revision(&self) -> Option<&str> {
+        self.build_revision.as_deref()
     }
 
     pub fn minor_version_key(&self) -> &PythonInstallationMinorVersionKey {
@@ -644,11 +658,11 @@ impl ManagedPythonInstallation {
         Ok(())
     }
 
-    /// Ensure the build version is written to a BUILD file in the installation directory.
+    /// Ensure the build revision is written to a BUILD file in the installation directory.
     pub fn ensure_build_file(&self) -> Result<(), Error> {
-        if let Some(ref build) = self.build {
+        if let Some(ref build_revision) = self.build_revision {
             let build_file = self.path.join("BUILD");
-            fs::write(&build_file, build.as_ref())?;
+            fs::write(&build_file, build_revision.as_ref())?;
         }
         Ok(())
     }
@@ -695,7 +709,7 @@ impl ManagedPythonInstallation {
             return false;
         }
         // If the patch versions are the same, we're handling a pre-release upgrade
-        // or a build version upgrade
+        // or a build revision upgrade
         if self.key.patch == other.key.patch {
             return match (self.key.prerelease, other.key.prerelease) {
                 // Require a newer pre-release, if present on both
@@ -704,15 +718,18 @@ impl ManagedPythonInstallation {
                 (None, Some(_)) => true,
                 // Do not upgrade from stable to pre-release
                 (Some(_), None) => false,
-                // For matching stable versions (same patch, no prerelease), check build version
-                (None, None) => match (self.build.as_deref(), other.build.as_deref()) {
-                    // Download has build, installation doesn't -> upgrade (legacy)
+                // For matching stable versions (same patch, no prerelease), check build revision
+                (None, None) => match (
+                    self.build_revision.as_deref(),
+                    other.build_revision.as_deref(),
+                ) {
+                    // A download with a revision upgrades a legacy installation without one.
                     (Some(_), None) => true,
-                    // Both have build, compare them
+                    // Compare two recorded revisions.
                     (Some(self_build), Some(other_build)) => {
-                        compare_build_versions(self_build, other_build) == Ordering::Greater
+                        compare_build_revisions(self_build, other_build) == Ordering::Greater
                     }
-                    // Download doesn't have build -> no upgrade
+                    // A download without a revision does not trigger an upgrade.
                     (None, _) => false,
                 },
             };
@@ -1046,7 +1063,7 @@ mod tests {
         patch: u8,
         prerelease: Option<Prerelease>,
         variant: PythonVariant,
-        build: Option<&str>,
+        build_revision: Option<&str>,
     ) -> ManagedPythonInstallation {
         let platform = Platform::from_str("linux-x86_64-gnu").unwrap();
         let key = PythonInstallationKey::new(
@@ -1063,7 +1080,20 @@ mod tests {
             key,
             url: None,
             sha256: None,
-            build: build.map(|s| Cow::Owned(s.to_owned())),
+            build_revision: build_revision.map(|revision| Cow::Owned(revision.to_owned())),
+        }
+    }
+
+    #[test]
+    fn compare_numeric_build_revisions() {
+        for (older, newer) in [
+            ("9", "10"),
+            ("20260825", "20260901"),
+            ("99999999999999999999", "100000000000000000000"),
+        ] {
+            assert_eq!(compare_build_revisions(older, newer), Ordering::Less);
+            assert_eq!(compare_build_revisions(newer, older), Ordering::Greater);
+            assert_eq!(compare_build_revisions(newer, newer), Ordering::Equal);
         }
     }
 
@@ -1091,7 +1121,7 @@ mod tests {
         let installation = root.join(name);
         let base_prefix = installation.join("lib").join("python3.13");
         fs::create_dir_all(&base_prefix)?;
-        // Resolving the identity must not require readable build metadata.
+        // Resolving the identity must not require readable build-revision metadata.
         fs::create_dir(installation.join("BUILD"))?;
 
         let (path, key) =
@@ -1313,7 +1343,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_upgrade_of_build_version() {
+    fn test_is_upgrade_of_build_revision() {
         let older_build = create_test_installation(
             ImplementationName::CPython,
             3,
@@ -1333,14 +1363,14 @@ mod tests {
             Some("20240201"),
         );
 
-        // Newer build version should be an upgrade
+        // Newer build revision should be an upgrade
         assert!(newer_build.is_upgrade_of(&older_build));
-        // Older build version should not be an upgrade
+        // Older build revision should not be an upgrade
         assert!(!older_build.is_upgrade_of(&newer_build));
     }
 
     #[test]
-    fn test_is_upgrade_of_build_version_same() {
+    fn test_is_upgrade_of_build_revision_same() {
         let installation = create_test_installation(
             ImplementationName::CPython,
             3,
@@ -1351,7 +1381,7 @@ mod tests {
             Some("20240101"),
         );
 
-        // Same build version should not be an upgrade
+        // Same build revision should not be an upgrade
         assert!(!installation.is_upgrade_of(&installation));
     }
 
@@ -1376,9 +1406,9 @@ mod tests {
             Some("20240101"),
         );
 
-        // Installation with build should upgrade legacy installation without build
+        // A revisioned installation should upgrade a legacy installation without a revision.
         assert!(with_build.is_upgrade_of(&legacy));
-        // Legacy installation should not upgrade installation with build
+        // A legacy installation should not upgrade an installation with a revision.
         assert!(!legacy.is_upgrade_of(&with_build));
     }
 
@@ -1403,9 +1433,9 @@ mod tests {
             Some("20240101"),
         );
 
-        // Newer patch version should be an upgrade regardless of build
+        // A newer patch version should be an upgrade regardless of build revision.
         assert!(newer_patch_older_build.is_upgrade_of(&older_patch_newer_build));
-        // Older patch version should not be an upgrade even with newer build
+        // An older patch version should not be an upgrade even with a newer build revision.
         assert!(!older_patch_newer_build.is_upgrade_of(&newer_patch_older_build));
     }
 

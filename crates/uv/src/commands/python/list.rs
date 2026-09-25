@@ -5,7 +5,7 @@ use uv_cli::PythonListFormat;
 use uv_pep440::Version;
 
 use anyhow::Result;
-use itertools::Either;
+use itertools::{Either, Itertools};
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashSet;
 use uv_cache::Cache;
@@ -120,7 +120,9 @@ pub(crate) async fn list(
         .await?;
 
         let downloads = download_list
-            .iter_matching(&download_request)
+            .iter_matching_with_build_revisions(&download_request)?
+            // Downloads are ordered by revision, newest first. Display one artifact per key.
+            .unique_by(|download| download.key())
             // TODO(zanieb): Add a way to show debug downloads, we just hide them for now
             .filter(|download| !download.key().variant().is_debug());
 
