@@ -1100,6 +1100,14 @@ fn existing_project_environment(
             }
             return Ok(None);
         }
+        Err(uv_python::Error::Query(err))
+            if matches!(root.join("pyvenv.cfg").try_exists(), Ok(false)) =>
+        {
+            // Without `pyvenv.cfg`, a Windows virtualenv launcher cannot be queried. Let the
+            // environment replacement policy decide whether this directory can be used.
+            debug!("Ignoring non-virtual project environment that could not be queried: {err}");
+            return Ok(None);
+        }
         Err(err) => return Err(err.into()),
     };
 
