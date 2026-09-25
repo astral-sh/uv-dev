@@ -23,10 +23,12 @@ printed its environment path, and exited with status 0.
 Relocatable Nushell activation was implemented by astral-sh/uv#17036 to satisfy
 astral-sh/uv#16973, so successful activation after moving an environment is intended behavior.
 
-No existing issue or pull request tracks this exact parse-time failure. The existing Rust test only
-checks that the problematic text is generated, while the Nushell integration workflow executes a
-standard, non-relocatable script and does not reach this branch. astral-sh/uv#15294 tracks the
-broader need for activation-script integration coverage.
+astral-sh/uv#21979 is now open with a targeted fix for this issue. It changes the relocatable
+`virtual_env` binding from `let` to `const` and updates the existing Rust assertion accordingly. The
+pull request does not add an execution test. The existing Rust test only checks the generated text,
+while the Nushell integration workflow executes a standard, non-relocatable script and does not
+reach this branch. astral-sh/uv#15294 tracks the broader need for activation-script integration
+coverage.
 
 ## Reproduction
 
@@ -85,12 +87,17 @@ exact compatibility boundary.
 `bug` is the appropriate classification. A targeted execution with the reported uv version produces
 the exact diagnostic, while the non-relocatable control works, and relocatable Nushell activation is
 explicitly intended behavior. The reporter's Nushell version remains unknown, but current Nushell
-0.115.1 is affected. It is not a duplicate: no open issue or pull request was found for this
-parse-time failure. The historical work enabled this code path; it does not already track the new
+0.115.1 is affected. It is not a duplicate: astral-sh/uv#21979 was opened in response to this report
+and proposes the fix. The historical work enabled this code path; it did not already track the new
 failure.
 
 ## Related
 
+- astral-sh/uv#21979 — open pull request, **fix(venv): use const for nushell activate path self**.
+  This directly addresses the reported failure by changing the relocatable `virtual_env` binding
+  from `let` to `const`, and it identifies astral-sh/uv#21978 as the issue it fixes. Its two-file
+  change updates the activation template and the existing generated-text assertion; it does not add
+  a Nushell execution test.
 - astral-sh/uv#17036 — merged pull request, **Fix relocatable nushell activation script**. This is
   the origin of the exact `path self` expression in the failing generated script. It made
   relocatable `activate.nu` derive the environment root dynamically. The new report shows that
@@ -106,8 +113,8 @@ failure.
 
 ## Search evidence
 
-Searches covered open and closed issues and open, closed, and merged pull requests. Literal queries
-used the exact diagnostic (`this command can only run during parse-time`), `path self`,
+The original searches covered open and closed issues and open, closed, and merged pull requests.
+Literal queries used the exact diagnostic (`this command can only run during parse-time`), `path self`,
 `activate.nu`, and `overlay use`. Conceptual queries covered Nushell virtual-environment activation,
 shell compatibility, relocatable environments, and activation-test coverage. Fix-oriented review
 included closed reports, merged pull requests, file history for both the Nushell template and its
@@ -117,3 +124,5 @@ astral-sh/uv#14888 was plausible from its title but concerns a different Nushell
 incompatibility: deprecation of `get -i`, not a parse-time failure at `path self`.
 astral-sh/uv#18940 uses the same `overlay use` command but was caused by Windows `Path`/`PATH`
 casing and fails on a different expression. Neither is the same underlying problem.
+
+After that investigation, astral-sh/uv#21979 was opened specifically to fix astral-sh/uv#21978.
