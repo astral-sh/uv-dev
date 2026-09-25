@@ -813,6 +813,30 @@ jobs:
         with:
           name: uv-windows-x86_64-${{ inputs.sha }}
 
+      - name: "Ensure Docker is running"
+        timeout-minutes: 2
+        run: |
+          docker info *> $null
+          if ($LASTEXITCODE -eq 0) {
+            exit 0
+          }
+
+          # Hosted Windows runners can fail to start Docker during boot.
+          # https://github.com/actions/runner-images/issues/13729
+          Write-Host "Docker is unavailable; restarting the service."
+          Restart-Service -Name docker -ErrorAction Stop
+
+          for ($attempt = 0; $attempt -lt 30; $attempt++) {
+            docker info *> $null
+            if ($LASTEXITCODE -eq 0) {
+              exit 0
+            }
+            Start-Sleep -Seconds 2
+          }
+
+          docker info
+          throw "Docker did not become ready after restarting the service."
+
       - name: "Run uv on Windows NanoServer"
         run: |
           docker run --rm `
