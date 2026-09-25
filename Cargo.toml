@@ -153,6 +153,7 @@ dotenvy = { version = "0.15.7", default-features = false }
 dunce = { version = "1.0.5", default-features = false }
 editpe = { version = "0.2.4", default-features = false, features = ["std"] }
 either = { version = "1.13.0", default-features = false, features = ["std"] }
+encoding_rs = { version = "0.8.35", default-features = false }
 encoding_rs_io = { version = "0.1.7", default-features = false }
 embed-manifest = { version = "1.5.0", default-features = false }
 enumflags2 = { version = "0.7.12", default-features = false }
