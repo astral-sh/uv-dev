@@ -25,3 +25,4 @@ mod cache_prune;
 mod cache_size;
 
 mod extract;
+mod extract_local;
