@@ -7,9 +7,12 @@ use anyhow::Context;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{
     assert::PathAssert,
+    fixture::ChildPath,
     prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir},
 };
 use indoc::indoc;
+#[cfg(feature = "test-python-managed")]
+use insta::allow_duplicates;
 use predicates::prelude::predicate;
 use tracing::debug;
 use uv_test::{LATEST_PYTHON_3_12, TestContext, uv_snapshot};
@@ -147,6 +150,36 @@ fn python_build_name_context() -> anyhow::Result<(TestContext, ManagedPythonInst
     Ok((context, unnamed))
 }
 
+fn python_named_build_context()
+-> anyhow::Result<(TestContext, ManagedPythonInstallation, ChildPath)> {
+    let (context, unnamed) = python_build_name_context()?;
+    let unnamed_name = unnamed.key().to_string();
+    let platform = platform_key_from_env()?;
+    let version = unnamed_name
+        .strip_suffix(&format!("-{platform}"))
+        .context("Missing platform suffix")?;
+    let custom_build_path = context
+        .temp_dir
+        .child("managed")
+        .child(format!("{version}+custom-{platform}"));
+    // Keep unnamed installed so environments using it remain healthy when switching builds.
+    copy_dir_all(unnamed.path(), &custom_build_path)?;
+    Ok((context, unnamed, custom_build_path))
+}
+
+fn python_build_name_project(context: &TestContext) -> anyhow::Result<ChildPath> {
+    let project = context.temp_dir.child("project");
+    project.create_dir_all()?;
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+    "#})?;
+    Ok(project)
+}
+
 fn python_build_name_catalog_context() -> anyhow::Result<(
     TestContext,
     ManagedPythonInstallation,
@@ -214,16 +247,11 @@ async fn mount_python_build_name_catalog(
 #[tokio::test]
 #[cfg(feature = "test-python-managed")]
 async fn python_install_build_name() -> anyhow::Result<()> {
-    let (context, unnamed) = python_build_name_context()?;
-    let managed_dir = context.temp_dir.child("managed");
-    let unnamed_name = unnamed.key().to_string();
-    let platform = platform_key_from_env()?;
-    let version = unnamed_name
-        .strip_suffix(&format!("-{platform}"))
-        .context("Missing platform suffix")?;
-    let custom_name = format!("{version}+custom-{platform}");
-    let custom_build_path = managed_dir.join(&custom_name);
-    fs_err::rename(unnamed.path(), &custom_build_path)?;
+    let (context, unnamed, custom_build_path) = python_named_build_context()?;
+    let custom_name = custom_build_path
+        .file_name()
+        .context("Missing custom installation name")?
+        .to_string_lossy();
     let key = unnamed.key();
     let arch = key.arch().to_string();
     let arch_family = key.arch().family().to_string();
@@ -263,6 +291,7 @@ async fn python_install_build_name() -> anyhow::Result<()> {
         .python_install()
         .arg("3.13+custom")
         .arg("--default")
+        .arg("--force")
         .arg("--python-downloads-json-url")
         .arg(format!("{}/metadata", server.uri()))
         .assert()
@@ -299,7 +328,6 @@ fn python_find_build_name() -> anyhow::Result<()> {
         .context("Missing platform suffix")?;
     let custom_build_path = managed_dir.join(format!("{version}+custom-{platform}"));
     fs_err::rename(unnamed.path(), &custom_build_path)?;
-
     uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -543,6 +571,412 @@ fn python_build_name_catalog_explicit_path() -> anyhow::Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_init_build_name() -> anyhow::Result<()> {
+    let (context, _unnamed, custom_build_path) = python_named_build_context()?;
+    let custom_name = custom_build_path
+        .file_name()
+        .context("Missing custom installation name")?
+        .to_string_lossy();
+    for (directory, request) in [
+        ("init-major", "3+custom"),
+        ("init-implementation", "cpython@3.13+custom"),
+        ("init-key", custom_name.as_ref()),
+    ] {
+        context
+            .init()
+            .arg(directory)
+            .arg("--no-workspace")
+            .arg("--python")
+            .arg(request)
+            .assert()
+            .success();
+        assert_eq!(
+            context.read(format!("{directory}/.python-version")),
+            "3.13+custom\n"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_project_build_name_centralized() -> anyhow::Result<()> {
+    let (context, _unnamed, custom_build_path) = python_named_build_context()?;
+    // Use a minor-version link so the custom environment is upgradeable.
+    let installations = ManagedPythonInstallations::from_settings(Some(
+        context.temp_dir.child("managed").to_path_buf(),
+    ))?;
+    installations
+        .find_all()?
+        .find(|installation| installation.path() == custom_build_path.path())
+        .context("Missing custom installation")?
+        .ensure_minor_version_link()?;
+    let context = context
+        .with_filtered_latest_python_versions()
+        .with_filtered_centralized_environment_hashes();
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = []
+        "#,
+    )?;
+    context
+        .sync()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13")
+        .assert()
+        .success();
+    let unnamed_environment = fs_err::canonicalize(&context.venv)?;
+    context.venv.child("unnamed-marker").touch()?;
+
+    // The existing unnamed environment must still run before testing build compatibility.
+    let base_prefix =
+        "import sys; from pathlib import Path; print(Path(sys.base_prefix).resolve().as_posix())";
+    assert!(context.interpreter().is_file());
+    uv_snapshot!(context.filters(), context.python_command().arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13+custom"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[LATEST]
+    Creating virtual environment `project-cp3.13-[HASH]`
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    let custom_environment = fs_err::canonicalize(&context.venv)?;
+    assert_ne!(unnamed_environment, custom_environment);
+    assert!(unnamed_environment.join("unnamed-marker").is_file());
+    context.venv.child("custom-marker").touch()?;
+
+    uv_snapshot!(context.filters(), context.python_command().arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+    ");
+
+    // Running with the same build reuses the custom environment.
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13+custom")
+        .arg("python")
+        .arg("-c")
+        .arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(custom_environment, fs_err::canonicalize(&context.venv)?);
+    context
+        .venv
+        .child("custom-marker")
+        .assert(predicate::path::exists());
+
+    // An unqualified request selects the unnamed build instead of the custom environment.
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13")
+        .arg("python")
+        .arg("-c")
+        .arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(unnamed_environment, fs_err::canonicalize(&context.venv)?);
+    context
+        .venv
+        .child("unnamed-marker")
+        .assert(predicate::path::exists());
+    assert!(custom_environment.join("custom-marker").is_file());
+
+    // `uv run` must also switch a healthy unnamed environment to the requested custom build.
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("--python")
+        .arg("3.13+custom")
+        .arg("python")
+        .arg("-c")
+        .arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(custom_environment, fs_err::canonicalize(&context.venv)?);
+    context
+        .venv
+        .child("custom-marker")
+        .assert(predicate::path::exists());
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "test-python-managed")]
+async fn python_project_build_name_catalog() -> anyhow::Result<()> {
+    let (context, _unnamed, downloads) = python_build_name_catalog_context()?;
+    let server = MockServer::start().await;
+    mount_python_build_name_catalog(&server, downloads).await;
+    let metadata_url = format!("{}/metadata", server.uri());
+    let find = |request| {
+        let mut command = context.python_find();
+        command
+            .arg(request)
+            .arg("--python-downloads-json-url")
+            .arg(&metadata_url);
+        command
+    };
+
+    let base_prefix = "import os, sys; print(os.path.realpath(sys.base_prefix))";
+    find("3.13").assert().success();
+
+    let requests_before_project = server
+        .received_requests()
+        .await
+        .context("Missing request log")?
+        .len();
+    let project = python_build_name_project(&context)?;
+    context
+        .sync()
+        .current_dir(&project)
+        .arg("--python")
+        .arg("3.13+custom")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &metadata_url)
+        .assert()
+        .success();
+    let project_run = |request| {
+        let mut command = context.run();
+        command
+            .current_dir(&project)
+            .env_remove(EnvVars::VIRTUAL_ENV)
+            .arg("--python")
+            .arg(request)
+            .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &metadata_url);
+        command
+    };
+
+    // An explicit build name reuses the environment without consulting the catalog.
+    project.child(".venv/custom-marker").touch()?;
+    uv_snapshot!(context.filters(), project_run("3.13+custom")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::exists());
+
+    // A wildcard request reuses the named build on repeated runs, even without a catalog.
+    for _ in 0..2 {
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), project_run("any")
+                .arg("--offline")
+                .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, "missing-catalog.json")
+                .arg("python").arg("-c").arg(base_prefix), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            Checked in [TIME]
+            ");
+        }
+        project
+            .child(".venv/custom-marker")
+            .assert(predicate::path::exists());
+    }
+
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .context("Missing request log")?
+            .len(),
+        requests_before_project
+    );
+
+    // Offline reuse does not require catalog metadata, including with `--no-sync`.
+    uv_snapshot!(context.filters(), project_run("3.13+custom")
+        .arg("--offline")
+        .arg("--no-sync")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, "missing-catalog.json")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::exists());
+
+    // A different build name must not reuse the custom environment.
+    uv_snapshot!(context.filters(), project_run("3.13+custom_internal")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13+custom_internal in [PYTHON SOURCES]
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::exists());
+
+    // An unqualified request replaces the named custom environment with unnamed.
+    uv_snapshot!(context.filters(), project_run("3.13")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]-[PLATFORM]
+
+    ----- stderr -----
+    Using CPython 3.13.[LATEST]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::missing());
+
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_project_prerelease_environment_reuse() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_python_install_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+    context.python_install().arg("3.14.0rc3").assert().success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.14.0rc3"
+    "#})?;
+    context
+        .sync()
+        .arg("--python")
+        .arg("3.14.0rc3")
+        .assert()
+        .success();
+    let marker = context.venv.child("prerelease-marker");
+    marker.touch()?;
+
+    // A range without an explicit prerelease accepts the same interpreter on repeated runs.
+    for _ in 0..2 {
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.run()
+                .arg("--offline")
+                .arg("--python")
+                .arg(">=3.14")
+                .arg("python")
+                .arg("-c")
+                .arg("import platform; print(platform.python_version())"), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            3.14.0rc3
+
+            ----- stderr -----
+            Resolved 1 package in [TIME]
+            Checked in [TIME]
+            ");
+        }
+        marker.assert(predicate::path::exists());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "test-python-managed")]
+async fn python_build_name_catalog_fallback() -> anyhow::Result<()> {
+    let (context, unnamed, downloads) = python_build_name_catalog_context()?;
+    let server = MockServer::start().await;
+    mount_python_build_name_catalog(&server, downloads).await;
+    let metadata_url = format!("{}/metadata", server.uri());
+    context.temp_dir.child("requirements.in").write_str("")?;
+    let compile = || {
+        let mut command = context.pip_compile();
+        command
+            .arg("requirements.in")
+            .args(["--python-version", "3.8", "--no-python-downloads"])
+            .env_remove(EnvVars::VIRTUAL_ENV)
+            .env(EnvVars::UV_PYTHON_PREFERENCE, "only-managed")
+            .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &metadata_url);
+        command
+    };
+
+    // The installed unnamed build is eligible when falling back to a different version.
+    uv_snapshot!(context.filters(), compile(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    # This file was autogenerated by uv via the following command:
+    #    uv pip compile --cache-dir [CACHE_DIR] requirements.in --python-version 3.8 --no-python-downloads
+
+    ----- stderr -----
+    warning: Requirements file `requirements.in` does not contain any dependencies
+    warning: The requested Python version 3.8 is not available; 3.13.[LATEST] will be used to build dependencies instead.
+    Resolved in [TIME]
+    ");
+
+    // Removing the unnamed build must not allow an installed named build to satisfy the fallback.
+    fs_err::rename(unnamed.path(), context.temp_dir.join("hidden-unnamed"))?;
+    uv_snapshot!(context.filters(), compile(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: Requirements file `requirements.in` does not contain any dependencies
+    error: No interpreter found for Python 3.8 in virtual environments or managed installations
     ");
 
     Ok(())
