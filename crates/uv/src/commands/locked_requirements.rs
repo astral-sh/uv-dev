@@ -4,11 +4,11 @@ use anyhow::Result;
 use tracing::info_span;
 
 use uv_configuration::Upgrade;
-use uv_distribution_types::IndexUrl;
+use uv_distribution_types::{IndexUrl, MinimumLibcVersion};
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
-use uv_pep508::VerbatimUrl;
+use uv_pep508::{MarkerTree, VerbatimUrl};
 use uv_requirements_txt::RequirementsTxt;
 use uv_resolver::{Preference, PreferenceError, UpgradePackages};
 
@@ -71,6 +71,8 @@ pub(crate) fn read_lock_requirements(
     lock: &Lock,
     install_path: &Path,
     upgrade: &Upgrade,
+    required_environments: &[MarkerTree],
+    minimum_libc_version: Option<MinimumLibcVersion>,
 ) -> Result<LockedRequirements, LockError> {
     // As an optimization, skip iterating over the lockfile is we're upgrading all packages anyway.
     if upgrade.is_all() {
@@ -113,6 +115,15 @@ pub(crate) fn read_lock_requirements(
         // Skip the distribution if it's included in the upgrade strategy (either by explicit
         // package name or via a dependency group).
         if upgrade_packages.contains(package.name()) {
+            continue;
+        }
+
+        // If a required environment is active for this package and the existing lock entry has no
+        // matching wheel, drop the lock preference so the resolver can eagerly upgrade it.
+        if required_environments.iter().copied().any(|marker| {
+            package.is_included_by_marker(marker)
+                && !package.has_wheel_for_marker(marker, minimum_libc_version)
+        }) {
             continue;
         }
 
