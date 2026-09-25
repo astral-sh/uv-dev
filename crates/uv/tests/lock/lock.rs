@@ -6137,6 +6137,85 @@ fn lock_conflicting_project_basic2() -> Result<()> {
     Ok(())
 }
 
+/// Empty conflicting extras fork the resolution of a shared registry dependency.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_conflicting_empty_extras_fork_shared_dependency() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "conflicting-empty-extras-shared-dependency"
+
+        [root]
+        requires = []
+
+        [expected]
+        satisfiable = true
+
+        [packages.shared.versions."1.0.0"]
+        [packages.shared.versions."2.0.0"]
+        [packages.shared.versions."3.0.0"]
+        [packages.shared.versions."4.0.0"]
+        [packages.shared.versions."5.0.0"]
+        [packages.shared.versions."6.0.0"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["shared>=1,<7"]
+
+            [project.optional-dependencies]
+            extra1 = []
+            extra2 = []
+            extra3 = []
+            extra4 = []
+
+            [tool.uv]
+            conflicts = [[
+                { extra = "extra1" },
+                { extra = "extra2" },
+                { extra = "extra3" },
+                { extra = "extra4" },
+            ]]
+        "#})?;
+
+    // Resolving every empty extra as a separate full fork repeats work for `shared`; the cost
+    // grows severely with more extras and package releases. See astral-sh/uv#21954.
+    let assert = context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env(EnvVars::RUST_LOG, "uv_resolver::resolver=debug")
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    let repeated_work = stderr
+        .lines()
+        .filter(|line| {
+            line.starts_with("DEBUG Splitting resolution")
+                || line.starts_with("DEBUG Searching for a compatible version of shared")
+                || line.starts_with("INFO Solved your requirements")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!(repeated_work, @r"
+    DEBUG Splitting resolution on root==0a0.dev0 over project into 5 resolutions with separate markers
+    DEBUG Searching for a compatible version of shared (>=1, <7)
+    DEBUG Searching for a compatible version of shared (>=1, <7)
+    DEBUG Searching for a compatible version of shared (>=1, <7)
+    DEBUG Searching for a compatible version of shared (>=1, <7)
+    DEBUG Searching for a compatible version of shared (>=1, <7)
+    INFO Solved your requirements for 5 environments
+    ");
+
+    Ok(())
+}
+
 /// This tests a case where we declare an extra and a group as conflicting.
 #[cfg(feature = "test-universal")]
 #[test]
