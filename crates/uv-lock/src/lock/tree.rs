@@ -532,7 +532,7 @@ impl<'env> TreeDisplay<'env> {
     fn visit(
         &'env self,
         cursor: Cursor,
-        visited: &mut FxHashMap<VisitedNode<'env>, Vec<PackageIndex>>,
+        visited: &mut FxHashMap<VisitedNode<'env>, bool>,
         path: &mut Vec<VisitedNode<'env>>,
     ) -> Vec<String> {
         // Short-circuit if the current path is longer than the provided depth.
@@ -603,9 +603,9 @@ impl<'env> TreeDisplay<'env> {
             return vec![format!("{line} (*)")];
         }
         if !self.no_dedupe
-            && let Some(requirements) = visited.get(&visited_node)
+            && let Some(&is_leaf) = visited.get(&visited_node)
         {
-            return if requirements.is_empty() {
+            return if is_leaf {
                 vec![line]
             } else {
                 vec![format!("{line} (*)")]
@@ -678,16 +678,7 @@ impl<'env> TreeDisplay<'env> {
         // Keep track of the dependency path to avoid cycles.
         // Only mark as visited if we're going to expand children (not at depth limit).
         if path.len() < self.depth {
-            visited.insert(
-                visited_node.clone(),
-                dependencies
-                    .iter()
-                    .filter_map(|node| match self.graph[node.node()] {
-                        Node::Package(package_index) => Some(package_index),
-                        Node::Root => None,
-                    })
-                    .collect(),
-            );
+            visited.insert(visited_node.clone(), dependencies.is_empty());
         }
         path.push(visited_node);
 
