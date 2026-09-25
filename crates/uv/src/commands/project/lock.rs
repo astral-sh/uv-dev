@@ -1231,6 +1231,15 @@ impl ValidatedLock {
             );
             return Ok(Self::Unusable(lock));
         }
+        if lock.index_strategy() != options.index_strategy {
+            let _ = writeln!(
+                printer.stderr(),
+                "Ignoring existing lockfile due to change in index strategy: `{}` vs. `{}`",
+                lock.index_strategy().cyan(),
+                options.index_strategy.cyan()
+            );
+            return Ok(Self::Unusable(lock));
+        }
         // Stored cutoffs can belong to packages considered during backtracking. New cutoffs for
         // packages outside the lock take effect when another change triggers resolution.
         let exclude_newer = lock.filter_exclude_newer(options.exclude_newer.clone());
