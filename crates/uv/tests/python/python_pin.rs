@@ -12,6 +12,7 @@ use indoc::indoc;
 use insta::assert_snapshot;
 use uv_platform::{Arch, Os};
 use uv_python::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
+#[cfg(feature = "test-python-managed")]
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
