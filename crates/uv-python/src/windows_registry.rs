@@ -28,6 +28,25 @@ pub(crate) struct WindowsPython {
     pub(crate) version: Option<PythonVersion>,
 }
 
+impl WindowsPython {
+    /// Include the debug executable installed alongside a registered release interpreter.
+    pub(crate) fn executables(self, include_debug: bool) -> impl Iterator<Item = PathBuf> {
+        let debug_executable = include_debug
+            .then(|| {
+                let stem = self.path.file_stem()?.to_str()?;
+                if stem.ends_with("_d") || !self.path.extension()?.eq_ignore_ascii_case("exe") {
+                    return None;
+                }
+                let path = self.path.with_file_name(format!("{stem}_d.exe"));
+                path.is_file().then_some(path)
+            })
+            .flatten();
+        debug_executable
+            .into_iter()
+            .chain(std::iter::once(self.path))
+    }
+}
+
 /// Find all Pythons registered in the Windows registry following PEP 514.
 pub(crate) fn registry_pythons() -> Result<Vec<WindowsPython>, windows::core::Error> {
     let mut registry_pythons = Vec::new();
@@ -310,5 +329,47 @@ pub fn remove_orphan_registry_entries(installations: &[ManagedPythonInstallation
             // TODO(konsti): We don't have an installation key here.
             warn_user_once!("Failed to remove orphan registry key HKCU:\\{python_entry}: {err}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::WindowsPython;
+
+    #[test]
+    fn windows_debug_registry_executables() -> io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        for name in ["python.exe", "python3.14t.exe"] {
+            let path = temp.path().join(name);
+            fs_err::write(&path, b"release")?;
+            let entry = WindowsPython {
+                path: path.clone(),
+                version: None,
+            };
+            assert_eq!(
+                entry.clone().executables(true).collect::<Vec<_>>(),
+                std::slice::from_ref(&path)
+            );
+
+            let debug = path.with_file_name(format!("{}_d.exe", name.trim_end_matches(".exe")));
+            fs_err::write(&debug, b"debug")?;
+            assert_eq!(
+                entry.clone().executables(false).collect::<Vec<_>>(),
+                std::slice::from_ref(&path)
+            );
+            assert_eq!(
+                entry.executables(true).collect::<Vec<_>>(),
+                [debug.clone(), path]
+            );
+
+            let entry = WindowsPython {
+                path: debug.clone(),
+                version: None,
+            };
+            assert_eq!(entry.executables(true).collect::<Vec<_>>(), [debug]);
+        }
+        Ok(())
     }
 }

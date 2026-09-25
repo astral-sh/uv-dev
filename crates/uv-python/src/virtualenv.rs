@@ -189,6 +189,11 @@ pub(crate) fn virtualenv_python_executable(venv: impl AsRef<Path>) -> PathBuf {
             return default_executable;
         }
 
+        let executable = venv.join("Scripts").join("python_d.exe");
+        if executable.exists() {
+            return executable;
+        }
+
         // Apparently, Python installed via msys2 on Windows _might_ produce a POSIX-like layout.
         // See: https://github.com/PyO3/maturin/issues/1108
         let executable = venv.join("bin").join("python.exe");
@@ -196,8 +201,18 @@ pub(crate) fn virtualenv_python_executable(venv: impl AsRef<Path>) -> PathBuf {
             return executable;
         }
 
+        let executable = venv.join("bin").join("python_d.exe");
+        if executable.exists() {
+            return executable;
+        }
+
         // Fallback for Conda environments.
         let executable = venv.join("python.exe");
+        if executable.exists() {
+            return executable;
+        }
+
+        let executable = venv.join("python_d.exe");
         if executable.exists() {
             return executable;
         }
@@ -220,6 +235,28 @@ pub(crate) fn virtualenv_python_executable(venv: impl AsRef<Path>) -> PathBuf {
         // If none of these exist, return the standard location
         default_executable
     }
+}
+
+#[test]
+#[cfg(windows)]
+fn test_windows_debug_virtualenv_executable() -> io::Result<()> {
+    let temp = tempfile::tempdir()?;
+    for directory in ["Scripts", "bin", ""] {
+        let root = temp.path().join(if directory.is_empty() {
+            "conda"
+        } else {
+            directory
+        });
+        let scripts = root.join(directory);
+        fs::create_dir_all(&scripts)?;
+        let debug = scripts.join("python_d.exe");
+        fs::write(&debug, [])?;
+        assert_eq!(virtualenv_python_executable(&root), debug);
+        let release = scripts.join("python.exe");
+        fs::write(&release, [])?;
+        assert_eq!(virtualenv_python_executable(&root), release);
+    }
+    Ok(())
 }
 
 impl PyVenvConfiguration {

@@ -499,10 +499,12 @@ fn python_executables_from_installed<'a>(
 
                 registry_pythons()
                     .map(|entries| {
+                        let include_debug = version.variant().is_none_or(PythonVariant::is_debug);
                         entries
                             .into_iter()
                             .filter(version_filter)
-                            .map(|entry| (PythonSource::Registry, entry.path))
+                            .flat_map(move |entry| entry.executables(include_debug))
+                            .map(|path| (PythonSource::Registry, path))
                             .chain(
                                 find_microsoft_store_pythons()
                                     .filter(version_filter)
@@ -751,16 +753,17 @@ fn find_all_minor(
         | VersionRequest::Default
         | VersionRequest::Major(_, _)
         | VersionRequest::Range(_, _) => {
+            let variant_suffix = if cfg!(windows) { "t?(?:_d)?" } else { "t?" };
             let regex = if let Some(implementation) = implementation {
                 Regex::new(&format!(
-                    r"^({}|python3)\.(?<minor>\d\d?)t?{}$",
+                    r"^({}|python3)\.(?<minor>\d\d?){variant_suffix}{}$",
                     regex::escape(&implementation.to_string()),
                     regex::escape(EXE_SUFFIX)
                 ))
                 .unwrap()
             } else {
                 Regex::new(&format!(
-                    r"^python3\.(?<minor>\d\d?)t?{}$",
+                    r"^python3\.(?<minor>\d\d?){variant_suffix}{}$",
                     regex::escape(EXE_SUFFIX)
                 ))
                 .unwrap()
@@ -1894,6 +1897,15 @@ impl PythonVariant {
         }
     }
 
+    /// Return the executable suffix for Windows, e.g., `_d` for `python_d.exe`.
+    pub(crate) fn windows_executable_suffix(self) -> &'static str {
+        match self {
+            Self::Debug | Self::GilDebug => "_d",
+            Self::FreethreadedDebug => "t_d",
+            _ => self.executable_suffix(),
+        }
+    }
+
     /// Return the suffix for display purposes, e.g., `+gil`.
     pub fn display_suffix(self) -> &'static str {
         match self {
@@ -2821,7 +2833,17 @@ impl fmt::Display for ExecutableName {
         if let Some(prerelease) = &self.prerelease {
             write!(f, "{prerelease}")?;
         }
-        f.write_str(self.variant.executable_suffix())?;
+        f.write_str(
+            if cfg!(windows)
+                && self
+                    .implementation
+                    .is_none_or(|implementation| implementation == ImplementationName::CPython)
+            {
+                self.variant.windows_executable_suffix()
+            } else {
+                self.variant.executable_suffix()
+            },
+        )?;
         f.write_str(EXE_SUFFIX)?;
         Ok(())
     }
@@ -2947,6 +2969,10 @@ impl VersionRequest {
             for i in 0..names.len() {
                 let name = names[i].with_variant(variant);
                 names.push(name);
+            }
+            if cfg!(windows) && variant == PythonVariant::FreethreadedDebug {
+                // Standalone free-threaded debug distributions also provide `python_d.exe`.
+                names.push(ExecutableName::default().with_variant(PythonVariant::Debug));
             }
         }
 
@@ -4549,6 +4575,43 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn windows_debug_minor_executables() -> io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        for name in [
+            "python3.12t_d.exe",
+            "python3.14.exe",
+            "python3.14_d.exe",
+            "python3.14t.exe",
+            "python3.14t_d.exe",
+            "python3.16t_d.exe",
+            "pythont_d.exe",
+        ] {
+            fs_err::write(temp.path().join(name), b"")?;
+        }
+        let request = VersionRequest::Range(
+            VersionSpecifiers::from_str(">=3.13,<3.16").expect("valid version range"),
+            PythonVariant::FreethreadedDebug,
+        );
+        for implementation in [None, Some(&ImplementationName::CPython)] {
+            let mut paths =
+                super::find_all_minor(implementation, &request, temp.path()).collect::<Vec<_>>();
+            paths.sort();
+            assert_eq!(
+                paths,
+                [
+                    "python3.14.exe",
+                    "python3.14_d.exe",
+                    "python3.14t.exe",
+                    "python3.14t_d.exe",
+                ]
+                .map(|name| temp.path().join(name))
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn executable_names_from_request() {
         fn case(request: &str, expected: &[&str]) {
             let (implementation, version) = match PythonRequest::parse(request) {
@@ -4622,6 +4685,55 @@ mod tests {
             ],
         );
         case("3t", &["python3t", "python3", "pythont", "python"]);
+
+        if cfg!(windows) {
+            case(
+                "3.13d",
+                &[
+                    "python3.13_d",
+                    "python3.13",
+                    "python3_d",
+                    "python3",
+                    "python_d",
+                    "python",
+                ],
+            );
+            case(
+                "3.13td",
+                &[
+                    "python3.13t_d",
+                    "python3.13",
+                    "python3t_d",
+                    "python3",
+                    "pythont_d",
+                    "python_d",
+                    "python",
+                ],
+            );
+        } else {
+            case(
+                "3.13d",
+                &[
+                    "python3.13d",
+                    "python3.13",
+                    "python3d",
+                    "python3",
+                    "pythond",
+                    "python",
+                ],
+            );
+            case(
+                "3.13td",
+                &[
+                    "python3.13td",
+                    "python3.13",
+                    "python3td",
+                    "python3",
+                    "pythontd",
+                    "python",
+                ],
+            );
+        }
 
         case(
             "3.13.2",

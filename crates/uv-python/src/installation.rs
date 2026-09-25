@@ -661,6 +661,19 @@ impl PythonInstallationKey {
         &self.variant
     }
 
+    fn executable_suffix(&self) -> &'static str {
+        if cfg!(windows)
+            && matches!(
+                self.implementation,
+                LenientImplementationName::Known(ImplementationName::CPython)
+            )
+        {
+            self.variant.windows_executable_suffix()
+        } else {
+            self.variant.executable_suffix()
+        }
+    }
+
     /// Return a canonical name for a minor versioned executable.
     pub fn executable_name_minor(&self) -> String {
         format!(
@@ -668,7 +681,7 @@ impl PythonInstallationKey {
             name = self.implementation().executable_install_name(),
             maj = self.major,
             min = self.minor,
-            var = self.variant.executable_suffix(),
+            var = self.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
@@ -679,7 +692,7 @@ impl PythonInstallationKey {
             "{name}{maj}{var}{exe}",
             name = self.implementation().executable_install_name(),
             maj = self.major,
-            var = self.variant.executable_suffix(),
+            var = self.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
@@ -689,7 +702,7 @@ impl PythonInstallationKey {
         format!(
             "{name}{var}{exe}",
             name = self.implementation().executable_install_name(),
-            var = self.variant.executable_suffix(),
+            var = self.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
