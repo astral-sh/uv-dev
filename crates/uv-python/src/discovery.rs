@@ -3573,44 +3573,31 @@ pub(crate) fn parse_python_variant_and_build_name(
         return Ok((python, None));
     }
 
-    let mut gil_disabled = None;
-    let mut debug_enabled = false;
+    let mut python_variant = String::new();
     let mut build_name = None;
-    for variant in value.split('+') {
-        let (variant_gil_disabled, variant_debug) = match PythonVariant::from_str(variant) {
-            Ok(PythonVariant::Default) => return Err(()),
-            Ok(PythonVariant::Debug) => (None, true),
-            Ok(PythonVariant::Freethreaded) => (Some(true), false),
-            Ok(PythonVariant::FreethreadedDebug) => (Some(true), true),
-            Ok(PythonVariant::Gil) => (Some(false), false),
-            Ok(PythonVariant::GilDebug) => (Some(false), true),
-            Err(()) => {
-                if build_name.is_some() {
-                    return Err(());
-                }
-                build_name = Some(PythonBuildName::from_str(variant)?);
-                continue;
+    for component in value.split('+') {
+        if component.is_empty() {
+            return Err(());
+        }
+        if PythonVariant::from_str(component).is_ok() {
+            if !python_variant.is_empty() {
+                python_variant.push('+');
             }
-        };
-
-        if let Some(variant_gil_disabled) = variant_gil_disabled
-            && gil_disabled.replace(variant_gil_disabled).is_some()
-        {
-            return Err(());
+            python_variant.push_str(component);
+        } else {
+            if build_name.is_some() {
+                return Err(());
+            }
+            build_name = Some(PythonBuildName::from_str(component)?);
         }
-        if variant_debug && debug_enabled {
-            return Err(());
-        }
-        debug_enabled |= variant_debug;
     }
 
-    let python = match (gil_disabled, debug_enabled) {
-        (None, false) => PythonVariant::Default,
-        (None, true) => PythonVariant::Debug,
-        (Some(true), false) => PythonVariant::Freethreaded,
-        (Some(true), true) => PythonVariant::FreethreadedDebug,
-        (Some(false), false) => PythonVariant::Gil,
-        (Some(false), true) => PythonVariant::GilDebug,
+    // Long-form components can appear in either order, but short variant spellings must be
+    // complete: `td` is valid, while `t+d` and `t+debug` are not.
+    let python = match python_variant.as_str() {
+        "debug+freethreaded" => PythonVariant::FreethreadedDebug,
+        "debug+gil" => PythonVariant::GilDebug,
+        variant => PythonVariant::from_str(variant)?,
     };
     Ok((python, build_name))
 }
