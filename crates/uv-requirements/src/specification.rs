@@ -49,6 +49,7 @@ use uv_distribution_types::{
 use uv_fs::{CWD, Simplified};
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pypi_types::PyProjectToml;
+use uv_redacted::DisplaySafeUrl;
 use uv_requirements_txt::{RequirementsTxt, RequirementsTxtRequirement, SourceCache};
 use uv_scripts::{OverrideDependency, Pep723Metadata};
 use uv_warnings::warn_user;
@@ -744,6 +745,13 @@ pub struct GroupsSpecification {
     pub groups: Vec<PipGroupName>,
 }
 
+fn redact_remote_script_error(
+    err: &(impl std::fmt::Display + ?Sized),
+    url: &DisplaySafeUrl,
+) -> String {
+    err.to_string().replace(url.as_str(), &url.to_string())
+}
+
 /// Read the contents of a requirements input.
 async fn read_file(
     input: &RequirementsInput,
@@ -757,11 +765,27 @@ async fn read_file(
                 .for_host(url)
                 .get(Url::from(url.clone()))
                 .send()
-                .await?;
+                .await
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Failed to fetch remote script from `{url}`: {}",
+                        redact_remote_script_error(&err, url)
+                    )
+                })?;
 
-            response.error_for_status_ref()?;
+            response.error_for_status_ref().map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed to fetch remote script from `{url}`: {}",
+                    redact_remote_script_error(&err, url)
+                )
+            })?;
 
-            Ok(response.text().await?)
+            response.text().await.map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed to read remote script from `{url}`: {}",
+                    redact_remote_script_error(&err, url)
+                )
+            })
         }
         RequirementsInput::Local(path) => Ok(uv_fs::read_to_string_transcode(path).await?),
     }
