@@ -15,9 +15,9 @@ use uv_cache::{CacheArgs, Refresh};
 use uv_cli::comma::CommaSeparatedRequirements;
 use uv_cli::{
     AddArgs, AuditArgs, AuditCommonArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs,
-    AuthTokenArgs, ColorChoice, ExternalCommand, GlobalArgs, InitArgs, ListFormat, LockArgs, Maybe,
-    MetadataArgs, PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs, PipInstallFormat,
-    PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs, PipUninstallArgs,
+    AuthTokenArgs, ColorChoice, ExternalCommand, GlobalArgs, InitArgs, ListFormat, LockArgs,
+    LockFormat, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs,
+    PipInstallFormat, PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs, PipUninstallArgs,
     ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs, PythonListArgs,
     PythonListFormat, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs, RemoveArgs, RunArgs,
     SyncArgs, SyncFormat, ToolAuditArgs, ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolRunArgs,
@@ -2156,6 +2156,7 @@ impl SyncSettings {
 #[derive(Debug, Clone)]
 pub(crate) struct LockSettings {
     pub(crate) lock_check: LockCheck,
+    pub(crate) output_format: LockFormat,
     pub(crate) frozen: Option<FrozenSource>,
     pub(crate) dry_run: DryRun,
     pub(crate) script: Option<PathBuf>,
@@ -2174,6 +2175,7 @@ impl LockSettings {
     ) -> anyhow::Result<Self> {
         let LockArgs {
             check,
+            output_format,
             locked,
             no_locked,
             check_exists,
@@ -2218,6 +2220,7 @@ impl LockSettings {
 
         Ok(Self {
             lock_check: locked,
+            output_format,
             frozen,
             dry_run: DryRun::from_args(dry_run),
             script,
