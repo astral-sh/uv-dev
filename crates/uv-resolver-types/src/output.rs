@@ -433,6 +433,7 @@ impl From<ResolverOutput> for uv_distribution_types::Resolution {
 
         let mut transformed = Graph::with_capacity(graph.node_count(), graph.edge_count());
         let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
+        let mut root_edges = FxHashSet::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
 
         // Create the root node.
         let root = transformed.add_node(Node::Root);
@@ -461,7 +462,9 @@ impl From<ResolverOutput> for uv_distribution_types::Resolution {
             match (&graph[source], &graph[target]) {
                 (ResolutionGraphNode::Root, ResolutionGraphNode::Dist(target_dist)) => {
                     let target = inverse[&target_dist.name()];
-                    transformed.update_edge(root, target, Edge::Prod);
+                    if root_edges.insert(target) {
+                        transformed.add_edge(root, target, Edge::Prod);
+                    }
                 }
                 (
                     ResolutionGraphNode::Dist(source_dist),
