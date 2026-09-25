@@ -321,6 +321,77 @@ fn python_find_build_name() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_find_prerelease_build_name_warning() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.14.0rc3").assert().success();
+    let managed_dir = context.temp_dir.child("managed");
+    let installations = ManagedPythonInstallations::from_settings(Some(managed_dir.to_path_buf()))?;
+    let unnamed = installations
+        .find_all()?
+        .next()
+        .context("Missing prerelease installation")?;
+    let key = unnamed.key();
+    let platform = platform_key_from_env()?;
+    fs_err::rename(
+        unnamed.path(),
+        managed_dir.child(format!("cpython-3.14.0rc3+custom-{platform}")),
+    )?;
+
+    let arch = key.arch().to_string();
+    let arch_family = key.arch().family().to_string();
+    let arch_variant = arch.strip_prefix(&format!("{arch_family}_"));
+    let stable = serde_json::json!({
+        "name": "cpython",
+        "arch": {"family": arch_family, "variant": arch_variant},
+        "os": key.os().to_string(),
+        "libc": key.libc().to_string(),
+        "major": 3,
+        "minor": 14,
+        "patch": 0,
+        "build_revision": "20260825",
+        "url": "https://custom.example/cpython.tar.gz"
+    });
+    let mut other = stable.clone();
+    other["build_name"] = serde_json::json!("other");
+    let catalog = context.temp_dir.child("downloads.json");
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1,
+        "downloads": {"unnamed": stable, "other": other}
+    }))?)?;
+
+    // Stable releases of other builds cannot upgrade the selected named prerelease.
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["3.14+custom", "--show-version"])
+        .arg("--python-downloads-json-url").arg(catalog.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.14.0rc3
+    ");
+
+    let mut custom = stable;
+    custom["build_name"] = serde_json::json!("custom");
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1,
+        "downloads": {"custom": custom}
+    }))?)?;
+
+    // The upgrade hint must select the same build as the installed prerelease.
+    uv_snapshot!(context.filters(), context.python_find()
+        .args(["3.14+custom", "--show-version"])
+        .arg("--python-downloads-json-url").arg(catalog.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.14.0rc3
+
+    ----- stderr -----
+    warning: You're using a pre-release version of Python (3.14.0rc3) but a stable version is available. Use `uv python upgrade 3.14+custom` to upgrade.
+    ");
+
+    Ok(())
+}
+
 #[tokio::test]
 #[cfg(feature = "test-python-managed")]
 async fn python_build_name_catalog_selection() -> anyhow::Result<()> {
