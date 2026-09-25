@@ -2364,6 +2364,72 @@ fn python_install_build_name_patch_alias() -> anyhow::Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python-managed")]
+fn python_install_prerelease_build_name_alias() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_python_install_bin()
+        .with_filtered_python_names()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+    let platform = platform_key_from_env()?;
+    let metadata: serde_json::Value = serde_json::from_str(&fs_err::read_to_string(
+        context
+            .workspace_root
+            .join("crates/uv-python/download-metadata.json"),
+    )?)?;
+    let mut entry = metadata
+        .get(format!("cpython-3.14.0rc3-{platform}").replace("-macos-", "-darwin-"))
+        .context("Missing bundled prerelease download")?
+        .clone();
+    let revision = entry
+        .as_object_mut()
+        .and_then(|fields| fields.remove("build"))
+        .context("Missing bundled build revision")?;
+    entry["build_revision"] = revision;
+    entry["build_name"] = serde_json::json!("custom");
+    let catalog = context.temp_dir.child("downloads.json");
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1, "downloads": {"custom": entry}
+    }))?)?;
+    let context = context.with_env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, catalog.path());
+
+    // Falling back to a prerelease does not turn a minor request into a fixed-version request.
+    context
+        .python_install()
+        .arg("3.14+custom")
+        .assert()
+        .success();
+    let bin_python = context
+        .bin_dir
+        .child(format!("python3.14{}", std::env::consts::EXE_SUFFIX));
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(read_link(&bin_python), @"[TEMP_DIR]/managed/cpython-3.14+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]");
+    });
+
+    // The selected prerelease also satisfies a repeated minor request without downloading.
+    uv_snapshot!(context.filters(), context.python_install()
+        .arg("3.14+custom")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Python 3.14+custom is already installed
+    ");
+
+    // An explicit prerelease request still opts into a fixed-version executable link.
+    context
+        .python_install()
+        .arg("3.14.0rc3+custom")
+        .assert()
+        .success();
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(read_link(&bin_python), @"[TEMP_DIR]/managed/cpython-3.14.0rc3+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]");
+    });
+
+    Ok(())
+}
+
+#[test]
 fn python_install_patch_after_minor_alias() -> anyhow::Result<()> {
     for remove_minor_link in [false, true] {
         let context = uv_test::test_context_with_versions!(&[])

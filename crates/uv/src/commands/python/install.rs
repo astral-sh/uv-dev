@@ -81,6 +81,14 @@ impl<'a> InstallRequest<'a> {
             Err(err) => return Err(err.into()),
         };
 
+        // Download selection falls back to prereleases when no stable release matches. Use that
+        // policy when matching installed versions and choosing their executable links, too.
+        let download_request = if download.key().version().pre().is_some() {
+            download_request.with_prereleases(true)
+        } else {
+            download_request
+        };
+
         Ok(Self {
             request,
             download_request,
