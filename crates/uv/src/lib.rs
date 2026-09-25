@@ -1602,7 +1602,6 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 workspace_cache,
                 printer,
                 args.env_file,
-                args.no_env_file,
                 globals.preview,
             ))
             .await
