@@ -1511,9 +1511,10 @@ mod test {
     use test_case::test_case;
     use unscanny::Scanner;
 
+    use uv_configuration::RequirementsInput;
     use uv_fs::Simplified;
 
-    use crate::{RequirementsTxt, calculate_row_column};
+    use crate::{RequirementsTxt, calculate_row_column, visited_file};
 
     fn workspace_test_data_dir() -> PathBuf {
         Path::new("./test-data").simple_canonicalize().unwrap()
@@ -2889,6 +2890,16 @@ mod test {
 
         // Assert line and columns are expected
         assert_eq!(line_column, expected, "Issues with input: {input}");
+    }
+
+    /// Normalize remote path aliases before checking for recursive inclusions.
+    #[test_case("http://example.com/sub/../sub/recursive.txt", "http://example.com/sub/recursive.txt"; "dot segments")]
+    #[test_case("https://example.com/sub/%2e%2e/sub/recursive.txt", "https://example.com/sub/recursive.txt"; "encoded dot segments")]
+    fn normalize_remote_visited_file(input: &str, expected: &str) -> Result<()> {
+        let input: RequirementsInput = input.parse()?;
+        let expected: RequirementsInput = expected.parse()?;
+        assert_eq!(visited_file(&input), expected);
+        Ok(())
     }
 
     /// Test different kinds of recursive inclusions with requirements and constraints
