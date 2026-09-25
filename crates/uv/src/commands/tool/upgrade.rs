@@ -4,7 +4,7 @@ use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::str::FromStr;
-use tracing::{debug, trace};
+use tracing::debug;
 
 use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
@@ -37,7 +37,7 @@ use crate::commands::project::{
 };
 use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::tool::common::{ToolLock, remove_entrypoints, tool_environment_spec};
-use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_install};
+use crate::commands::{ExitStatus, UvError, conjunction, tool::common::finalize_tool_install};
 use crate::printer::Printer;
 use crate::settings::ResolverInstallerSettings;
 
@@ -173,17 +173,13 @@ pub(crate) async fn upgrade(
     }
 
     if !errors.is_empty() {
-        for (name, err) in errors
+        let errors = errors
             .into_iter()
             .sorted_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b))
-        {
-            trace!("Error trace: {err:?}");
-            crate::commands::diagnostics::write_error_chain(
-                &err.context(format!("Failed to upgrade {}", name.green())),
-                printer,
-            )?;
-        }
-        return Ok(ExitStatus::Failure);
+            .map(|(name, err)| {
+                UvError::user(err.context(format!("Failed to upgrade {}", name.green())))
+            });
+        return Err(UvError::batch(errors).into());
     }
 
     if did_upgrade_tool.is_empty() && did_upgrade_environment.is_empty() {

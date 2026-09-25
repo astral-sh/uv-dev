@@ -29,7 +29,7 @@ use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, IndexLocations,
     NameRequirementSpecification, PackageConfigSettings, Requirement, SourceDist,
 };
-use uv_errors::{ErrorOptions, Hinted, Hints, write_error_chain_with_options};
+use uv_errors::{Hinted, Hints};
 use uv_fs::{Simplified, normalize_path, relative_to};
 use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
@@ -48,10 +48,10 @@ use uv_warnings::warn_user;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 
-use crate::commands::ExitStatus;
 use crate::commands::pip::operations;
 use crate::commands::project::{ProjectError, find_requires_python};
 use crate::commands::reporters::PythonDownloadReporter;
+use crate::commands::{ExitStatus, UvError};
 use crate::printer::Printer;
 use crate::settings::ResolverSettings;
 
@@ -226,7 +226,7 @@ pub(crate) async fn build_frontend(
     printer: Printer,
     preview: Preview,
 ) -> Result<ExitStatus> {
-    let build_result = build_impl(
+    build_impl(
         project_dir,
         skip_dependency_check,
         src.as_deref(),
@@ -258,19 +258,7 @@ pub(crate) async fn build_frontend(
     )
     .await?;
 
-    match build_result {
-        BuildResult::Failure => Ok(ExitStatus::Error),
-        BuildResult::Success => Ok(ExitStatus::Success),
-    }
-}
-
-/// Represents the overall result of a build process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BuildResult {
-    /// Indicates that at least one of the builds failed.
-    Failure,
-    /// Indicates that all builds succeeded.
-    Success,
+    Ok(ExitStatus::Success)
 }
 
 // https://github.com/rust-lang/rust/issues/147648
@@ -305,7 +293,7 @@ async fn build_impl(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
-) -> Result<BuildResult> {
+) -> Result<()> {
     // Extract the resolver settings.
     let ResolverSettings {
         index_locations,
@@ -520,7 +508,7 @@ async fn build_impl(
     }))
     .await;
 
-    let mut success = true;
+    let mut errors = Vec::new();
     for (source, result) in results {
         match result {
             Ok(messages) => {
@@ -529,23 +517,16 @@ async fn build_impl(
                 }
             }
             Err(err) => {
-                let err = anyhow::Error::from(err).context(format!("Failed to build `{source}`"));
-                let hints = crate::commands::diagnostics::hints_for_error(&err);
-                write_error_chain_with_options(
-                    err.as_ref(),
-                    &hints,
-                    ErrorOptions::default().with_stream(printer.stderr_important()),
-                )?;
-
-                success = false;
+                errors
+                    .push(anyhow::Error::from(err).context(format!("Failed to build `{source}`")));
             }
         }
     }
 
-    if success {
-        Ok(BuildResult::Success)
+    if errors.is_empty() {
+        Ok(())
     } else {
-        Ok(BuildResult::Failure)
+        Err(UvError::batch(errors.into_iter().map(UvError::unexpected)).into())
     }
 }
 
