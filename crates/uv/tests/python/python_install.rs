@@ -1,6 +1,12 @@
 #[cfg(windows)]
 use std::path::PathBuf;
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
+#[cfg(all(unix, not(target_os = "macos")))]
+use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
 use std::{env, path::Path, process::Command};
 
 use anyhow::Context;
@@ -12,7 +18,7 @@ use assert_fs::{
 use indoc::indoc;
 use predicates::prelude::predicate;
 use tracing::debug;
-use uv_test::{LATEST_PYTHON_3_12, uv_snapshot};
+use uv_test::{LATEST_PYTHON_3_12, apply_filters, uv_snapshot};
 
 use uv_fs::Simplified;
 use uv_python::managed::platform_key_from_env;
@@ -492,6 +498,185 @@ fn python_install_multiple_patch() {
     //         );
     //     });
     // }
+}
+
+#[test]
+fn python_uninstall_executable_candidates() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+
+    context
+        .python_install()
+        .arg("3.12.8")
+        .arg("3.12.6")
+        .assert()
+        .success();
+
+    let python_minor = context
+        .bin_dir
+        .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
+    let foreign_python_major = context
+        .bin_dir
+        .child(format!("python3{}", std::env::consts::EXE_SUFFIX));
+    foreign_python_major.touch().unwrap();
+
+    for index in 0..128 {
+        context
+            .bin_dir
+            .child(format!("unrelated-tool-{index}"))
+            .touch()
+            .unwrap();
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let invalid_name = {
+        let invalid_name = context
+            .bin_dir
+            .path()
+            .join(OsString::from_vec(b"python3.12-\xff".to_vec()));
+        fs_err::File::create(&invalid_name).unwrap();
+        invalid_name
+    };
+
+    let output = context
+        .python_uninstall()
+        .arg("3.12")
+        .assert()
+        .success()
+        .stdout("");
+    insta::assert_snapshot!(apply_filters(
+        String::from_utf8_lossy(&output.get_output().stderr).into_owned(),
+        context.filters(),
+    ), @"
+    Searching for Python versions matching: Python 3.12
+    Uninstalled 2 versions in [TIME]
+     - cpython-3.12.6-[PLATFORM]
+     - cpython-3.12.8-[PLATFORM] (python3.12)
+    ");
+
+    python_minor.assert(predicate::path::missing());
+    foreign_python_major.assert(predicate::path::exists());
+    context
+        .bin_dir
+        .child("unrelated-tool-127")
+        .assert(predicate::path::exists());
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    assert!(invalid_name.exists());
+}
+
+#[test]
+fn python_uninstall_retargeted_executable() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+
+    context
+        .python_install()
+        .arg("3.11.13")
+        .arg("3.12.11")
+        .assert()
+        .success();
+
+    let python_311 = context
+        .bin_dir
+        .child(format!("python3.11{}", std::env::consts::EXE_SUFFIX));
+    let python_312 = context
+        .bin_dir
+        .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
+    #[cfg(unix)]
+    let source = fs_err::canonicalize(python_311.path()).unwrap();
+    #[cfg(windows)]
+    let source = python_311.path().to_path_buf();
+    fs_err::remove_file(python_312.path()).unwrap();
+    uv_fs::symlink_or_copy_file(source, python_312.path()).unwrap();
+
+    let output = context
+        .python_uninstall()
+        .arg("3.11.13")
+        .arg("3.12.11")
+        .assert()
+        .success()
+        .stdout("");
+    insta::assert_snapshot!(apply_filters(
+        String::from_utf8_lossy(&output.get_output().stderr).into_owned(),
+        context.filters(),
+    ), @"
+    Searching for Python versions matching: Python 3.11.13
+    Searching for Python versions matching: Python 3.12.11
+    Uninstalled 2 versions in [TIME]
+     - cpython-3.11.13-[PLATFORM] (python3.11, python3.12)
+     - cpython-3.12.11-[PLATFORM]
+    ");
+
+    assert!(
+        fs_err::symlink_metadata(python_311.path())
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+    );
+    assert!(
+        fs_err::symlink_metadata(python_312.path())
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn python_uninstall_executable_first_owner() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_managed_python_dirs();
+
+    context
+        .python_install()
+        .arg("3.11.13")
+        .arg("3.12.11")
+        .assert()
+        .success();
+
+    let python_311 = context.bin_dir.child("python3.11");
+    let python_312 = context.bin_dir.child("python3.12");
+    let executable_311 = fs_err::canonicalize(python_311.path()).unwrap();
+    let executable_312 = fs_err::canonicalize(python_312.path()).unwrap();
+    assert!(executable_311 < executable_312);
+    fs_err::remove_file(&executable_312).unwrap();
+    fs_err::hard_link(&executable_311, &executable_312).unwrap();
+    let metadata_311 = fs_err::metadata(&executable_311).unwrap();
+    let metadata_312 = fs_err::metadata(&executable_312).unwrap();
+    assert_eq!(
+        (metadata_311.dev(), metadata_311.ino()),
+        (metadata_312.dev(), metadata_312.ino())
+    );
+
+    let output = context
+        .python_uninstall()
+        .arg("3.11.13")
+        .arg("3.12.11")
+        .assert()
+        .success()
+        .stdout("");
+    insta::assert_snapshot!(apply_filters(
+        String::from_utf8_lossy(&output.get_output().stderr).into_owned(),
+        context.filters(),
+    ), @"
+    Searching for Python versions matching: Python 3.11.13
+    Searching for Python versions matching: Python 3.12.11
+    Uninstalled 2 versions in [TIME]
+     - cpython-3.11.13-[PLATFORM] (python3.11, python3.12)
+     - cpython-3.12.11-[PLATFORM]
+    ");
+
+    assert!(
+        fs_err::symlink_metadata(python_311.path())
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+    );
+    assert!(
+        fs_err::symlink_metadata(python_312.path())
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+    );
 }
 
 #[test]
