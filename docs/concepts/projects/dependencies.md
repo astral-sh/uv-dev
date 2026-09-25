@@ -226,9 +226,12 @@ The following dependency sources are supported by uv:
 
 !!! important
 
-    Sources are only respected by uv. If another tool is used, only the definitions in the standard
-    project tables will be used. If another tool is being used for development, any metadata
-    provided in the source table will need to be re-specified in the other tool's format.
+    Sources are only respected by uv. They are not included in the package's published dependency
+    metadata. Statically declared dependencies in
+    `project.dependencies` and `project.optional-dependencies` are used as written, including when
+    building with the [uv build backend](../build-backend.md). If another tool is being used for
+    development, any metadata provided in the source table will need to be re-specified in the other
+    tool's format.
 
 ### Index
 
