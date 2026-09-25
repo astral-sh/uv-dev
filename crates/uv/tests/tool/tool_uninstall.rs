@@ -1,5 +1,7 @@
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::PathChild;
+#[cfg(unix)]
+use assert_fs::fixture::{FileWriteStr, PathCreateDir};
 
 use uv_static::EnvVars;
 
@@ -90,6 +92,38 @@ fn tool_uninstall_not_installed() {
     ----- stderr -----
     error: `black` is not installed
     ");
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_uninstall_symlinked_environment_only_removes_symlink() {
+    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let target_dir = context.temp_dir.child("target");
+    let marker = target_dir.child("keep-me.txt");
+    tool_dir.create_dir_all().unwrap();
+    bin_dir.create_dir_all().unwrap();
+    target_dir.create_dir_all().unwrap();
+    marker.write_str("still here").unwrap();
+
+    // A local attacker with write access to `UV_TOOL_DIR` can plant a symlink that points at an
+    // arbitrary directory before `uv tool uninstall` tries to clean up a malformed environment.
+    fs_err::os::unix::fs::symlink(target_dir.path(), tool_dir.join("black")).unwrap();
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("black")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Removed dangling environment for `black`
+    ");
+
+    assert!(marker.path().is_file());
+    assert!(!tool_dir.join("black").exists());
 }
 
 #[test]
