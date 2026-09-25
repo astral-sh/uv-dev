@@ -43,9 +43,6 @@ name = "registry_wheel_index"
 path = "benches/registry_wheel_index.rs"
 harness = false
 
-[dependencies]
-rmp-serde = { workspace = true }
-
 [dev-dependencies]
 uv = { workspace = true }
 uv-cache = { workspace = true }
@@ -79,6 +76,7 @@ flate2 = { workspace = true }
 fs-err = { workspace = true }
 futures = { workspace = true }
 jiff = { workspace = true }
+rmp-serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tar-codec = { workspace = true }
