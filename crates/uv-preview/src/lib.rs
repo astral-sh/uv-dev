@@ -350,6 +350,9 @@ pub enum PreviewFeature {
     /// Enables lazy imports in build backend invocations on CPython 3.15 and later.
     /// This can affect import-time side effects in third-party build backends.
     BuildLazyImports,
+    /// Shares content-addressed dependency environments between PEP 723 scripts while retaining
+    /// a distinct, mutable virtual environment for each script.
+    SharedScriptEnvironments,
 }
 
 impl Display for PreviewFeature {
