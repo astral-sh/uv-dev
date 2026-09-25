@@ -4157,6 +4157,27 @@ fn python_install_emulated_macos() {
      + cpython-3.13.[LATEST]-macos-x86_64-none (python3.13)
     ");
 
+    // A minor request can reuse an emulated installation even though the catalog prefers native.
+    // Its executable alias must keep following the selected installation's minor-version link.
+    context
+        .python_install()
+        .args(["3.13-x86_64", "--default", "--preview", "--force"])
+        .assert()
+        .success();
+    let bin_python = context.bin_dir.child("python3.13");
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(read_link(&bin_python), @"[TEMP_DIR]/managed/cpython-3.13-macos-x86_64-none/bin/python3.13");
+    });
+
+    uv_snapshot!(context.filters(), context.python_install().arg("3.13"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Python 3.13 is already installed
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(read_link(&bin_python), @"[TEMP_DIR]/managed/cpython-3.13-macos-x86_64-none/bin/python3.13");
+    });
+
     // It should be discoverable with `uv python find`
     uv_snapshot!(context.filters(), context.python_find().arg("3.13").arg("--resolve-links"), @r"
     exit_code: 0 (success)
