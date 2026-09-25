@@ -5,11 +5,84 @@ use uv_platform::{Arch, Os};
 use uv_static::EnvVars;
 
 use anyhow::Result;
+use assert_fs::prelude::{FileWriteStr, PathChild};
+use insta::allow_duplicates;
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
+
+#[test]
+fn python_list_versioned_catalog_artifacts() -> Result<()> {
+    // Listing catalog entries does not download or execute Python.
+    let context = uv_test::test_context_with_versions!(&[]);
+    let catalog = context.temp_dir.child("downloads.json");
+    let entry = serde_json::json!({
+        "name": "cpython", "arch": { "family": "x86_64", "variant": null },
+        "os": "linux", "libc": "gnu", "major": 3, "minor": 13, "patch": 7,
+        "build_name": "custom", "build_revision": "42",
+        "url": "https://example.com/python.tar.gz"
+    });
+    let list = || {
+        let mut command = context.python_list();
+        command
+            .args([
+                "--only-downloads",
+                "--all-platforms",
+                "--all-arches",
+                "--all-versions",
+                "--show-urls",
+            ])
+            .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, catalog.path());
+        command
+    };
+
+    // Identical records describe one unambiguous artifact.
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1, "downloads": { "a": entry, "b": entry }
+    }))?)?;
+    uv_snapshot!(context.filters(), list(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.13.7+custom-linux-x86_64-gnu    https://example.com/python.tar.gz
+    ");
+
+    for (field, value) in [
+        ("url", serde_json::json!("https://example.com/other.tar.gz")),
+        ("sha256", serde_json::json!("0".repeat(64))),
+    ] {
+        let mut conflicting = entry.clone();
+        conflicting[field] = value;
+        // An omitted variant and an explicit empty variant have the same identity.
+        conflicting["variant"] = serde_json::json!("");
+        catalog.write_str(&serde_json::to_string(&serde_json::json!({
+            "version": 1, "downloads": { "a": entry, "b": conflicting }
+        }))?)?;
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), list(), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Unable to parse the JSON Python download list at [TEMP_DIR]/downloads.json
+              cause: Conflicting Python download records `a` and `b` for `cpython-3.13.7+custom-linux-x86_64-gnu` at build revision `42`
+            ");
+        }
+    }
+
+    let mut invalid = entry.clone();
+    invalid["build_revision"] = serde_json::json!("042");
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1, "downloads": { "a": invalid }
+    }))?)?;
+    uv_snapshot!(context.filters(), list(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to parse the JSON Python download list at [TEMP_DIR]/downloads.json
+      cause: Python build revision `042` in `a` must be a non-empty string of ASCII digits without leading zeros
+    ");
+
+    Ok(())
+}
 
 #[test]
 fn python_list() {
@@ -590,7 +663,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
     let server = MockServer::start().await;
 
-    let remote_json = r#"
+    let downloads_json = r#"
     {
         "cpython-3.14.0-darwin-aarch64-none": {
             "name": "cpython",
@@ -607,7 +680,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
             "url": "https://custom.com/cpython-3.14.0-darwin-aarch64-none.tar.gz",
             "sha256": "C3223D5924A0ED0EF5958A750377C362D0957587F896C0F6C635AE4B39E0F337",
             "variant": null,
-            "build": "20251028"
+            "build_revision": "20251028"
         },
         "cpython-3.13.2+freethreaded-linux-powerpc64le-gnu": {
             "name": "cpython",
@@ -624,13 +697,34 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
             "url": "https://custom.com/ccpython-3.13.2+freethreaded-linux-powerpc64le-gnu.tar.gz",
             "sha256": "6ae8fa44cb2edf4ab49cff1820b53c40c10349c0f39e11b8cd76ce7f3e7e1def",
             "variant": "freethreaded",
-            "build": "20250317"
+            "build_revision": "20250317"
+        },
+        "cpython-3.12.9+custom-linux-x86_64-gnu": {
+            "name": "cpython",
+            "arch": {
+                "family": "x86_64",
+                "variant": null
+            },
+            "os": "linux",
+            "libc": "gnu",
+            "major": 3,
+            "minor": 12,
+            "patch": 9,
+            "prerelease": "",
+            "url": "https://custom.com/cpython-3.12.9+custom-linux-x86_64-gnu.tar.gz",
+            "sha256": "7f3d0e0d0ff7e70e8df69c81f1b4bd0a7a9e8ea3b6d4c7a6c13c2b6f6bc0a4f2",
+            "variant": null,
+            "build_name": "custom",
+            "build_revision": "20250317"
         }
     }
     "#;
+    let versioned_json = format!(r#"{{"version": 1, "downloads": {downloads_json}}}"#);
     Mock::given(method("GET"))
         .and(path("/"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(remote_json, "application/json"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(versioned_json.as_str(), "application/json"),
+        )
         .mount(&server)
         .await;
 
@@ -643,12 +737,43 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     Mock::given(method("GET"))
         .and(path("/invalid-hash"))
         .respond_with(ResponseTemplate::new(200).set_body_raw(
-            remote_json.replace(
+            versioned_json.replace(
                 "C3223D5924A0ED0EF5958A750377C362D0957587F896C0F6C635AE4B39E0F337",
                 "short",
             ),
             "application/json",
         ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/versioned-invalid-revision"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            versioned_json.replace(
+                r#""build_revision": "20251028""#,
+                r#""build_revision": "invalid""#,
+            ),
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/versioned-invalid-build-name"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            versioned_json.replace(r#""build_name": "custom""#, r#""build_name": 42"#),
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    // Future schema versions need not use the version-1 payload shape.
+    Mock::given(method("GET"))
+        .and(path("/unsupported-version"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(r#"{"version": 2, "artifacts": []}"#, "application/json"),
+        )
         .mount(&server)
         .await;
 
@@ -665,6 +790,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     ----- stdout -----
     cpython-3.14.0-macos-aarch64-none                    https://custom.com/cpython-3.14.0-darwin-aarch64-none.tar.gz
     cpython-3.13.2+freethreaded-linux-powerpc64le-gnu    https://custom.com/ccpython-3.13.2+freethreaded-linux-powerpc64le-gnu.tar.gz
+    cpython-3.12.9+custom-linux-x86_64-gnu               https://custom.com/cpython-3.12.9+custom-linux-x86_64-gnu.tar.gz
     ");
 
     // test invalid URL path
@@ -700,6 +826,81 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
     error: Unable to parse the JSON Python download list at http://[LOCALHOST]/invalid-hash
       cause: Invalid hash digest length (expected 64 hexadecimal characters, found 5) at line 16 column 29
     ");
+
+    // Invalid build metadata must be rejected.
+    uv_snapshot!(context.filters(), context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("--python-downloads-json-url").arg(format!("{}/versioned-invalid-revision", server.uri())), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-revision
+      cause: Python build revision `invalid` in `cpython-3.14.0-darwin-aarch64-none` must be a non-empty string of ASCII digits without leading zeros
+    "#);
+
+    uv_snapshot!(context.filters(), context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("--python-downloads-json-url").arg(format!("{}/versioned-invalid-build-name", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-build-name
+      cause: invalid type: integer `42`, expected a string at line 52 column 28
+    ");
+
+    uv_snapshot!(context.filters(), context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("--python-downloads-json-url").arg(format!("{}/unsupported-version", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: This version of uv is too old to support the JSON Python download list at http://[LOCALHOST]/unsupported-version
+    ");
+
+    // Versioned catalogs require canonical build names.
+    let context = context
+        .with_filter((r"invalid-build-name-\d+", "invalid-build-name-[INDEX]"))
+        .with_filter((
+            r"cause: (?:invalid Python build name .*|Python build name .* must be lowercase)",
+            "cause: [INVALID BUILD NAME]",
+        ));
+    for (index, build_name) in [
+        "CUSTOM",
+        "20260825",
+        "_custom",
+        "custom+internal",
+        "pgo+lto",
+        "freethreaded+custom",
+        "custom.public",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let endpoint = format!("/invalid-build-name-{index}");
+        Mock::given(method("GET"))
+            .and(path(&endpoint))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                versioned_json.replace(
+                    r#""build_name": "custom""#,
+                    &format!(r#""build_name": "{build_name}""#),
+                ),
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context
+                .python_list()
+                .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+                .arg("--python-downloads-json-url").arg(format!("{}{endpoint}", server.uri())), @r#"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Unable to parse the JSON Python download list at http://[LOCALHOST]/invalid-build-name-[INDEX]
+              cause: [INVALID BUILD NAME]
+            "#);
+        }
+    }
 
     Ok(())
 }

@@ -14,7 +14,8 @@ use owo_colors::OwoColorize;
 use reqwest::Response;
 use reqwest_retry::RetryError;
 use reqwest_retry::policies::ExponentialBackoff;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use tempfile::TempDir;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter, ReadBuf};
@@ -40,14 +41,15 @@ use uv_static::{
     EnvVars, astral_mirror_base_url, astral_mirror_url_from_env, custom_astral_mirror_url,
 };
 
-use crate::PythonVariant;
 use crate::implementation::{
     Error as ImplementationError, ImplementationName, LenientImplementationName,
 };
 use crate::installation::PythonInstallationKey;
 use crate::managed::ManagedPythonInstallation;
 use crate::python_version::{BuildVersionError, python_build_version_from_env};
-use crate::{Interpreter, PythonRequest, PythonVersion, VersionRequest};
+use crate::{
+    Interpreter, PythonBuildName, PythonRequest, PythonVariant, PythonVersion, VersionRequest,
+};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -954,6 +956,8 @@ pub struct ManagedPythonDownloadList {
     downloads: Vec<ManagedPythonDownload>,
 }
 
+// Cached downloads use positional MessagePack records. Incompatible changes require a new
+// Python cache bucket version so older uv versions do not read the new representation.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct JsonPythonDownload {
     name: String,
@@ -968,6 +972,101 @@ struct JsonPythonDownload {
     sha256: Option<Digest<32>>,
     variant: Option<String>,
     build: Option<String>,
+    #[serde(default)]
+    build_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VersionedPythonDownloads {
+    downloads: HashMap<String, VersionedJsonPythonDownload>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VersionedJsonPythonDownload {
+    name: String,
+    arch: JsonArch,
+    os: String,
+    libc: String,
+    major: u8,
+    minor: u8,
+    patch: u8,
+    prerelease: Option<String>,
+    url: String,
+    sha256: Option<Digest<32>>,
+    variant: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
+    build_name: Option<String>,
+    build_revision: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyJsonPythonDownload {
+    name: String,
+    arch: JsonArch,
+    os: String,
+    libc: String,
+    major: u8,
+    minor: u8,
+    patch: u8,
+    prerelease: Option<String>,
+    url: String,
+    sha256: Option<Digest<32>>,
+    variant: Option<String>,
+    build: Option<String>,
+}
+
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    String::deserialize(deserializer).map(Some)
+}
+
+impl From<LegacyJsonPythonDownload> for JsonPythonDownload {
+    fn from(entry: LegacyJsonPythonDownload) -> Self {
+        Self {
+            name: entry.name,
+            arch: entry.arch,
+            os: entry.os,
+            libc: entry.libc,
+            major: entry.major,
+            minor: entry.minor,
+            patch: entry.patch,
+            prerelease: entry.prerelease,
+            url: entry.url,
+            sha256: entry.sha256,
+            variant: entry.variant,
+            build: entry.build,
+            build_name: None,
+        }
+    }
+}
+
+impl From<VersionedJsonPythonDownload> for JsonPythonDownload {
+    fn from(entry: VersionedJsonPythonDownload) -> Self {
+        Self {
+            name: entry.name,
+            arch: entry.arch,
+            os: entry.os,
+            libc: entry.libc,
+            major: entry.major,
+            minor: entry.minor,
+            patch: entry.patch,
+            prerelease: entry.prerelease,
+            url: entry.url,
+            sha256: entry.sha256,
+            variant: entry.variant,
+            build: Some(entry.build_revision),
+            build_name: entry.build_name,
+        }
+    }
+}
+
+/// Read the schema version independently of the payload, which may use an unsupported format.
+#[derive(Debug, Deserialize)]
+struct PythonDownloadsVersion {
+    version: u8,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1002,14 +1101,17 @@ impl ManagedPythonDownloadList {
     /// If there is no stable version matching the request, a compatible pre-release version will
     /// be searched for — even if a pre-release was not explicitly requested.
     pub fn find(&self, request: &PythonDownloadRequest) -> Result<&ManagedPythonDownload, Error> {
-        if let Some(download) = self.iter_matching(request).next() {
+        if let Some(download) = self
+            .iter_matching(request)
+            .find(|download| download.key().build_name().is_none())
+        {
             return Ok(download);
         }
 
         if !request.allows_prereleases()
             && let Some(download) = self
                 .iter_matching(&request.clone().with_prereleases(true))
-                .next()
+                .find(|download| download.key().build_name().is_none())
         {
             return Ok(download);
         }
@@ -1084,10 +1186,10 @@ impl ManagedPythonDownloadList {
     /// Load available Python distributions from the compiled-in list only.
     /// for testing purposes.
     pub fn new_only_embedded() -> Result<Self, Error> {
-        let json_downloads: HashMap<String, JsonPythonDownload> =
-            serde_json::from_slice(BUILTIN_PYTHON_DOWNLOADS_JSON).map_err(|e| {
-                Error::InvalidPythonDownloadsJSON("EMBEDDED IN THE BINARY".to_owned(), e)
-            })?;
+        let json_downloads = parse_downloads_json(
+            BUILTIN_PYTHON_DOWNLOADS_JSON,
+            "EMBEDDED IN THE BINARY".to_owned(),
+        )?;
         let result = parse_json_downloads(json_downloads);
         Ok(Self { downloads: result })
     }
@@ -1100,25 +1202,94 @@ fn parse_downloads_json(
     buf: &[u8],
     source: String,
 ) -> Result<HashMap<String, JsonPythonDownload>, Error> {
-    match serde_json::from_slice(buf) {
-        Ok(data) => Ok(data),
-        Err(e) => {
+    match serde_json::from_slice::<HashMap<String, LegacyJsonPythonDownload>>(buf) {
+        Ok(data) => Ok(data
+            .into_iter()
+            .map(|(key, entry)| (key, entry.into()))
+            .collect()),
+        Err(legacy_error) => {
             // As an explicit compatibility mechanism, if there's a top-level "version" key, it
-            // means it's a newer format than we know how to deal with. Before reporting a
-            // parse error about the format of JsonPythonDownload, check for that key. We can do
-            // this by parsing into a Map<String, IgnoredAny> which allows any valid JSON on the
-            // value side. (Because it's zero-sized, Clippy suggests Set<String>, but that won't
-            // have the same parsing effect.)
-            #[expect(clippy::zero_sized_map_values)]
-            if let Ok(keys) = serde_json::from_slice::<HashMap<String, serde::de::IgnoredAny>>(buf)
-                && keys.contains_key("version")
-            {
-                Err(Error::UnsupportedPythonDownloadsJSON(source))
-            } else {
-                Err(Error::InvalidPythonDownloadsJSON(source, e))
+            // prevents older uv versions from treating build names as unnamed downloads. New
+            // versions can opt into supported schemas explicitly.
+            let Ok(version) = serde_json::from_slice::<PythonDownloadsVersion>(buf) else {
+                return Err(Error::InvalidPythonDownloadsJSON(source, legacy_error));
+            };
+            if version.version != 1 {
+                return Err(Error::UnsupportedPythonDownloadsJSON(source));
             }
+            let versioned = serde_json::from_slice::<VersionedPythonDownloads>(buf)
+                .map_err(|err| Error::InvalidPythonDownloadsJSON(source.clone(), err))?;
+            validate_versioned_downloads(&versioned.downloads).map_err(|message| {
+                Error::InvalidPythonDownloadsJSON(
+                    source.clone(),
+                    serde_json::Error::custom(message),
+                )
+            })?;
+            let downloads = versioned
+                .downloads
+                .into_iter()
+                .map(|(key, entry)| (key, entry.into()))
+                .collect();
+            validate_download_artifacts(&downloads).map_err(|message| {
+                Error::InvalidPythonDownloadsJSON(source, serde_json::Error::custom(message))
+            })?;
+            Ok(downloads)
         }
     }
+}
+
+fn validate_versioned_downloads(
+    downloads: &HashMap<String, VersionedJsonPythonDownload>,
+) -> Result<(), String> {
+    for (key, entry) in downloads {
+        if let Some(build_name) = entry.build_name.as_deref() {
+            let parsed = PythonBuildName::from_str(build_name)
+                .map_err(|()| format!("invalid Python build name `{build_name}` in `{key}`"))?;
+            if parsed.to_string() != build_name {
+                return Err(format!(
+                    "Python build name `{build_name}` in `{key}` must be lowercase"
+                ));
+            }
+        }
+
+        if entry.build_revision.is_empty()
+            || (entry.build_revision.len() > 1 && entry.build_revision.starts_with('0'))
+            || !entry
+                .build_revision
+                .bytes()
+                .all(|character| character.is_ascii_digit())
+        {
+            return Err(format!(
+                "Python build revision `{}` in `{key}` must be a non-empty string of ASCII digits without leading zeros",
+                entry.build_revision
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Reject conflicting artifacts after normalizing their installation identities.
+fn validate_download_artifacts(
+    downloads: &HashMap<String, JsonPythonDownload>,
+) -> Result<(), String> {
+    let mut artifacts = HashMap::new();
+    // Stable record ordering makes diagnostics independent of hash-map iteration order.
+    for (record, entry) in downloads.iter().sorted_by_key(|(record, _)| *record) {
+        let Some(key) = parse_json_download_key(record, entry) else {
+            // Unknown platforms and Python variants are skipped by download selection too.
+            continue;
+        };
+        let revision = entry.build.as_deref().unwrap_or_default();
+        if let Some((previous_record, previous_url, previous_sha256)) =
+            artifacts.insert((key.clone(), revision), (record, &entry.url, &entry.sha256))
+            && (previous_url != &entry.url || previous_sha256 != &entry.sha256)
+        {
+            return Err(format!(
+                "Conflicting Python download records `{previous_record}` and `{record}` for `{key}` at build revision `{revision}`"
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn fetch_downloads_from_url(
@@ -1597,110 +1768,129 @@ impl ManagedPythonDownload {
     }
 }
 
+fn parse_json_download_key(key: &str, entry: &JsonPythonDownload) -> Option<PythonInstallationKey> {
+    let implementation = match entry.name.as_str() {
+        "cpython" => LenientImplementationName::Known(ImplementationName::CPython),
+        "pypy" => LenientImplementationName::Known(ImplementationName::PyPy),
+        "graalpy" => LenientImplementationName::Known(ImplementationName::GraalPy),
+        _ => LenientImplementationName::Unknown(entry.name.clone()),
+    };
+
+    let arch_str = match entry.arch.family.as_str() {
+        "armv5tel" => Cow::Borrowed("armv5te"),
+        // The `gc` variant of riscv64 is the common base instruction set and
+        // is the target in `python-build-standalone`
+        // See https://github.com/astral-sh/python-build-standalone/issues/504
+        "riscv64" => Cow::Borrowed("riscv64gc"),
+        value => Cow::Borrowed(value),
+    };
+
+    let arch_str = if let Some(variant) = &entry.arch.variant {
+        Cow::Owned(format!("{arch_str}_{variant}"))
+    } else {
+        arch_str
+    };
+
+    let arch = match Arch::from_str(&arch_str) {
+        Ok(arch) => arch,
+        Err(e) => {
+            debug!("Skipping entry {key}: Invalid arch '{arch_str}' - {e}");
+            return None;
+        }
+    };
+
+    let os = match Os::from_str(&entry.os) {
+        Ok(os) => os,
+        Err(e) => {
+            debug!("Skipping entry {}: Invalid OS '{}' - {}", key, entry.os, e);
+            return None;
+        }
+    };
+
+    let libc = match Libc::from_str(&entry.libc) {
+        Ok(libc) => libc,
+        Err(e) => {
+            debug!(
+                "Skipping entry {}: Invalid libc '{}' - {}",
+                key, entry.libc, e
+            );
+            return None;
+        }
+    };
+
+    let variant = match entry
+        .variant
+        .as_deref()
+        .map(PythonVariant::from_str)
+        .transpose()
+    {
+        Ok(Some(variant)) => variant,
+        Ok(None) => PythonVariant::default(),
+        Err(()) => {
+            debug!(
+                "Skipping entry {key}: Unknown python variant - {}",
+                entry.variant.as_deref().unwrap_or_default()
+            );
+            return None;
+        }
+    };
+
+    let Ok(build_name) = entry
+        .build_name
+        .as_deref()
+        .map(PythonBuildName::from_str)
+        .transpose()
+    else {
+        debug!(
+            "Skipping entry {key}: Invalid Python build name - {}",
+            entry.build_name.as_deref().unwrap_or_default()
+        );
+        return None;
+    };
+
+    let version_str = format!(
+        "{}.{}.{}{}",
+        entry.major,
+        entry.minor,
+        entry.patch,
+        entry.prerelease.as_deref().unwrap_or_default()
+    );
+
+    let version = match PythonVersion::from_str(&version_str) {
+        Ok(version) => version,
+        Err(e) => {
+            debug!("Skipping entry {key}: Invalid version '{version_str}' - {e}");
+            return None;
+        }
+    };
+
+    let mut installation_key = PythonInstallationKey::new_from_version(
+        implementation,
+        &version,
+        Platform::new(os, arch, libc),
+        variant,
+    );
+    if let Some(build_name) = build_name {
+        installation_key = installation_key.with_build_name(build_name);
+    }
+
+    Some(installation_key)
+}
+
 fn parse_json_downloads(
     json_downloads: HashMap<String, JsonPythonDownload>,
 ) -> Vec<ManagedPythonDownload> {
     json_downloads
         .into_iter()
         .filter_map(|(key, entry)| {
-            let implementation = match entry.name.as_str() {
-                "cpython" => LenientImplementationName::Known(ImplementationName::CPython),
-                "pypy" => LenientImplementationName::Known(ImplementationName::PyPy),
-                "graalpy" => LenientImplementationName::Known(ImplementationName::GraalPy),
-                _ => LenientImplementationName::Unknown(entry.name.clone()),
-            };
-
-            let arch_str = match entry.arch.family.as_str() {
-                "armv5tel" => Cow::Borrowed("armv5te"),
-                // The `gc` variant of riscv64 is the common base instruction set and
-                // is the target in `python-build-standalone`
-                // See https://github.com/astral-sh/python-build-standalone/issues/504
-                "riscv64" => Cow::Borrowed("riscv64gc"),
-                value => Cow::Borrowed(value),
-            };
-
-            let arch_str = if let Some(variant) = entry.arch.variant {
-                Cow::Owned(format!("{arch_str}_{variant}"))
-            } else {
-                arch_str
-            };
-
-            let arch = match Arch::from_str(&arch_str) {
-                Ok(arch) => arch,
-                Err(e) => {
-                    debug!("Skipping entry {key}: Invalid arch '{arch_str}' - {e}");
-                    return None;
-                }
-            };
-
-            let os = match Os::from_str(&entry.os) {
-                Ok(os) => os,
-                Err(e) => {
-                    debug!("Skipping entry {}: Invalid OS '{}' - {}", key, entry.os, e);
-                    return None;
-                }
-            };
-
-            let libc = match Libc::from_str(&entry.libc) {
-                Ok(libc) => libc,
-                Err(e) => {
-                    debug!(
-                        "Skipping entry {}: Invalid libc '{}' - {}",
-                        key, entry.libc, e
-                    );
-                    return None;
-                }
-            };
-
-            let variant = match entry
-                .variant
-                .as_deref()
-                .map(PythonVariant::from_str)
-                .transpose()
-            {
-                Ok(Some(variant)) => variant,
-                Ok(None) => PythonVariant::default(),
-                Err(()) => {
-                    debug!(
-                        "Skipping entry {key}: Unknown python variant - {}",
-                        entry.variant.unwrap_or_default()
-                    );
-                    return None;
-                }
-            };
-
-            let version_str = format!(
-                "{}.{}.{}{}",
-                entry.major,
-                entry.minor,
-                entry.patch,
-                entry.prerelease.as_deref().unwrap_or_default()
-            );
-
-            let version = match PythonVersion::from_str(&version_str) {
-                Ok(version) => version,
-                Err(e) => {
-                    debug!("Skipping entry {key}: Invalid version '{version_str}' - {e}");
-                    return None;
-                }
-            };
-
-            let url = Cow::Owned(entry.url);
-            let sha256 = entry.sha256;
-            let build = entry
-                .build
-                .map(|s| Box::leak(s.into_boxed_str()) as &'static str);
-
+            let installation_key = parse_json_download_key(&key, &entry)?;
             Some(ManagedPythonDownload {
-                key: PythonInstallationKey::new_from_version(
-                    implementation,
-                    &version,
-                    Platform::new(os, arch, libc),
-                    variant,
-                ),
-                url,
-                sha256,
-                build,
+                key: installation_key,
+                url: Cow::Owned(entry.url),
+                sha256: entry.sha256,
+                build: entry
+                    .build
+                    .map(|revision| Box::leak(revision.into_boxed_str()) as &'static str),
             })
         })
         .sorted_by(|a, b| Ord::cmp(&b.key, &a.key))
@@ -1861,12 +2051,312 @@ mod tests {
     use std::assert_matches;
     use std::collections::HashSet;
 
+    use anyhow::Result;
+
     use crate::PythonVariant;
     use crate::implementation::LenientImplementationName;
     use crate::installation::PythonInstallationKey;
     use uv_platform::{Arch, Libc, Os, Platform};
 
     use super::*;
+
+    #[test]
+    fn parse_versioned_downloads() -> Result<()> {
+        let json = r#"{
+            "version": 1,
+            "downloads": {
+                "custom": {
+                    "name": "cpython",
+                    "arch": { "family": "x86_64", "variant": null },
+                    "os": "linux",
+                    "libc": "gnu",
+                    "major": 3,
+                    "minor": 13,
+                    "patch": 0,
+                    "prerelease": null,
+                    "url": "https://example.com/python-custom.tar.gz",
+                    "sha256": null,
+                    "variant": null,
+                    "build_name": "custom",
+                    "build_revision": "20260825"
+                }
+            }
+        }"#;
+        let downloads = parse_downloads_json(json.as_bytes(), "test".to_string())?;
+        assert_eq!(downloads["custom"].build_name.as_deref(), Some("custom"));
+        assert_eq!(downloads["custom"].build.as_deref(), Some("20260825"));
+        let cached = rmp_serde::to_vec(&downloads)?;
+        let restored: HashMap<String, JsonPythonDownload> = rmp_serde::from_slice(&cached)?;
+        assert_eq!(
+            serde_json::to_value(restored)?,
+            serde_json::to_value(downloads)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn versioned_download_fields_must_be_non_null() {
+        let json = r#"{
+            "version": 1,
+            "downloads": {
+                "custom": {
+                    "name": "cpython",
+                    "arch": { "family": "x86_64", "variant": null },
+                    "os": "linux",
+                    "libc": "gnu",
+                    "major": 3,
+                    "minor": 13,
+                    "patch": 0,
+                    "prerelease": null,
+                    "url": "https://example.com/python-custom.tar.gz",
+                    "sha256": null,
+                    "variant": null,
+                    "build_name": null,
+                    "build_revision": null
+                }
+            }
+        }"#;
+
+        assert!(parse_downloads_json(json.as_bytes(), "test".to_string()).is_err());
+        let json = json.replace(r#""build_name": null,"#, r#""build_name": "custom","#);
+        assert!(parse_downloads_json(json.as_bytes(), "test".to_string()).is_err());
+    }
+
+    #[test]
+    fn versioned_downloads_require_canonical_build_names() {
+        let json = r#"{
+            "version": 1,
+            "downloads": {
+                "custom": {
+                    "name": "cpython",
+                    "arch": { "family": "x86_64", "variant": null },
+                    "os": "linux",
+                    "libc": "gnu",
+                    "major": 3,
+                    "minor": 13,
+                    "patch": 0,
+                    "prerelease": null,
+                    "url": "https://example.com/python-custom.tar.gz",
+                    "sha256": null,
+                    "variant": null,
+                    "build_revision": "20260825",
+                    "build_name": "CUSTOM"
+                }
+            }
+        }"#;
+
+        assert!(parse_downloads_json(json.as_bytes(), "test".to_string()).is_err());
+        for build_name in ["20260825", "_custom", "custom.public"] {
+            let json = json.replace("CUSTOM", build_name);
+            assert!(parse_downloads_json(json.as_bytes(), "test".to_string()).is_err());
+        }
+    }
+
+    #[test]
+    fn versioned_downloads_reject_legacy_build_fields() {
+        let json = r#"{
+            "version": 1,
+            "downloads": {
+                "custom": {
+                    "name": "cpython",
+                    "arch": { "family": "x86_64", "variant": null },
+                    "os": "linux",
+                    "libc": "gnu",
+                    "major": 3,
+                    "minor": 13,
+                    "patch": 0,
+                    "prerelease": null,
+                    "url": "https://example.com/python-custom.tar.gz",
+                    "sha256": null,
+                    "variant": null,
+                    "build_revision": "20260825",
+                    "build_variant": "custom"
+                }
+            }
+        }"#;
+
+        assert!(parse_downloads_json(json.as_bytes(), "test".to_string()).is_err());
+        let json = json.replace("build_variant", "build");
+        assert!(parse_downloads_json(json.as_bytes(), "test".to_string()).is_err());
+    }
+
+    #[test]
+    fn versioned_downloads_require_numeric_revisions() -> Result<()> {
+        let entry = serde_json::json!({
+            "name": "cpython", "arch": { "family": "x86_64", "variant": null },
+            "os": "linux", "libc": "gnu", "major": 3, "minor": 13, "patch": 0,
+            "url": "https://example.com/python.tar.gz", "build_revision": "20260825"
+        });
+        let parse = |entry| {
+            parse_downloads_json(
+                &serde_json::to_vec(
+                    &serde_json::json!({"version": 1, "downloads": {"python": entry}}),
+                )?,
+                "test".to_string(),
+            )
+            .map_err(anyhow::Error::from)
+        };
+        parse(entry.clone())?;
+        for revision in ["0", "42", "20260924", "100000000000000000000"] {
+            let mut valid = entry.clone();
+            valid["build_revision"] = serde_json::json!(revision);
+            parse(valid)?;
+        }
+        for revision in [
+            serde_json::Value::Null,
+            serde_json::json!(123),
+            serde_json::json!(""),
+            serde_json::json!("7.3.19"),
+            serde_json::json!("-1"),
+            serde_json::json!("00"),
+            serde_json::json!("042"),
+            serde_json::json!(" 123"),
+            serde_json::json!("１２３"),
+        ] {
+            let mut invalid = entry.clone();
+            invalid["build_revision"] = revision;
+            assert!(parse(invalid).is_err());
+        }
+        let mut missing = entry.clone();
+        if let Some(fields) = missing.as_object_mut() {
+            fields.remove("build_revision");
+        }
+        assert!(parse(missing).is_err());
+        let mut default = entry;
+        default["default"] = serde_json::json!(true);
+        assert!(parse(default).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn versioned_download_artifact_identities() -> Result<()> {
+        let entry = serde_json::json!({
+            "name": "cpython", "arch": { "family": "x86_64", "variant": null },
+            "os": "linux", "libc": "gnu", "major": 3, "minor": 13, "patch": 7,
+            "build_name": "custom", "build_revision": "42",
+            "url": "https://example.com/python.tar.gz"
+        });
+        for (field, value) in [
+            ("name", serde_json::json!("pypy")),
+            (
+                "arch",
+                serde_json::json!({ "family": "aarch64", "variant": null }),
+            ),
+            ("os", serde_json::json!("darwin")),
+            ("libc", serde_json::json!("musl")),
+            ("patch", serde_json::json!(8)),
+            ("prerelease", serde_json::json!("rc1")),
+            ("variant", serde_json::json!("freethreaded")),
+            ("build_name", serde_json::json!("other")),
+            ("build_revision", serde_json::json!("43")),
+        ] {
+            let mut different = entry.clone();
+            different[field] = value;
+            different["url"] = serde_json::json!("https://example.com/other.tar.gz");
+            let downloads = parse_downloads_json(
+                &serde_json::to_vec(&serde_json::json!({
+                    "version": 1, "downloads": { "a": entry, "b": different }
+                }))?,
+                "test".to_string(),
+            )?;
+            assert_eq!(parse_json_downloads(downloads).len(), 2, "field: {field}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn cached_downloads_without_build_names_remain_compatible() -> Result<()> {
+        #[derive(Serialize)]
+        struct LegacyJsonPythonDownload {
+            name: String,
+            arch: JsonArch,
+            os: String,
+            libc: String,
+            major: u8,
+            minor: u8,
+            patch: u8,
+            prerelease: Option<String>,
+            url: String,
+            sha256: Option<String>,
+            variant: Option<String>,
+            build: Option<String>,
+        }
+
+        let legacy = HashMap::from([(
+            "cpython".to_string(),
+            LegacyJsonPythonDownload {
+                name: "cpython".to_string(),
+                arch: JsonArch {
+                    family: "x86_64".to_string(),
+                    variant: None,
+                },
+                os: "linux".to_string(),
+                libc: "gnu".to_string(),
+                major: 3,
+                minor: 13,
+                patch: 0,
+                prerelease: None,
+                url: "https://example.com/python.tar.gz".to_string(),
+                sha256: None,
+                variant: None,
+                build: Some("20260825".to_string()),
+            },
+        )]);
+        let cached = rmp_serde::to_vec(&legacy)?;
+        let downloads: HashMap<String, JsonPythonDownload> = rmp_serde::from_slice(&cached)?;
+        assert_eq!(downloads["cpython"].build.as_deref(), Some("20260825"));
+        assert_eq!(downloads["cpython"].build_name, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_build_names() -> Result<()> {
+        let entry = |build_name: &str| JsonPythonDownload {
+            name: "cpython".to_string(),
+            arch: JsonArch {
+                family: "x86_64".to_string(),
+                variant: None,
+            },
+            os: "linux".to_string(),
+            libc: "gnu".to_string(),
+            major: 3,
+            minor: 13,
+            patch: 0,
+            prerelease: None,
+            url: format!("https://example.com/python-{build_name}.tar.gz"),
+            sha256: None,
+            variant: None,
+            build_name: Some(build_name.to_string()),
+            build: Some("20250825".to_string()),
+        };
+        let downloads = parse_json_downloads(HashMap::from([
+            ("custom_internal".to_string(), entry("custom_internal")),
+            ("custom".to_string(), entry("custom")),
+        ]));
+
+        let internal_key =
+            PythonInstallationKey::from_str("cpython-3.13.0+custom_internal-linux-x86_64-gnu")?;
+        let custom_key = PythonInstallationKey::from_str("cpython-3.13.0+custom-linux-x86_64-gnu")?;
+        assert_eq!(downloads.len(), 2);
+        assert!(
+            downloads
+                .iter()
+                .any(|download| download.key() == &internal_key)
+        );
+        assert!(
+            downloads
+                .iter()
+                .any(|download| download.key() == &custom_key)
+        );
+
+        let request =
+            PythonDownloadRequest::default().with_version(VersionRequest::from_str("3.13")?);
+        let downloads = ManagedPythonDownloadList { downloads };
+        assert!(downloads.find(&request).is_err());
+        Ok(())
+    }
 
     /// Parse a request with all of its fields.
     #[test]
