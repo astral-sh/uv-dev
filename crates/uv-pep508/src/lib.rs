@@ -1538,6 +1538,14 @@ mod tests {
     }
 
     #[test]
+    fn marker_operator_before_parentheses() {
+        Requirement::<Url>::from_str(
+            r#"numpy; python_version >= "3.0" and(sys_platform == "linux" or(os_name == "posix"))"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn reversed_compatible_release_string_marker() {
         let requirement = Requirement::<Url>::from_str(r#"foo; "3" ~= sys_platform"#).unwrap();
 
