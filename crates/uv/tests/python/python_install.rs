@@ -1903,6 +1903,20 @@ fn python_install_invalid_request() {
     error: `foobar` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions
     ");
 
+    // Short variant spellings cannot be split into independent components.
+    uv_snapshot!(context.filters(), context.python_install().arg("3.15+t+d"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `3.15+t+d` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions
+    ");
+
+    // Adding a build name does not broaden the accepted variant spellings.
+    uv_snapshot!(context.filters(), context.python_install().arg("3.15+t+d+custom"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `3.15+t+d+custom` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions
+    ");
+
     // Request a version we don't have a download for
     uv_snapshot!(context.filters(), context.python_install().arg("3.8.0"), @"
     exit_code: 2 (failure)

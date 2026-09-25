@@ -4621,6 +4621,76 @@ mod tests {
     }
 
     #[test]
+    fn version_request_build_variant_spellings() -> Result<(), Error> {
+        for (request, canonical) in [
+            ("3.15td", "3.15+freethreaded+debug"),
+            ("3.15+td", "3.15+freethreaded+debug"),
+            ("3.15+freethreaded+debug", "3.15+freethreaded+debug"),
+            ("3.15+debug+freethreaded", "3.15+freethreaded+debug"),
+            ("3.15+debug+gil", "3.15+gil+debug"),
+            ("3.15+td+custom", "3.15+freethreaded+debug+custom"),
+            ("3.15+custom+td", "3.15+freethreaded+debug+custom"),
+            (
+                "3.15+freethreaded+debug+custom",
+                "3.15+freethreaded+debug+custom",
+            ),
+            (
+                "3.15+freethreaded+custom+debug",
+                "3.15+freethreaded+debug+custom",
+            ),
+            (
+                "3.15+custom+freethreaded+debug",
+                "3.15+freethreaded+debug+custom",
+            ),
+            (
+                "3.15+debug+freethreaded+custom",
+                "3.15+freethreaded+debug+custom",
+            ),
+            (
+                "3.15+debug+custom+freethreaded",
+                "3.15+freethreaded+debug+custom",
+            ),
+            (
+                "3.15+custom+debug+freethreaded",
+                "3.15+freethreaded+debug+custom",
+            ),
+            ("3.15+debug+gil+custom", "3.15+gil+debug+custom"),
+            ("3.15+debug+custom+gil", "3.15+gil+debug+custom"),
+            ("3.15+custom+debug+gil", "3.15+gil+debug+custom"),
+            (">=3.15+td+custom", ">=3.15+freethreaded+debug+custom"),
+            (
+                ">=3.15+custom+debug+freethreaded",
+                ">=3.15+freethreaded+debug+custom",
+            ),
+        ] {
+            assert_eq!(
+                VersionRequest::from_str(request)?.to_string(),
+                canonical,
+                "request: {request}"
+            );
+        }
+        for request in [
+            "3.15+t+d",
+            "3.15+d+t",
+            "3.15+t+debug",
+            "3.15+debug+t",
+            "3.15+freethreaded+d",
+            "3.15+d+freethreaded",
+            "3.15+t+d+custom",
+            "3.15+custom+t+d",
+            "3.15+t+custom+d",
+            ">=3.15+t+d+custom",
+        ] {
+            assert_matches!(
+                VersionRequest::from_str(request),
+                Err(Error::InvalidVersionRequest(_)),
+                "request: {request}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn version_request_from_str() {
         assert_eq!(
             VersionRequest::from_str("3").unwrap(),
