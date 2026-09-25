@@ -14550,6 +14550,41 @@ requires_python = "==3.13.*"
 }
 
 #[test]
+fn pep_751_default_group_not_listed_as_dependency_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context.temp_dir.child("pylock.toml").write_str(
+        r#"
+        lock-version = "1.0"
+        default-groups = ["mygroup"]
+        created-by = "hand-written"
+
+        [[packages]]
+        name = "mypy-extensions"
+        version = "1.1.0"
+        marker = "\"mygroup\" in dependency_groups"
+        requires-python = ">=3.8"
+        wheels = [{ name = "mypy_extensions-1.1.0-py3-none-any.whl", url = "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl", hashes = { sha256 = "1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505" } }]
+        "#,
+    )?;
+
+    // PEP 751 permits default groups to be absent from `dependency-groups`, but uv silently
+    // ignores packages selected by such groups; see astral-sh/uv#21917.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview")
+        .arg("--dry-run")
+        .arg("-r")
+        .arg("pylock.toml"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    Would make no changes
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn pep_751_lock_version() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
