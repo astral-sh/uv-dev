@@ -79,6 +79,7 @@ pub(crate) mod install_target;
 pub(crate) mod lock;
 pub(crate) mod lock_target;
 pub(crate) mod remove;
+mod report;
 pub(crate) mod run;
 pub(crate) mod sync;
 mod toolchain;
