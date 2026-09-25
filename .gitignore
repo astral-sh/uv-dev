@@ -31,6 +31,7 @@ __pycache__
 /crates/uv-build/dist
 
 # Profiling
+.cache/bench-fixtures/
 flamegraph.svg
 perf.data
 perf.data.old
