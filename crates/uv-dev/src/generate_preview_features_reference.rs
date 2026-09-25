@@ -125,6 +125,7 @@ mod tests {
         - <a id="content-addressed-cache" href="#content-addressed-cache"><code>content-addressed-cache</code></a>: Enables content-addressed wheel archives in the cache.
         - <a id="detect-module-conflicts" href="#detect-module-conflicts"><code>detect-module-conflicts</code></a>: Warns when multiple packages would install conflicting Python modules into the same
           environment.
+        - <a id="download-command" href="#download-command"><code>download-command</code></a>: Allows using `uv download`.
         - <a id="extra-build-dependencies" href="#extra-build-dependencies"><code>extra-build-dependencies</code></a>: Allows specifying additional dependencies for package builds.
         - <a id="format-command" href="#format-command"><code>format-command</code></a>: Allows using `uv format`.
         - <a id="gcs-endpoint" href="#gcs-endpoint"><code>gcs-endpoint</code></a>: Allows signing requests to configured Google Cloud Storage endpoints.

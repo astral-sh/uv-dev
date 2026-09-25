@@ -34,6 +34,7 @@ pub(crate) use project::ProjectError;
 pub(crate) use project::add::add;
 pub(crate) use project::audit::audit;
 pub(crate) use project::check::check;
+pub(crate) use project::download::download;
 pub(crate) use project::export::export;
 pub(crate) use project::format::format;
 pub(crate) use project::init::{InitKind, InitProjectKind, init};
