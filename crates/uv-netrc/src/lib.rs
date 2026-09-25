@@ -111,9 +111,6 @@ mod tests {
     use std::assert_matches;
 
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    static NETRC_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     const CONTENT: &str = "\
 machine cocolog-nifty.com
@@ -129,9 +126,8 @@ login mbutterley2
 password hY5>yKqU&$vq&0
 ";
 
-    fn create_netrc_file() -> PathBuf {
-        let id = NETRC_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dest = std::env::temp_dir().join(format!("mynetrc-{}-{id}", std::process::id()));
+    fn create_netrc_file(directory: &Path) -> PathBuf {
+        let dest = directory.join("mynetrc");
         fs_err::write(&dest, CONTENT).unwrap();
         dest
     }
@@ -154,7 +150,8 @@ password hY5>yKqU&$vq&0
 
     #[test]
     fn test_new_env() {
-        let fi = create_netrc_file();
+        let directory = tempfile::tempdir().unwrap();
+        let fi = create_netrc_file(directory.path());
         temp_env::with_var("NETRC", Some(fi.as_os_str()), || {
             let nrc = Netrc::new().unwrap();
             check_nrc(&nrc);
@@ -171,7 +168,8 @@ password hY5>yKqU&$vq&0
 
     #[test]
     fn test_from_file() {
-        let fi = create_netrc_file();
+        let directory = tempfile::tempdir().unwrap();
+        let fi = create_netrc_file(directory.path());
         let nrc = Netrc::from_file(fi.as_path()).unwrap();
         check_nrc(&nrc);
     }
