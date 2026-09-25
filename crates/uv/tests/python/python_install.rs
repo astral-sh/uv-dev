@@ -596,8 +596,7 @@ fn python_uninstall_executable_candidates() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
-        .with_managed_python_dirs()
-        .with_python_download_cache();
+        .with_managed_python_dirs();
 
     context
         .python_install()
@@ -660,8 +659,7 @@ fn python_uninstall_retargeted_executable() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
-        .with_managed_python_dirs()
-        .with_python_download_cache();
+        .with_managed_python_dirs();
 
     context
         .python_install()
@@ -712,8 +710,7 @@ fn python_uninstall_executable_first_owner() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
-        .with_managed_python_dirs()
-        .with_python_download_cache();
+        .with_managed_python_dirs();
 
     context
         .python_install()
