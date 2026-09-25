@@ -10,6 +10,7 @@ use tracing::{debug, warn};
 
 use uv_cache::Cache;
 use uv_dirs::user_executable_directory;
+use uv_distribution_types::{InstalledDist, Name};
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified};
 use uv_install_wheel::read_record;
 use uv_installer::SitePackages;
@@ -40,14 +41,18 @@ impl ToolEnvironment {
 
     /// Return the [`Version`] of the tool package in this environment.
     pub fn version(&self) -> Result<Version, Error> {
+        Ok(self.installed_dist()?.version().clone())
+    }
+
+    /// Return the [`InstalledDist`] of the tool package in this environment.
+    pub fn installed_dist(&self) -> Result<InstalledDist, Error> {
         let site_packages = SitePackages::from_environment(&self.environment).map_err(|err| {
             Error::EnvironmentRead(self.environment.root().to_path_buf(), err.to_string())
         })?;
-        let packages = site_packages.get_packages(&self.name);
-        let package = packages
-            .first()
-            .ok_or_else(|| Error::MissingToolPackage(self.name.clone()))?;
-        Ok(package.version().clone())
+        site_packages
+            .into_iter()
+            .find(|package| package.name() == &self.name)
+            .ok_or_else(|| Error::MissingToolPackage(self.name.clone()))
     }
 
     /// Get the underlying [`PythonEnvironment`].
