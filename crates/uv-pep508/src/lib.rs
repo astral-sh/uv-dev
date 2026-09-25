@@ -796,12 +796,11 @@ pub(crate) fn split_extras(given: &str) -> Option<(&str, &str)> {
 
 /// PEP 440 wrapper
 fn parse_specifier<T: Pep508Url>(
-    cursor: &mut Cursor,
-    buffer: &str,
+    cursor: &Cursor,
     start: usize,
     end: usize,
 ) -> Result<VersionSpecifier, Pep508Error<T>> {
-    VersionSpecifier::from_str(buffer).map_err(|err| Pep508Error {
+    VersionSpecifier::from_str(cursor.slice(start, end - start)).map_err(|err| Pep508Error {
         message: Pep508ErrorSource::String(err.to_string()),
         start,
         len: end - start,
@@ -809,92 +808,61 @@ fn parse_specifier<T: Pep508Url>(
     })
 }
 
-/// Such as `>=1.19,<2.0`, either delimited by the end of the specifier or a `;` for the marker part
+/// Such as `>=1.19,<2.0` or `(>=1.19,<2.0)`, followed by an optional `;` marker.
 ///
 /// ```text
 /// version_one (wsp* ',' version_one)* (wsp* ',')?
 /// ```
 fn parse_version_specifier<T: Pep508Url>(
     cursor: &mut Cursor,
-) -> Result<Option<VersionOrUrl<T>>, Pep508Error<T>> {
+) -> Result<VersionSpecifiers, Pep508Error<T>> {
+    let brace_pos = cursor.eat_char('(');
+    if brace_pos.is_some() {
+        // Makes for slightly better error underline
+        cursor.eat_whitespace();
+    }
     let mut start = cursor.pos();
     let mut specifiers = Vec::new();
-    let mut buffer = String::new();
-    let requirement_kind = loop {
-        match cursor.peek() {
+    let end = loop {
+        // Consume a closing parenthesis, but leave a bare marker delimiter for marker parsing.
+        let next = if brace_pos.is_some() {
+            cursor.next()
+        } else {
+            cursor.peek()
+        };
+        match next {
             Some((end, ',')) => {
-                let specifier = parse_specifier(cursor, &buffer, start, end)?;
+                let specifier = parse_specifier(cursor, start, end)?;
                 specifiers.push(specifier);
-                buffer.clear();
-                cursor.next();
+                if brace_pos.is_none() {
+                    cursor.next();
+                }
                 start = end + 1;
             }
-            Some((_, ';')) | None => {
-                if buffer.trim().is_empty() && !specifiers.is_empty() {
-                    break Some(VersionOrUrl::VersionSpecifier(
-                        specifiers.into_iter().collect(),
-                    ));
+            Some((end, ')')) if brace_pos.is_some() => break end,
+            Some((end, ';')) if brace_pos.is_none() => break end,
+            Some(_) => {
+                if brace_pos.is_none() {
+                    cursor.next();
                 }
-                let end = cursor.pos();
-                let specifier = parse_specifier(cursor, &buffer, start, end)?;
-                specifiers.push(specifier);
-                break Some(VersionOrUrl::VersionSpecifier(
-                    specifiers.into_iter().collect(),
-                ));
             }
-            Some((_, char)) => {
-                buffer.push(char);
-                cursor.next();
+            None => {
+                if let Some(brace_pos) = brace_pos {
+                    return Err(Pep508Error {
+                        message: Pep508ErrorSource::String("Missing closing parenthesis (expected ')', found end of dependency specification)".to_string()),
+                        start: brace_pos,
+                        len: 1,
+                        input: cursor.to_string(),
+                    });
+                }
+                break cursor.pos();
             }
         }
     };
-    Ok(requirement_kind)
-}
-
-/// Such as `(>=1.19,<2.0)`
-///
-/// ```text
-/// '(' version_one (wsp* ',' version_one)* (wsp* ',')? ')'
-/// ```
-fn parse_version_specifier_parentheses<T: Pep508Url>(
-    cursor: &mut Cursor,
-) -> Result<Option<VersionOrUrl<T>>, Pep508Error<T>> {
-    let brace_pos = cursor.pos();
-    cursor.next();
-    // Makes for slightly better error underline
-    cursor.eat_whitespace();
-    let mut start = cursor.pos();
-    let mut specifiers = Vec::new();
-    let mut buffer = String::new();
-    let requirement_kind = loop {
-        match cursor.next() {
-            Some((end, ',')) => {
-                let specifier =
-                    parse_specifier(cursor, &buffer, start, end)?;
-                specifiers.push(specifier);
-                buffer.clear();
-                start = end + 1;
-            }
-            Some((end, ')')) => {
-                if buffer.trim().is_empty() && !specifiers.is_empty() {
-                    break Some(VersionOrUrl::VersionSpecifier(
-                        specifiers.into_iter().collect(),
-                    ));
-                }
-                let specifier = parse_specifier(cursor, &buffer, start, end)?;
-                specifiers.push(specifier);
-                break Some(VersionOrUrl::VersionSpecifier(specifiers.into_iter().collect()));
-            }
-            Some((_, char)) => buffer.push(char),
-            None => return Err(Pep508Error {
-                message: Pep508ErrorSource::String("Missing closing parenthesis (expected ')', found end of dependency specification)".to_string()),
-                start: brace_pos,
-                len: 1,
-                input: cursor.to_string(),
-            }),
-        }
-    };
-    Ok(requirement_kind)
+    if !cursor.slice(start, end - start).trim().is_empty() || specifiers.is_empty() {
+        specifiers.push(parse_specifier(cursor, start, end)?);
+    }
+    Ok(specifiers.into_iter().collect())
 }
 
 /// Parse a PEP 508-compliant [dependency specifier](https://packaging.python.org/en/latest/specifications/dependency-specifiers).
@@ -938,9 +906,9 @@ fn parse_pep508_requirement<T: Pep508Url>(
             Some(VersionOrUrl::Url(parse_url(cursor, working_dir)?))
         }
         // name_req
-        Some('(') => parse_version_specifier_parentheses(cursor)?,
-        // name_req
-        Some('<' | '=' | '>' | '~' | '!') => parse_version_specifier(cursor)?,
+        Some('(' | '<' | '=' | '>' | '~' | '!') => Some(VersionOrUrl::VersionSpecifier(
+            parse_version_specifier(cursor)?,
+        )),
         // No requirements / any version
         Some(';') | None => None,
         Some(other) => {
@@ -1185,6 +1153,83 @@ mod tests {
     fn leading_whitespace() {
         let numpy = Requirement::<Url>::from_str(" numpy").unwrap();
         assert_eq!(numpy.name.as_ref(), "numpy");
+    }
+
+    fn assert_version_specifier_string_error(
+        input: &str,
+        start: usize,
+        len: usize,
+        expected_message: &str,
+    ) {
+        let error = Requirement::<Url>::from_str(input).unwrap_err();
+        assert_eq!((error.start, error.len), (start, len), "{input}");
+        assert_eq!(error.input, input);
+        assert!(
+            matches!(&error.message, crate::Pep508ErrorSource::String(message) if message == expected_message),
+            "{input}: {:?}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn version_specifier_byte_spans() {
+        for (input, component, start, len) in [
+            ("demo>=1,\u{2003}><2", "\u{2003}><2", 8, 6),
+            ("demo(>=1,\u{2003}><2)", "\u{2003}><2", 9, 6),
+            ("demo(\u{2003}><2)", "><2", 8, 3),
+            ("demo>=1,\u{2003}==λ", "\u{2003}==λ", 8, 7),
+            ("demo(>=1,\u{2003}==λ)", "\u{2003}==λ", 9, 7),
+        ] {
+            let expected_message = VersionSpecifier::from_str(component)
+                .unwrap_err()
+                .to_string();
+            assert_version_specifier_string_error(input, start, len, &expected_message);
+        }
+    }
+
+    #[test]
+    fn version_specifier_trailing_comma_whitespace() {
+        for (input, expected) in [
+            ("demo>=1,\u{2003}", "demo>=1"),
+            ("demo(>=1,\u{2003})", "demo>=1"),
+            (
+                "demo>=1,\u{2003}; python_version < '3.13'",
+                "demo>=1 ; python_full_version < '3.13'",
+            ),
+            (
+                "demo(>=1,\u{2003}); python_version < '3.13'",
+                "demo>=1 ; python_full_version < '3.13'",
+            ),
+        ] {
+            assert_eq!(
+                Requirement::<Url>::from_str(input).unwrap().to_string(),
+                expected,
+                "{input}"
+            );
+        }
+
+        for input in [
+            "demo>=1,\u{2003},",
+            "demo(>=1,\u{2003},)",
+            "demo(\u{2003},)",
+        ] {
+            assert!(Requirement::<Url>::from_str(input).is_err(), "{input}");
+        }
+    }
+
+    #[test]
+    fn version_specifier_missing_parenthesis_precedence() {
+        for input in ["demo(><2", "demo(>=1,\u{2003}><2"] {
+            assert_version_specifier_string_error(
+                input,
+                4,
+                1,
+                "Missing closing parenthesis (expected ')', found end of dependency specification)",
+            );
+        }
+
+        let expected_message = VersionSpecifier::from_str("><2").unwrap_err().to_string();
+        assert_version_specifier_string_error("demo(><2,>=1", 5, 3, &expected_message);
     }
 
     #[test]
