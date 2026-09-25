@@ -51,6 +51,127 @@ fn sync() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn isolated_lock() -> Result<()> {
+    let server = PackseServer::new("simple/single-package.toml");
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a>=1.0.0"]
+    "#})?;
+    let sentinel = context.venv.child("sentinel");
+    sentinel.write_str("present")?;
+
+    let assert = context
+        .sync()
+        .arg("--isolated-lock")
+        .arg("--index")
+        .arg(server.index_url())
+        .arg("--output-format=json")
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    insta::assert_json_snapshot!(json!({
+        "dry_run": report["dry_run"],
+        "lock_action": report["lock"]["action"],
+        "changes": report["sync"]["changes"],
+    }), @r#"
+    {
+      "changes": [
+        {
+          "action": "installed",
+          "name": "a",
+          "version": "2.0.0"
+        }
+      ],
+      "dry_run": false,
+      "lock_action": "resolve"
+    }
+    "#);
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    assert!(sentinel.exists());
+
+    context
+        .lock()
+        .arg("--index")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let lockfile = context.read("uv.lock");
+
+    let assert = context
+        .sync()
+        .arg("--isolated-lock")
+        .arg("--dry-run")
+        .arg("--resolution=lowest-direct")
+        .arg("--index")
+        .arg(server.index_url())
+        .arg("--output-format=json")
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    insta::assert_json_snapshot!(json!({
+        "dry_run": report["dry_run"],
+        "lock_action": report["lock"]["action"],
+    }), @r#"
+    {
+      "dry_run": true,
+      "lock_action": "resolve"
+    }
+    "#);
+    assert_eq!(lockfile, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("python")
+        .arg("-c").arg("import a; print(a.__version__)"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--resolution=lowest-direct")
+        .arg("--index")
+        .arg(server.index_url())
+        .env(EnvVars::UV_ISOLATED_LOCK, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Ignoring existing lockfile due to change in resolution mode: `highest` vs. `lowest-direct`
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - a==2.0.0
+     + a==1.0.0
+    ");
+    assert_eq!(lockfile, context.read("uv.lock"));
+    assert!(sentinel.exists());
+    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("python")
+        .arg("-c").arg("import a; print(a.__version__)"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    ");
+
+    // Explicitly disabling an inherited setting permits a lockfile update.
+    context
+        .sync()
+        .arg("--no-isolated-lock")
+        .arg("--resolution=lowest-direct")
+        .arg("--index")
+        .arg(server.index_url())
+        .env(EnvVars::UV_ISOLATED_LOCK, "1")
+        .assert()
+        .success();
+    assert_ne!(lockfile, context.read("uv.lock"));
+
+    Ok(())
+}
+
 /// Explicit lock modes override conflicting environment variables without updating the lockfile.
 #[test]
 fn sync_lock_flags_override_environment() -> Result<()> {

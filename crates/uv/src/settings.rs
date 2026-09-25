@@ -759,11 +759,25 @@ fn resolve_lock_check(
     }
 }
 
+/// Resolve isolated locking from CLI arguments and the environment.
+fn resolve_isolated_lock(enabled: bool, disabled: bool, environment: EnvFlag) -> bool {
+    let (isolated_lock, _) = resolve_flag_pair(
+        enabled,
+        disabled,
+        "isolated-lock",
+        "no-isolated-lock",
+        Some(environment),
+        None,
+    );
+    isolated_lock.is_enabled()
+}
+
 /// The resolved settings to use for a `run` invocation.
 #[derive(Debug, Clone)]
 pub(crate) struct RunSettings {
     pub(crate) lock_check: LockCheck,
     pub(crate) frozen: Option<FrozenSource>,
+    pub(crate) isolated_lock: bool,
     pub(crate) extras: ExtrasSpecification,
     pub(crate) groups: DependencyGroups,
     pub(crate) editable: Option<EditableMode>,
@@ -839,6 +853,8 @@ impl RunSettings {
             no_locked,
             frozen,
             no_frozen,
+            isolated_lock,
+            no_isolated_lock,
             installer,
             build,
             refresh,
@@ -891,6 +907,11 @@ impl RunSettings {
         Ok(Self {
             lock_check: locked,
             frozen,
+            isolated_lock: resolve_isolated_lock(
+                isolated_lock,
+                no_isolated_lock,
+                environment.isolated_lock,
+            ),
             extras: ExtrasSpecification::from_args(
                 extra.unwrap_or_default(),
                 no_extra,
@@ -1938,6 +1959,7 @@ impl PythonPinSettings {
 pub(crate) struct SyncSettings {
     pub(super) lock_check: LockCheck,
     pub(super) frozen: Option<FrozenSource>,
+    pub(super) isolated_lock: bool,
     pub(super) dry_run: DryRun,
     pub(super) script: Option<PathBuf>,
     pub(super) active: ActiveEnvironment,
@@ -1997,6 +2019,8 @@ impl SyncSettings {
             no_locked,
             frozen,
             no_frozen,
+            isolated_lock,
+            no_isolated_lock,
             active,
             no_active,
             dry_run,
@@ -2095,6 +2119,11 @@ impl SyncSettings {
             output_format,
             lock_check: locked,
             frozen,
+            isolated_lock: resolve_isolated_lock(
+                isolated_lock,
+                no_isolated_lock,
+                environment.isolated_lock,
+            ),
             dry_run,
             script,
             active: flag(active, no_active, "active")?.into(),
@@ -2278,6 +2307,7 @@ pub(crate) struct MetadataSettings {
     script: Option<PathBuf>,
     pub(crate) lock_check: LockCheck,
     pub(crate) frozen: Option<FrozenSource>,
+    pub(crate) isolated_lock: bool,
     pub(crate) sync: Option<Modifications>,
     pub(crate) active: ActiveEnvironment,
     pub(crate) python: Option<String>,
@@ -2300,6 +2330,8 @@ impl MetadataSettings {
             no_locked,
             frozen,
             no_frozen,
+            isolated_lock,
+            no_isolated_lock,
             resolver,
             build,
             refresh,
@@ -2326,6 +2358,11 @@ impl MetadataSettings {
             script,
             lock_check: locked,
             frozen,
+            isolated_lock: resolve_isolated_lock(
+                isolated_lock,
+                no_isolated_lock,
+                environment.isolated_lock,
+            ),
             sync: sync.then_some(if exact {
                 Modifications::Exact
             } else {
@@ -3175,6 +3212,7 @@ pub(crate) struct CheckSettings {
     pub(crate) groups: DependencyGroups,
     pub(crate) lock_check: LockCheck,
     pub(crate) frozen: Option<FrozenSource>,
+    pub(crate) isolated_lock: bool,
     pub(crate) no_sync: bool,
     pub(crate) no_install_project: bool,
     pub(crate) isolated: bool,
@@ -3220,6 +3258,8 @@ impl CheckSettings {
             no_locked,
             frozen,
             no_frozen,
+            isolated_lock,
+            no_isolated_lock,
             no_sync,
             no_install_project,
             isolated,
@@ -3294,6 +3334,11 @@ impl CheckSettings {
             ),
             lock_check: locked,
             frozen,
+            isolated_lock: resolve_isolated_lock(
+                isolated_lock,
+                no_isolated_lock,
+                environment.isolated_lock,
+            ),
             no_sync: no_sync.is_enabled(),
             no_install_project: no_install_project.is_enabled(),
             isolated,

@@ -246,9 +246,17 @@ fn workspace_metadata_lockfile() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().arg("-qq"), @"
+    uv_snapshot!(context.filters(), context.workspace_metadata().arg("--isolated-lock").arg("-qq"), @"
     exit_code: 0 (success)
     ");
+    assert!(!context.temp_dir.child("uv.lock").exists());
+
+    context
+        .workspace_metadata()
+        .arg("--sync")
+        .env(EnvVars::UV_ISOLATED_LOCK, "1")
+        .assert()
+        .success();
     assert!(!context.temp_dir.child("uv.lock").exists());
 
     uv_snapshot!(context.filters(), context.workspace_metadata().arg("--frozen"), @"
@@ -264,15 +272,15 @@ fn workspace_metadata_lockfile() -> Result<()> {
     error: Unable to find lockfile at `uv.lock`, but `--locked` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
     ");
 
-    context
-        .workspace_metadata()
-        .arg("--sync")
-        .assert()
-        .success();
+    context.workspace_metadata().assert().success();
     let lockfile = context.read("uv.lock");
 
     pyproject_toml.write_str(&context.read("pyproject.toml").replace("0.1.0", "0.2.0"))?;
-    let assert = context.workspace_metadata().assert().success();
+    let assert = context
+        .workspace_metadata()
+        .arg("--isolated-lock")
+        .assert()
+        .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     let member_id = metadata["members"][0]["id"]
         .as_str()
@@ -280,8 +288,21 @@ fn workspace_metadata_lockfile() -> Result<()> {
     insta::assert_json_snapshot!(metadata["resolution"][member_id]["version"], @r#""0.2.0""#);
     assert_eq!(lockfile, context.read("uv.lock"));
 
-    // Synchronization must respect an explicit request not to update the lockfile.
-    uv_snapshot!(context.filters(), context.workspace_metadata().arg("--sync").arg("--locked"), @"
+    let assert = context
+        .workspace_metadata()
+        .arg("--sync")
+        .arg("--isolated-lock")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let member_id = metadata["members"][0]["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing workspace member ID"))?;
+    insta::assert_json_snapshot!(metadata["resolution"][member_id]["version"], @r#""0.2.0""#);
+    assert_eq!(lockfile, context.read("uv.lock"));
+
+    // Explicit lock checks still apply when lockfile writes are disabled.
+    uv_snapshot!(context.filters(), context.workspace_metadata().arg("--sync").arg("--isolated-lock").arg("--locked"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
@@ -295,6 +316,7 @@ fn workspace_metadata_lockfile() -> Result<()> {
     let assert = context
         .workspace_metadata()
         .arg("--sync")
+        .arg("--isolated-lock")
         .arg("--frozen")
         .assert()
         .success();
@@ -305,6 +327,11 @@ fn workspace_metadata_lockfile() -> Result<()> {
     insta::assert_json_snapshot!(metadata["resolution"][member_id]["version"], @r#""0.1.0""#);
     assert_eq!(lockfile, context.read("uv.lock"));
 
+    context.workspace_metadata().assert().success();
+    assert_ne!(lockfile, context.read("uv.lock"));
+    let lockfile = context.read("uv.lock");
+
+    pyproject_toml.write_str(&context.read("pyproject.toml").replace("0.2.0", "0.3.0"))?;
     context
         .workspace_metadata()
         .arg("--sync")
@@ -496,6 +523,35 @@ print("Hello, world!")
     );
 
     assert!(!context.temp_dir.child("script.py.lock").exists());
+
+    context
+        .lock()
+        .arg("--script")
+        .arg(script.path())
+        .assert()
+        .success();
+    let lockfile = context.read("script.py.lock");
+    script.write_str(&context.read("script.py").replace(">=3.12", ">=3.12,<4"))?;
+
+    let assert = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--isolated-lock")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    insta::assert_json_snapshot!(metadata["requires_python"], @r#"">=3.12,<4""#);
+    assert_eq!(lockfile, context.read("script.py.lock"));
+
+    context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .assert()
+        .success();
+    assert_ne!(lockfile, context.read("script.py.lock"));
 
     Ok(())
 }

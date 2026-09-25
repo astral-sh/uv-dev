@@ -3694,6 +3694,17 @@ pub struct RunArgs {
     #[arg(long, overrides_with = "frozen", hide = true)]
     pub no_frozen: bool,
 
+    /// Resolve dependencies without creating or updating the lockfile [env: UV_ISOLATED_LOCK=]
+    ///
+    /// Uses existing lockfile preferences when resolving the current requirements. The selected
+    /// environment is still synchronized unless synchronization is disabled separately.
+    #[arg(long, overrides_with = "no_isolated_lock", value_parser = clap::builder::BoolishValueParser::new())]
+    pub isolated_lock: bool,
+
+    /// Disable isolated locking, overriding `UV_ISOLATED_LOCK`.
+    #[arg(long, overrides_with = "isolated_lock", hide = true)]
+    pub no_isolated_lock: bool,
+
     /// Run the given path as a Python script.
     ///
     /// Using `--script` will attempt to parse the path as a PEP 723 script,
@@ -3980,6 +3991,17 @@ pub struct SyncArgs {
     /// Disable frozen mode, overriding `UV_FROZEN`.
     #[arg(long, overrides_with = "frozen", hide = true)]
     pub no_frozen: bool,
+
+    /// Resolve dependencies without creating or updating the lockfile [env: UV_ISOLATED_LOCK=]
+    ///
+    /// Uses existing lockfile preferences when resolving the current requirements. The selected
+    /// environment is still synchronized unless synchronization is disabled separately.
+    #[arg(long, overrides_with = "no_isolated_lock", value_parser = clap::builder::BoolishValueParser::new())]
+    pub isolated_lock: bool,
+
+    /// Disable isolated locking, overriding `UV_ISOLATED_LOCK`.
+    #[arg(long, overrides_with = "isolated_lock", hide = true)]
+    pub no_isolated_lock: bool,
 
     /// Perform a dry run, without writing the lockfile or modifying the project environment.
     ///
@@ -5199,6 +5221,17 @@ pub struct CheckArgs {
     /// Disable frozen mode, overriding `UV_FROZEN`.
     #[arg(long, overrides_with = "frozen", hide = true)]
     pub no_frozen: bool,
+
+    /// Resolve dependencies without creating or updating the lockfile [env: UV_ISOLATED_LOCK=]
+    ///
+    /// Uses existing lockfile preferences when resolving the current requirements. The selected
+    /// environment is still synchronized unless synchronization is disabled separately.
+    #[arg(long, overrides_with = "no_isolated_lock", value_parser = clap::builder::BoolishValueParser::new())]
+    pub isolated_lock: bool,
+
+    /// Disable isolated locking, overriding `UV_ISOLATED_LOCK`.
+    #[arg(long, overrides_with = "isolated_lock", hide = true)]
+    pub no_isolated_lock: bool,
 
     /// Avoid syncing the virtual environment [env: UV_NO_SYNC=]
     #[arg(long)]
@@ -7880,6 +7913,17 @@ pub struct MetadataArgs {
     #[arg(long, overrides_with = "frozen", hide = true)]
     pub no_frozen: bool,
 
+    /// Resolve dependencies without creating or updating the lockfile [env: UV_ISOLATED_LOCK=]
+    ///
+    /// Uses existing lockfile preferences when resolving the current requirements. Combine with
+    /// `--sync` to update the environment without writing the lockfile.
+    #[arg(long, overrides_with = "no_isolated_lock", value_parser = clap::builder::BoolishValueParser::new())]
+    pub isolated_lock: bool,
+
+    /// Disable isolated locking, overriding `UV_ISOLATED_LOCK`.
+    #[arg(long, overrides_with = "isolated_lock", hide = true)]
+    pub no_isolated_lock: bool,
+
     #[command(flatten)]
     pub resolver: ResolverArgs,
 
@@ -7893,9 +7937,6 @@ pub struct MetadataArgs {
     ///
     /// This adds a mapping from importable module names to references to the package nodes
     /// that provide them. By default, the environment is synced in inexact mode.
-    ///
-    /// This also allows creating or updating the lockfile, unless `--locked` or `--frozen` is
-    /// provided. For scripts, the lockfile is only updated if it already exists.
     #[arg(long)]
     pub sync: bool,
 

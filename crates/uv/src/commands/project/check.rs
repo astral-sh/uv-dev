@@ -49,6 +49,7 @@ pub(crate) async fn check(
     fix: bool,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
+    isolated_lock: bool,
     no_sync: bool,
     no_install_project: bool,
     isolated: bool,
@@ -406,7 +407,7 @@ pub(crate) async fn check(
             LockMode::Frozen(frozen_source.into())
         } else if let LockCheck::Enabled(lock_check) = lock_check {
             LockMode::Locked(venv.interpreter(), lock_check)
-        } else if isolated || !lock_target.lock_path().is_file() {
+        } else if isolated || isolated_lock || !lock_target.lock_path().is_file() {
             LockMode::DryRun(venv.interpreter())
         } else {
             LockMode::Write(venv.interpreter())
@@ -570,7 +571,7 @@ pub(crate) async fn check(
             LockMode::Frozen(frozen_source.into())
         } else if let LockCheck::Enabled(lock_check) = lock_check {
             LockMode::Locked(lock_interpreter, lock_check)
-        } else if isolated {
+        } else if isolated || isolated_lock {
             LockMode::DryRun(lock_interpreter)
         } else {
             LockMode::Write(lock_interpreter)
@@ -757,6 +758,7 @@ pub(crate) async fn check(
             .map(|project| project.workspace().install_path().as_path()),
         lock_check,
         frozen,
+        isolated || isolated_lock,
         &check_targets,
         &excluded_targets,
         explicit_targets,

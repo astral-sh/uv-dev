@@ -376,6 +376,11 @@ impl EnvVars {
     #[attr_added_in("0.4.18")]
     pub const UV_NO_SYNC: &'static str = "UV_NO_SYNC";
 
+    /// Equivalent to the `--isolated-lock` command-line argument. If set, uv resolves dependencies
+    /// without creating or updating the lockfile, while allowing environment synchronization.
+    #[attr_added_in("0.12.17")]
+    pub const UV_ISOLATED_LOCK: &'static str = "UV_ISOLATED_LOCK";
+
     /// Equivalent to the `--locked` command-line argument. If set, uv will assert that the
     /// `uv.lock` remains unchanged.
     #[attr_added_in("0.4.25")]
