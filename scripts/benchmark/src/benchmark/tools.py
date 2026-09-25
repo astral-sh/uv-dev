@@ -224,6 +224,21 @@ class Uv(Suite):
         )
 
 
+def select_suites(args: argparse.Namespace) -> list[Suite]:
+    suites = []
+    if args.pipx:
+        suites.append(Pipx())
+    if args.uv:
+        suites.append(Uv())
+    for path in args.pipx_path or []:
+        suites.append(Pipx(path=path))
+    for path in args.uv_path or []:
+        suites.append(Uv(path=path))
+    if not suites:
+        suites = [Pipx(), Uv()]
+    return suites
+
+
 def main():
     """Run the benchmark."""
     parser = argparse.ArgumentParser(
@@ -297,22 +312,7 @@ def main():
         min_runs = 10
 
     # Determine the tools to benchmark, based on the user-provided arguments.
-    suites = []
-    if args.pipx:
-        suites.append(Pipx())
-    if args.uv:
-        suites.append(Uv())
-    for path in args.pipx_path or []:
-        suites.append(Pipx(path=path))
-    for path in args.uv_path or []:
-        suites.append(Uv(path=path))
-
-    # If no tools were specified, benchmark all tools.
-    if not suites:
-        suites = [
-            Pipx(),
-            Uv(),
-        ]
+    suites = select_suites(args)
 
     # Determine the benchmarks to run, based on user input.
     benchmarks = (
