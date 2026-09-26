@@ -18,10 +18,9 @@ the lockfile would remain unchanged after resolution, while `--frozen` uses the 
 without checking whether it is up to date. astral-sh/uv#11573 records the same locked-versus-frozen
 distinction for an unavailable platform-specific path wheel.
 
-A maintainer has now asked the reporter to try `uv sync --frozen --no-group lab`, explicitly
-confirming that `--locked` must access the files to validate the lockfile while `--frozen` trusts
-the lockfile without verification. The reporter has not yet confirmed whether the suggested command
-succeeds in this reproduction.
+A maintainer asked the reporter to try `uv sync --frozen --no-group lab`, explicitly confirming that
+`--locked` must access the files to validate the lockfile while `--frozen` trusts the lockfile
+without verification. The reporter confirmed that the suggested command meets their needs.
 
 ## Draft response
 
@@ -70,8 +69,8 @@ documentation describes `--no-group` in terms of packages not being installed, c
 maintainer explanations in the related issues.
 
 The maintainer comment on astral-sh/uv#21972 directly confirms this interpretation and proposes
-`uv sync --frozen --no-group lab` as the next diagnostic step. This is a source-backed workaround,
-but its success remains unverified until the reporter responds.
+`uv sync --frozen --no-group lab` as the workaround. The reporter subsequently confirmed that this
+command works for the reported scenario.
 
 Literal searches covered the exact `Distribution not found at`, `Failed to generate package
 metadata`, `--no-group`, `--no-sources-package`, dependency-metadata/hash, path-source, and locked
