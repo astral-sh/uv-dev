@@ -3,8 +3,14 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 #[cfg(feature = "test-git")]
 use std::ffi::OsString;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader};
 use std::process::Command;
+#[cfg(unix)]
+use std::process::Stdio;
 
+#[cfg(unix)]
+use anyhow::Context;
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 #[cfg(feature = "test-git")]
@@ -2846,6 +2852,93 @@ fn tool_install_force() {
     black, 24.3.0 (compiled: yes)
     Python (CPython) 3.12.[X]
     ");
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_install_force_reinstall_interrupts_concurrent_import() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let (filename, wheel) = generate_wheel(
+        &"concurrent-reader".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["concurrent-reader".to_string()],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+
+    context
+        .tool_install()
+        .arg(wheel_path.path())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let missing = context.temp_dir.child("missing");
+    let mut observer = Command::new(
+        tool_dir
+            .child("concurrent-reader")
+            .child("bin")
+            .child("python")
+            .path(),
+    )
+    .args([
+        "-c",
+        indoc! {r#"
+            import importlib
+            import pathlib
+            import sys
+
+            import concurrent_reader
+
+            missing = pathlib.Path(sys.argv[1])
+            print("ready", flush=True)
+            while True:
+                sys.modules.pop("concurrent_reader", None)
+                try:
+                    importlib.import_module("concurrent_reader")
+                except (ModuleNotFoundError, FileNotFoundError):
+                    missing.touch()
+                    break
+        "#},
+    ])
+    .arg(missing.path())
+    .env("PYTHONDONTWRITEBYTECODE", "1")
+    .stdout(Stdio::piped())
+    .spawn()?;
+    let stdout = observer
+        .stdout
+        .take()
+        .context("observer stdout should be piped")?;
+    let mut stdout = BufReader::new(stdout);
+    let mut ready = String::new();
+    stdout.read_line(&mut ready)?;
+    assert_eq!(ready, "ready\n");
+
+    let reinstall = context
+        .tool_install()
+        .arg(wheel_path.path())
+        .args(["--force", "--reinstall"])
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .output()?;
+    reinstall.assert().success();
+
+    let observed_missing = missing.exists();
+    if observer.try_wait()?.is_none() {
+        let _ = observer.kill();
+    }
+    observer.wait()?;
+
+    // The environment disappears before its replacement is ready, so a successful reinstall can
+    // interrupt concurrent readers. This is undesirable: astral-sh/uv#22006.
+    assert!(observed_missing);
+
+    Ok(())
 }
 
 /// Test `uv tool install` when the bin directory is inferred from `$HOME`
