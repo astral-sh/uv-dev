@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9243,
+        "title": "Again problems with the --native-tls flag or SSL_CERT_FILE",
+        "url": "https://github.com/astral-sh/uv/issues/9243",
+        "state": "closed",
+        "reason": "Canonical historical discussion: native/system trust failed to validate platform-accepted certificate chains on Windows and macOS; reporters confirmed uv 0.11.0 fixed it."
+      },
+      {
+        "kind": "issue",
+        "number": 17355,
+        "title": "Flag `--native-tls` still shows UnknownIssuer on windows.",
+        "url": "https://github.com/astral-sh/uv/issues/17355",
+        "state": "closed",
+        "reason": "Near-identical Windows/PyPI failure: a trusted company root still produced `UnknownIssuer` with native TLS enabled; the reporter confirmed uv 0.11.0 resolved it."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18550,
+        "title": "Upgrade reqwest to 0.13",
+        "url": "https://github.com/astral-sh/uv/pull/18550",
+        "state": "merged",
+        "reason": "Historical fix shipped in uv 0.11.0: it adopted `rustls-platform-verifier`, delegating Windows validation to native certificate-chain and policy APIs."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests. Literal searches covered `UnknownIssuer`, `invalid peer certificate`, `system-certs`, `native-tls`, GlobalSign, and PyCharm. Conceptual searches covered Windows trusted roots, certificate stores, corporate CAs, TLS inspection, certificate-chain validation, `rustls-native-certs`, and `rustls-platform-verifier`. Fix-oriented searches covered reqwest 0.13, the uv 0.11.0 TLS change, and later certificate fixes. Comments and references were followed from astral-sh/uv#17355 through astral-sh/uv#9243, astral-sh/uv#17427, and astral-sh/uv#18550. astral-sh/uv#16474 was ruled out because system trust worked after clearing an `SSL_CERT_FILE` override and its remaining problem concerns custom PEM validation. astral-sh/uv#19903 concerns `UnsupportedCriticalExtension` on Linux rather than `UnknownIssuer` on Windows. astral-sh/uv#19876 was withdrawn as a configuration problem, while astral-sh/uv#6649 was resolved by removing conflicting certificate environment variables."
+  },
+  "type": "bug",
+  "type_reason": "`--system-certs` is documented and implemented to delegate verification to the operating system. The report shows certificates in the Windows trusted-root store are rejected through that path but accepted after export as a custom bundle. The same observable failure was fixed in uv 0.11.0 and has returned on uv 0.12.19, making this a bug and possible regression rather than a duplicate of the closed historical reports. The precise cause remains unconfirmed; certificate environment-variable overrides and the served chain still need checking.",
+  "summary": "The closest history is the Windows native/system-certificate failure tracked in astral-sh/uv#9243 and astral-sh/uv#17355 and addressed by astral-sh/uv#18550. The report indicates that behavior may have returned in uv 0.12.19.",
+  "draft_response": "Thanks for the detailed command comparisons. `--system-certs` is expected to delegate certificate verification to Windows. astral-sh/uv#18550 introduced that path and resolved the same `UnknownIssuer` behavior reported in astral-sh/uv#9243 and astral-sh/uv#17355 for uv 0.11.0. Since this occurs on uv 0.12.19 while a PEM exported from the Windows trust store works, this may be a regression.\n\nCould you first confirm that neither `SSL_CERT_FILE` nor `SSL_CERT_DIR` is set in the shell or PyCharm environment? A non-empty value overrides `--system-certs`. If both are unset and the command still fails, please share the output of `uv -vv --system-certs pip install isodate` and `openssl s_client -showcerts -connect pypi.org:443`, with any private proxy details redacted. That will let us compare the certificate chain being served without requiring the exported certificate bundle."
+}
