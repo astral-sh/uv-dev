@@ -2856,7 +2856,7 @@ fn tool_install_force() {
 
 #[cfg(unix)]
 #[test]
-fn tool_install_force_reinstall_interrupts_concurrent_import() -> Result<()> {
+fn tool_install_force_reinstall_preserves_concurrent_import() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
@@ -2934,9 +2934,14 @@ fn tool_install_force_reinstall_interrupts_concurrent_import() -> Result<()> {
     }
     observer.wait()?;
 
-    // The environment disappears before its replacement is ready, so a successful reinstall can
-    // interrupt concurrent readers. This is undesirable: astral-sh/uv#22006.
-    assert!(observed_missing);
+    // Reinstalling a tool should not interrupt processes reading from the existing environment.
+    assert!(!observed_missing);
+
+    uv_snapshot!(context.filters(), Command::new(bin_dir.child("concurrent-reader").path()), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from concurrent-reader!
+    ");
 
     Ok(())
 }
