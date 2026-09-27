@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using uv 0.12.13 on Linux x86_64 with Python 3.12.3, isolated UV_TOOL_DIR/UV_TOOL_BIN_DIR/UV_CACHE_DIR under $RUNNER_TEMP, and a controlled local wheel, a 10 Hz read-only observer (`PYTHONDONTWRITEBYTECODE=1 .../bin/python -c 'import issue22006_tool'`) saw an import failure during `uv --no-config tool install --force --reinstall <wheel>`, while uv exited 0 after 1.72 seconds. A faster observer recorded 34 failures over about 0.87 seconds during another successful reinstall. The reported 43-second duration was not independently tested because the report omits the tool name."
+}
