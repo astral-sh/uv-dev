@@ -1,7 +1,13 @@
 use std::fmt::Write;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::io::ErrorKind;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::path::Path;
 use std::str::FromStr;
 use uv_distribution_types::RequirementScope;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use anyhow::Context;
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
 use tracing::{debug, trace};
@@ -34,6 +40,9 @@ use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use tempfile::TempDir;
+
 use crate::commands::ExitStatus;
 use crate::commands::pip::latest::LatestClient;
 use crate::commands::pip::loggers::{
@@ -47,12 +56,106 @@ use crate::commands::project::{
 };
 use crate::commands::tool::common::{
     ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    tool_environment_spec,
+    remove_stale_entrypoints, tool_environment_spec,
 };
 use crate::commands::tool::{Target, ToolRequest};
 use crate::commands::{UvError, reporters::PythonDownloadReporter};
 use crate::printer::Printer;
 use crate::settings::{ResolverInstallerSettings, ResolverSettings};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct StagedToolEnvironment {
+    environment: PythonEnvironment,
+    directory: TempDir,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl StagedToolEnvironment {
+    fn create(
+        installed_tools: &InstalledTools,
+        name: &PackageName,
+        interpreter: Interpreter,
+    ) -> Result<Self> {
+        let environment_path = installed_tools.tool_dir(name);
+        let directory = tempfile::Builder::new()
+            .prefix(&format!(".{name}-"))
+            .tempdir_in(
+                environment_path
+                    .parent()
+                    .context("tool environment should have a parent directory")?,
+            )?;
+        let environment = uv_virtualenv::create_venv(
+            directory.path(),
+            interpreter,
+            uv_virtualenv::Prompt::None,
+            false,
+            uv_virtualenv::OnExisting::Remove(uv_virtualenv::RemovalReason::TemporaryEnvironment),
+            false,
+            uv_virtualenv::Seed::Disabled,
+            false,
+        )?;
+        Ok(Self {
+            environment,
+            directory,
+        })
+    }
+
+    fn publish(
+        self,
+        installed_tools: &InstalledTools,
+        name: &PackageName,
+        cache: &Cache,
+    ) -> Result<PythonEnvironment> {
+        let Self {
+            environment,
+            directory,
+        } = self;
+        drop(environment);
+
+        let environment_path = installed_tools.tool_dir(name);
+        Self::rewrite_environment_paths(directory.path(), &environment_path)?;
+        if environment_path.exists() {
+            uv_fs::exchange_paths(directory.path(), &environment_path)?;
+        } else {
+            fs_err::rename(directory.path(), &environment_path)?;
+            let _ = directory.keep();
+        }
+
+        Ok(PythonEnvironment::from_root(environment_path, cache)?)
+    }
+
+    fn rewrite_environment_paths(source: &Path, target: &Path) -> Result<()> {
+        let source = source
+            .to_str()
+            .context("staged tool environment path should be UTF-8")?;
+        let target = target
+            .to_str()
+            .context("tool environment path should be UTF-8")?;
+
+        let scripts = Path::new(source).join("bin");
+        for entry in fs_err::read_dir(scripts)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            match fs_err::read_to_string(entry.path()) {
+                Ok(contents) if contents.contains(source) => {
+                    fs_err::write(entry.path(), contents.replace(source, target))?;
+                }
+                Ok(_) => {}
+                Err(err) if err.kind() == ErrorKind::InvalidData => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        let configuration = Path::new(source).join("pyvenv.cfg");
+        let contents = fs_err::read_to_string(&configuration)?;
+        if contents.contains(source) {
+            fs_err::write(configuration, contents.replace(source, target))?;
+        }
+        Ok(())
+    }
+}
 
 /// Install a tool.
 pub(crate) async fn install(
@@ -689,11 +792,13 @@ pub(crate) async fn install(
         EnvironmentResolution::Specific
     };
 
-    // TODO(zanieb): Build the environment in the cache directory then copy into the tool directory.
-    // This lets us confirm the environment is valid before removing an existing install. However,
-    // entrypoints always contain an absolute path to the relevant Python interpreter, which would
-    // be invalidated by moving the environment.
-    let (environment, tool_lock) = if let Some(environment) = existing_environment {
+    // Replacements on Linux and macOS are built in a sibling directory and atomically exchanged
+    // with the installed environment after synchronization. Generated paths are rewritten to the
+    // stable destination before publication. New installs and platforms without atomic directory
+    // exchange are created at the destination path.
+    let (environment, tool_lock, replaced_atomically) = if let Some(environment) =
+        existing_environment
+    {
         let environment = environment.into_environment();
         let (environment, tool_lock) = if tool_locks {
             let site_packages = SitePackages::from_environment(&environment)?;
@@ -881,7 +986,7 @@ pub(crate) async fn install(
             remove_entrypoints(existing_receipt);
         }
 
-        (environment, tool_lock)
+        (environment, tool_lock, false)
     } else {
         let satisfied_tool_lock = match existing_tool_lock.take() {
             Some(lock) if lock.is_satisfied() => Some(lock.into_lock()),
@@ -1016,16 +1121,24 @@ pub(crate) async fn install(
         } else {
             HashStrategy::default()
         };
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let (environment, directory) = if existing_tool_receipt.is_some() {
+            let StagedToolEnvironment {
+                environment,
+                directory,
+            } = StagedToolEnvironment::create(&installed_tools, package_name, interpreter)?;
+            (environment, Some(directory))
+        } else {
+            (
+                installed_tools.create_environment(package_name, interpreter)?,
+                None,
+            )
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let environment = installed_tools.create_environment(package_name, interpreter)?;
 
-        // At this point, we removed any existing environment, so we should remove any of its
-        // executables.
-        if let Some(existing_receipt) = existing_tool_receipt {
-            remove_entrypoints(&existing_receipt);
-        }
-
         // Sync the environment with the resolved requirements.
-        match sync_environment(
+        let environment = match sync_environment(
             environment,
             &resolution,
             hash_strategy,
@@ -1042,14 +1155,47 @@ pub(crate) async fn install(
             preview,
         )
         .await
-        .inspect_err(|_| {
-            // If we failed to sync, remove the newly created environment.
-            debug!("Failed to sync environment; removing `{}`", package_name);
-            let _ = installed_tools.remove_environment(package_name);
-        }) {
-            Ok(environment) => (environment, tool_lock),
-            Err(err) => return Err(UvError::from(err).into()),
+        {
+            Ok(environment) => environment,
+            Err(err) => {
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                if directory.is_none() {
+                    debug!("Failed to sync environment; removing `{}`", package_name);
+                    let _ = installed_tools.remove_environment(package_name);
+                }
+                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+                {
+                    debug!("Failed to sync environment; removing `{}`", package_name);
+                    let _ = installed_tools.remove_environment(package_name);
+                }
+                return Err(UvError::from(err).into());
+            }
+        };
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let (environment, replaced_atomically) = if let Some(directory) = directory {
+            (
+                StagedToolEnvironment {
+                    environment,
+                    directory,
+                }
+                .publish(&installed_tools, package_name, &cache)?,
+                true,
+            )
+        } else {
+            (environment, false)
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let replaced_atomically = false;
+
+        // The entrypoints continue to resolve through the stable environment path while the
+        // replacement is prepared and published.
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        if let Some(existing_receipt) = existing_tool_receipt.as_ref() {
+            remove_entrypoints(existing_receipt);
         }
+
+        (environment, tool_lock, replaced_atomically)
     };
 
     finalize_tool_install(
@@ -1073,6 +1219,13 @@ pub(crate) async fn install(
         tool_lock.as_ref(),
         printer,
     )?;
+
+    if replaced_atomically
+        && let Some(previous_receipt) = existing_tool_receipt.as_ref()
+        && let Some(current_receipt) = installed_tools.get_tool_receipt(package_name)?
+    {
+        remove_stale_entrypoints(previous_receipt, &current_receipt);
+    }
 
     Ok(ExitStatus::Success)
 }

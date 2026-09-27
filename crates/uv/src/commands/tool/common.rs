@@ -149,6 +149,17 @@ pub(crate) fn remove_entrypoints(tool: &Tool) {
     );
 }
 
+/// Remove entrypoints that are no longer provided by a replacement tool environment.
+pub(crate) fn remove_stale_entrypoints(previous: &Tool, current: &Tool) {
+    remove_entrypoint_paths(previous.entrypoints().iter().filter_map(|entrypoint| {
+        current
+            .entrypoints()
+            .iter()
+            .all(|current| current.install_path != entrypoint.install_path)
+            .then_some(entrypoint.install_path.as_path())
+    }));
+}
+
 /// Remove the entrypoints at the given paths.
 fn remove_entrypoint_paths<'a>(entrypoints: impl IntoIterator<Item = &'a Path>) {
     for executable in entrypoints {
