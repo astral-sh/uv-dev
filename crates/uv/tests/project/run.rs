@@ -5801,7 +5801,6 @@ fn exit_status_sigpipe() {
     exit_code: 141 (failure)
     ");
 }
-
 #[test]
 fn run_repeated() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]);
