@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "With uv 0.12.19 on Linux x86_64, `env -u SSL_CERT_DIR SSL_CERT_FILE=\"$PWD/missing.pem\" uv --system-certs pip install --target site isodate` and the equivalent `uv add` command both reproduced the reported PyPI `UnknownIssuer` failure. Supplying a valid PEM through `--cert` succeeded. With `SSL_CERT_FILE` and `SSL_CERT_DIR` unset, both default and system certificates installed isodate successfully. This confirms the symptom when an unusable certificate override replaces system roots, as covered by `crates/uv-client/tests/it/ssl_certs.rs::test_system_certs_with_ssl_cert_file_replaces_system_roots`. It does not confirm a Windows trust-store defect; the reporter must verify those variables are absent and retry with `--no-config`."
+}
