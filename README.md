@@ -6,7 +6,7 @@ Classification: bug
 
 ## Summary
 
-The reported reader-visible interruption is reproducible. With an isolated tool directory and a controlled local wheel, an external process repeatedly importing from the installed tool environment observed a failed import during `uv tool install --force --reinstall`, while uv 0.12.13 completed successfully. A faster observer targeting a module installed late in the wheel saw 34 failures over about 0.87 seconds during another successful reinstall.
+The reported reader-visible interruption is reproducible. With an isolated tool directory and a controlled local wheel, an external process repeatedly importing from the installed tool environment observed a failed import during `uv tool install --force --reinstall`, while uv 0.12.13 completed successfully. A faster observer targeting a module installed late in the wheel saw 34 failures over about 0.87 seconds during another successful reinstall. The fix builds replacements outside the live environment and atomically publishes the completed directory on Linux and macOS.
 
 No existing issue specifically tracks atomic publication of installed tool environments. The closest historical work is astral-sh/uv#5503 and astral-sh/uv#5509, which made cached environments safe to recreate while in use by constructing them elsewhere and publishing them through a symlink. astral-sh/uv#13883 tracks stronger locking between uv operations, but external processes already running from a tool environment cannot participate in uv's locks.
 
@@ -45,19 +45,40 @@ The 10 Hz observer recorded one failed plain-package import during the 1.72-seco
 
 Existing integration coverage does not test concurrent reader availability. `crates/uv/tests/tool/tool_install.rs`, test `tool_install_force`, verifies that a forced reinstall succeeds and removes a marker from the old environment, and separately verifies `--reinstall`; it does not run a reader while the environment is replaced or assert atomic publication.
 
+## Fix
+
+Outcome: **fixed** for the reported macOS behavior and the reproduced Linux behavior.
+
+The root cause was confirmed in the forced-install branch: setting `--force` discards the existing environment selection, and `InstalledTools::create_environment` removed the installed directory before `sync_environment` populated its replacement. The tools-directory lock serializes uv writers but cannot prevent external readers from resolving the stable tool path during that interval.
+
+On Linux and macOS, forced replacement of a valid installed tool now creates and synchronizes a staged virtual environment in a sibling directory. Generated virtual-environment paths are rewritten from the staging location to the stable tool destination, then a new `uv_fs::exchange_paths` primitive uses the platform's atomic rename-exchange operation to publish the completed directory without making the destination disappear. Existing executable links remain in place during preparation and publication; after finalization, only entrypoints absent from the new receipt are removed. New installs and platforms without atomic directory exchange retain their prior path.
+
+The parent integration test `tool_install_force_reinstall_preserves_concurrent_import` now asserts that a continuously reloaded import never disappears during `--force --reinstall`, and it runs the installed console entrypoint after replacement. The neighboring `tool_install_force` test caught and prevented a relocatable-script approach that would have required `dirname` and `realpath` on `PATH`; the final implementation retains the existing absolute console-script form.
+
+Focused validation passed:
+
+- `cargo test --package uv --test tool tool_install::tool_install_force_reinstall_preserves_concurrent_import -- --exact`
+- `cargo test --package uv --test tool tool_install::tool_install_force -- --exact`
+- `cargo test --package uv --test tool tool_install::tool_install_already_installed -- --exact`
+- `cargo test --package uv --test tool tool_install::tool_install_force_respects_global_python_change -- --exact`
+- `cargo +stable clippy --package uv --test tool --locked -- -D warnings`
+- `cargo +stable fmt --all -- --check`
+
+The pinned 1.98.1 toolchain did not have rustfmt or clippy installed and its read-only installation could not be extended, so the available stable rustfmt and clippy components were used. `cargo-xwin` was unavailable, but the Windows path remains behind the existing non-atomic implementation and the new staging and exchange code is target-gated to Linux and macOS.
+
 ## Draft response
 
-Thanks for the concrete report. We reproduced a reader-visible failed import during a successful `uv tool install --force --reinstall` using uv 0.12.13 on Linux. The current tool-install path removes and recreates the installed environment, while the tools-directory lock only serializes uv operations; it does not protect a process that is already reading or running from that environment. We also have prior art for staged, atomically published cached environments in astral-sh/uv#5503 and astral-sh/uv#5509, but that mechanism was not extended to installed tools.
+Thanks for the concrete report. We reproduced a reader-visible failed import during a successful `uv tool install --force --reinstall` using uv 0.12.13 on Linux. Forced replacements now build a complete environment beside the installed tool and atomically exchange it into the stable path on Linux and macOS, so concurrent readers continue to see either the old complete environment or the new complete environment.
 
-We'll keep this as a distinct bug for making tool replacement safe for concurrent readers. The next step is to add a focused regression test around reader-visible availability and evaluate staged publication without invalidating the absolute interpreter paths embedded in tool entrypoints.
+The regression test continuously reloads the installed package while the replacement runs and verifies the installed console entrypoint afterward. Existing absolute interpreter paths are rewritten to the stable destination before publication, preserving tool execution without requiring additional shell utilities on `PATH`.
 
 ## Classification
 
-This is a bug rather than an enhancement or question. A targeted reproduction observed an incomplete live environment during a successful replacement, and the current source is consistent with the observed behavior:
+This is a bug rather than an enhancement or question. A targeted reproduction observed an incomplete live environment during a successful replacement, and the fix addresses the confirmed behavior:
 
 - Forced tool installation sets the existing environment aside rather than updating it as an existing usable environment.
-- `InstalledTools::create_environment` removes the current tool environment before recreating it at the same path.
-- The install and upgrade paths contain TODOs to build the environment in the cache and copy it into the tool directory; the install comment specifically identifies absolute interpreter paths in entrypoints as the complication.
+- The replacement branch formerly called `InstalledTools::create_environment`, which removed the current tool environment before recreating it at the same path.
+- Linux and macOS replacements now synchronize in a sibling directory, rewrite generated paths, and use atomic directory exchange at publication.
 - The tools-directory lock is exclusive and serializes uv processes, which explains why concurrent writers need not corrupt each other. It does not provide a read lock to a tool or Python process already using the environment, so it cannot prevent the reported reader-visible gap.
 
 The issue already has the repository's `bug` label. It is not a duplicate: astral-sh/uv#13883 is about coordination among uv subcommands, while astral-sh/uv#5503 was limited to cached environments and was closed by a fix that did not cover installed tools.
@@ -75,3 +96,5 @@ The issue already has the repository's `bug` label. It is not a duplicate: astra
 Searches covered open and closed issues and open, closed, and merged pull requests. Literal queries included `uv tool install --force --reinstall`, `uv tool install` with `atomic`, `reinstall`, `missing`, `partial`, `concurrent`, and `lock`, plus `tool environment`, `site-packages`, and `missing files`. Conceptual queries covered tool upgrades while running, concurrent readers, in-place environment mutation, atomic or relocatable virtual environments, staged construction, symlink publication, and stronger reader/writer locking. Fix-oriented searches included the reporter-cited astral-sh/uv#12751 chain and searches for merged atomic-environment and concurrency fixes.
 
 No closer tool-specific issue or pull request was found. astral-sh/uv#14520 and astral-sh/uv#11134 were inspected as plausible candidates but ruled out: both concern Windows refusing to remove or overwrite executable files that are in use, whereas astral-sh/uv#22006 reports a successful macOS reinstall whose intermediate missing state is visible to readers. astral-sh/uv#5503 and astral-sh/uv#5509 remain the strongest design precedent, and astral-sh/uv#13883 is the closest active but broader concurrency tracker.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/2118

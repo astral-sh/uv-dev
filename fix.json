@@ -1,0 +1,13 @@
+{
+  "outcome": "fixed",
+  "summary": "Forced tool reinstalls now build a complete sibling environment, rewrite generated paths to the stable destination, and atomically exchange directories on Linux and macOS so concurrent readers never observe a missing environment. The regression test now asserts uninterrupted imports and verifies the installed entrypoint after replacement.",
+  "validation": [
+    "Concurrent-import regression test",
+    "Forced tool reinstall integration test",
+    "Ordinary tool reinstall integration test",
+    "Forced reinstall with Python change integration test",
+    "Focused Clippy check",
+    "Rust formatting check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2118"
+}
