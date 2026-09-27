@@ -273,6 +273,31 @@ async fn invalid_ssl_cert_file_warns_default_roots_are_disabled() {
     ");
 }
 
+/// `SSL_CERT_FILE` takes precedence over `--system-certs`, leaving no trusted roots.
+/// This makes `--system-certs` unable to recover from a stale environment override
+/// (astral-sh/uv#22011).
+#[cfg(feature = "test-pypi")]
+#[test]
+fn system_certs_with_invalid_ssl_cert_file() {
+    let context = uv_test::test_context!("3.12");
+
+    uv_snapshot!(context.filters(), context
+        .pip_install()
+        .arg("isodate")
+        .arg("--system-certs")
+        .env(EnvVars::SSL_CERT_FILE, context.temp_dir.join("missing.pem"))
+        .env_remove(EnvVars::SSL_CERT_DIR)
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: Invalid `SSL_CERT_FILE`. Path does not exist: [TEMP_DIR]/missing.pem. No default certificates will be trusted.
+    error: Failed to fetch: `https://pypi.org/simple/isodate/`
+      cause: error sending request for url (https://pypi.org/simple/isodate/)
+      cause: client error (Connect)
+      cause: invalid peer certificate: UnknownIssuer
+    ");
+}
+
 /// Invalid explicit certificate directories disable the default trust roots rather than being ignored.
 #[tokio::test]
 async fn invalid_ssl_cert_dir_warns_default_roots_are_disabled() {
