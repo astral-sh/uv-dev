@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "The reproduction depends on documented certificate-override precedence, while the Windows system-store failure remains unconfirmed. Changing `--system-certs` to ignore standard certificate environment variables would require a product decision and could alter intentional behavior, so the checkout remains unchanged.",
+  "validation": [],
+  "pull_request": null
+}

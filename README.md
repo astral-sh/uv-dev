@@ -66,6 +66,16 @@ The reported symptom is reproducible, but the current evidence does not confirm 
 
 If both override variables are absent and the command still fails on the reported Windows host, `--system-certs` is expected to delegate validation to Windows, and rejection of a chain that Windows itself accepts would be a likely bug. Until that isolated Windows result and the served chain are available, the Windows trust-store explanation remains a hypothesis.
 
+## Fix
+
+Outcome: no production fix was made because the confirmed reproduction exercises documented certificate-source precedence rather than a confirmed Windows verifier defect.
+
+The parent regression in `crates/uv/tests/it/network.rs`, `system_certs_with_invalid_ssl_cert_file`, passed in the debug profile and confirmed that a non-empty missing `SSL_CERT_FILE` replaces the roots selected by `--system-certs`, producing the expected warning and `UnknownIssuer` failure. Updating that snapshot to expect a successful installation failed for exactly the reported reason before any production change.
+
+The relevant implementation has two consistent layers. `NetworkSettings::resolve` loads non-empty `SSL_CERT_FILE` and `SSL_CERT_DIR` values as custom certificates, and `BaseClientBuilder` intentionally selects those custom certificates before system roots. On Unix, `rustls-platform-verifier` also treats these standard variables as the native certificate location. A trial settings-only precedence change therefore did not establish a valid cross-platform fix: after uv ignored the override, the Unix platform verifier still honored it and reported that no system CA certificates could be loaded.
+
+Making an explicit `--system-certs` flag ignore standard certificate environment variables would change the documented uv 0.12 certificate contract and requires a product decision about command-line versus environment precedence. The Windows report does not establish that either variable is present, so that change would also be speculative with respect to the original failure. The trial changes were removed, leaving the checkout unchanged. A production fix should wait for a Windows reproduction with both variables absent, or an explicit decision to redefine certificate-source precedence.
+
 ## Draft response
 
 Thanks for the detailed command comparisons. I could reproduce the same `UnknownIssuer` result with uv 0.12.19 when `SSL_CERT_FILE` is non-empty but unusable. In that configuration, `SSL_CERT_FILE` intentionally replaces the roots selected by `--system-certs`, while `--cert` overrides the environment setting, matching the failure/success pattern in the report.
