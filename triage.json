@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 5503,
+        "title": "Make `CachedEnvironment` robust to concurrent modifications",
+        "url": "https://github.com/astral-sh/uv/issues/5503",
+        "state": "closed",
+        "reason": "Closest historical analogue: it tracks environments being modified while in use, and a maintainer explicitly noted that its staged-and-linked approach might be reusable for tool installs. It did not cover installed tool environments."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5509,
+        "title": "Add relocatable installs to support concurrency-safe cached environments",
+        "url": "https://github.com/astral-sh/uv/pull/5509",
+        "state": "merged",
+        "reason": "Implemented build-elsewhere plus atomic symlink publication for cached environments, demonstrating the relevant pattern without applying it to installed tools."
+      },
+      {
+        "kind": "issue",
+        "number": 13883,
+        "title": "Stronger locking for parallel operations",
+        "url": "https://github.com/astral-sh/uv/issues/13883",
+        "state": "open",
+        "reason": "Broadly covers reader/writer environment races between uv operations, but it is scoped to cooperating uv subcommands; an independently running installed tool cannot participate in those locks."
+      },
+      {
+        "kind": "issue",
+        "number": 12751,
+        "title": "uv sync failure when running concurrently",
+        "url": "https://github.com/astral-sh/uv/issues/12751",
+        "state": "closed",
+        "reason": "Reporter-cited adjacent multi-writer race in project sync. It differs because writer serialization fixed it, whereas this report concerns readers outside uv during tool replacement."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13869,
+        "title": "Lock during `uv sync`, `uv add` and `uv remove` to avoid race conditions",
+        "url": "https://github.com/astral-sh/uv/pull/13869",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#12751 by serializing competing uv writers; it does not provide continuous availability to external readers."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for `uv tool install --force --reinstall`, atomic or partial tool installation, missing files and site-packages, concurrent readers, in-place mutation, locks, relocatable environments, symlink publication, and tool upgrades while running. Fix-oriented searches followed astral-sh/uv#12751 and the cached-environment concurrency work. No tool-specific prior report was found. astral-sh/uv#14520 and astral-sh/uv#11134 were inspected but ruled out because they concern Windows file-lock/removal failures rather than a successful reinstall exposing missing files."
+  },
+  "type": "bug",
+  "type_reason": "Current source confirms the correctness gap: forced installation does not reuse the existing environment, tool-environment creation removes the current directory before recreating it, and the install path contains a TODO to build elsewhere before replacement. The tools lock serializes uv writers but cannot protect external readers. No open issue specifically tracks atomic publication of installed tool environments, so this is not a duplicate.",
+  "summary": "No existing issue specifically covers reader-visible partial state during installed-tool replacement. Prior work made cached environments concurrency-safe through staged construction and atomic linking; broader locking issues address cooperating uv operations rather than independently running tools.",
+  "draft_response": "Thanks for the concrete reproduction. The current tool-install path removes and recreates the installed environment when `--force` is used, while the tools-directory lock only serializes uv operations; it does not protect a process already reading or running from that environment. We have prior art for staged, atomically published cached environments in astral-sh/uv#5503 and astral-sh/uv#5509, but that mechanism was not extended to installed tools. We’ll keep this as a distinct bug. The next step is a focused regression test for reader-visible availability and an evaluation of staged publication that accounts for the absolute interpreter paths embedded in tool entrypoints."
+}
