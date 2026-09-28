@@ -1461,92 +1461,107 @@ async fn python_reinstall_build_name() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn python_reinstall_exact_key() -> anyhow::Result<()> {
-    for exact in [true, false] {
-        let context = uv_test::test_context_with_versions!(&[])
-            .with_managed_python_dirs()
-            .with_http_retries("0");
-        let platform = platform_key_from_env()?;
-        let unnamed_key = format!("cpython-3.13.7-{platform}");
-        let custom_key = format!("cpython-3.13.7+custom-{platform}");
-        let key = unnamed_key.parse::<PythonInstallationKey>()?;
-        for installed_key in [&unnamed_key, &custom_key] {
-            context
-                .temp_dir
-                .child("managed")
-                .child(installed_key)
-                .create_dir_all()?;
-        }
+    for (version, canonical_version, patch, prerelease) in [
+        ("3.13.7", "3.13.7", 7, ""),
+        ("3.13.0rc1", "3.13.0rc1", 0, "rc1"),
+        ("3.13rc1", "3.13.0rc1", 0, "rc1"),
+    ] {
+        for build_name in [None, Some("custom")] {
+            for exact in [true, false] {
+                let context = uv_test::test_context_with_versions!(&[])
+                    .with_managed_python_dirs()
+                    .with_http_retries("0");
+                let platform = platform_key_from_env()?;
+                let unnamed_key = format!("cpython-{canonical_version}-{platform}");
+                let custom_key = format!("cpython-{canonical_version}+custom-{platform}");
+                let key = unnamed_key.parse::<PythonInstallationKey>()?;
+                for installed_key in [&unnamed_key, &custom_key] {
+                    context
+                        .temp_dir
+                        .child("managed")
+                        .child(installed_key)
+                        .create_dir_all()?;
+                }
 
-        let server = MockServer::start().await;
-        let entry = |build_name: Option<&str>, archive: &str| {
-            let mut entry = serde_json::json!({
-                "name": "cpython",
-                "arch": { "family": key.arch().family().to_string(), "variant": null },
-                "os": key.os().to_string(),
-                "libc": key.libc().to_string(),
-                "major": 3,
-                "minor": 13,
-                "patch": 7,
-                "prerelease": "",
-                "url": format!("{}/{archive}", server.uri()),
-                "sha256": null,
-                "variant": null,
-                "build_revision": "20260825"
-            });
-            if let Some(build_name) = build_name {
-                entry["build_name"] = serde_json::json!(build_name);
+                let server = MockServer::start().await;
+                let entry = |build_name: Option<&str>, archive: &str| {
+                    let mut entry = serde_json::json!({
+                        "name": "cpython",
+                        "arch": { "family": key.arch().family().to_string(), "variant": null },
+                        "os": key.os().to_string(),
+                        "libc": key.libc().to_string(),
+                        "major": 3,
+                        "minor": 13,
+                        "patch": patch,
+                        "prerelease": prerelease,
+                        "url": format!("{}/{archive}", server.uri()),
+                        "sha256": null,
+                        "variant": null,
+                        "build_revision": "20260825"
+                    });
+                    if let Some(build_name) = build_name {
+                        entry["build_name"] = serde_json::json!(build_name);
+                    }
+                    entry
+                };
+                let metadata = serde_json::json!({
+                    "version": 1,
+                    "downloads": {
+                        (unnamed_key.clone()): entry(None, "unnamed.tar.gz"),
+                        (custom_key): entry(Some("custom"), "custom.tar.gz")
+                    }
+                });
+                Mock::given(method("GET"))
+                    .and(path("/metadata"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(metadata))
+                    .mount(&server)
+                    .await;
+
+                // Archives return 404 so the request log identifies every selected build.
+                let request = if let Some(build_name) = build_name {
+                    format!("{version}+{build_name}")
+                } else {
+                    version.to_string()
+                };
+                let request = if exact {
+                    format!("cpython-{request}-{platform}")
+                } else {
+                    request
+                };
+                context
+                    .python_install()
+                    .arg("--reinstall")
+                    .arg(request)
+                    .arg("--python-downloads-json-url")
+                    .arg(format!("{}/metadata", server.uri()))
+                    .assert()
+                    .failure();
+
+                let requests = server
+                    .received_requests()
+                    .await
+                    .context("Missing request log")?;
+                let mut request_paths: Vec<_> =
+                    requests.iter().map(|request| request.url.path()).collect();
+                request_paths.sort_unstable();
+                allow_duplicates! {
+                    if build_name.is_some() {
+                        insta::assert_debug_snapshot!(request_paths, @r#"
+                        [
+                            "/custom.tar.gz",
+                            "/metadata",
+                        ]
+                        "#);
+                    } else {
+                        insta::assert_debug_snapshot!(request_paths, @r#"
+                        [
+                            "/metadata",
+                            "/unnamed.tar.gz",
+                        ]
+                        "#);
+                    }
+                }
             }
-            entry
-        };
-        let metadata = serde_json::json!({
-            "version": 1,
-            "downloads": {
-                (unnamed_key.clone()): entry(None, "unnamed.tar.gz"),
-                (custom_key): entry(Some("custom"), "custom.tar.gz")
-            }
-        });
-        Mock::given(method("GET"))
-            .and(path("/metadata"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(metadata))
-            .mount(&server)
-            .await;
-
-        // Archives return 404 so the request log identifies every selected build.
-        context
-            .python_install()
-            .arg("--reinstall")
-            .arg(if exact {
-                unnamed_key.as_str()
-            } else {
-                "3.13.7"
-            })
-            .arg("--python-downloads-json-url")
-            .arg(format!("{}/metadata", server.uri()))
-            .assert()
-            .failure();
-
-        let requests = server
-            .received_requests()
-            .await
-            .context("Missing request log")?;
-        let mut request_paths: Vec<_> = requests.iter().map(|request| request.url.path()).collect();
-        request_paths.sort_unstable();
-        if exact {
-            // A full unnamed key must not select the named installation.
-            insta::assert_debug_snapshot!(request_paths, @r#"
-            [
-                "/metadata",
-                "/unnamed.tar.gz",
-            ]
-            "#);
-        } else {
-            // Unqualified version requests also select only unnamed builds.
-            insta::assert_debug_snapshot!(request_paths, @r#"
-            [
-                "/metadata",
-                "/unnamed.tar.gz",
-            ]
-            "#);
         }
     }
 
