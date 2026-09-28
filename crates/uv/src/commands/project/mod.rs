@@ -1009,6 +1009,7 @@ impl ScriptInterpreter {
                 &environment,
                 EnvironmentKind::Script,
                 python_request.as_ref(),
+                &source,
                 python_preference,
                 python_arch,
                 requires_python
@@ -1145,6 +1146,7 @@ fn check_environment_compatibility(
     environment: &PythonEnvironment,
     kind: EnvironmentKind,
     python_request: Option<&PythonRequest>,
+    source: &PythonRequestSource,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     requires_python: Option<&RequiresPython>,
@@ -1162,7 +1164,16 @@ fn check_environment_compatibility(
         .or_else(|| python_arch.map(|_| &PythonRequest::Any))
         .map(|request| request.with_default_arch(python_arch.map(PythonArchitecture::into_inner)));
     if let Some(request) = python_request {
-        if request.satisfied(environment.interpreter(), cache) {
+        let satisfied = match source {
+            // Compatibility metadata constrains the interpreter, not its publisher's build name.
+            PythonRequestSource::RequiresPython => {
+                request.satisfied_by_interpreter(environment.interpreter(), cache)
+            }
+            PythonRequestSource::UserRequest | PythonRequestSource::DotPythonVersion(_) => {
+                request.satisfied(environment.interpreter(), cache)
+            }
+        };
+        if satisfied {
             debug!("The {kind} environment's Python version satisfies the request: `{request}`");
         } else {
             return Err(EnvironmentIncompatibilityError::PythonRequest(
@@ -1288,10 +1299,9 @@ fn existing_project_environment(
 /// Discover a compatible project environment at `root`.
 fn discover_project_environment(
     root: &Path,
-    python_request: Option<&PythonRequest>,
+    workspace_python: &WorkspacePython,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
-    requires_python: Option<&RequiresPython>,
     policy: ProjectEnvironmentPolicy,
     centralized: bool,
     cache: &Cache,
@@ -1303,10 +1313,14 @@ fn discover_project_environment(
     let compatibility = check_environment_compatibility(
         &environment,
         EnvironmentKind::Project,
-        python_request,
+        workspace_python.python_request.as_ref(),
+        &workspace_python.source,
         python_preference,
         python_arch,
-        requires_python,
+        workspace_python
+            .requirement
+            .as_ref()
+            .map(|requirement| &requirement.requires_python),
         cache,
     );
 
@@ -1615,10 +1629,7 @@ impl ProjectInterpreter {
             source,
             python_request,
             requirement,
-        } = workspace_python;
-        let requires_python = requirement
-            .as_ref()
-            .map(|requirement| &requirement.requires_python);
+        } = &workspace_python;
 
         let environment_selection = workspace.environment_selection(active);
         let centralized = centralized_environments_enabled(&environment_selection, cache);
@@ -1645,10 +1656,9 @@ impl ProjectInterpreter {
                 );
                 if let Some(environment) = discover_project_environment(
                     &root,
-                    python_request.as_ref(),
+                    &workspace_python,
                     python_preference,
                     python_arch,
-                    requires_python,
                     policy,
                     centralized,
                     cache,
@@ -1667,10 +1677,9 @@ impl ProjectInterpreter {
                     .is_ok_and(|target| is_centralized_environment_path(&target, cache)))
                 && let Some(environment) = discover_project_environment(
                     &project_environment_path,
-                    python_request.as_ref(),
+                    &workspace_python,
                     python_preference,
                     python_arch,
-                    requires_python,
                     policy,
                     centralized,
                     cache,
@@ -1703,10 +1712,9 @@ impl ProjectInterpreter {
                 centralized_environment_root(workspace, python.interpreter(), upgradeable, cache);
             if let Some(environment) = discover_project_environment(
                 &root,
-                python_request.as_ref(),
+                &workspace_python,
                 python_preference,
                 python_arch,
-                requires_python,
                 policy,
                 centralized,
                 cache,
@@ -1750,7 +1758,7 @@ impl ProjectInterpreter {
             validate_python_requirement(
                 &interpreter,
                 &requirement.requires_python,
-                &source,
+                source,
                 requirement_source,
             )?;
         }

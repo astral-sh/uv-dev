@@ -2352,8 +2352,8 @@ impl PythonRequest {
 
     /// Check the interpreter's reported properties or executable path against this request.
     ///
-    /// Build names are not checked. Use [`Self::satisfied`]
-    /// when deciding whether to reuse an environment.
+    /// Build names are not checked. Use [`Self::satisfied`] when checking an explicit Python
+    /// selection, including when deciding whether to reuse an environment for that selection.
     pub fn satisfied_by_interpreter(&self, interpreter: &Interpreter, cache: &Cache) -> bool {
         /// Returns `true` if the two paths refer to the same interpreter executable.
         fn is_same_executable(path1: &Path, path2: &Path) -> bool {
