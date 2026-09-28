@@ -289,8 +289,10 @@ impl PythonBuildRevisionPins {
         Ok(Self::Unnamed(revisions))
     }
 
-    /// Return the pin applicable to a candidate's build name and implementation.
-    /// Implementation-specific pins constrain only unnamed builds.
+    /// Return the revision pin for this build, if applicable.
+    ///
+    /// Implementation-specific pins, such as `UV_PYTHON_CPYTHON_BUILD`, do not
+    /// constrain named builds. Named-build pins do not constrain unnamed builds.
     pub(crate) fn get(
         &self,
         implementation: Option<ImplementationName>,
