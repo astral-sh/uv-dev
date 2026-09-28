@@ -151,6 +151,7 @@ fn python_list_build_revision_pins() -> Result<()> {
         ("cpython", None),
         ("cpython", Some("custom")),
         ("pypy", None),
+        ("rustpython", Some("custom")),
     ] {
         for revision in ["9", "10"] {
             let label = format!("{name}-{}-{revision}", build_name.unwrap_or("unnamed"));
@@ -190,6 +191,7 @@ fn python_list_build_revision_pins() -> Result<()> {
     cpython-3.13.7-linux-x86_64-gnu https://example.com/cpython-unnamed-10.tar.gz
     cpython-3.13.7+custom-linux-x86_64-gnu https://example.com/cpython-custom-10.tar.gz
     pypy-3.13.7-linux-x86_64-gnu https://example.com/pypy-unnamed-10.tar.gz
+    rustpython-3.13.7+custom-linux-x86_64-gnu https://example.com/rustpython-custom-10.tar.gz
     ");
 
     // The named-build pin applies to explicit build names, independently of the CPython pin.
@@ -199,6 +201,7 @@ fn python_list_build_revision_pins() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.13.7+custom-linux-x86_64-gnu https://example.com/cpython-custom-9.tar.gz
+    rustpython-3.13.7+custom-linux-x86_64-gnu https://example.com/rustpython-custom-9.tar.gz
     ");
     uv_snapshot!(context.filters(), list().arg("3.13+custom")
         .env(EnvVars::UV_PYTHON_BUILD_REVISION, "missing"), @"

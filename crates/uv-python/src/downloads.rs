@@ -2201,6 +2201,10 @@ async fn read_url(
 mod tests {
     use std::assert_matches;
     use std::collections::HashSet;
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     use anyhow::Result;
 
@@ -2560,6 +2564,136 @@ mod tests {
                     .minor(),
                 14
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn download_build_revision_environment() -> Result<()> {
+        let invalid = OsString::from_vec(vec![0xff]);
+        for build_name in [None, Some("custom")] {
+            let downloads = ManagedPythonDownloadList {
+                downloads: parse_json_downloads(
+                    ["9", "10"]
+                        .map(|revision| {
+                            (
+                                revision.to_string(),
+                                JsonPythonDownload {
+                                    name: "cpython".to_string(),
+                                    arch: JsonArch {
+                                        family: "x86_64".to_string(),
+                                        variant: None,
+                                    },
+                                    os: "linux".to_string(),
+                                    libc: "gnu".to_string(),
+                                    major: 3,
+                                    minor: 13,
+                                    patch: 0,
+                                    prerelease: None,
+                                    url: format!("https://example.com/python-{revision}.tar.gz"),
+                                    sha256: None,
+                                    variant: None,
+                                    build_name: build_name.map(str::to_owned),
+                                    build: Some(revision.to_string()),
+                                },
+                            )
+                        })
+                        .into_iter()
+                        .collect(),
+                ),
+            };
+            let request = PythonDownloadRequest::from_request(&PythonRequest::parse(
+                if build_name.is_some() {
+                    "cpython@3.13+custom"
+                } else {
+                    "cpython@3.13"
+                },
+            ))
+            .expect("Valid download request");
+
+            temp_env::with_vars(
+                [
+                    (EnvVars::UV_PYTHON_BUILD_REVISION, Some(invalid.clone())),
+                    (EnvVars::UV_PYTHON_CPYTHON_BUILD, Some(invalid.clone())),
+                    (EnvVars::UV_PYTHON_PYPY_BUILD, Some(invalid.clone())),
+                ],
+                || -> Result<()> {
+                    assert!(request.clone().fill_build_revision_from_env().is_err());
+                    assert!(
+                        downloads
+                            .iter_matching_with_build_revisions(&request)
+                            .is_err()
+                    );
+
+                    // An explicit revision takes precedence without reading environment pins.
+                    let mut explicit = request.clone();
+                    explicit.build_revision = Some("9".to_string());
+                    let explicit = explicit.fill_build_revision_from_env()?;
+                    assert_eq!(explicit.build_revision.as_deref(), Some("9"));
+                    assert_eq!(
+                        downloads
+                            .iter_matching_with_build_revisions(&explicit)?
+                            .map(ManagedPythonDownload::build_revision)
+                            .collect::<Vec<_>>(),
+                        [Some("9")],
+                    );
+
+                    // Download requests defer environment pins until the implementation is known.
+                    let mut unspecified = request.clone();
+                    unspecified.implementation = None;
+                    assert_eq!(
+                        unspecified.fill_build_revision_from_env()?.build_revision,
+                        None
+                    );
+                    Ok(())
+                },
+            )?;
+
+            temp_env::with_vars(
+                [
+                    (
+                        EnvVars::UV_PYTHON_BUILD_REVISION,
+                        Some(if build_name.is_some() {
+                            OsString::from("9")
+                        } else {
+                            invalid.clone()
+                        }),
+                    ),
+                    (
+                        EnvVars::UV_PYTHON_CPYTHON_BUILD,
+                        Some(if build_name.is_none() {
+                            OsString::from("9")
+                        } else {
+                            invalid.clone()
+                        }),
+                    ),
+                    (EnvVars::UV_PYTHON_PYPY_BUILD, Some(invalid.clone())),
+                ],
+                || -> Result<()> {
+                    let filled = request.clone().fill_build_revision_from_env()?;
+                    assert_eq!(filled.build_revision.as_deref(), Some("9"));
+                    if build_name.is_some() {
+                        assert_eq!(
+                            downloads
+                                .iter_matching_with_build_revisions(&request)?
+                                .map(ManagedPythonDownload::build_revision)
+                                .collect::<Vec<_>>(),
+                            [Some("9")],
+                        );
+                    } else {
+                        // Listing reads all implementation pins, even with an implementation filter.
+                        assert_matches!(
+                            downloads.iter_matching_with_build_revisions(&request).err(),
+                            Some(Error::BuildRevision(BuildRevisionError::NotUnicode(
+                                EnvVars::UV_PYTHON_PYPY_BUILD,
+                                _
+                            )))
+                        );
+                    }
+                    Ok(())
+                },
+            )?;
         }
         Ok(())
     }
