@@ -613,17 +613,6 @@ impl PythonDownloadRequest {
             && self.libc.is_some()
     }
 
-    /// Whether this exact request is satisfied by an installation key.
-    pub fn satisfied_by_exact_key(&self, key: &PythonInstallationKey) -> bool {
-        if !self.is_exact_installation_key() || !self.satisfied_by_key(key) {
-            return false;
-        }
-        self.version
-            .as_ref()
-            .and_then(VersionRequest::build_request)
-            .is_some_and(|build_request| build_request.build_name() == key.build_name())
-    }
-
     /// Whether this request is satisfied by a Python download.
     fn satisfied_by_download(&self, download: &ManagedPythonDownload) -> bool {
         // First check the key
@@ -2504,10 +2493,9 @@ mod tests {
         let custom =
             PythonInstallationKey::from_str("cpython-3.12.0+custom-linux-x86_64-gnu").unwrap();
 
+        assert!(request.is_exact_installation_key());
         assert!(request.satisfied_by_key(&unnamed));
         assert!(!request.satisfied_by_key(&custom));
-        assert!(request.satisfied_by_exact_key(&unnamed));
-        assert!(!request.satisfied_by_exact_key(&custom));
     }
 
     /// Parse a request with `any` in various positions.
