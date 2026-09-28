@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with CPython 3.12.3, installed uv 0.12.13 reproduced the exact reported diff. From the lock in DigitalEarthSweden/digital-earth-sweden-community#167, `uv lock --upgrade-package rioxarray` reordered one of four `resolution-markers` and changed nothing else; the result matched DigitalEarthSweden/digital-earth-sweden-community#168 byte-for-byte. uv 0.12.3 left the same lock unchanged, while uv 0.12.4 produced the exact reorder, confirming a 0.12.4 regression boundary."
+}
