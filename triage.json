@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21951,
+        "title": "Normalize requirement declarations in lockfiles",
+        "url": "https://github.com/astral-sh/uv/pull/21951",
+        "state": "open",
+        "reason": "This pre-existing pull request is the canonical match: it normalizes requirement collections during lock satisfaction, including the missing-`package.metadata` path, and combines same-package declarations and extras before semantic comparison. The reported reproduction has been proposed there as integration-test coverage."
+      },
+      {
+        "kind": "issue",
+        "number": 18553,
+        "title": "uv lock --check --refresh false positive in workspace with [tool.uv.conflicts]",
+        "url": "https://github.com/astral-sh/uv/issues/18553",
+        "state": "closed",
+        "reason": "This is the closest historical symptom involving `uv lock --check` and conflicts, but it required `--refresh` and was traced to persisted fork-marker canonicalization. The current report instead compares reconstructed requirement collections when metadata is omitted."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18612,
+        "title": "Normalize persisted fork markers before lock equality checks",
+        "url": "https://github.com/astral-sh/uv/pull/18612",
+        "state": "merged",
+        "reason": "This merged pull request fixed astral-sh/uv#18553 by canonicalizing fork markers before lock equality checks. Its narrower mechanism distinguishes the current base-plus-extra requirement-normalization defect from a regression of that earlier fix."
+      }
+    ],
+    "search_scope": "Searched the exact debug fragment, `lock-without-metadata`, `uv lock --check`, offline/no-cache failure, conflicts, and base-plus-extra identifiers across open and closed issues and open, closed, and merged pull requests. Conceptual searches covered stale locks, equivalent requirement declarations, requirement and marker normalization, conflict splits, and extra activation. Fix-oriented inspection followed astral-sh/uv#13614/astral-sh/uv#13635, astral-sh/uv#15869/astral-sh/uv#15884, astral-sh/uv#16839/astral-sh/uv#18116, and astral-sh/uv#18553/astral-sh/uv#18612. Exact-message searches found no earlier issue. astral-sh/uv#18553 was the strongest apparent prior issue but has a different confirmed marker-canonicalization cause; astral-sh/uv#19106, astral-sh/uv#18015, and astral-sh/uv#14645 were ruled out because they concern extra activation or package-conflict resolution. Open astral-sh/uv#21951 is the only result changing the exact semantic requirement-comparison path implicated here."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#21951 predates this issue and tracks the same underlying problem closely enough to centralize the work: syntactically different but semantically equivalent requirement collections incorrectly make a lockfile appear stale. Its implementation normalizes same-package declarations, specifiers, markers, and extras in the lock-satisfaction path used when `package.metadata` is absent, directly covering the reported `pkg` plus `pkg[extra]` mismatch. The older astral-sh/uv#18553 fix addressed fork-marker equality, so this is not evidence of that fixed bug regressing.",
+  "summary": "The report is a specific reproduction of the semantic lockfile-requirement comparison already addressed by open astral-sh/uv#21951. Historical astral-sh/uv#18553 and its merged fix astral-sh/uv#18612 are adjacent but involve fork-marker canonicalization, not the metadata-omitted base-plus-extra comparison.",
+  "draft_response": "Thanks for the focused reproduction. This is covered by astral-sh/uv#21951: its lockfile-satisfaction changes normalize semantically equivalent requirement collections before comparison, including the missing-metadata path exercised by `lock-without-metadata`. That covers the `pkg` plus `pkg[extra]` mismatch that makes the unchanged lock appear stale. The exact scenario has also been proposed there as integration-test coverage, so let’s centralize the fix and follow-up on astral-sh/uv#21951. Until that lands in a release, disabling `lock-without-metadata` or avoiding the duplicate base/extra declarations remains the available workaround."
+}
