@@ -5,7 +5,6 @@ use rustc_hash::{FxBuildHasher, FxHashSet};
 use same_file::is_same_file;
 use std::borrow::Cow;
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
 use std::env::consts::EXE_SUFFIX;
 use std::fmt::{self, Debug, Formatter};
 use std::{env, io, iter};
@@ -38,9 +37,7 @@ use crate::managed::{
 };
 #[cfg(windows)]
 use crate::microsoft_store::find_microsoft_store_pythons;
-use crate::python_version::{
-    python_build_revisions_from_env, python_named_build_revision_from_env,
-};
+use crate::python_version::{PythonBuildRevisionPins, python_named_build_revision_from_env};
 use crate::virtualenv::Error as VirtualEnvError;
 use crate::virtualenv::{
     CondaEnvironmentKind, conda_environment_from_env, virtualenv_from_env,
@@ -491,19 +488,8 @@ fn python_executables_from_installed<'a>(
                 );
                 let installations = ManagedPythonInstallations::find_matching_current_platform()?;
 
-                let has_build_name = version
-                    .build_request()
-                    .is_some_and(|build_request| build_request.build_name().is_some());
-                let named_build_revision = if has_build_name {
-                    python_named_build_revision_from_env()?
-                } else {
-                    None
-                };
-                let build_revisions = if has_build_name {
-                    BTreeMap::new()
-                } else {
-                    python_build_revisions_from_env()?
-                };
+                let build_revisions =
+                    PythonBuildRevisionPins::from_env(version.build_request(), None)?;
 
                 // Check that the Python version and platform satisfy the request to avoid
                 // unnecessary interpreter queries later
@@ -519,9 +505,8 @@ fn python_executables_from_installed<'a>(
                             return false;
                         }
 
-                        if let Some(requested_build_revision) = named_build_revision
-                            .as_ref()
-                            .or_else(|| build_revisions.get(&installation.implementation()))
+                        if let Some(requested_build_revision) =
+                            build_revisions.get(Some(installation.implementation()))
                         {
                             let Some(installation_build_revision) = installation.build_revision() else {
                                 debug!(
