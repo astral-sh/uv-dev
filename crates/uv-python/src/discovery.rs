@@ -206,6 +206,13 @@ static DEFAULT_BUILD_REQUEST: PythonBuildRequest =
     PythonBuildRequest::new(PythonVariant::Default, None);
 
 impl PythonBuildRequest {
+    /// Request the Python variant and managed build name of an [`Interpreter`].
+    pub fn from_interpreter(interpreter: &Interpreter) -> Self {
+        let build_name = ManagedPythonInstallation::key_from_interpreter(interpreter)
+            .and_then(|key| key.build_name);
+        Self::new(interpreter.variant(), build_name)
+    }
+
     pub(crate) const fn new(variant: PythonVariant, build_name: Option<PythonBuildName>) -> Self {
         Self {
             variant,

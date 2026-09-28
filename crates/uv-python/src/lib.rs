@@ -4,13 +4,12 @@ use thiserror::Error;
 #[cfg(test)]
 use uv_static::EnvVars;
 
-pub(crate) use crate::discovery::PythonBuildRequest;
 #[cfg(all(test, unix))]
 use crate::discovery::find_python_installations;
 pub use crate::discovery::{
-    EnvironmentPreference, Error as DiscoveryError, PythonBuildName, PythonDownloads,
-    PythonNotFound, PythonPreference, PythonRequest, PythonSource, PythonVariant, VersionRequest,
-    find_all_python_installations,
+    EnvironmentPreference, Error as DiscoveryError, PythonBuildName, PythonBuildRequest,
+    PythonDownloads, PythonNotFound, PythonPreference, PythonRequest, PythonSource, PythonVariant,
+    VersionRequest, find_all_python_installations,
 };
 pub use crate::environment::{InvalidEnvironmentKind, PythonEnvironment};
 pub use crate::implementation::{ImplementationName, LenientImplementationName};
@@ -227,8 +226,8 @@ mod tests {
     use uv_cache::Cache;
 
     use crate::{
-        Interpreter, PythonDownloads, PythonNotFound, PythonRequest, PythonSource, PythonVersion,
-        VersionRequest,
+        Interpreter, PythonBuildRequest, PythonDownloads, PythonNotFound, PythonRequest,
+        PythonSource, PythonVersion, VersionRequest,
         downloads::PythonDownloadRequest,
         find_all_python_installations, find_python_installations,
         implementation::ImplementationName,
@@ -821,6 +820,11 @@ mod tests {
                         ];
 
                         context.run(|| {
+                            assert_eq!(
+                                Some(PythonBuildRequest::from_interpreter(&interpreter)),
+                                PythonRequest::parse(&format!("3.13{variant}{build_name}"))
+                                    .build_request(),
+                            );
                             assert_eq!(
                                 ManagedPythonInstallation::key_from_interpreter(&interpreter)
                                     .map(|key| key.to_string()),

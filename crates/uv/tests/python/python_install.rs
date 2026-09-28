@@ -660,6 +660,45 @@ fn python_init_build_name() -> anyhow::Result<()> {
 
 #[test]
 #[cfg(feature = "test-python-managed")]
+fn python_init_existing_build_name() -> anyhow::Result<()> {
+    let (context, _unnamed, _custom_build_path) = python_named_build_context()?;
+    let context = context.with_filtered_latest_python_versions();
+    let project = context.temp_dir.child("project");
+    project.create_dir_all()?;
+    context
+        .venv()
+        .current_dir(&project)
+        .arg("--python")
+        .arg("3.13+custom")
+        .assert()
+        .success();
+    let marker = project.child(".venv/custom-marker");
+    marker.touch()?;
+
+    uv_snapshot!(context.filters(), context.init().current_dir(&project).arg("--no-workspace"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Initialized project `project`
+    ");
+    insta::assert_snapshot!(context.read("project/.python-version"), @"3.13+custom");
+
+    uv_snapshot!(context.filters(), context.run().current_dir(&project)
+        .arg("--offline")
+        .arg("--quiet")
+        .arg("python")
+        .arg("-c")
+        .arg("import sys; from pathlib import Path; print(Path(sys.base_prefix).resolve().as_posix())"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+    ");
+    marker.assert(predicate::path::exists());
+
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
 fn python_project_build_name_centralized() -> anyhow::Result<()> {
     let (context, _unnamed, custom_build_path) = python_named_build_context()?;
     // Use a minor-version link so the custom environment is upgradeable.
