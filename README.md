@@ -16,6 +16,9 @@ The behavior begins in uv 0.12.4. On the same input, uv 0.12.3 leaves the lockfi
 uv 0.12.4 and the installed uv 0.12.13 produce the exact reported two-line diff. The uv 0.12.4
 release notes associate the relevant initial-fork ordering change with astral-sh/uv#21000.
 
+The checkout now contains a focused fix that keeps fork scheduling for version selection but
+restores the initial fork order before constructing resolver output and serializing the lockfile.
+
 ## Classification
 
 This is a reproducible bug and a regression in uv 0.12.4. A package-specific operation creates
@@ -89,11 +92,47 @@ The installed uv 0.12.13 produced the same result as 0.12.4. No Python 3.14 inte
 needed; universal lock resolution generated the Python-version markers while uv itself ran under
 Python 3.12.3.
 
-Existing test coverage is adjacent but does not cover this failure. The gated integration test
+Before the parent regression test was added, existing coverage was adjacent but did not cover this
+failure. The gated integration test
 `crates/uv/tests/lock/lock.rs::lock_fork_strategy_with_python_environments` verifies scheduling and
 serialized order for initial forks supplied through `environments`. It does not compare a clean
 full resolution with a package-specific resolution seeded from an existing lockfile, so it would
 not detect this command-dependent reorder.
+
+## Fix
+
+Outcome: **fixed**.
+
+The resolver intentionally sorts initial fork states by their lower Python bounds so the selected
+versions honor `fork-strategy` and resolution mode. Completed forks were appended in that processing
+order, and the lock producer retained it when constructing top-level and package-level resolution
+markers. Consequently, rereading an existing lock could change serialization order even when the
+resolution itself was unchanged.
+
+Each completed resolver environment can be matched to the initial fork from which it was narrowed.
+The fix stably restores those initial positions after all forks have been solved and before resolver
+output is constructed. This separates scheduling order from output order: version selection keeps
+the behavior introduced by astral-sh/uv#21000, while existing locks and configured environments
+retain their producer order.
+
+The parent regression test in `crates/uv/tests/lock/lock.rs` now requires an empty lockfile diff
+after `uv lock --upgrade-package project`. The neighboring
+`lock_fork_strategy_with_python_environments` snapshots were corrected to retain configured
+environment order while continuing to assert the strategy-dependent selected versions. The
+conflict-marker round trip in
+`crates/uv/tests/lock_scenarios/lock_conflict.rs::avoids_exponential_lock_file_growth` also passes,
+confirming that combined conflict markers still map to their initial forks.
+
+Successful focused validation:
+
+- `cargo test --package uv --test lock lock_upgrade_package_preserves_resolution_marker_order`
+- `cargo test --package uv --test lock --features test-universal lock_fork_strategy_with_python_environments`
+- `cargo test --package uv --test lock_scenarios --features test-python,test-pypi,test-universal avoids_exponential_lock_file_growth`
+- `cargo +stable clippy --package uv --test lock --features test-universal -- -D warnings`
+- `cargo +stable fmt --all`
+- `git diff --check`
+- The debug uv 0.12.19 binary left the original 220-package reproduction lock unchanged after
+  `uv lock --upgrade-package rioxarray` under CPython 3.14.0.
 
 ## Draft response
 
@@ -105,7 +144,8 @@ Starting from the maintenance lock, `uv lock --upgrade-package rioxarray` with u
 moves the same marker and changes nothing else. uv 0.12.3 leaves that lock unchanged, so this is a
 regression in uv 0.12.4. The uv 0.12.4 release notes point to the initial-fork ordering change in
 astral-sh/uv#21000. The existing fork-strategy integration test does not exercise stability between
-full and package-specific upgrades.
+full and package-specific upgrades. The fix retains scheduling behavior while restoring initial
+fork order before writing resolver output, and the original reproduction no longer changes.
 
 ## Related
 
@@ -132,3 +172,5 @@ The following plausible results are not the same report:
 - astral-sh/uv#9296 involved duplicate `resolution-markers`, not a different order of the same set.
 - astral-sh/uv#16839 involved a false dry-run message without a written lockfile diff.
 - astral-sh/uv#17752 targets astral-sh/uv#17747's compound-disjunction canonicalization failure.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/2121

@@ -1,0 +1,13 @@
+{
+  "outcome": "fixed",
+  "summary": "Targeted upgrades no longer serialize resolution markers in resolver processing order. The resolver now restores each completed fork to its initial lockfile or configured-environment position before producing output, while regression coverage verifies stable lockfiles and unchanged fork-strategy version selection.",
+  "validation": [
+    "Parent targeted-upgrade regression test",
+    "Configured-environment fork-strategy integration test",
+    "Conflict-marker lock round trip",
+    "Original 220-package reproduction with debug uv",
+    "Focused clippy check",
+    "Rust formatting and diff checks"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2121"
+}
