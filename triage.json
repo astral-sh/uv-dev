@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 12203,
+        "title": "Add prototype implementation of wheel variant specification",
+        "url": "https://github.com/astral-sh/uv/pull/12203",
+        "state": "open",
+        "reason": "astral-sh/uv#12203 is the broad prototype this tracker explicitly decomposes. It covers providers, ordering, static configuration, markers, resolution, and locking, while leaving ABI dependencies unimplemented."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22038,
+        "title": "Refactor `.dist-info` reading",
+        "url": "https://github.com/astral-sh/uv/pull/22038",
+        "state": "merged",
+        "reason": "astral-sh/uv#22038 is a direct preparatory split that generalized `.dist-info` reads to support PEP 825 `variants.json` metadata."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22039,
+        "title": "Parse wheel filenames with variant labels",
+        "url": "https://github.com/astral-sh/uv/pull/22039",
+        "state": "open",
+        "reason": "astral-sh/uv#22039 is the first checklist implementation. It introduces the preview feature and parses PEP 825 labels, but deliberately does not select variant wheels yet."
+      },
+      {
+        "kind": "issue",
+        "number": 8639,
+        "title": "Variant metadata prototype ideas",
+        "url": "https://github.com/astral-sh/uv/issues/8639",
+        "state": "open",
+        "reason": "astral-sh/uv#8639 is a historical design precursor covering static input, per-package index metadata, and compatibility ordering. It predates PEP 825 and is not the current implementation tracker."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for wheel variants, PEP 815/825, variant labels and markers, compatibility, static input/providers, provider frontends and properties, ABI dependencies, `UV_VARIANT_LOCK`, `variants.json`, WheelNext, and hardware/backend-aware wheel selection. Fix-oriented review followed astral-sh/uv#12203’s cross-references and found merged preparatory work in astral-sh/uv#22038. Comments and timelines were inspected. astral-sh/uv#16522 and astral-sh/uv#12478 were ruled out as user-facing backend-selection requests, while astral-sh/uv#15402 concerns distributing prototype builds rather than tracking implementation."
+  },
+  "type": "enhancement",
+  "type_reason": "astral-sh/uv#22043 tracks new preview functionality and reports no incorrect existing behavior. Earlier design and use-case issues overlap, but none already serves as the scoped implementation tracker for decomposing astral-sh/uv#12203.",
+  "summary": "The direct implementation chain runs from the broad prototype astral-sh/uv#12203 through merged preparatory work in astral-sh/uv#22038 and the initial scoped implementation in astral-sh/uv#22039. astral-sh/uv#8639 is the closest design precursor.",
+  "draft_response": "Thanks for setting up the tracker. astral-sh/uv#12203 is the broad prototype, while astral-sh/uv#22038 and astral-sh/uv#22039 establish the first preparatory and preview-gated pieces. Selection, compatibility, provider execution, and ABI-dependency work remain outstanding. The opening sentence appears to mean PEP 825 rather than PEP 815. Please keep linking each split pull request here as it is opened so this remains the canonical implementation checklist."
+}
