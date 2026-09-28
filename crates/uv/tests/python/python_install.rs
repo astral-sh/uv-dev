@@ -5455,6 +5455,61 @@ fn python_find_build_name_revision_variables() -> anyhow::Result<()> {
 }
 
 #[test]
+fn python_find_any_build_revision_pins() -> anyhow::Result<()> {
+    let (context, unnamed, custom_build_path) = python_named_build_context()?;
+    let context = context.with_filtered_latest_python_versions();
+    fs_err::write(unnamed.path().join("BUILD"), "111")?;
+    custom_build_path.child("BUILD").write_str("222")?;
+
+    // An implementation pin still constrains an explicitly requested unnamed build.
+    uv_snapshot!(context.filters(), context.python_find().arg("3.13")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "333"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.13 in [PYTHON SOURCES]
+    ");
+
+    // With only a named installation available, wildcard discovery ignores unnamed pins.
+    fs_err::rename(unnamed.path(), context.temp_dir.join("hidden-unnamed"))?;
+    uv_snapshot!(context.filters(), context.python_find().arg("any")
+        .arg("--managed-python")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "111")
+        .env(EnvVars::UV_PYTHON_BUILD_REVISION, "333"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn python_list_installed_build_revision_pins() -> anyhow::Result<()> {
+    let (context, unnamed, custom_build_path) = python_named_build_context()?;
+    let context = context
+        .with_filtered_latest_python_versions()
+        .with_collapsed_whitespace();
+    custom_build_path.child("BUILD").write_str("222")?;
+    fs_err::rename(unnamed.path(), context.temp_dir.join("hidden-unnamed"))?;
+
+    for request in [None, Some("any")] {
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.python_list().args(request)
+                .arg("--only-installed")
+                .arg("--managed-python")
+                .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "111")
+                .env(EnvVars::UV_PYTHON_BUILD_REVISION, "333"), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            cpython-3.13.[LATEST]+custom-[PLATFORM] managed/cpython-3.13.[LATEST]+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+            ");
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn python_find_build_name_revision_exact_name() -> anyhow::Result<()> {
     let (context, _installation) = python_build_name_revision_context("custom_internal")?;
     let context = context.with_filtered_python_sources();

@@ -493,9 +493,10 @@ fn python_executables_from_installed<'a>(
                             return false;
                         }
 
-                        if let Some(requested_build_revision) =
-                            build_revisions.get(Some(installation.implementation()))
-                        {
+                        if let Some(requested_build_revision) = build_revisions.get(
+                            Some(installation.implementation()),
+                            installation.key().build_name(),
+                        ) {
                             let Some(installation_build_revision) = installation.build_revision() else {
                                 debug!(
                                     "Skipping managed installation `{installation}`: a build revision was requested but is not recorded for this installation"
