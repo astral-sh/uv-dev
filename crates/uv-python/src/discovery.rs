@@ -5247,6 +5247,71 @@ mod tests {
     }
 
     #[test]
+    fn version_request_build_request() -> anyhow::Result<()> {
+        assert!(VersionRequest::Any.build_request().is_none());
+        assert_eq!(
+            VersionRequest::Default
+                .build_request()
+                .map(|request| (request.variant, request.build_name().cloned())),
+            Some((PythonVariant::Default, None)),
+        );
+        assert!(
+            PythonRequest::Version(VersionRequest::Any)
+                .build_request()
+                .is_none()
+        );
+        assert_eq!(
+            PythonRequest::Version(VersionRequest::Default).build_request(),
+            Some(PythonBuildRequest::default()),
+        );
+
+        for variant in [
+            PythonVariant::Default,
+            PythonVariant::Debug,
+            PythonVariant::Freethreaded,
+            PythonVariant::FreethreadedDebug,
+            PythonVariant::Gil,
+            PythonVariant::GilDebug,
+        ] {
+            for build_name in [
+                None,
+                Some(PythonBuildName::from_str("custom").expect("Valid build name")),
+            ] {
+                let build = PythonBuildRequest::new(variant, build_name.clone());
+                let prerelease = Prerelease {
+                    kind: PrereleaseKind::Rc,
+                    number: 1,
+                };
+                for request in [
+                    VersionRequest::Major(3, build.clone()),
+                    VersionRequest::MajorMinor(3, 13, build.clone()),
+                    VersionRequest::MajorMinorPatch(3, 13, 7, build.clone()),
+                    VersionRequest::MajorMinorPrerelease(3, 13, prerelease, build.clone()),
+                    VersionRequest::MajorMinorPatchPrerelease(3, 13, 0, prerelease, build.clone()),
+                    VersionRequest::Range(
+                        VersionSpecifiers::from_str(">=3.13,<3.14")?,
+                        build.clone(),
+                    ),
+                ] {
+                    assert_eq!(
+                        request
+                            .build_request()
+                            .map(|request| (request.variant, request.build_name().cloned())),
+                        Some((variant, build_name.clone())),
+                        "request: {request:?}",
+                    );
+                    assert_eq!(
+                        PythonRequest::Version(request.clone()).build_request(),
+                        Some(build.clone()),
+                        "request: {request:?}",
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn python_request_build_request() {
         for (request, build) in [
             ("3+custom", "custom"),
