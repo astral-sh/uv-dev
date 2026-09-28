@@ -2,81 +2,107 @@
 
 Issue: astral-sh/uv#22046
 
-Classification: duplicate
+Classification: bug
 
 ## Summary
 
 With the preview `lock-without-metadata` feature enabled, a dependency group that participates in
-`tool.uv.conflicts` and contains both a base requirement and the same requirement with an extra
-causes `uv lock --check` to reject a lockfile it just created. The freshness check reconstructs two
-requested declarations, such as `requests` and `requests[socks]`, while the metadata-free lock
-represents their combined resolved dependency. The mismatch triggers an unnecessary resolution;
-`--offline` then fails with an empty cache even though the lockfile is current. The report reproduces
-the behavior from uv 0.12.0 through 0.12.19 and identifies disabling the preview feature or removing
-one of the declarations or the conflict as workarounds.
+`tool.uv.conflicts` and contains both a base requirement and the same requirement with an extra can
+cause `uv lock --check` to reject a lockfile it just created. The freshness check reconstructs two
+requested declarations while the metadata-free lock can contain only the declaration with extras.
+That mismatch triggers an unnecessary resolution; `--offline` then fails with an empty cache even
+though the project inputs have not changed.
 
-Open astral-sh/uv#21951 is the canonical match. It predates this report and changes lockfile
-satisfaction to normalize semantically equivalent requirement collections, including the path used
-when `package.metadata` is absent. Its normalizer combines declarations for the same package,
-including their extras, before comparison. The exact base-plus-extra/conflicting-group scenario has
-also been proposed on that pull request as integration-test coverage.
+Merged astral-sh/uv#21951 fixed the original reproduction where the two declarations had no version
+specifiers and added integration coverage for that case. The reporter subsequently provided a
+narrower reproduction showing that the failure remains when the declarations have different
+specifiers, such as `requests<3` and `requests[socks]==2.32.3`. The issue body now describes
+astral-sh/uv#21951 as a partial fix.
 
-## Draft response
+The report covers uv 0.12.0 through 0.12.19 for the original case. The follow-up concerns behavior
+after astral-sh/uv#21951, but the remaining case has not been independently reproduced in this
+handoff. Disabling `lock-without-metadata`, removing the conflict, or avoiding either overlapping
+declaration remains a reported workaround.
 
-Thanks for the focused reproduction. This is covered by astral-sh/uv#21951: its lockfile-satisfaction
-changes normalize semantically equivalent requirement collections before comparison, including the
-missing-metadata path exercised by `lock-without-metadata`. That covers the `pkg` plus `pkg[extra]`
-mismatch that makes the unchanged lock appear stale. The exact scenario has also been proposed there
-as integration-test coverage, so let's centralize the fix and follow-up on astral-sh/uv#21951. Until
-that lands in a release, disabling `lock-without-metadata` or avoiding the duplicate base/extra
-declarations remains the available workaround.
+## Follow-up reproduction
+
+Use the same project scaffolding as the original reproduction, but define the groups and conflict as:
+
+```toml
+[dependency-groups]
+a = ["requests<3", "requests[socks]==2.32.3"]
+b = []
+
+[tool.uv]
+preview-features = ["lock-without-metadata"]
+conflicts = [[{ group = "a" }, { group = "b" }]]
+```
+
+Then run:
+
+```console
+uv lock
+uv cache clean
+uv lock --check --offline -v
+```
+
+The reporter observes the same offline resolution failure. The verbose freshness diagnostic shows
+two requested dependencies—an unconditional base dependency and an extra-bearing dependency guarded
+by the conflict-group marker—but only the extra-bearing dependency in the existing lock:
+
+```text
+DEBUG Resolving despite existing lockfile due to mismatched resolved dependencies for: `mre==0.1.0`
+  Requested: [requests with no extra and marker true, requests[socks] with the group marker]
+  Existing: [requests[socks] with the group marker]
+```
+
+The real project has the same shape through group inclusion: a shared group declares
+`apache-airflow<4`, while a leaf group pins `apache-airflow[celery,...]==3.3.2`.
 
 ## Classification
 
-Duplicate. astral-sh/uv#21951 was opened five days before astral-sh/uv#22046 and tracks the same
-underlying comparison problem: syntactically different but semantically equivalent requirement
-collections cause an existing lock to be treated as stale. The pull request's implementation applies
-`NormalizedRequirements` while validating missing package metadata, and its normalization combines
-same-package declarations, markers, version constraints, and extras. That is the path and semantic
-difference shown by this reproduction, so discussion and regression coverage can be centralized on
-astral-sh/uv#21951.
+Bug. `uv lock --check` should accept an unchanged lockfile produced from the same project inputs.
+Instead, the remaining reproduction causes a false stale-lock decision and can make offline
+validation fail after the cache is cleared.
 
-This is not a regression of the older astral-sh/uv#18553 fix. That issue's false positive required
-`--refresh` and was traced to a mismatch between deserialized and in-memory fork-marker forms.
-Merged astral-sh/uv#18612 canonicalized those fork markers before equality checks. The new report's
-debug output instead identifies mismatched resolved dependencies reconstructed without
+The earlier duplicate classification is no longer accurate. astral-sh/uv#21951 has merged and fixes
+the equal-specifier/base-plus-extra case, but the new reproduction establishes a materially different
+remaining trigger involving overlapping declarations with different specifiers. This is best treated
+as incomplete coverage of the reported correctness problem, not as a duplicate that can be fully
+centralized on the merged pull request.
+
+This is also not evidence that the older astral-sh/uv#18553 fix regressed. That issue's false positive
+required `--refresh` and was traced to a mismatch between deserialized and in-memory fork-marker
+forms. Merged astral-sh/uv#18612 canonicalized those fork markers before equality checks. The current
+diagnostic instead identifies mismatched resolved dependency declarations reconstructed without
 `package.metadata`.
 
 ## Related
 
-- astral-sh/uv#21951 — Open pull request, “Normalize requirement declarations in lockfiles.” This
-  is the canonical match: it normalizes requirement collections during lock satisfaction, including
-  the missing-`package.metadata` path, and combines same-package declarations and extras before
-  semantic comparison. The reported reproduction has been proposed there as integration-test
-  coverage.
+- astral-sh/uv#21951 — Merged pull request, “Normalize requirement declarations in lockfiles.” It
+  normalizes semantically equivalent requirement collections during lock satisfaction and added a
+  test for a conflicting metadata-free group containing an unversioned base requirement plus the
+  same requirement with an extra. The follow-up shows that this was only a partial fix: differing
+  specifiers still produce the stale-lock mismatch.
 - astral-sh/uv#18553 — Closed issue, “uv lock --check --refresh false positive in workspace with
   [tool.uv.conflicts].” This is the closest historical symptom involving `uv lock --check` and
   conflicts, but it required `--refresh` and had a different confirmed cause: fork-marker
-  canonicalization rather than base-plus-extra requirement collections.
+  canonicalization rather than overlapping base-plus-extra requirement declarations.
 - astral-sh/uv#18612 — Merged pull request, “Normalize persisted fork markers before lock equality
   checks.” It fixed astral-sh/uv#18553 by canonicalizing fork markers. Its narrower mechanism shows
   why the current report is not a regression of that prior fix.
 
-## Search evidence
+## Investigation notes
 
-Literal searches covered the exact “mismatched resolved dependencies” debug fragment,
-`lock-without-metadata`, `uv lock --check`, offline/no-cache failure, conflicts, and the base-plus-extra
-identifiers across open and closed issues and open, closed, and merged pull requests. No earlier issue
-matched the exact message or full trigger.
+The remaining comparison differs from the case added to astral-sh/uv#21951 in two important ways:
+the base declaration has a broad bound, and the extra-bearing declaration has a narrower exact pin.
+The verbose output indicates that the unconditional base edge is absent from the lock's reconstructed
+resolved dependencies. The comment establishes the observable mismatch but does not confirm whether
+the defect is in metadata-free serialization, reconstruction, or semantic comparison; that mechanism
+still needs source-level confirmation.
 
-Conceptual searches covered stale or out-of-date locks, semantically equivalent requirement
-declarations, requirement and marker normalization, conflict splits, and extra activation.
-Fix-oriented inspection followed astral-sh/uv#13614 with astral-sh/uv#13635, astral-sh/uv#15869 with
-astral-sh/uv#15884, astral-sh/uv#16839 with astral-sh/uv#18116, and astral-sh/uv#18553 with
-astral-sh/uv#18612. Those reports concern false markers, inferred-conflict flags, or persisted fork
-markers rather than the current metadata-free requirement collection.
-
-The strongest superficially similar candidate was astral-sh/uv#18553, ruled out as the canonical
-discussion because of its distinct confirmed mechanism. astral-sh/uv#19106, astral-sh/uv#18015, and
-astral-sh/uv#14645 were also inspected and ruled out because they concern extra activation during
-sync or package-level conflict resolution, not whether an unchanged lockfile satisfies its inputs.
+Earlier searches covered the exact “mismatched resolved dependencies” diagnostic,
+`lock-without-metadata`, `uv lock --check`, offline/no-cache behavior, conflict splits, requirement
+normalization, and extra activation across issues and pull requests. astral-sh/uv#19106,
+astral-sh/uv#18015, and astral-sh/uv#14645 concern extra activation during sync or package-level
+conflict resolution and remain non-canonical for this stale-lock failure.
