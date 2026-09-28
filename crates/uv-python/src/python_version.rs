@@ -224,7 +224,7 @@ fn python_build_revision_variable(implementation: ImplementationName) -> &'stati
 }
 
 /// Get the build revision number from the environment variable for a given implementation.
-pub(crate) fn python_build_revision_from_env(
+fn python_build_revision_from_env(
     implementation: ImplementationName,
 ) -> Result<Option<String>, BuildRevisionError> {
     let variable = python_build_revision_variable(implementation);
