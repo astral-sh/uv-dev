@@ -5900,7 +5900,7 @@ fn python_install_build_name_latest_revision() -> anyhow::Result<()> {
 }
 
 #[test]
-fn python_install_build_name_revision_unpinned_overlap() -> anyhow::Result<()> {
+fn python_install_build_name_revision_overlapping_downloads() -> anyhow::Result<()> {
     for requests in [
         ["3.13.7+custom", "3.13+custom"],
         ["3.13+custom", "3.13.7+custom"],

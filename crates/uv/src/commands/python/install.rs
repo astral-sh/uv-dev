@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Error, Result};
 use futures::{StreamExt, join};
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexSet;
 use itertools::Itertools;
 use owo_colors::{AnsiColors, OwoColorize};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -531,14 +531,13 @@ async fn perform_install(
         }
     }
 
-    // Find requests that are already satisfied. Retain original requests for diagnostics alongside
-    // effective reinstall requests, which select revision pins for each expanded build identity.
+    // Find requests that are already satisfied.
     let mut changelog = Changelog::default();
     let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall {
         // In the reinstall case, we want to iterate over all matching installations instead of
         // stopping at the first match.
 
-        let mut unsatisfied: Vec<(&InstallRequest, Cow<InstallRequest>)> =
+        let mut unsatisfied: Vec<Cow<InstallRequest>> =
             Vec::with_capacity(existing_installations.len() + requests.len());
 
         for request in &requests {
@@ -551,7 +550,7 @@ async fn perform_install(
                 {
                     changelog.existing.insert(request.download.key().clone());
                 }
-                unsatisfied.push((request, Cow::Borrowed(request)));
+                unsatisfied.push(Cow::Borrowed(request));
                 continue;
             }
 
@@ -573,7 +572,7 @@ async fn perform_install(
 
             if matching_installations.peek().is_none() {
                 debug!("No installation found for request `{}`", request);
-                unsatisfied.push((request, Cow::Borrowed(request)));
+                unsatisfied.push(Cow::Borrowed(request));
             }
 
             for installation in matching_installations {
@@ -582,7 +581,7 @@ async fn perform_install(
                 if let PythonUpgrade::Enabled(_) = upgrade {
                     // An upgrade must reinstall the latest patch, not every matching patch.
                     debug!("Will reinstall the latest patch for `{}`", request);
-                    unsatisfied.push((request, Cow::Borrowed(request)));
+                    unsatisfied.push(Cow::Borrowed(request));
                     break;
                 }
 
@@ -590,7 +589,7 @@ async fn perform_install(
                 match InstallRequest::from_installation(installation, &download_list) {
                     Ok(reinstall_request) => {
                         debug!("Will reinstall `{}`", installation.key());
-                        unsatisfied.push((request, Cow::Owned(reinstall_request)));
+                        unsatisfied.push(Cow::Owned(reinstall_request));
                     }
                     Err(err) => {
                         // This shouldn't really happen, but maybe a new version of uv dropped
@@ -623,7 +622,7 @@ async fn perform_install(
                         installation.build_revision(),
                     ) {
                         debug!("Found `{}` for request `{}`", installation.key(), request);
-                        satisfied.push((request, installation));
+                        satisfied.push(installation);
                     } else {
                         // Key matches but build revision differs - track as existing for reinstall
                         debug!(
@@ -631,18 +630,18 @@ async fn perform_install(
                             installation.key()
                         );
                         changelog.existing.insert(installation.key().clone());
-                        unsatisfied.push((request, Cow::Borrowed(request)));
+                        unsatisfied.push(Cow::Borrowed(request));
                     }
                 } else {
                     debug!("No installation found for request `{}`", request);
-                    unsatisfied.push((request, Cow::Borrowed(request)));
+                    unsatisfied.push(Cow::Borrowed(request));
                 }
             } else if let Some(installation) = existing_installations
                 .iter()
                 .find(|inst| request.matches_installation(inst))
             {
                 debug!("Found `{}` for request `{}`", installation.key(), request);
-                satisfied.push((request, installation));
+                satisfied.push(installation);
             } else {
                 debug!("No installation found for request `{}`", request);
                 // A different revision may already occupy the selected installation key.
@@ -652,47 +651,12 @@ async fn perform_install(
                 {
                     changelog.existing.insert(request.download.key().clone());
                 }
-                unsatisfied.push((request, Cow::Borrowed(request)));
+                unsatisfied.push(Cow::Borrowed(request));
             }
         }
 
         (satisfied, unsatisfied)
     };
-
-    // An installation directory can contain only one build revision. Include satisfied requests
-    // so replacing an installation cannot invalidate another request's revision requirement.
-    let mut requested_revisions = FxHashMap::default();
-    for (request, key, build_revision) in satisfied
-        .iter()
-        .map(|(request, installation)| {
-            (
-                *request,
-                installation.key(),
-                request.download_request.build_revision(),
-            )
-        })
-        .chain(unsatisfied.iter().map(|(request, install_request)| {
-            (
-                *request,
-                install_request.download.key(),
-                install_request.download_request.build_revision(),
-            )
-        }))
-    {
-        let Some(build_revision) = build_revision else {
-            continue;
-        };
-        if let Some((previous_request, previous_build_revision)) =
-            requested_revisions.insert(key, (request, build_revision))
-            && previous_build_revision != build_revision
-        {
-            anyhow::bail!(
-                "Conflicting build revisions for `{key}`: `{}` requires `{previous_build_revision}`, but `{}` requires `{build_revision}`",
-                previous_request.request.to_canonical_string(),
-                request.request.to_canonical_string(),
-            );
-        }
-    }
 
     let downloads_allowed = match python_downloads {
         PythonDownloads::Automatic | PythonDownloads::Manual => true,
@@ -705,7 +669,7 @@ async fn perform_install(
     if let Some(ref sender) = bytecode_compilation_sender {
         for installation in satisfied
             .iter()
-            .map(|(_, installation)| *installation)
+            .copied()
             .unique_by(|installation| installation.key())
         {
             if downloads_allowed && changelog.existing.contains(installation.key()) {
@@ -728,26 +692,18 @@ async fn perform_install(
     }
 
     // Find downloads for the requests
-    let mut downloads = IndexMap::new();
-    for (_, install_request) in &unsatisfied {
-        debug!(
-            "Found download `{}` for request `{}`",
-            install_request.download, install_request,
-        );
-        let (previous_request, download) = downloads
-            .entry(install_request.download.key())
-            .or_insert((install_request.as_ref(), install_request.download));
-        // A pinned revision also satisfies an unpinned request for the same installation.
-        if install_request.download_request.build_revision().is_some()
-            && previous_request.download_request.build_revision().is_none()
-        {
-            *previous_request = install_request.as_ref();
-            *download = install_request.download;
-        }
-    }
-    let downloads = downloads
-        .into_values()
-        .map(|(_, download)| download)
+    let downloads = unsatisfied
+        .iter()
+        .inspect(|request| {
+            debug!(
+                "Found download `{}` for request `{}`",
+                request.download, request,
+            );
+        })
+        .map(|request| request.download)
+        // Revision pins come from the environment for each build identity, including expanded
+        // reinstall requests, so requests for the same key select the same revision.
+        .unique_by(|download| download.key())
         .collect::<Vec<_>>();
 
     // Download and unpack the Python versions concurrently
@@ -828,7 +784,7 @@ async fn perform_install(
     // still refer to the build revision that was replaced.
     let installations: Vec<_> = downloaded
         .iter()
-        .chain(satisfied.iter().map(|(_, installation)| *installation))
+        .chain(satisfied.iter().copied())
         .unique_by(|installation| installation.key())
         .collect();
 
