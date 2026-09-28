@@ -5868,6 +5868,76 @@ fn python_install_build_name_revision_unpinned_overlap() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn python_install_build_name_revision_download_once() -> anyhow::Result<()> {
+    for requests in [
+        ["3.13.7+custom", "3.13+custom"],
+        ["3.13+custom", "3.13.7+custom"],
+    ] {
+        for revision in [None, Some("9")] {
+            let context = uv_test::test_context_with_versions!(&[])
+                .with_managed_python_dirs()
+                .without_python_download_cache()
+                .with_http_retries("0");
+            let platform = platform_key_from_env()?;
+            let key =
+                format!("cpython-3.13.7+custom-{platform}").parse::<PythonInstallationKey>()?;
+            let server = MockServer::start().await;
+            let mut downloads = serde_json::Map::new();
+            for revision in ["9", "10"] {
+                downloads.insert(
+                    revision.to_string(),
+                    serde_json::json!({
+                        "name": "cpython",
+                        "arch": { "family": key.arch().family().to_string(), "variant": null },
+                        "os": key.os().to_string(), "libc": key.libc().to_string(),
+                        "major": 3, "minor": 13, "patch": 7,
+                        "build_name": "custom", "build_revision": revision,
+                        "url": format!("{}/python-{revision}.tar.gz", server.uri())
+                    }),
+                );
+            }
+            let catalog = context.temp_dir.child("downloads.json");
+            catalog.write_str(&serde_json::to_string(&serde_json::json!({
+                "version": 1, "downloads": downloads
+            }))?)?;
+
+            let mut install = context.python_install();
+            install
+                .args(requests)
+                .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, catalog.path());
+            if let Some(revision) = revision {
+                install.env(EnvVars::UV_PYTHON_BUILD_REVISION, revision);
+            }
+            // A failed archive cannot satisfy another request through the download cache.
+            // Both requests must therefore be deduplicated before attempting the download.
+            install.assert().failure();
+
+            let requests = server
+                .received_requests()
+                .await
+                .context("Missing request log")?;
+            let request_paths: Vec<_> = requests.iter().map(|request| request.url.path()).collect();
+            allow_duplicates! {
+                if revision.is_some() {
+                    insta::assert_debug_snapshot!(request_paths, @r#"
+                    [
+                        "/python-9.tar.gz",
+                    ]
+                    "#);
+                } else {
+                    insta::assert_debug_snapshot!(request_paths, @r#"
+                    [
+                        "/python-10.tar.gz",
+                    ]
+                    "#);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn python_install_build_name_revision_compile_bytecode() -> anyhow::Result<()> {
     let (context, installation) = python_build_name_revision_context("custom")?;
