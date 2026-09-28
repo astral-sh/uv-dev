@@ -10,6 +10,8 @@ On Windows 11 25H2 with uv 0.12.19 and Python 3.12.12, both `uv pip install isod
 
 The same command/result pattern is reproducible with uv 0.12.19 when a non-empty `SSL_CERT_FILE` points to an unusable certificate source. Since uv 0.12.0, a non-empty `SSL_CERT_FILE` or `SSL_CERT_DIR` intentionally replaces all default roots, including roots selected by `--system-certs`; `--cert` in turn overrides those environment sources. The report does not state whether either environment variable is set, so this reproduction confirms the reported symptom but does not establish that Windows failed to consult or honor its current-user trusted-root store.
 
+A maintainer has now asked the reporter to check whether `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, unset either variable, and rerun `uv -vv --system-certs pip install isodate`. If that still fails, the requested comparison is `curl.exe -V` and `curl.exe -v https://pypi.org/simple/isodate/`. This should distinguish certificate-source override behavior from a failure also visible through the Windows curl TLS path.
+
 PyCharm is not required to trigger the observed failure. Its inability to supply extra uv arguments is context rather than part of the minimal reproduction.
 
 ## Reproduction
@@ -52,7 +54,7 @@ Installed 1 package
  + isodate==0.7.2
 ```
 
-This Linux fixture cannot exercise Windows `CertGetCertificateChain` or the reporter's served certificate chain. To distinguish the reproduced override behavior from a Windows verifier defect, the reporter should rerun in the same Windows shell after removing `SSL_CERT_FILE` and `SSL_CERT_DIR` for that process and using `--no-config`, then confirm only whether those variables had been set (not their values). If the failure persists, a credential-redacted `uv -vv --no-config --system-certs pip install isodate` log and the server certificate chain are needed, along with confirmation of whether the required root is in the current-user or local-machine certificate store.
+This Linux fixture cannot exercise Windows `CertGetCertificateChain` or the reporter's served certificate chain. To distinguish the reproduced override behavior from a Windows verifier defect, the maintainer requested that the reporter check whether `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, remove either variable for the retry, and run `uv -vv --system-certs pip install isodate`. If that still fails, the reporter should provide `curl.exe -V` and credential-redacted output from `curl.exe -v https://pypi.org/simple/isodate/`. Any reported environment values or logs must have credentials and private proxy details removed before they are added to this handoff.
 
 Existing tests cover the reproduced override semantics:
 
@@ -76,11 +78,15 @@ The relevant implementation has two consistent layers. `NetworkSettings::resolve
 
 Making an explicit `--system-certs` flag ignore standard certificate environment variables would change the documented uv 0.12 certificate contract and requires a product decision about command-line versus environment precedence. The Windows report does not establish that either variable is present, so that change would also be speculative with respect to the original failure. The trial changes were removed, leaving the checkout unchanged. A production fix should wait for a Windows reproduction with both variables absent, or an explicit decision to redefine certificate-source precedence.
 
-## Draft response
+## Current maintainer request
 
-Thanks for the detailed command comparisons. I could reproduce the same `UnknownIssuer` result with uv 0.12.19 when `SSL_CERT_FILE` is non-empty but unusable. In that configuration, `SSL_CERT_FILE` intentionally replaces the roots selected by `--system-certs`, while `--cert` overrides the environment setting, matching the failure/success pattern in the report.
+The maintainer follow-up in astral-sh/uv#22011 asks for this diagnostic sequence:
 
-Could you check whether `SSL_CERT_FILE` or `SSL_CERT_DIR` is present in the failing shell, without sharing either value? Please then remove both variables for that process and retry `uv --no-config --system-certs pip install isodate`. If it still fails, please provide a credential-redacted verbose log and the certificate chain served for `pypi.org`, and confirm whether the required root is installed for the current user or the local machine. That will determine whether this is the expected override behavior or a Windows system-verifier problem.
+1. Check whether `SSL_CERT_FILE` or `SSL_CERT_DIR` is set and identify the configured certificate source, with any sensitive path or proxy information redacted.
+2. If either is set, unset it and run `uv -vv --system-certs pip install isodate`.
+3. If uv still fails, provide `curl.exe -V` and credential-redacted output from `curl.exe -v https://pypi.org/simple/isodate/`.
+
+No reporter response to these questions is present yet. The classification should remain configuration-dependent until those results show whether the failure survives removal of the certificate overrides.
 
 ## Related
 
