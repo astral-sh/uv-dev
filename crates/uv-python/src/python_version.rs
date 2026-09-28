@@ -12,6 +12,7 @@ use uv_pep440::Version;
 use uv_pep508::{MarkerEnvironment, StringVersion};
 use uv_static::EnvVars;
 
+use crate::PythonBuildRequest;
 use crate::implementation::ImplementationName;
 
 #[derive(Error, Debug)]
@@ -253,26 +254,108 @@ fn build_revision_from_env(variable: &'static str) -> Result<Option<String>, Bui
     Ok(Some(trimmed.to_string()))
 }
 
-/// Get the build revision numbers for all Python implementations.
-pub(crate) fn python_build_revisions_from_env()
--> Result<BTreeMap<ImplementationName, String>, BuildRevisionError> {
-    let mut revisions = BTreeMap::new();
-    for implementation in ImplementationName::iter_all() {
-        let Some(revision) = python_build_revision_from_env(implementation)? else {
-            continue;
-        };
-        revisions.insert(implementation, revision);
+/// Environment revision pins for either named builds or unnamed implementations.
+#[derive(Debug)]
+pub(crate) enum PythonBuildRevisionPins {
+    Named(Option<String>),
+    Unnamed(BTreeMap<ImplementationName, String>),
+}
+
+impl PythonBuildRevisionPins {
+    /// Read only the variables applicable to the request. Without an implementation, read pins
+    /// for every implementation so discovery and listing remain implementation-independent.
+    pub(crate) fn from_env(
+        build_request: Option<&PythonBuildRequest>,
+        implementation: Option<ImplementationName>,
+    ) -> Result<Self, BuildRevisionError> {
+        if build_request.is_some_and(|request| request.build_name().is_some()) {
+            return Ok(Self::Named(python_named_build_revision_from_env()?));
+        }
+        let mut revisions = BTreeMap::new();
+        match implementation {
+            Some(implementation) => {
+                if let Some(revision) = python_build_revision_from_env(implementation)? {
+                    revisions.insert(implementation, revision);
+                }
+            }
+            None => {
+                for implementation in ImplementationName::iter_all() {
+                    if let Some(revision) = python_build_revision_from_env(implementation)? {
+                        revisions.insert(implementation, revision);
+                    }
+                }
+            }
+        }
+        Ok(Self::Unnamed(revisions))
     }
-    Ok(revisions)
+
+    pub(crate) fn get(&self, implementation: Option<ImplementationName>) -> Option<&str> {
+        match self {
+            Self::Named(revision) => revision.as_deref(),
+            Self::Unnamed(revisions) => implementation
+                .and_then(|implementation| revisions.get(&implementation))
+                .map(String::as_str),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
     use std::str::FromStr;
 
     use uv_pep440::{Prerelease, PrereleaseKind, Version};
+    #[cfg(unix)]
+    use uv_static::EnvVars;
 
+    #[cfg(unix)]
+    use super::{BuildRevisionError, PythonBuildRevisionPins};
     use crate::PythonVersion;
+    #[cfg(unix)]
+    use crate::{ImplementationName, PythonBuildRequest};
+
+    #[test]
+    #[cfg(unix)]
+    fn build_revision_pins_ignore_unrelated_variables() -> Result<(), BuildRevisionError> {
+        let invalid = OsString::from_vec(vec![0xff]);
+        let build_request = PythonBuildRequest::from_str("custom").expect("Valid build name");
+        temp_env::with_vars(
+            [
+                (EnvVars::UV_PYTHON_BUILD_REVISION, Some(invalid.clone())),
+                (
+                    EnvVars::UV_PYTHON_CPYTHON_BUILD,
+                    Some(OsString::from("cpython")),
+                ),
+                (EnvVars::UV_PYTHON_PYPY_BUILD, Some(invalid.clone())),
+            ],
+            || -> Result<(), BuildRevisionError> {
+                let pins =
+                    PythonBuildRevisionPins::from_env(None, Some(ImplementationName::CPython))?;
+                assert_eq!(pins.get(Some(ImplementationName::CPython)), Some("cpython"));
+                assert!(PythonBuildRevisionPins::from_env(None, None).is_err());
+                assert!(PythonBuildRevisionPins::from_env(Some(&build_request), None).is_err());
+                Ok(())
+            },
+        )?;
+        temp_env::with_vars(
+            [
+                (
+                    EnvVars::UV_PYTHON_BUILD_REVISION,
+                    Some(OsString::from("named")),
+                ),
+                (EnvVars::UV_PYTHON_CPYTHON_BUILD, Some(invalid)),
+            ],
+            || -> Result<(), BuildRevisionError> {
+                let pins = PythonBuildRevisionPins::from_env(Some(&build_request), None)?;
+                assert_eq!(pins.get(Some(ImplementationName::CPython)), Some("named"));
+                assert_eq!(pins.get(None), Some("named"));
+                Ok(())
+            },
+        )
+    }
 
     #[test]
     fn python_markers() {

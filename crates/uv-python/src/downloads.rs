@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -46,10 +46,7 @@ use crate::implementation::{
 };
 use crate::installation::{PythonInstallation, PythonInstallationKey};
 use crate::managed::{ManagedPythonInstallation, compare_build_revisions};
-use crate::python_version::{
-    BuildRevisionError, python_build_revision_from_env, python_build_revisions_from_env,
-    python_named_build_revision_from_env,
-};
+use crate::python_version::{BuildRevisionError, PythonBuildRevisionPins};
 use crate::{
     Interpreter, PythonBuildName, PythonBuildRequest, PythonRequest, PythonVariant, PythonVersion,
     VersionRequest,
@@ -446,16 +443,14 @@ impl PythonDownloadRequest {
             return Ok(self);
         };
 
-        self.build_revision = if self
-            .version
-            .as_ref()
-            .and_then(VersionRequest::build_request)
-            .is_some_and(|build_request| build_request.build_name().is_some())
-        {
-            python_named_build_revision_from_env()?
-        } else {
-            python_build_revision_from_env(implementation)?
-        };
+        self.build_revision = PythonBuildRevisionPins::from_env(
+            self.version
+                .as_ref()
+                .and_then(VersionRequest::build_request),
+            Some(implementation),
+        )?
+        .get(Some(implementation))
+        .map(str::to_owned);
         Ok(self)
     }
 
@@ -1165,32 +1160,26 @@ impl ManagedPythonDownloadList {
         &self,
         request: &PythonDownloadRequest,
     ) -> Result<impl Iterator<Item = &ManagedPythonDownload>, Error> {
-        let explicit_build_name = request
-            .version
-            .as_ref()
-            .and_then(VersionRequest::build_request)
-            .is_some_and(|build_request| build_request.build_name().is_some());
-        let named_build_revision = if request.build_revision.is_none() && explicit_build_name {
-            python_named_build_revision_from_env()?
+        let build_revisions = if request.build_revision.is_none() {
+            Some(PythonBuildRevisionPins::from_env(
+                request
+                    .version
+                    .as_ref()
+                    .and_then(VersionRequest::build_request),
+                None,
+            )?)
         } else {
             None
         };
-        let build_revisions = if request.build_revision.is_none() && !explicit_build_name {
-            python_build_revisions_from_env()?
-        } else {
-            BTreeMap::new()
-        };
         Ok(self.iter_matching(request).filter(move |download| {
-            let build_revision = named_build_revision.as_ref().or_else(|| {
-                match download.key().implementation().as_ref() {
-                    LenientImplementationName::Known(implementation) => {
-                        build_revisions.get(implementation)
-                    }
+            let build_revision = build_revisions.as_ref().and_then(|revisions| {
+                let implementation = match download.key().implementation().as_ref() {
+                    LenientImplementationName::Known(implementation) => Some(*implementation),
                     LenientImplementationName::Unknown(_) => None,
-                }
+                };
+                revisions.get(implementation)
             });
-            build_revision
-                .is_none_or(|revision| download.build_revision() == Some(revision.as_str()))
+            build_revision.is_none_or(|revision| download.build_revision() == Some(revision))
         }))
     }
 
