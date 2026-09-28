@@ -2,11 +2,13 @@
 
 Issue: astral-sh/uv#22006
 
-Classification: bug
+Classification: enhancement
 
 ## Summary
 
-The reported reader-visible interruption is reproducible. With an isolated tool directory and a controlled local wheel, an external process repeatedly importing from the installed tool environment observed a failed import during `uv tool install --force --reinstall`, while uv 0.12.13 completed successfully. A faster observer targeting a module installed late in the wheel saw 34 failures over about 0.87 seconds during another successful reinstall. The fix builds replacements outside the live environment and atomically publishes the completed directory on Linux and macOS.
+The reported reader-visible interruption is reproducible. With an isolated tool directory and a controlled local wheel, an external process repeatedly importing from the installed tool environment observed a failed import during `uv tool install --force --reinstall`, while uv 0.12.13 completed successfully. A faster observer targeting a module installed late in the wheel saw 34 failures over about 0.87 seconds during another successful reinstall.
+
+A maintainer has classified uninterrupted tool availability during an update as a feature request rather than an existing correctness guarantee. They also identified an important scope limitation in the proposed atomic publication approach: it can ensure that new path lookups see a complete old or new environment, but a process that already holds references to directories in the old environment may still encounter missing files after that old environment is deleted. The implementation in astral-sh/uv-dev#2118 therefore addresses the supplied observer reproduction on Linux and macOS but does not by itself establish that every already-running tool remains functional throughout replacement and cleanup.
 
 No existing issue specifically tracks atomic publication of installed tool environments. The closest historical work is astral-sh/uv#5503 and astral-sh/uv#5509, which made cached environments safe to recreate while in use by constructing them elsewhere and publishing them through a symlink. astral-sh/uv#13883 tracks stronger locking between uv operations, but external processes already running from a tool environment cannot participate in uv's locks.
 
@@ -45,15 +47,17 @@ The 10 Hz observer recorded one failed plain-package import during the 1.72-seco
 
 Existing integration coverage does not test concurrent reader availability. `crates/uv/tests/tool/tool_install.rs`, test `tool_install_force`, verifies that a forced reinstall succeeds and removes a marker from the old environment, and separately verifies `--reinstall`; it does not run a reader while the environment is replaced or assert atomic publication.
 
-## Fix
+## Proposed fix and scope
 
-Outcome: **fixed** for the reported macOS behavior and the reproduced Linux behavior.
+Outcome: **the supplied path-based reader reproduction is fixed by the proposed implementation** on Linux and macOS; availability for all already-running processes remains unresolved.
 
 The root cause was confirmed in the forced-install branch: setting `--force` discards the existing environment selection, and `InstalledTools::create_environment` removed the installed directory before `sync_environment` populated its replacement. The tools-directory lock serializes uv writers but cannot prevent external readers from resolving the stable tool path during that interval.
 
-On Linux and macOS, forced replacement of a valid installed tool now creates and synchronizes a staged virtual environment in a sibling directory. Generated virtual-environment paths are rewritten from the staging location to the stable tool destination, then a new `uv_fs::exchange_paths` primitive uses the platform's atomic rename-exchange operation to publish the completed directory without making the destination disappear. Existing executable links remain in place during preparation and publication; after finalization, only entrypoints absent from the new receipt are removed. New installs and platforms without atomic directory exchange retain their prior path.
+In astral-sh/uv-dev#2118, forced replacement of a valid installed tool on Linux and macOS creates and synchronizes a staged virtual environment in a sibling directory. Generated virtual-environment paths are rewritten from the staging location to the stable tool destination, then a new `uv_fs::exchange_paths` primitive uses the platform's atomic rename-exchange operation to publish the completed directory without making the destination disappear. Existing executable links remain in place during preparation and publication; after finalization, only entrypoints absent from the new receipt are removed. New installs and platforms without atomic directory exchange retain their prior path.
 
-The parent integration test `tool_install_force_reinstall_preserves_concurrent_import` now asserts that a continuously reloaded import never disappears during `--force --reinstall`, and it runs the installed console entrypoint after replacement. The neighboring `tool_install_force` test caught and prevented a relocatable-script approach that would have required `dirname` and `realpath` on `PATH`; the final implementation retains the existing absolute console-script form.
+This publication strategy protects readers that resolve the stable path after the exchange: they see either the complete old tree or the complete new tree. Per the maintainer's follow-up, it does not necessarily protect a long-running process that retained a directory reference into the old tree and opens additional files after cleanup deletes that tree. Investigation should therefore distinguish fresh readers like the current regression test from already-running processes, and define the intended lifetime or reclamation policy for replaced environments before treating uninterrupted execution as fully solved.
+
+The proposed integration test `tool_install_force_reinstall_preserves_concurrent_import` asserts that a continuously reloaded import never disappears during `--force --reinstall`, and it runs the installed console entrypoint after replacement. The neighboring `tool_install_force` test caught and prevented a relocatable-script approach that would have required `dirname` and `realpath` on `PATH`; the proposed implementation retains the existing absolute console-script form.
 
 Focused validation passed:
 
@@ -66,22 +70,19 @@ Focused validation passed:
 
 The pinned 1.98.1 toolchain did not have rustfmt or clippy installed and its read-only installation could not be extended, so the available stable rustfmt and clippy components were used. `cargo-xwin` was unavailable, but the Windows path remains behind the existing non-atomic implementation and the new staging and exchange code is target-gated to Linux and macOS.
 
-## Draft response
-
-Thanks for the concrete report. We reproduced a reader-visible failed import during a successful `uv tool install --force --reinstall` using uv 0.12.13 on Linux. Forced replacements now build a complete environment beside the installed tool and atomically exchange it into the stable path on Linux and macOS, so concurrent readers continue to see either the old complete environment or the new complete environment.
-
-The regression test continuously reloads the installed package while the replacement runs and verifies the installed console entrypoint afterward. Existing absolute interpreter paths are rewritten to the stable destination before publication, preserving tool execution without requiring additional shell utilities on `PATH`.
-
 ## Classification
 
-This is a bug rather than an enhancement or question. A targeted reproduction observed an incomplete live environment during a successful replacement, and the fix addresses the confirmed behavior:
+This is classified as an enhancement. A targeted reproduction confirms the reader-visible interruption, but a maintainer stated that continuous tool availability during an update is not necessarily an existing expectation and explicitly marked the issue as a feature request. That project decision supersedes the initial bug triage.
+
+The source and reproduction still establish the current mechanism and the narrower benefit of atomic publication:
 
 - Forced tool installation sets the existing environment aside rather than updating it as an existing usable environment.
 - The replacement branch formerly called `InstalledTools::create_environment`, which removed the current tool environment before recreating it at the same path.
-- Linux and macOS replacements now synchronize in a sibling directory, rewrite generated paths, and use atomic directory exchange at publication.
+- The proposed Linux and macOS implementation synchronizes in a sibling directory, rewrites generated paths, and uses atomic directory exchange at publication.
 - The tools-directory lock is exclusive and serializes uv processes, which explains why concurrent writers need not corrupt each other. It does not provide a read lock to a tool or Python process already using the environment, so it cannot prevent the reported reader-visible gap.
+- Atomic exchange protects new resolution of the stable path, but it does not guarantee later file access through references an existing process retained into the old environment once that environment is deleted.
 
-The issue already has the repository's `bug` label. It is not a duplicate: astral-sh/uv#13883 is about coordination among uv subcommands, while astral-sh/uv#5503 was limited to cached environments and was closed by a fix that did not cover installed tools.
+It is not a duplicate: astral-sh/uv#13883 is about coordination among uv subcommands, while astral-sh/uv#5503 was limited to cached environments and was closed by a fix that did not cover installed tools.
 
 ## Related
 
@@ -97,4 +98,4 @@ Searches covered open and closed issues and open, closed, and merged pull reques
 
 No closer tool-specific issue or pull request was found. astral-sh/uv#14520 and astral-sh/uv#11134 were inspected as plausible candidates but ruled out: both concern Windows refusing to remove or overwrite executable files that are in use, whereas astral-sh/uv#22006 reports a successful macOS reinstall whose intermediate missing state is visible to readers. astral-sh/uv#5503 and astral-sh/uv#5509 remain the strongest design precedent, and astral-sh/uv#13883 is the closest active but broader concurrency tracker.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/2118
+Proposed implementation: astral-sh/uv-dev#2118
