@@ -2,21 +2,21 @@
 
 Issue: astral-sh/uv#22011
 
-Classification: configuration-dependent behavior reproduced; Windows system-certificate bug unconfirmed
+Classification: resolved configuration issue; optional warning enhancement suggested
 
 ## Summary
 
 On Windows 11 25H2 with uv 0.12.19 and Python 3.12.12, both `uv pip install isodate` and `uv add isodate` reportedly fail while fetching `https://pypi.org/simple/isodate/` with `invalid peer certificate: UnknownIssuer`. `--system-certs` and its deprecated alias `--native-tls` do not change the result. Exporting GlobalSign certificates from the current user's Windows trusted-root store to a PEM bundle and passing it via `uv pip install --cert` succeeds.
 
-The same command/result pattern is reproducible with uv 0.12.19 when a non-empty `SSL_CERT_FILE` points to an unusable certificate source. Since uv 0.12.0, a non-empty `SSL_CERT_FILE` or `SSL_CERT_DIR` intentionally replaces all default roots, including roots selected by `--system-certs`; `--cert` in turn overrides those environment sources. The report does not state whether either environment variable is set, so this reproduction confirms the reported symptom but does not establish that Windows failed to consult or honor its current-user trusted-root store.
+The reporter has now confirmed that `SSL_CERT_FILE` was set. Since uv 0.12.0, a non-empty `SSL_CERT_FILE` or `SSL_CERT_DIR` intentionally replaces all default roots, including roots selected by `--system-certs`; `--cert` in turn overrides those environment sources. This precedence exactly explains why system-certificate mode failed while the explicit GlobalSign bundle succeeded. The report therefore does not demonstrate a Windows trusted-root or platform-verifier defect.
 
-A maintainer has now asked the reporter to check whether `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, unset either variable, and rerun `uv -vv --system-certs pip install isodate`. If that still fails, the requested comparison is `curl.exe -V` and `curl.exe -v https://pypi.org/simple/isodate/`. This should distinguish certificate-source override behavior from a failure also visible through the Windows curl TLS path.
+The reporter suggested that uv warn when `SSL_CERT_FILE` overrides `--system-certs`, for example by identifying the precedence conflict. This is a usability enhancement suggestion, not a maintainer decision or evidence that the current precedence is incorrect.
 
 PyCharm is not required to trigger the observed failure. Its inability to supply extra uv arguments is context rather than part of the minimal reproduction.
 
 ## Reproduction
 
-Outcome: reproducible under an evidence-backed certificate-override configuration; the Windows-specific cause needs confirmation.
+Outcome: reproduced and explained by the reporter's confirmed certificate-override configuration.
 
 All files, targets, tools, and caches were isolated under `$RUNNER_TEMP`. The runner was Linux x86_64 with Python 3.12.3. The uv executable on `PATH` was 0.12.13; it was used to install the exact reported uv 0.12.19 x86_64 Linux wheel into the temporary directory for the version-specific checks.
 
@@ -54,7 +54,7 @@ Installed 1 package
  + isodate==0.7.2
 ```
 
-This Linux fixture cannot exercise Windows `CertGetCertificateChain` or the reporter's served certificate chain. To distinguish the reproduced override behavior from a Windows verifier defect, the maintainer requested that the reporter check whether `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, remove either variable for the retry, and run `uv -vv --system-certs pip install isodate`. If that still fails, the reporter should provide `curl.exe -V` and credential-redacted output from `curl.exe -v https://pypi.org/simple/isodate/`. Any reported environment values or logs must have credentials and private proxy details removed before they are added to this handoff.
+The Linux fixture could not exercise Windows `CertGetCertificateChain`, but that limitation is no longer material to this report: the reporter confirmed the same `SSL_CERT_FILE` condition used by the reproduction. No additional certificate-chain or `curl.exe` diagnostics are needed unless the failure can also be reproduced after removing both certificate override variables.
 
 Existing tests cover the reproduced override semantics:
 
@@ -64,29 +64,25 @@ Existing tests cover the reproduced override semantics:
 
 ## Classification
 
-The reported symptom is reproducible, but the current evidence does not confirm a uv defect. Under the reproduced configuration, the result is intentional: non-empty certificate environment overrides replace system roots even if the configured path is missing or contains no usable certificates. This behavior shipped in uv 0.12.0 and is documented in that release's breaking changes.
+The reported symptom is reproducible and is explained by documented configuration precedence, not a uv correctness defect. The reporter confirmed that `SSL_CERT_FILE` was set. Non-empty certificate environment overrides replace system roots even if the configured source is missing or does not contain the roots needed for the request. This behavior shipped in uv 0.12.0 and is documented in the certificate documentation and that release's breaking changes.
 
-If both override variables are absent and the command still fails on the reported Windows host, `--system-certs` is expected to delegate validation to Windows, and rejection of a chain that Windows itself accepts would be a likely bug. Until that isolated Windows result and the served chain are available, the Windows trust-store explanation remains a hypothesis.
+The reporter's proposed warning when an environment certificate source overrides `--system-certs` would be an enhancement to diagnostics. There is no maintainer decision accepting that behavior change, and it should be evaluated separately from the resolved installation failure.
 
 ## Fix
 
-Outcome: no production fix was made because the confirmed reproduction exercises documented certificate-source precedence rather than a confirmed Windows verifier defect.
+Outcome: no production fix was made because the confirmed reproduction and reporter follow-up establish documented certificate-source precedence rather than a Windows verifier defect.
 
 The parent regression in `crates/uv/tests/it/network.rs`, `system_certs_with_invalid_ssl_cert_file`, passed in the debug profile and confirmed that a non-empty missing `SSL_CERT_FILE` replaces the roots selected by `--system-certs`, producing the expected warning and `UnknownIssuer` failure. Updating that snapshot to expect a successful installation failed for exactly the reported reason before any production change.
 
 The relevant implementation has two consistent layers. `NetworkSettings::resolve` loads non-empty `SSL_CERT_FILE` and `SSL_CERT_DIR` values as custom certificates, and `BaseClientBuilder` intentionally selects those custom certificates before system roots. On Unix, `rustls-platform-verifier` also treats these standard variables as the native certificate location. A trial settings-only precedence change therefore did not establish a valid cross-platform fix: after uv ignored the override, the Unix platform verifier still honored it and reported that no system CA certificates could be loaded.
 
-Making an explicit `--system-certs` flag ignore standard certificate environment variables would change the documented uv 0.12 certificate contract and requires a product decision about command-line versus environment precedence. The Windows report does not establish that either variable is present, so that change would also be speculative with respect to the original failure. The trial changes were removed, leaving the checkout unchanged. A production fix should wait for a Windows reproduction with both variables absent, or an explicit decision to redefine certificate-source precedence.
+Making an explicit `--system-certs` flag ignore standard certificate environment variables would change the documented uv 0.12 certificate contract and requires a product decision about command-line versus environment precedence. The trial changes were removed, leaving the checkout unchanged. A narrower warning that explains which certificate source won could improve diagnostics without changing precedence, but the reporter's suggestion has not been accepted or designed by maintainers.
 
-## Current maintainer request
+## Resolution and possible follow-up
 
-The maintainer follow-up in astral-sh/uv#22011 asks for this diagnostic sequence:
+The reporter confirmed in astral-sh/uv#22011 that `SSL_CERT_FILE` was set and took precedence over `--system-certs`, matching both the documentation and the isolated reproduction. This resolves the original `UnknownIssuer` report as a configuration issue and rules out the suspected Windows system-certificate regression for this case.
 
-1. Check whether `SSL_CERT_FILE` or `SSL_CERT_DIR` is set and identify the configured certificate source, with any sensitive path or proxy information redacted.
-2. If either is set, unset it and run `uv -vv --system-certs pip install isodate`.
-3. If uv still fails, provide `curl.exe -V` and credential-redacted output from `curl.exe -v https://pypi.org/simple/isodate/`.
-
-No reporter response to these questions is present yet. The classification should remain configuration-dependent until those results show whether the failure survives removal of the certificate overrides.
+The only proposed follow-up is the reporter's suggestion to emit a warning when `SSL_CERT_FILE` overrides `--system-certs`. No maintainer has yet classified or accepted that suggestion as an enhancement.
 
 ## Related
 
