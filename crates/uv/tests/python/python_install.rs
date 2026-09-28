@@ -751,6 +751,27 @@ fn python_project_build_name_centralized() -> anyhow::Result<()> {
         .child("custom-marker")
         .assert(predicate::path::exists());
 
+    // Project compatibility metadata does not select a build name.
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .arg("python")
+        .arg("-c")
+        .arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_eq!(custom_environment, fs_err::canonicalize(&context.venv)?);
+    context
+        .venv
+        .child("custom-marker")
+        .assert(predicate::path::exists());
+
     // An unqualified request selects the unnamed build instead of the custom environment.
     uv_snapshot!(context.filters(), context.run()
         .arg("--preview-features")
@@ -861,6 +882,39 @@ async fn python_project_build_name_catalog() -> anyhow::Result<()> {
         .child(".venv/custom-marker")
         .assert(predicate::path::exists());
 
+    // Without an explicit selection, project compatibility metadata accepts a named build.
+    uv_snapshot!(context.filters(), context.run()
+        .current_dir(&project)
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--offline")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, "missing-catalog.json")
+        .arg("python").arg("-c").arg(base_prefix), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::exists());
+
+    uv_snapshot!(context.filters(), context.sync()
+        .current_dir(&project)
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--offline")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, "missing-catalog.json"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    project
+        .child(".venv/custom-marker")
+        .assert(predicate::path::exists());
+
     // A wildcard request reuses the named build on repeated runs, even without a catalog.
     for _ in 0..2 {
         allow_duplicates! {
@@ -935,6 +989,36 @@ async fn python_project_build_name_catalog() -> anyhow::Result<()> {
         .child(".venv/custom-marker")
         .assert(predicate::path::missing());
 
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn python_script_build_name_requires_python() -> anyhow::Result<()> {
+    let (context, _unnamed, _custom_build_path) = python_named_build_context()?;
+    let context = context.with_filtered_latest_python_versions();
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.13"
+        # dependencies = []
+        # ///
+        import os, sys
+        print(os.path.realpath(sys.base_prefix))
+    "#})?;
+    context
+        .run()
+        .arg("--python")
+        .arg("3.13+custom")
+        .arg("script.py")
+        .assert()
+        .success();
+
+    // Script compatibility metadata does not select a build name either.
+    uv_snapshot!(context.filters(), context.run().arg("--offline").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]
+    ");
     Ok(())
 }
 

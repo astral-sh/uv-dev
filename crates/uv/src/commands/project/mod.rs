@@ -836,6 +836,7 @@ impl ScriptInterpreter {
                 &environment,
                 EnvironmentKind::Script,
                 python_request.as_ref(),
+                &source,
                 python_preference,
                 requires_python
                     .as_ref()
@@ -970,6 +971,7 @@ fn check_environment_compatibility(
     environment: &PythonEnvironment,
     kind: EnvironmentKind,
     python_request: Option<&PythonRequest>,
+    source: &PythonRequestSource,
     python_preference: PythonPreference,
     requires_python: Option<&RequiresPython>,
     cache: &Cache,
@@ -983,7 +985,16 @@ fn check_environment_compatibility(
     }
 
     if let Some(request) = python_request {
-        if request.satisfied(environment.interpreter(), cache) {
+        let satisfied = match source {
+            // Compatibility metadata constrains the interpreter, not its publisher's build name.
+            PythonRequestSource::RequiresPython => {
+                request.satisfied_by_interpreter(environment.interpreter(), cache)
+            }
+            PythonRequestSource::UserRequest | PythonRequestSource::DotPythonVersion(_) => {
+                request.satisfied(environment.interpreter(), cache)
+            }
+        };
+        if satisfied {
             debug!("The {kind} environment's Python version satisfies the request: `{request}`");
         } else {
             return Err(EnvironmentIncompatibilityError::PythonRequest(
@@ -1109,9 +1120,8 @@ fn existing_project_environment(
 /// Discover a compatible project environment at `root`.
 fn discover_project_environment(
     root: &Path,
-    python_request: Option<&PythonRequest>,
+    workspace_python: &WorkspacePython,
     python_preference: PythonPreference,
-    requires_python: Option<&RequiresPython>,
     policy: ProjectEnvironmentPolicy,
     centralized: bool,
     cache: &Cache,
@@ -1123,9 +1133,10 @@ fn discover_project_environment(
     let compatibility = check_environment_compatibility(
         &environment,
         EnvironmentKind::Project,
-        python_request,
+        workspace_python.python_request.as_ref(),
+        &workspace_python.source,
         python_preference,
-        requires_python,
+        workspace_python.requires_python.as_ref(),
         cache,
     );
 
@@ -1433,7 +1444,7 @@ impl ProjectInterpreter {
             source,
             python_request,
             requires_python,
-        } = workspace_python;
+        } = &workspace_python;
 
         let environment_selection = workspace.environment_selection(active);
         let centralized = centralized_environments_enabled(&environment_selection, cache);
@@ -1460,9 +1471,8 @@ impl ProjectInterpreter {
                 );
                 if let Some(environment) = discover_project_environment(
                     &root,
-                    python_request.as_ref(),
+                    &workspace_python,
                     python_preference,
-                    requires_python.as_ref(),
                     policy,
                     centralized,
                     cache,
@@ -1481,9 +1491,8 @@ impl ProjectInterpreter {
                     .is_ok_and(|target| is_centralized_environment_path(&target, cache)))
                 && let Some(environment) = discover_project_environment(
                     &project_environment_path,
-                    python_request.as_ref(),
+                    &workspace_python,
                     python_preference,
-                    requires_python.as_ref(),
                     policy,
                     centralized,
                     cache,
@@ -1515,9 +1524,8 @@ impl ProjectInterpreter {
                 centralized_environment_root(workspace, python.interpreter(), upgradeable, cache);
             if let Some(environment) = discover_project_environment(
                 &root,
-                python_request.as_ref(),
+                &workspace_python,
                 python_preference,
-                requires_python.as_ref(),
                 policy,
                 centralized,
                 cache,
@@ -1555,7 +1563,7 @@ impl ProjectInterpreter {
                 Some(workspace),
                 groups,
                 requires_python,
-                &source,
+                source,
             )?;
         }
 
