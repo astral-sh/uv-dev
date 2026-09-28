@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 1655,
+        "title": "Add `pip cache info` and `pip cache list`",
+        "url": "https://github.com/astral-sh/uv/issues/1655",
+        "state": "open",
+        "reason": "This is the closest open discussion: its proposed cache information explicitly includes file counts. It is broader than inode usage and asks for categorized cache information and listing, so it does not fully track a total inode-count mode for `uv cache size`."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16032,
+        "title": "Add a `uv cache size` command",
+        "url": "https://github.com/astral-sh/uv/pull/16032",
+        "state": "merged",
+        "reason": "This introduced the command the new issue proposes to extend. It implemented total-byte output with human-readable formatting, and the current source still uses diskus only to calculate bytes."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20992,
+        "title": "Add `--output-format` to `uv cache size`",
+        "url": "https://github.com/astral-sh/uv/pull/20992",
+        "state": "merged",
+        "reason": "This established the current automatic, human, and machine output modes for `uv cache size`, directly informing the new issue's UI questions about raw versus abbreviated inode counts and combined output."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms (`inode`, `uv cache size`, `cache-size`, and `diskus`) and conceptual terms (`file count`, `number of files`, cache info/statistics/inspection, disk usage, quota, HPC, and cache limits). Inspected the original cache-size issue and implementation, the later output-format issue and implementation, the broader cache-info request and its originating discussion, cache-management/counting reports, and inode/link-count discussions. astral-sh/uv#7642 was a plausible HPC/inode-quota lead, but it concerns virtual-environment placement and architecture-sensitive wheel caching rather than reporting cache inode consumption. No existing issue or pull request was found that specifically tracks a total inode-count mode for `uv cache size`."
+  },
+  "type": "enhancement",
+  "type_reason": "The requested inode statistic and CLI presentation do not exist: source inspection shows `uv cache size` currently traverses the cache through diskus and emits only a byte total. The report requests a new metric rather than identifying incorrect existing output. astral-sh/uv#1655 overlaps through file-count reporting but is broader and does not clearly cover total inode consumption, so centralizing this request there would lose the inode-quota semantics.",
+  "summary": "No exact duplicate was found. The closest open issue is astral-sh/uv#1655, which proposes broader cache information including file counts; astral-sh/uv#16032 and astral-sh/uv#20992 established the byte-size command and its current output-format behavior.",
+  "draft_response": "The inode-quota use case is clear, and this would be a new capability for the preview `uv cache size` command. The command currently uses diskus to calculate only total bytes. astral-sh/uv#1655 is related because its broader cache-info proposal includes file counts, but it does not specifically cover total inode consumption.\n\nBefore implementation, we should define the metric precisely: whether to count directory entries or distinct inode objects, and whether directories and symlinks are included. That distinction matters for hard-linked cache contents and portability. Once those semantics are agreed, we can decide how the new metric should fit the automatic, human, and machine output modes added in astral-sh/uv#20992."
+}
