@@ -499,6 +499,20 @@ impl ResolverEnvironment {
             }
         }
     }
+
+    /// Return the position of this fork in the initial fork list.
+    pub(crate) fn initial_fork_position(&self) -> Option<usize> {
+        let Kind::Universal {
+            ref initial_forks, ..
+        } = self.kind
+        else {
+            return None;
+        };
+        let marker = self.try_universal_markers()?.combined();
+        initial_forks
+            .iter()
+            .position(|initial_fork| !initial_fork.is_disjoint(marker))
+    }
 }
 
 /// A user visible representation of a resolver environment.
