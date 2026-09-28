@@ -558,7 +558,7 @@ async fn perform_install(
                     if let PythonRequest::Key(download_request) = &request.request
                         && download_request.is_exact_installation_key()
                     {
-                        download_request.satisfied_by_exact_key(installation.key())
+                        download_request.satisfied_by_key(installation.key())
                     } else {
                         request.matches_installation(installation)
                     }
