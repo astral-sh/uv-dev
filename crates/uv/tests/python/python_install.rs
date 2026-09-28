@@ -332,17 +332,7 @@ fn python_build_name_context() -> anyhow::Result<(TestContext, ManagedPythonInst
 fn python_named_build_context()
 -> anyhow::Result<(TestContext, ManagedPythonInstallation, ChildPath)> {
     let (context, unnamed) = python_build_name_context()?;
-    let unnamed_name = unnamed.key().to_string();
-    let platform = platform_key_from_env()?;
-    let version = unnamed_name
-        .strip_suffix(&format!("-{platform}"))
-        .context("Missing platform suffix")?;
-    let custom_build_path = context
-        .temp_dir
-        .child("managed")
-        .child(format!("{version}+custom-{platform}"));
-    // Keep unnamed installed so environments using it remain healthy when switching builds.
-    copy_dir_all(unnamed.path(), &custom_build_path)?;
+    let custom_build_path = context.copy_named_python(&unnamed, "custom", None)?;
     Ok((context, unnamed, custom_build_path))
 }
 
@@ -5370,20 +5360,7 @@ fn python_build_name_revision_context(
         .success();
 
     // Use a real Python archive for the replacement, with test revision metadata.
-    let metadata: serde_json::Value = serde_json::from_str(&fs_err::read_to_string(
-        context
-            .workspace_root
-            .join("crates/uv-python/download-metadata.json"),
-    )?)?;
-    let mut unnamed_entry = metadata
-        .get(unnamed_key.replace("-macos-", "-darwin-"))
-        .context("The unnamed download is in the bundled catalog")?
-        .clone();
-    let embedded_build_revision = unnamed_entry
-        .as_object_mut()
-        .and_then(|entry| entry.remove("build"))
-        .context("The bundled download has a build revision")?;
-    unnamed_entry["build_revision"] = embedded_build_revision;
+    let unnamed_entry = context.python_download_catalog_entry(&unnamed_key)?;
     let mut entry = unnamed_entry.clone();
     entry["build_name"] = serde_json::json!(build_name);
     entry["build_revision"] = serde_json::json!("20260901");

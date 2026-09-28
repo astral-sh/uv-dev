@@ -19,6 +19,7 @@ use std::str::FromStr;
 use std::{env, io};
 use uv_python::downloads::ManagedPythonDownloadList;
 
+use anyhow::Context;
 use assert_cmd::assert::{Assert, OutputAssertExt};
 use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{
@@ -34,8 +35,8 @@ use tokio::io::AsyncWriteExt;
 use walkdir::WalkDir;
 
 use uv_cache::{Cache, CacheBucket};
-use uv_fs::Simplified;
-use uv_python::managed::ManagedPythonInstallations;
+use uv_fs::{Simplified, copy_dir_all};
+use uv_python::managed::{ManagedPythonInstallation, ManagedPythonInstallations};
 use uv_python::{
     EnvironmentPreference, PythonInstallation, PythonPreference, PythonRequest, PythonVersion,
 };
@@ -734,6 +735,49 @@ impl TestContext {
             .push((EnvVars::UV_PYTHON_DOWNLOADS.into(), "automatic".into()));
 
         self
+    }
+
+    /// Copy a managed installation under a named build identity, optionally changing its revision.
+    /// The source remains installed so environments using it remain healthy.
+    pub fn copy_named_python(
+        &self,
+        installation: &ManagedPythonInstallation,
+        build_name: &str,
+        build_revision: Option<&str>,
+    ) -> anyhow::Result<ChildPath> {
+        let key = installation.key();
+        let platform = format!("{}-{}-{}", key.os(), key.arch(), key.libc());
+        let key = key.to_string();
+        let version = key
+            .strip_suffix(&format!("-{platform}"))
+            .context("Missing platform suffix")?;
+        let named = self
+            .temp_dir
+            .child("managed")
+            .child(format!("{version}+{build_name}-{platform}"));
+        copy_dir_all(installation.path(), &named)?;
+        if let Some(build_revision) = build_revision {
+            named.child("BUILD").write_str(build_revision)?;
+        }
+        Ok(named)
+    }
+
+    /// Return a versioned catalog entry backed by a real archive from the bundled catalog.
+    pub fn python_download_catalog_entry(&self, key: &str) -> anyhow::Result<serde_json::Value> {
+        let metadata: serde_json::Value = serde_json::from_str(&fs_err::read_to_string(
+            self.workspace_root
+                .join("crates/uv-python/download-metadata.json"),
+        )?)?;
+        let mut entry = metadata
+            .get(key.replace("-macos-", "-darwin-"))
+            .context("The download is in the bundled catalog")?
+            .clone();
+        let revision = entry
+            .as_object_mut()
+            .and_then(|entry| entry.remove("build"))
+            .context("The bundled download has a build revision")?;
+        entry["build_revision"] = revision;
+        Ok(entry)
     }
 
     /// Configure isolated directories for installed tools and their executable entry points.
