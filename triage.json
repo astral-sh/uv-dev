@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21000,
+        "title": "Respect `fork-strategy` for `environments`",
+        "url": "https://github.com/astral-sh/uv/pull/21000",
+        "state": "merged",
+        "reason": "The likely regression point: astral-sh/uv#21000 began sorting initial lockfile forks by Python lower bound while retaining input order for ties."
+      },
+      {
+        "kind": "issue",
+        "number": 20999,
+        "title": "`fork-strategy` has no effect on the forks that come from `[tool.uv] environments`",
+        "url": "https://github.com/astral-sh/uv/issues/20999",
+        "state": "closed",
+        "reason": "This prompted astral-sh/uv#21000 and explains why initial-fork scheduling changed, but it concerns version selection rather than stable serialization across upgrade modes."
+      },
+      {
+        "kind": "issue",
+        "number": 17747,
+        "title": "`uv lock` not working as expected in some cases when `upgrade_package` is set",
+        "url": "https://github.com/astral-sh/uv/issues/17747",
+        "state": "open",
+        "reason": "The closest open adjacent report also involves package-specific upgrades changing `resolution-markers`, but its symptom is a perpetually stale lockfile associated with marker canonicalization, not ordering-only churn."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for `resolution-markers`, ordering, sorting, reordering, `--upgrade-package`, lockfile stability, deterministic output, initial forks, `fork-strategy`, and marker canonicalization. Fix-oriented review covered astral-sh/uv#21000 and astral-sh/uv#20999. Ruled out astral-sh/uv#10988 because different uv versions produced materially different markers, astral-sh/uv#9296 because it concerns duplicate markers, astral-sh/uv#16839 because it concerns a false dry-run report, and astral-sh/uv#17752 because it targets the distinct canonicalization failure in astral-sh/uv#17747."
+  },
+  "type": "bug",
+  "type_reason": "The public Renovate diff confirms an ordering-only change to an unchanged set of `resolution-markers`. Source inspection shows that full upgrades resolve without the existing lockfile, package-only upgrades can reuse its fork markers, and astral-sh/uv#21000 schedules those initial forks by Python lower bound without a final canonical serialization order. This command-dependent lockfile churn is incorrect behavior, and no existing issue tracks the exact regression.",
+  "summary": "No existing issue tracks the exact ordering-only churn. Merged astral-sh/uv#21000 is the likely regression point; open astral-sh/uv#17747 is adjacent but has a different symptom and mechanism.",
+  "draft_response": "Thanks for the paired Renovate pull requests. The second diff confirms an ordering-only change: one `resolution-markers` entry moves, with no resolved package change.\n\nuv currently handles these paths differently: a full upgrade resolves without the existing lockfile, while a package-only upgrade can reuse its fork markers; astral-sh/uv#21000 added Python-bound scheduling for those reused initial forks. That makes astral-sh/uv#21000 a likely regression point, though we still need the exact invocation to confirm it.\n\nCould you provide the `uv --version` output and the uv command lines from Renovate’s debug log? Alternatively, please confirm whether running `uv lock --upgrade` followed by `uv lock --upgrade-package rioxarray` from a clean checkout reproduces the one-line reorder. That would give us a focused regression case."
+}
