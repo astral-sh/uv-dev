@@ -1,5 +1,7 @@
 #[cfg(windows)]
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
 use std::{env, path::Path, process::Command};
 
@@ -5433,6 +5435,44 @@ fn python_find_build_name_revision_variables() -> anyhow::Result<()> {
         .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "missing-build")
         .assert()
         .success();
+
+    #[cfg(unix)]
+    {
+        let invalid = OsString::from_vec(vec![0xff]);
+        // Named discovery must not read implementation-specific pins.
+        context
+            .python_find()
+            .current_dir(find_dir.path())
+            .arg("3.13+custom")
+            .env(EnvVars::UV_PYTHON_BUILD_REVISION, "custom-build")
+            .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, &invalid)
+            .env(EnvVars::UV_PYTHON_PYPY_BUILD, &invalid)
+            .assert()
+            .success();
+        context
+            .python_find()
+            .current_dir(find_dir.path())
+            .arg("3.13+custom")
+            .env(EnvVars::UV_PYTHON_BUILD_REVISION, &invalid)
+            .assert()
+            .failure();
+        // Unnamed discovery ignores the named pin but reads all implementation pins,
+        // including when a request filters the implementation.
+        context
+            .python_find()
+            .current_dir(find_dir.path())
+            .arg("cpython@3.13")
+            .env(EnvVars::UV_PYTHON_BUILD_REVISION, &invalid)
+            .assert()
+            .success();
+        context
+            .python_find()
+            .current_dir(find_dir.path())
+            .arg("cpython@3.13")
+            .env(EnvVars::UV_PYTHON_PYPY_BUILD, &invalid)
+            .assert()
+            .failure();
+    }
 
     Ok(())
 }
