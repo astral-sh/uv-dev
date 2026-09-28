@@ -12,8 +12,8 @@ use uv_pep440::Version;
 use uv_pep508::{MarkerEnvironment, StringVersion};
 use uv_static::EnvVars;
 
-use crate::PythonBuildRequest;
 use crate::implementation::ImplementationName;
+use crate::{PythonBuildName, PythonBuildRequest};
 
 #[derive(Error, Debug)]
 pub enum BuildRevisionError {
@@ -289,12 +289,19 @@ impl PythonBuildRevisionPins {
         Ok(Self::Unnamed(revisions))
     }
 
-    pub(crate) fn get(&self, implementation: Option<ImplementationName>) -> Option<&str> {
-        match self {
-            Self::Named(revision) => revision.as_deref(),
-            Self::Unnamed(revisions) => implementation
+    /// Return the pin applicable to a candidate's build name and implementation.
+    /// Implementation-specific pins constrain only unnamed builds.
+    pub(crate) fn get(
+        &self,
+        implementation: Option<ImplementationName>,
+        build_name: Option<&PythonBuildName>,
+    ) -> Option<&str> {
+        match (self, build_name) {
+            (Self::Named(revision), Some(_)) => revision.as_deref(),
+            (Self::Unnamed(revisions), None) => implementation
                 .and_then(|implementation| revisions.get(&implementation))
                 .map(String::as_str),
+            (Self::Named(_), None) | (Self::Unnamed(_), Some(_)) => None,
         }
     }
 }
@@ -334,7 +341,17 @@ mod tests {
             || -> Result<(), BuildRevisionError> {
                 let pins =
                     PythonBuildRevisionPins::from_env(None, Some(ImplementationName::CPython))?;
-                assert_eq!(pins.get(Some(ImplementationName::CPython)), Some("cpython"));
+                assert_eq!(
+                    pins.get(Some(ImplementationName::CPython), None),
+                    Some("cpython")
+                );
+                assert_eq!(
+                    pins.get(
+                        Some(ImplementationName::CPython),
+                        build_request.build_name()
+                    ),
+                    None
+                );
                 assert!(PythonBuildRevisionPins::from_env(None, None).is_err());
                 assert!(PythonBuildRevisionPins::from_env(Some(&build_request), None).is_err());
                 Ok(())
@@ -350,8 +367,15 @@ mod tests {
             ],
             || -> Result<(), BuildRevisionError> {
                 let pins = PythonBuildRevisionPins::from_env(Some(&build_request), None)?;
-                assert_eq!(pins.get(Some(ImplementationName::CPython)), Some("named"));
-                assert_eq!(pins.get(None), Some("named"));
+                assert_eq!(
+                    pins.get(
+                        Some(ImplementationName::CPython),
+                        build_request.build_name()
+                    ),
+                    Some("named")
+                );
+                assert_eq!(pins.get(None, build_request.build_name()), Some("named"));
+                assert_eq!(pins.get(Some(ImplementationName::CPython), None), None);
                 Ok(())
             },
         )

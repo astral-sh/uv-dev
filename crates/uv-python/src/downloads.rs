@@ -463,14 +463,17 @@ impl PythonDownloadRequest {
             return Ok(self);
         };
 
-        self.build_revision = PythonBuildRevisionPins::from_env(
-            self.version
-                .as_ref()
-                .and_then(VersionRequest::build_request),
-            Some(implementation),
-        )?
-        .get(Some(implementation))
-        .map(str::to_owned);
+        let build_request = self
+            .version
+            .as_ref()
+            .and_then(VersionRequest::build_request);
+        self.build_revision =
+            PythonBuildRevisionPins::from_env(build_request, Some(implementation))?
+                .get(
+                    Some(implementation),
+                    build_request.and_then(PythonBuildRequest::build_name),
+                )
+                .map(str::to_owned);
         Ok(self)
     }
 
@@ -1192,17 +1195,7 @@ impl ManagedPythonDownloadList {
                     LenientImplementationName::Known(implementation) => Some(*implementation),
                     LenientImplementationName::Unknown(_) => None,
                 };
-                match revisions {
-                    // Broad listings include named builds outside the implementation pin's scope.
-                    PythonBuildRevisionPins::Unnamed(_)
-                        if download.key().build_name().is_some() =>
-                    {
-                        None
-                    }
-                    PythonBuildRevisionPins::Named(_) | PythonBuildRevisionPins::Unnamed(_) => {
-                        revisions.get(implementation)
-                    }
-                }
+                revisions.get(implementation, download.key().build_name())
             });
             build_revision.is_none_or(|revision| download.build_revision() == Some(revision))
         }))
