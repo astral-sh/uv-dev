@@ -2261,24 +2261,23 @@ impl PythonRequest {
 
     /// Check the interpreter's properties and local managed build identity against this request.
     pub fn satisfied(&self, interpreter: &Interpreter, cache: &Cache) -> bool {
-        // A wildcard request imposes no build identity restriction on an existing environment.
-        if let Self::Any = self {
-            return true;
-        }
         if !self.satisfied_by_interpreter(interpreter, cache) {
             return false;
         }
-        let Some(request) = PythonDownloadRequest::from_request(self) else {
-            return true;
+        let version = match self {
+            Self::Version(version) | Self::ImplementationVersion(_, version) => version,
+            Self::Key(request) => request.version().unwrap_or(&VersionRequest::Default),
+            Self::Default | Self::Implementation(_) => &VersionRequest::Default,
+            // Wildcards and explicit paths impose no build identity restriction.
+            Self::Any | Self::Directory(_) | Self::File(_) | Self::ExecutableName(_) => {
+                return true;
+            }
         };
         let key = ManagedPythonInstallation::key_from_interpreter(interpreter)
             .unwrap_or_else(|| interpreter.key());
         // Version and variant compatibility are determined by the interpreter check, including
         // its prerelease range semantics. Only the build name remains to be checked here.
-        request.version().map_or_else(
-            || key.build_name().is_none(),
-            |version| version.matches_build_name(&key),
-        )
+        version.matches_build_name(&key)
     }
 
     /// Check the interpreter's reported properties or executable path against this request.
