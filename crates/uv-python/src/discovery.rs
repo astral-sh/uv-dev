@@ -203,6 +203,9 @@ pub struct PythonBuildRequest {
     build_name: Option<PythonBuildName>,
 }
 
+static DEFAULT_BUILD_REQUEST: PythonBuildRequest =
+    PythonBuildRequest::new(PythonVariant::Default, None);
+
 impl PythonBuildRequest {
     pub(crate) const fn new(variant: PythonVariant, build_name: Option<PythonBuildName>) -> Self {
         Self {
@@ -2478,7 +2481,7 @@ impl PythonRequest {
             | Self::ExecutableName(_)
             | Self::Implementation(_) => None,
         }
-        .map(Cow::into_owned)
+        .cloned()
     }
 
     /// Convert an interpreter request into [`VersionSpecifiers`] representing the range of
@@ -3551,16 +3554,16 @@ impl VersionRequest {
     }
 
     /// Return the [`PythonBuildRequest`] carried by the version request, if any.
-    pub(crate) fn build_request(&self) -> Option<Cow<'_, PythonBuildRequest>> {
+    pub(crate) fn build_request(&self) -> Option<&PythonBuildRequest> {
         match self {
             Self::Any => None,
-            Self::Default => Some(Cow::Owned(PythonBuildRequest::default())),
+            Self::Default => Some(&DEFAULT_BUILD_REQUEST),
             Self::Major(_, variant)
             | Self::MajorMinor(_, _, variant)
             | Self::MajorMinorPatch(_, _, _, variant)
             | Self::MajorMinorPrerelease(_, _, _, variant)
             | Self::MajorMinorPatchPrerelease(_, _, _, _, variant)
-            | Self::Range(_, variant) => Some(Cow::Borrowed(variant)),
+            | Self::Range(_, variant) => Some(variant),
         }
     }
 
