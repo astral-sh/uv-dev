@@ -13,7 +13,7 @@ use fs_err::{metadata, set_permissions};
 use indoc::indoc;
 use uv_fs::copy_dir_all;
 #[cfg(feature = "test-python-managed")]
-use uv_python::managed::{ManagedPythonInstallations, platform_key_from_env};
+use uv_python::managed::ManagedPythonInstallations;
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
 
@@ -495,12 +495,7 @@ fn tool_run_from_install_python_build_name() -> Result<()> {
         .find_all()?
         .next()
         .context("Missing unnamed installation")?;
-    let platform = platform_key_from_env()?;
-    let custom = managed_dir.child(format!(
-        "cpython-{}+custom-{platform}",
-        unnamed.key().version()
-    ));
-    copy_dir_all(unnamed.path(), &custom)?;
+    context.copy_named_python(&unnamed, "custom", None)?;
     let context = context.with_env(EnvVars::UV_PYTHON_DOWNLOADS, "never");
 
     let foo = context.temp_dir.child("foo");
@@ -605,18 +600,12 @@ fn tool_run_from_install_python_build_name_revision() -> Result<()> {
 
     let managed_dir = context.temp_dir.child("managed");
     let installations = ManagedPythonInstallations::from_settings(Some(managed_dir.to_path_buf()))?;
-    let platform = platform_key_from_env()?;
     for (minor, revision) in [(12, "20260825"), (13, "20260901")] {
         let unnamed = installations
             .find_all()?
             .find(|installation| installation.key().minor() == minor)
             .context("Missing unnamed installation")?;
-        let custom = managed_dir.child(format!(
-            "cpython-{}+custom-{platform}",
-            unnamed.key().version()
-        ));
-        copy_dir_all(unnamed.path(), &custom)?;
-        custom.child("BUILD").write_str(revision)?;
+        context.copy_named_python(&unnamed, "custom", Some(revision))?;
     }
     let context = context.with_env(EnvVars::UV_PYTHON_DOWNLOADS, "never");
 
@@ -3740,18 +3729,13 @@ fn tool_run_reresolve_python_build_name() -> Result<()> {
 
     let managed_dir = context.temp_dir.child("managed");
     let installations = ManagedPythonInstallations::from_settings(Some(managed_dir.to_path_buf()))?;
-    let platform = platform_key_from_env()?;
     let mut python_paths = Vec::new();
     for minor in [11, 12] {
         let unnamed = installations
             .find_all()?
             .find(|installation| installation.key().minor() == minor)
             .context("Missing unnamed installation")?;
-        let custom = managed_dir.child(format!(
-            "cpython-{}+custom-{platform}",
-            unnamed.key().version()
-        ));
-        copy_dir_all(unnamed.path(), &custom)?;
+        let custom = context.copy_named_python(&unnamed, "custom", None)?;
         let executable = unnamed.executable(false);
         let executable_dir = executable
             .parent()
@@ -3827,14 +3811,8 @@ fn tool_run_reresolve_python_build_name_revision() -> Result<()> {
         .assert()
         .success();
 
-    let metadata: serde_json::Value = serde_json::from_str(&fs_err::read_to_string(
-        context
-            .workspace_root
-            .join("crates/uv-python/download-metadata.json"),
-    )?)?;
     let managed_dir = context.temp_dir.child("managed");
     let installations = ManagedPythonInstallations::from_settings(Some(managed_dir.to_path_buf()))?;
-    let platform = platform_key_from_env()?;
     let mut python_paths = Vec::new();
     let mut downloads = serde_json::Map::new();
     for (minor, revision) in [(11, "20260901"), (12, "20260825")] {
@@ -3842,10 +3820,11 @@ fn tool_run_reresolve_python_build_name_revision() -> Result<()> {
             .find_all()?
             .find(|installation| installation.key().minor() == minor)
             .context("Missing unnamed installation")?;
-        let custom_key = format!("cpython-{}+custom-{platform}", unnamed.key().version());
-        let custom = managed_dir.child(&custom_key);
-        copy_dir_all(unnamed.path(), &custom)?;
-        custom.child("BUILD").write_str(revision)?;
+        let custom = context.copy_named_python(&unnamed, "custom", Some(revision))?;
+        let custom_key = custom
+            .file_name()
+            .context("Missing custom installation key")?
+            .to_string_lossy();
         let executable = unnamed.executable(false);
         let executable_dir = executable
             .parent()
@@ -3853,17 +3832,10 @@ fn tool_run_reresolve_python_build_name_revision() -> Result<()> {
         python_paths.push(custom.join(executable_dir.strip_prefix(unnamed.path())?));
 
         // Offer real Python archives under custom identities with the requested revision.
-        let mut entry = metadata
-            .get(unnamed.key().to_string().replace("-macos-", "-darwin-"))
-            .context("The unnamed download is in the bundled catalog")?
-            .clone();
-        entry
-            .as_object_mut()
-            .context("The bundled catalog entry is an object")?
-            .remove("build");
+        let mut entry = context.python_download_catalog_entry(&unnamed.key().to_string())?;
         entry["build_name"] = serde_json::json!("custom");
         entry["build_revision"] = serde_json::json!("20260901");
-        downloads.insert(custom_key, entry);
+        downloads.insert(custom_key.into_owned(), entry);
     }
     let catalog = context.temp_dir.child("python-downloads.json");
     catalog.write_str(&serde_json::to_string(&serde_json::json!({
