@@ -15350,9 +15350,9 @@ fn lock_migrate() -> Result<()> {
     Ok(())
 }
 
-/// A targeted upgrade reorders existing resolution markers by their lower Python bound.
+/// A targeted upgrade preserves the order of existing resolution markers.
 #[test]
-fn lock_upgrade_package_reorders_resolution_markers() -> Result<()> {
+fn lock_upgrade_package_preserves_resolution_marker_order() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     context
@@ -15398,20 +15398,7 @@ fn lock_upgrade_package_reorders_resolution_markers() -> Result<()> {
     let new_lock = context.read("uv.lock");
     let diff = diff_snapshot(lock, &new_lock, 3);
 
-    // Rewriting an otherwise unchanged lockfile is undesirable; see astral-sh/uv#22040.
-    assert_snapshot!(diff, @r#"
-    --- old
-    +++ new
-    @@ -3,8 +3,8 @@
-     requires-python = ">=3.12"
-     resolution-markers = [
-         "python_full_version >= '3.14' and platform_machine == 'ARM64' and sys_platform == 'win32'",
-    +    "(python_full_version >= '3.14' and platform_machine != 'ARM64') or (python_full_version >= '3.14' and sys_platform != 'win32')",
-         "python_full_version < '3.14' and platform_machine == 'ARM64' and sys_platform == 'win32'",
-    -    "(python_full_version >= '3.14' and platform_machine != 'ARM64') or (python_full_version >= '3.14' and sys_platform != 'win32')",
-         "(python_full_version < '3.14' and platform_machine != 'ARM64') or (python_full_version < '3.14' and sys_platform != 'win32')",
-     ]
-    "#);
+    assert_snapshot!(diff, @"");
 
     Ok(())
 }
@@ -28615,7 +28602,8 @@ fn lock_split_python_environment() -> Result<()> {
 }
 
 /// Initial environment forks with distinct lower Python bounds should follow the effective fork
-/// scheduling policy, including the precedence of lowest resolution over the fork strategy.
+/// scheduling policy, including the precedence of lowest resolution over the fork strategy, while
+/// serialization retains the configured environment order.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_fork_strategy_with_python_environments() -> Result<()> {
@@ -28661,8 +28649,8 @@ fn lock_fork_strategy_with_python_environments() -> Result<()> {
         revision = 3
         requires-python = ">=3.11, <3.13"
         resolution-markers = [
-            "python_full_version >= '3.12'",
             "python_full_version < '3.12'",
+            "python_full_version >= '3.12'",
         ]
         supported-markers = [
             "python_full_version < '3.12'",
@@ -28750,8 +28738,8 @@ fn lock_fork_strategy_with_python_environments() -> Result<()> {
         revision = 3
         requires-python = ">=3.11, <3.13"
         resolution-markers = [
-            "python_full_version < '3.12'",
             "python_full_version >= '3.12'",
+            "python_full_version < '3.12'",
         ]
         supported-markers = [
             "python_full_version >= '3.12'",
@@ -28825,8 +28813,8 @@ fn lock_fork_strategy_with_python_environments() -> Result<()> {
         revision = 3
         requires-python = ">=3.11, <3.13"
         resolution-markers = [
-            "python_full_version < '3.12'",
             "python_full_version >= '3.12'",
+            "python_full_version < '3.12'",
         ]
         supported-markers = [
             "python_full_version >= '3.12'",

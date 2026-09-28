@@ -839,6 +839,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 resolutions.len()
             );
         }
+        // Fork scheduling affects version selection, but the order in which forks finish should
+        // not change the order inherited from an existing lockfile or configured environments.
+        resolutions.sort_by_key(|resolution| resolution.env.initial_fork_position());
         if tracing::enabled!(Level::DEBUG) {
             for resolution in &resolutions {
                 if let Some(env) = resolution.env.end_user_fork_display() {
