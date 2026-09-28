@@ -233,6 +233,31 @@ fn python_list_build_revision_pins() -> Result<()> {
     pypy-3.13.7-linux-x86_64-gnu https://example.com/pypy-unnamed-9.tar.gz
     ");
 
+    // Broad listings apply implementation pins only to unnamed builds. Named builds retain
+    // their newest revision whether or not they also publish the unnamed build's pinned revision.
+    for custom_revision_nine in [true, false] {
+        if !custom_revision_nine {
+            downloads.remove("cpython-custom-9");
+            catalog.write_str(&serde_json::to_string(&serde_json::json!({
+                "version": 1, "downloads": downloads
+            }))?)?;
+        }
+        for request in [None, Some("any")] {
+            allow_duplicates! {
+                uv_snapshot!(context.filters(), list().args(request)
+                    .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "9")
+                    .env(EnvVars::UV_PYTHON_BUILD_REVISION, "missing"), @"
+                exit_code: 0 (success)
+                ----- stdout -----
+                cpython-3.13.7-linux-x86_64-gnu https://example.com/cpython-unnamed-9.tar.gz
+                cpython-3.13.7+custom-linux-x86_64-gnu https://example.com/cpython-custom-10.tar.gz
+                pypy-3.13.7-linux-x86_64-gnu https://example.com/pypy-unnamed-10.tar.gz
+                rustpython-3.13.7+custom-linux-x86_64-gnu https://example.com/rustpython-custom-10.tar.gz
+                ");
+            }
+        }
+    }
+
     Ok(())
 }
 
