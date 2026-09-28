@@ -1172,7 +1172,17 @@ impl ManagedPythonDownloadList {
                     LenientImplementationName::Known(implementation) => Some(*implementation),
                     LenientImplementationName::Unknown(_) => None,
                 };
-                revisions.get(implementation)
+                match revisions {
+                    // Broad listings include named builds outside the implementation pin's scope.
+                    PythonBuildRevisionPins::Unnamed(_)
+                        if download.key().build_name().is_some() =>
+                    {
+                        None
+                    }
+                    PythonBuildRevisionPins::Named(_) | PythonBuildRevisionPins::Unnamed(_) => {
+                        revisions.get(implementation)
+                    }
+                }
             });
             build_revision.is_none_or(|revision| download.build_revision() == Some(revision))
         }))
