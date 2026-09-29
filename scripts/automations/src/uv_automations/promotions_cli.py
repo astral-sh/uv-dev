@@ -12,7 +12,10 @@ from typing import assert_never
 from uv_automations.actions import append_summary, write_json_output, write_output
 from uv_automations.github_promotion import PromotionGitHub, PromotionReadError
 from uv_automations.github_promotion_completion import PromotionCompletionGitHub
-from uv_automations.github_promotion_queue import PromotionQueueGitHub
+from uv_automations.github_promotion_queue import (
+    PromotionQueueCompletionGitHub,
+    PromotionQueueGitHub,
+)
 from uv_automations.json import loads
 from uv_automations.models import CommitSha, RepositoryIdentity, RepositoryName
 from uv_automations.promotion_models import (
@@ -511,8 +514,8 @@ def run(command: PromotionCommand) -> None:
         case RecordPromotionQueue():
             queued = _read_queue(command.source)
             outcome = record_queue(
-                PromotionGitHub(token_variable="GH_READ_TOKEN"),
-                PromotionQueueGitHub(),
+                PromotionQueueCompletionGitHub(token_variable="GH_READ_TOKEN"),
+                PromotionQueueCompletionGitHub(),
                 queued,
             )
             match outcome:

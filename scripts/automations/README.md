@@ -229,6 +229,10 @@ comment; it does not rewrite older approvals. A newer human readiness transition
 records, while conflicting records for the current event fail closed. Legacy waiting comments do not
 contain enough head/approval provenance to be upgraded automatically.
 
+If the queue-comment response is lost or invalid, recording reconciles the canonical, unedited
+receipt without posting another comment. Bounded reads honor `Retry-After`, and the source revision
+and human approval must still match after receipt collection before the workflow reports success.
+
 ```python
 from uv_automations.github_promotion import PromotionGitHub
 from uv_automations.github_promotion_queue import PromotionQueueGitHub

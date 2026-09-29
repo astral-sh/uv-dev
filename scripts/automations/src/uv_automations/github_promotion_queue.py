@@ -7,6 +7,7 @@ from uv_automations.github_promotion import (
     PromotionRevisionReader,
     decode_promotion_comment,
 )
+from uv_automations.github_promotion_completion import PromotionCompletionGitHub
 from uv_automations.models import CommitSha
 from uv_automations.promotion_models import (
     UV_DEV_REPOSITORY,
@@ -24,21 +25,24 @@ class PromotionQueueGitHub(PromotionGitHub):
     def create_queue_comment(self, queued: QueuedPromotion) -> None:
         scope = queued.source
         body = queued.comment()
-        comment = decode_promotion_comment(
-            self._api(
-                "POST",
-                f"repos/{scope.repository.name}/issues/{scope.number}/comments",
-                payload={"body": body},
-            ),
-            scope,
-        )
-        if comment.body != body:
-            raise ValueError(
-                "GitHub did not create the expected promotion queue record"
+        try:
+            comment = decode_promotion_comment(
+                self._api(
+                    "POST",
+                    f"repos/{scope.repository.name}/issues/{scope.number}/comments",
+                    payload={"body": body},
+                ),
+                scope,
             )
-        original = self.get_unedited_promotion_comment(scope, comment.identifier)
-        if original is None or original.comment.body != body:
-            raise ValueError("The new promotion queue record was edited")
+            if not comment.is_automation or comment.body != body:
+                raise ValueError("Unexpected promotion queue record")
+            original = self.get_unedited_promotion_comment(scope, comment.identifier)
+            if original is None or original.comment.body != body:
+                raise ValueError("The new promotion queue record was edited")
+        except KeyError, TypeError, ValueError:
+            # The POST can have committed even when its response or edit proof
+            # cannot attest to the receipt. Reconcile without exposing fields.
+            raise PromotionReadError("Invalid GitHub promotion response") from None
 
     def dispatch_promotion(self, approval: PromotionApprovalClaim) -> WorkflowDispatch:
         if approval.source.repository != UV_DEV_REPOSITORY:
@@ -96,3 +100,7 @@ class PromotionQueueGitHub(PromotionGitHub):
                 raise
         if self.get_ref(UV_REPOSITORY, destination.ref) != destination.sha:
             raise ValueError("GitHub did not create the expected upstream base")
+
+
+class PromotionQueueCompletionGitHub(PromotionQueueGitHub, PromotionCompletionGitHub):
+    """Use bounded completion response metadata only for queue receipt recording."""
