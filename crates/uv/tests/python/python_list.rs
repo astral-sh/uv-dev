@@ -933,17 +933,6 @@ async fn python_list_remote_python_downloads_ndjson_default_source() -> Result<(
     let remote_ndjson = r#"{"version":"3.14.1+20260420","artifacts":[{"url":"https://custom.com/cpython-3.14.1-aarch64-apple-darwin.tar.gz","platform":"aarch64-apple-darwin","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
 "#;
 
-    Mock::given(method("HEAD"))
-        .and(path("/versions.ndjson"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("Content-Length", remote_ndjson.len().to_string())
-                .insert_header("ETag", "\"v1\""),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-
     Mock::given(method("GET"))
         .and(path("/versions.ndjson"))
         .respond_with(
@@ -979,17 +968,6 @@ async fn python_list_remote_python_downloads_ndjson_cache_reuse() -> Result<()> 
 
     let remote_ndjson = r#"{"version":"3.14.1+20260420","artifacts":[{"url":"https://custom.com/cpython-3.14.1-aarch64-apple-darwin.tar.gz","platform":"aarch64-apple-darwin","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
 "#;
-
-    Mock::given(method("HEAD"))
-        .and(path("/versions.ndjson"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("Content-Length", remote_ndjson.len().to_string())
-                .insert_header("ETag", "\"v1\""),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
 
     Mock::given(method("GET"))
         .and(path("/versions.ndjson"))
@@ -1221,35 +1199,11 @@ async fn python_list_remote_python_downloads_ndjson_cache_keys_include_credentia
     let remote_ndjson_b = r#"{"version":"3.14.1+20260420","artifacts":[{"url":"https://custom.com/token-b.tar.gz","platform":"aarch64-apple-darwin","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only"}]}
 "#;
 
-    Mock::given(method("HEAD"))
-        .and(path("/versions.ndjson"))
-        .and(header("authorization", "Basic dXNlcjp0b2tlbkE="))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("Content-Length", remote_ndjson_a.len().to_string())
-                .insert_header("ETag", "\"token-a\""),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-
     Mock::given(method("GET"))
         .and(path("/versions.ndjson"))
         .and(header("authorization", "Basic dXNlcjp0b2tlbkE="))
         .respond_with(
             ResponseTemplate::new(200).set_body_raw(remote_ndjson_a, "application/x-ndjson"),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    Mock::given(method("HEAD"))
-        .and(path("/versions.ndjson"))
-        .and(header("authorization", "Basic dXNlcjp0b2tlbkI="))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("Content-Length", remote_ndjson_b.len().to_string())
-                .insert_header("ETag", "\"token-b\""),
         )
         .expect(1)
         .mount(&server)
@@ -1314,12 +1268,6 @@ async fn python_list_remote_python_downloads_ndjson_falls_back_to_embedded() -> 
         .with_filtered_latest_python_versions();
     let server = MockServer::start().await;
 
-    Mock::given(method("HEAD"))
-        .and(path("/versions.ndjson"))
-        .respond_with(ResponseTemplate::new(500))
-        .mount(&server)
-        .await;
-
     Mock::given(method("GET"))
         .and(path("/versions.ndjson"))
         .respond_with(ResponseTemplate::new(500))
@@ -1351,17 +1299,6 @@ async fn python_list_remote_python_downloads_ndjson_parse_error_falls_back() -> 
         .with_filtered_latest_python_versions();
     let server = MockServer::start().await;
     let remote_ndjson = "{";
-
-    Mock::given(method("HEAD"))
-        .and(path("/versions.ndjson"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("Content-Length", remote_ndjson.len().to_string())
-                .insert_header("ETag", "\"v1\""),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
 
     Mock::given(method("GET"))
         .and(path("/versions.ndjson"))
