@@ -1,3 +1,11 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["packaging"]
+# [tool.uv]
+# no-build = true
+# exclude-newer = "P7D"
+# ///
+
 import re
 import tempfile
 import unittest
@@ -25,6 +33,11 @@ class ReleaseVersionTests(unittest.TestCase):
             ("0.13.0a0", "0.13.0-alpha.0"),
             ("0.13.0b1", "0.13.0-beta.1"),
             ("0.13.0rc1", "0.13.0-rc.1"),
+            ("0.13.0.dev2", "0.13.0-dev.2"),
+            ("0.13.0.post2", "0.13.0-post.2"),
+            ("0.13.0.post2", "0.13.0-2"),
+            ("0.13.0+linux.1", "0.13.0+LINUX.01"),
+            ("0.13.0rc1.dev2+linux.1", "0.13.0-rc.1.dev.2+LINUX.01"),
         ):
             with (
                 self.subTest(
@@ -38,6 +51,35 @@ class ReleaseVersionTests(unittest.TestCase):
                 self.assertEqual(
                     check_release_versions(root, tag=cargo_version), python_version
                 )
+
+    def test_release_groups_must_match(self) -> None:
+        for python_version, cargo_version in (
+            ("0.13.0", "0.12.12"),
+            ("0.13.0a1", "0.13.0-alpha.0"),
+            ("0.13.0b1", "0.13.0-alpha.1"),
+            ("0.13.0rc1", "0.13.0-rc.2"),
+            ("0.13.0", "0.13.0-rc.1"),
+            ("0.13.0.dev1", "0.13.0-dev.2"),
+            ("0.13.0.post1", "0.13.0-post.2"),
+            ("0.13.0+linux.1", "0.13.0+linux.2"),
+        ):
+            with (
+                self.subTest(
+                    python_version=python_version, cargo_version=cargo_version
+                ),
+                tempfile.TemporaryDirectory() as temp,
+            ):
+                root = Path(temp)
+                write_versions(root, python_version, cargo_version)
+                for tag in (None, cargo_version):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        re.escape(
+                            f"Release version in pyproject.toml ({python_version}) "
+                            f"does not match crates/uv/Cargo.toml ({cargo_version})"
+                        ),
+                    ):
+                        check_release_versions(root, tag=tag)
 
     def test_mismatched_release_tags(self) -> None:
         for tag in ("0.13.0rc1", "v0.13.0-rc.1", "0.12.12", "", "--help"):

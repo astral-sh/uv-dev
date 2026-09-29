@@ -94,7 +94,7 @@ jobs:
       - name: "Validate pyproject and uv schema"
         run: ./scripts/validate-pyproject.sh
       - name: "Check release version consistency"
-        run: uv run --no-project --python 3.12 python -m unittest discover --start-directory scripts --pattern test_check_release_versions.py
+        run: uv run --no-project --locked --python 3.12 scripts/test_check_release_versions.py
 
   readme:
     timeout-minutes: 10
