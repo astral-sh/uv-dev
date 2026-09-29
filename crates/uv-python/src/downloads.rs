@@ -1567,9 +1567,11 @@ impl ManagedPythonDownload {
             let hash_prefix = match self.sha256.as_ref() {
                 Some(digest) => {
                     // Shorten the hash to avoid too-long-filename errors
-                    &digest.as_str()[..9]
+                    digest.as_str()[..9].to_owned()
                 }
-                None => "none",
+                // Without a checksum, identify the archive by URL and revision rather than
+                // filename, so different builds cannot share a cache entry.
+                None => format!("url-{}", cache_digest(&(url.as_str(), self.build_revision))),
             };
             let target_cache_file = python_builds_dir.join(format!("{hash_prefix}-{filename}"));
 
