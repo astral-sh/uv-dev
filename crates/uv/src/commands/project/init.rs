@@ -22,9 +22,9 @@ use uv_install_wheel::reserved_script_name;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, PythonDownloads, PythonEnvironment, PythonInstallation,
-    PythonPreference, PythonRequest, PythonVariant, PythonVersionFile, VersionFileDiscoveryOptions,
-    VersionRequest,
+    ConfigDiscovery, EnvironmentPreference, PythonBuildRequest, PythonDownloads, PythonEnvironment,
+    PythonInstallation, PythonPreference, PythonRequest, PythonVariant, PythonVersionFile,
+    VersionFileDiscoveryOptions, VersionRequest,
 };
 use uv_scripts::{Pep723Script, ScriptTag};
 use uv_settings::PythonInstallMirrors;
@@ -584,6 +584,7 @@ async fn determine_requires_python(
                 (requires_python, python_pin)
             }
             python_request => {
+                let build_request = python_request.build_request().unwrap_or_default();
                 let interpreter = PythonInstallation::find_or_download(
                     Some(python_request),
                     EnvironmentPreference::OnlySystem,
@@ -606,7 +607,7 @@ async fn determine_requires_python(
                     Some(PythonRequest::Version(VersionRequest::MajorMinor(
                         interpreter.python_major(),
                         interpreter.python_minor(),
-                        PythonVariant::Default.into(),
+                        build_request,
                     )))
                 } else {
                     None
@@ -631,7 +632,7 @@ async fn determine_requires_python(
             Some(PythonRequest::Version(VersionRequest::MajorMinor(
                 interpreter.python_major(),
                 interpreter.python_minor(),
-                PythonVariant::Default.into(),
+                PythonBuildRequest::from_interpreter(&interpreter),
             )))
         } else {
             None

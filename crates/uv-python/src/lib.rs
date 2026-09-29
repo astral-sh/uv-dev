@@ -4,13 +4,12 @@ use thiserror::Error;
 #[cfg(test)]
 use uv_static::EnvVars;
 
-pub(crate) use crate::discovery::PythonBuildRequest;
 #[cfg(all(test, unix))]
 use crate::discovery::find_python_installations;
 pub use crate::discovery::{
-    EnvironmentPreference, Error as DiscoveryError, PythonBuildName, PythonDownloads,
-    PythonNotFound, PythonPreference, PythonRequest, PythonSource, PythonVariant, VersionRequest,
-    find_all_python_installations,
+    EnvironmentPreference, Error as DiscoveryError, PythonBuildName, PythonBuildRequest,
+    PythonDownloads, PythonNotFound, PythonPreference, PythonRequest, PythonSource, PythonVariant,
+    VersionRequest, find_all_python_installations,
 };
 pub use crate::environment::{InvalidEnvironmentKind, PythonEnvironment};
 pub use crate::implementation::{ImplementationName, LenientImplementationName};
@@ -227,10 +226,14 @@ mod tests {
     use uv_cache::Cache;
 
     use crate::{
-        PythonDownloads, PythonNotFound, PythonRequest, PythonSource, PythonVersion,
+        Interpreter, PythonBuildRequest, PythonDownloads, PythonNotFound, PythonRequest,
+        PythonSource, PythonVersion, VersionRequest,
+        downloads::PythonDownloadRequest,
         find_all_python_installations, find_python_installations,
-        implementation::ImplementationName, installation::PythonInstallation,
-        managed::ManagedPythonInstallations, virtualenv::virtualenv_python_executable,
+        implementation::ImplementationName,
+        installation::PythonInstallation,
+        managed::{ManagedPythonInstallation, ManagedPythonInstallations},
+        virtualenv::virtualenv_python_executable,
     };
     use crate::{
         PythonPreference,
@@ -662,6 +665,190 @@ mod tests {
             ChildPath::new(path.as_ref().join("pyvenv.cfg")).touch()?;
             Ok(())
         }
+    }
+
+    #[test]
+    fn python_request_satisfied_build_identity() -> Result<()> {
+        let context = TestContext::new()?;
+
+        for implementation in [ImplementationName::CPython, ImplementationName::PyPy] {
+            for version in ["3.13.1", "3.13.0rc1"] {
+                for (variant, key_variant, free_threaded, debug) in [
+                    ("", "", false, false),
+                    ("t", "+freethreaded", true, false),
+                    ("d", "+debug", false, true),
+                    ("td", "+freethreaded+debug", true, true),
+                ] {
+                    for build_name in ["", "+custom"] {
+                        let key = format!(
+                            "{implementation}-{version}{key_variant}{build_name}-linux-x86_64-gnu"
+                        );
+                        let prefix = context.installations.root().join(&key);
+                        let executable = prefix.join("bin/python");
+                        TestContext::create_mock_interpreter(
+                            &executable,
+                            &PythonVersion::from_str(version)
+                                .expect("Test uses a valid Python version"),
+                            implementation,
+                            true,
+                            free_threaded,
+                        )?;
+                        let script = fs_err::read_to_string(&executable)?
+                            .replace(
+                                &format!("/home/ferris/.pyenv/versions/{version}"),
+                                &prefix.display().to_string(),
+                            )
+                            .replace(
+                                "\"debug_enabled\": false",
+                                &format!("\"debug_enabled\": {debug}"),
+                            );
+                        fs_err::write(&executable, script)?;
+                        let interpreter = Interpreter::query(&executable, &context.cache)?;
+                        let unnamed = build_name.is_empty();
+                        // Python 3.13 requires opt-in for free-threading, but not debug builds.
+                        let default_variant = !free_threaded;
+                        let version_request = VersionRequest::from_str(&format!("3.13{variant}"))?;
+                        let named_request =
+                            VersionRequest::from_str(&format!("3.13{variant}+custom"))?;
+
+                        // Expected interpreter-property and full build-identity matches are
+                        // separate: build names are not reported by the interpreter itself.
+                        let requests = [
+                            (PythonRequest::Any, true, true),
+                            (PythonRequest::Default, true, unnamed),
+                            (PythonRequest::Implementation(implementation), true, unnamed),
+                            (
+                                PythonRequest::Implementation(ImplementationName::GraalPy),
+                                false,
+                                false,
+                            ),
+                            (
+                                PythonRequest::Key(PythonDownloadRequest::default()),
+                                true,
+                                unnamed,
+                            ),
+                            (
+                                PythonRequest::Key(
+                                    PythonDownloadRequest::default()
+                                        .with_version(VersionRequest::Any),
+                                ),
+                                true,
+                                true,
+                            ),
+                            (
+                                PythonRequest::Key(
+                                    PythonDownloadRequest::default()
+                                        .with_version(VersionRequest::Default),
+                                ),
+                                default_variant,
+                                default_variant && unnamed,
+                            ),
+                            (PythonRequest::Version(VersionRequest::Any), true, true),
+                            (
+                                PythonRequest::Version(VersionRequest::Default),
+                                default_variant,
+                                default_variant && unnamed,
+                            ),
+                            (
+                                PythonRequest::Version(version_request.clone()),
+                                true,
+                                unnamed,
+                            ),
+                            (
+                                PythonRequest::Version(named_request.clone()),
+                                true,
+                                !unnamed,
+                            ),
+                            (
+                                PythonRequest::ImplementationVersion(
+                                    implementation,
+                                    named_request.clone(),
+                                ),
+                                true,
+                                !unnamed,
+                            ),
+                            (
+                                PythonRequest::ImplementationVersion(
+                                    ImplementationName::GraalPy,
+                                    named_request.clone(),
+                                ),
+                                false,
+                                false,
+                            ),
+                            (
+                                PythonRequest::Key(
+                                    PythonDownloadRequest::default().with_version(version_request),
+                                ),
+                                true,
+                                unnamed,
+                            ),
+                            (
+                                PythonRequest::Key(
+                                    PythonDownloadRequest::default().with_version(named_request),
+                                ),
+                                true,
+                                !unnamed,
+                            ),
+                            (
+                                PythonRequest::parse(&format!("3.12{variant}{build_name}")),
+                                false,
+                                false,
+                            ),
+                            (
+                                PythonRequest::parse(&format!("3.13{variant}+other")),
+                                true,
+                                false,
+                            ),
+                            (PythonRequest::File(executable.clone()), true, true),
+                            (PythonRequest::Directory(prefix.clone()), true, true),
+                            (
+                                PythonRequest::ExecutableName("python".to_owned()),
+                                true,
+                                true,
+                            ),
+                            (PythonRequest::File(prefix.join("missing")), false, false),
+                            (
+                                PythonRequest::Directory(prefix.join("missing")),
+                                false,
+                                false,
+                            ),
+                            (
+                                PythonRequest::ExecutableName("missing".to_owned()),
+                                false,
+                                false,
+                            ),
+                        ];
+
+                        context.run(|| {
+                            assert_eq!(
+                                Some(PythonBuildRequest::from_interpreter(&interpreter)),
+                                PythonRequest::parse(&format!("3.13{variant}{build_name}"))
+                                    .build_request(),
+                            );
+                            assert_eq!(
+                                ManagedPythonInstallation::key_from_interpreter(&interpreter)
+                                    .map(|key| key.to_string()),
+                                Some(key.clone()),
+                            );
+                            for (request, properties_match, identity_matches) in requests {
+                                assert_eq!(
+                                    request.satisfied_by_interpreter(&interpreter, &context.cache),
+                                    properties_match,
+                                    "Interpreter properties for {request:?} against {key}",
+                                );
+                                assert_eq!(
+                                    request.satisfied(&interpreter, &context.cache),
+                                    identity_matches,
+                                    "Build identity for {request:?} against {key}",
+                                );
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     #[test]
