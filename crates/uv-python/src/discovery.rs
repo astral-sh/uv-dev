@@ -1623,15 +1623,13 @@ pub(crate) async fn find_best_python_installation(
             };
 
             let download = match download_request.clone().fill() {
-                Ok(request) => {
-                    ManagedPythonDownloadList::find_streaming(
-                        client_builder,
-                        cache,
-                        python_downloads_json_url,
-                        &request,
-                    )
-                    .await
-                }
+                Ok(request) => Ok(ManagedPythonDownloadList::find_streaming(
+                    client_builder,
+                    cache,
+                    python_downloads_json_url,
+                    &request,
+                )
+                .await?),
                 Err(error) => Err(error),
             };
 

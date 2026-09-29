@@ -1428,6 +1428,33 @@ fn python_find_prerelease_version_specifiers() {
 
 #[test]
 #[cfg(feature = "test-python-managed")]
+fn automatic_discovery_propagates_explicit_manifest_errors() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("requirements.in").touch().unwrap();
+    for extension in ["json", "ndjson"] {
+        let manifest = context
+            .temp_dir
+            .child(format!("python-downloads.{extension}"));
+        manifest.write_str("{").unwrap();
+        let output = context
+            .pip_compile()
+            .arg("requirements.in")
+            .arg("--python-version")
+            .arg("3.99")
+            .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic")
+            .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, manifest.path())
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Unable to parse"),
+            "{output:?}"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
 fn automatic_discovery_with_bounded_ndjson_manifest() {
     for request_option in ["--python", "--python-version"] {
         let context = uv_test::test_context_with_versions!(&[])
