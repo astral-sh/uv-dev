@@ -1,0 +1,2980 @@
+{
+  "analysis": {
+    "1785": {
+      "real": {
+        "resolver_errors/render/httpx": {
+          "geometric_mean_ratio": 0.9914257808136973,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.9860359273154887,
+            "resamples": 20000,
+            "seed": 1785,
+            "upper": 0.9968529715088583
+          },
+          "pairs": [
+            {
+              "candidate_ns": 29357.68576388889,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 29604.798132183907,
+              "ratio": 0.9916529622262016
+            },
+            {
+              "candidate_ns": 29235.372413793102,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 29541.898084291188,
+              "ratio": 0.9896240360174731
+            },
+            {
+              "candidate_ns": 29667.307005494506,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 29859.41896551724,
+              "ratio": 0.9935661186091869
+            },
+            {
+              "candidate_ns": 29848.125957854405,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 29567.940476190473,
+              "ratio": 1.009475989100071
+            },
+            {
+              "candidate_ns": 29481.715773809523,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 30233.330357142855,
+              "ratio": 0.9751395372440087
+            },
+            {
+              "candidate_ns": 28919.51517857143,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 29258.183116883116,
+              "ratio": 0.9884248472655071
+            },
+            {
+              "candidate_ns": 29268.680844155846,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 29222.08125,
+              "ratio": 1.001594670610802
+            },
+            {
+              "candidate_ns": 29418.4953125,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 29381.958333333336,
+              "ratio": 1.0012435174930192
+            },
+            {
+              "candidate_ns": 29381.151785714286,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 29859.318993506495,
+              "ratio": 0.9839859975407947
+            },
+            {
+              "candidate_ns": 29222.632769016698,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 29928.083333333336,
+              "ratio": 0.9764284750059179
+            },
+            {
+              "candidate_ns": 29463.93095238095,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 29716.22543632838,
+              "ratio": 0.9915098744795833
+            },
+            {
+              "candidate_ns": 29475.550000000003,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 29623.111730899254,
+              "ratio": 0.9950186957994243
+            }
+          ]
+        },
+        "resolver_errors/render/numpy": {
+          "geometric_mean_ratio": 0.9930520803833064,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.9824077026115211,
+            "resamples": 20000,
+            "seed": 1785,
+            "upper": 1.005643297329733
+          },
+          "pairs": [
+            {
+              "candidate_ns": 29526.363095238095,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 30062.48724489796,
+              "ratio": 0.9821663408854884
+            },
+            {
+              "candidate_ns": 29405.371565934067,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 29978.235714285714,
+              "ratio": 0.9808906650207351
+            },
+            {
+              "candidate_ns": 29756.549886621317,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 30290.19745879121,
+              "ratio": 0.9823821692514253
+            },
+            {
+              "candidate_ns": 30222.897947640595,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 29874.888909774436,
+              "ratio": 1.0116488814039506
+            },
+            {
+              "candidate_ns": 29779.72930194805,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 30584.612283549784,
+              "ratio": 0.9736834008507392
+            },
+            {
+              "candidate_ns": 29403.77142857143,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 30540.098214285717,
+              "ratio": 0.9627923008714245
+            },
+            {
+              "candidate_ns": 30865.434771825396,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 29560.05158730159,
+              "ratio": 1.04416038249015
+            },
+            {
+              "candidate_ns": 29828.58829365079,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 29946.644345238095,
+              "ratio": 0.9960577869685063
+            },
+            {
+              "candidate_ns": 30144.035164835164,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 30251.553730867345,
+              "ratio": 0.9964458497904366
+            },
+            {
+              "candidate_ns": 29913.87599206349,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 30306.32261904762,
+              "ratio": 0.9870506682081753
+            },
+            {
+              "candidate_ns": 30053.437423687425,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 29603.474489795917,
+              "ratio": 1.0151996663110139
+            },
+            {
+              "candidate_ns": 29441.054591836735,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 29836.763909774436,
+              "ratio": 0.9867375255864103
+            }
+          ]
+        },
+        "resolver_errors/render/rooster": {
+          "geometric_mean_ratio": 0.9819468400081709,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.9272446559585212,
+            "resamples": 20000,
+            "seed": 1785,
+            "upper": 1.0337199764359626
+          },
+          "pairs": [
+            {
+              "candidate_ns": 30033.012345679013,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 30275.8287037037,
+              "ratio": 0.9919798608850307
+            },
+            {
+              "candidate_ns": 31127.672275641024,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 31243.340432098765,
+              "ratio": 0.9962978300380805
+            },
+            {
+              "candidate_ns": 32109.95681511471,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 30405.629923574368,
+              "ratio": 1.0560530038622529
+            },
+            {
+              "candidate_ns": 31892.16851851852,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 31062.064160119713,
+              "ratio": 1.026724056525019
+            },
+            {
+              "candidate_ns": 29631.318209876543,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 31809.711560044896,
+              "ratio": 0.9315179785250062
+            },
+            {
+              "candidate_ns": 31002.41512345679,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 36707.29897435897,
+              "ratio": 0.8445844829147687
+            },
+            {
+              "candidate_ns": 31296.0,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 29915.533950617282,
+              "ratio": 1.0461454591337567
+            },
+            {
+              "candidate_ns": 29576.198412698413,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 37087.96875,
+              "ratio": 0.7974607240440584
+            },
+            {
+              "candidate_ns": 31379.960082304526,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 30750.174145299145,
+              "ratio": 1.020480727492129
+            },
+            {
+              "candidate_ns": 34739.05796703297,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 30155.490384615383,
+              "ratio": 1.1519977796400225
+            },
+            {
+              "candidate_ns": 31206.660030864197,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 30644.830409356728,
+              "ratio": 1.0183335856000015
+            },
+            {
+              "candidate_ns": 31233.648611111108,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 32725.080555555556,
+              "ratio": 0.954425415640688
+            }
+          ]
+        },
+        "resolver_errors/resolve_and_render/httpx": {
+          "geometric_mean_ratio": 1.0032224049518164,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.9988424774064808,
+            "resamples": 20000,
+            "seed": 1785,
+            "upper": 1.007601710347849
+          },
+          "pairs": [
+            {
+              "candidate_ns": 507021.30555555556,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 508080.65316091955,
+              "ratio": 0.9979150010952523
+            },
+            {
+              "candidate_ns": 511292.28218390804,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 507706.4327586207,
+              "ratio": 1.0070628402437283
+            },
+            {
+              "candidate_ns": 509620.8898351648,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 506303.6978701826,
+              "ratio": 1.006551783008768
+            },
+            {
+              "candidate_ns": 513088.11625615763,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 507315.2682095865,
+              "ratio": 1.0113792121158598
+            },
+            {
+              "candidate_ns": 511793.04030612245,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 513376.8972689076,
+              "ratio": 0.9969148261808994
+            },
+            {
+              "candidate_ns": 515458.8263343799,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 508475.4399072394,
+              "ratio": 1.013733969979778
+            },
+            {
+              "candidate_ns": 506327.49017857143,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 511043.0496031746,
+              "ratio": 0.9907726767279883
+            },
+            {
+              "candidate_ns": 506907.01403061225,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 510156.8045977012,
+              "ratio": 0.9936298202086089
+            },
+            {
+              "candidate_ns": 506970.7471264368,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 509473.6612244898,
+              "ratio": 0.9950872551644036
+            },
+            {
+              "candidate_ns": 511655.62304075237,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 509011.6333180708,
+              "ratio": 1.0051943601081301
+            },
+            {
+              "candidate_ns": 515251.5471264368,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 508096.7671356421,
+              "ratio": 1.0140815302390709
+            },
+            {
+              "candidate_ns": 509070.7342743463,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 505680.84038461535,
+              "ratio": 1.0067036233509512
+            }
+          ]
+        },
+        "resolver_errors/resolve_and_render/numpy": {
+          "geometric_mean_ratio": 1.0022802729588558,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.9979961070197958,
+            "resamples": 20000,
+            "seed": 1785,
+            "upper": 1.007076965326992
+          },
+          "pairs": [
+            {
+              "candidate_ns": 515774.1232142857,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 518084.68833943835,
+              "ratio": 0.995540178705998
+            },
+            {
+              "candidate_ns": 513625.8350840336,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 515290.5814732143,
+              "ratio": 0.996769305613114
+            },
+            {
+              "candidate_ns": 515758.40687003965,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 517056.7376373627,
+              "ratio": 0.9974889974874795
+            },
+            {
+              "candidate_ns": 515084.6969246032,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 514676.79545454547,
+              "ratio": 1.0007925390724046
+            },
+            {
+              "candidate_ns": 528123.4107142857,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 517372.59464285715,
+              "ratio": 1.0207796396306028
+            },
+            {
+              "candidate_ns": 519582.50297619053,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 516316.3100240096,
+              "ratio": 1.0063259534683866
+            },
+            {
+              "candidate_ns": 513228.7326127819,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 518154.4032738095,
+              "ratio": 0.9904938168431916
+            },
+            {
+              "candidate_ns": 516918.51816152595,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 516547.54524886876,
+              "ratio": 1.0007181776703216
+            },
+            {
+              "candidate_ns": 514214.5736607143,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 516324.0208333333,
+              "ratio": 0.9959144895695258
+            },
+            {
+              "candidate_ns": 519134.6076388889,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 517687.8078007519,
+              "ratio": 1.0027947342323615
+            },
+            {
+              "candidate_ns": 518943.1254960317,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 514432.8869047619,
+              "ratio": 1.008767399414153
+            },
+            {
+              "candidate_ns": 517680.0413461538,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 511865.9208829365,
+              "ratio": 1.0113586785640825
+            }
+          ]
+        },
+        "resolver_errors/resolve_and_render/rooster": {
+          "geometric_mean_ratio": 0.9988789051342934,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.9948261259720458,
+            "resamples": 20000,
+            "seed": 1785,
+            "upper": 1.0037196046402692
+          },
+          "pairs": [
+            {
+              "candidate_ns": 531497.1430659983,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 534816.6405228758,
+              "ratio": 0.993793204613768
+            },
+            {
+              "candidate_ns": 530637.0075757576,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 531924.2064814814,
+              "ratio": 0.997580108425149
+            },
+            {
+              "candidate_ns": 532786.0605664488,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 536884.2286549708,
+              "ratio": 0.992366756425703
+            },
+            {
+              "candidate_ns": 533686.0725308643,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 528030.8693415638,
+              "ratio": 1.010709985945239
+            },
+            {
+              "candidate_ns": 532100.3018518519,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 534555.0555555555,
+              "ratio": 0.9954078561633798
+            },
+            {
+              "candidate_ns": 542332.8732193732,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 532887.8352623456,
+              "ratio": 1.0177242513940625
+            },
+            {
+              "candidate_ns": 534076.4276895943,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 533814.0074074074,
+              "ratio": 1.000491594972304
+            },
+            {
+              "candidate_ns": 529098.1292016807,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 534458.992341966,
+              "ratio": 0.989969551982287
+            },
+            {
+              "candidate_ns": 534563.0368694486,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 536603.1428571428,
+              "ratio": 0.9961981102517744
+            },
+            {
+              "candidate_ns": 532682.0052910054,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 534663.8640104751,
+              "ratio": 0.996293262266494
+            },
+            {
+              "candidate_ns": 535881.7351190476,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 533494.14160401,
+              "ratio": 1.0044753884416782
+            },
+            {
+              "candidate_ns": 528304.875,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 532613.0011904761,
+              "ratio": 0.9919113386626937
+            }
+          ]
+        }
+      },
+      "stress": {
+        "balanced_excluded_256": {
+          "geometric_mean_ratio": 0.1934157086573833,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.19268858762360022,
+            "resamples": 20000,
+            "seed": 1785,
+            "upper": 0.19410973826222463
+          },
+          "pairs": [
+            {
+              "candidate_ns": 1722364.961111111,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 8881747.272727273,
+              "ratio": 0.1939218611184636
+            },
+            {
+              "candidate_ns": 1714295.5444444446,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 8903046.610294119,
+              "ratio": 0.1925515634684307
+            },
+            {
+              "candidate_ns": 1736398.297767857,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 8971629.361764707,
+              "ratio": 0.1935432492528102
+            },
+            {
+              "candidate_ns": 1711158.0425925925,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 8899251.34375,
+              "ratio": 0.19228112304012512
+            },
+            {
+              "candidate_ns": 1708849.7152777778,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 8958138.2012987,
+              "ratio": 0.19075947221154038
+            },
+            {
+              "candidate_ns": 1746090.6176900584,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 8910384.738636363,
+              "ratio": 0.19596130457968064
+            },
+            {
+              "candidate_ns": 1731689.4184303351,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 8919519.26984127,
+              "ratio": 0.19414604823889256
+            },
+            {
+              "candidate_ns": 1729796.754761905,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 8918549.371875,
+              "ratio": 0.19395494520856585
+            },
+            {
+              "candidate_ns": 1728353.717813051,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 8895953.67857143,
+              "ratio": 0.19428537740437082
+            },
+            {
+              "candidate_ns": 1727344.64339981,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 8946440.673796792,
+              "ratio": 0.1930761859807583
+            },
+            {
+              "candidate_ns": 1721073.648148148,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 8865235.43956044,
+              "ratio": 0.1941373875382923
+            },
+            {
+              "candidate_ns": 1715157.1,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 8913645.080882352,
+              "ratio": 0.19241927229956732
+            }
+          ]
+        },
+        "balanced_plain_1024": {
+          "geometric_mean_ratio": 0.9638701700722326,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.960950316302717,
+            "resamples": 20000,
+            "seed": 1785,
+            "upper": 0.9669833998851418
+          },
+          "pairs": [
+            {
+              "candidate_ns": 3155636.976923077,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 3268198.6603238867,
+              "ratio": 0.965558494112578
+            },
+            {
+              "candidate_ns": 3182537.583508772,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 3290052.7982456144,
+              "ratio": 0.9673211278572266
+            },
+            {
+              "candidate_ns": 3168068.343567251,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 3316395.5166666666,
+              "ratio": 0.9552745827950883
+            },
+            {
+              "candidate_ns": 3167204.263888889,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 3295671.9606617647,
+              "ratio": 0.961019270635455
+            },
+            {
+              "candidate_ns": 3168312.6314285714,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 3278285.4771428574,
+              "ratio": 0.9664541582845521
+            },
+            {
+              "candidate_ns": 3197520.7750000004,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 3274877.561111111,
+              "ratio": 0.9763787241911832
+            },
+            {
+              "candidate_ns": 3178978.394871795,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 3282971.0980392154,
+              "ratio": 0.9683236007683617
+            },
+            {
+              "candidate_ns": 3168722.565,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 3287630.3785714284,
+              "ratio": 0.9638317572600429
+            },
+            {
+              "candidate_ns": 3145594.763076923,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 3273552.3,
+              "ratio": 0.9609117175482191
+            },
+            {
+              "candidate_ns": 3147896.4729411765,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 3289668.6,
+              "ratio": 0.9569038270119903
+            },
+            {
+              "candidate_ns": 3171157.809090909,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 3289241.112087912,
+              "ratio": 0.9641001376995294
+            },
+            {
+              "candidate_ns": 3153437.6100000003,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 3282967.5204334366,
+              "ratio": 0.9605448699607193
+            }
+          ]
+        },
+        "comb_excluded_256": {
+          "geometric_mean_ratio": 0.026471788602011652,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.026270541915882815,
+            "resamples": 20000,
+            "seed": 1785,
+            "upper": 0.026641941300304478
+          },
+          "pairs": [
+            {
+              "candidate_ns": 1746275.846491228,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 65994729.5,
+              "ratio": 0.026460838005120214
+            },
+            {
+              "candidate_ns": 1755800.8254419193,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 65841727.333333336,
+              "ratio": 0.02666699214242849
+            },
+            {
+              "candidate_ns": 1767613.9958333333,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 66886209.66666667,
+              "ratio": 0.02642718139721766
+            },
+            {
+              "candidate_ns": 1743236.018231854,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 65482545.33333333,
+              "ratio": 0.026621384513354808
+            },
+            {
+              "candidate_ns": 1736126.9586466164,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 67579388.66666667,
+              "ratio": 0.025690184431972463
+            },
+            {
+              "candidate_ns": 1767884.619047619,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 65725905.0,
+              "ratio": 0.026897836082251266
+            },
+            {
+              "candidate_ns": 1742399.8703703703,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 65982080.5,
+              "ratio": 0.02640716778202182
+            },
+            {
+              "candidate_ns": 1750900.6472222223,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 65725396.0,
+              "ratio": 0.026639636332084212
+            },
+            {
+              "candidate_ns": 1747803.2996031747,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 65977550.66666667,
+              "ratio": 0.026490878820789626
+            },
+            {
+              "candidate_ns": 1756428.6231481482,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 67639208.16666667,
+              "ratio": 0.025967610661854778
+            },
+            {
+              "candidate_ns": 1753543.1101010102,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 65389654.0,
+              "ratio": 0.026816828088752544
+            },
+            {
+              "candidate_ns": 1754419.8111111112,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 65957418.33333333,
+              "ratio": 0.02659927958739508
+            }
+          ]
+        },
+        "comb_plain_1024": {
+          "geometric_mean_ratio": 0.4532170453067769,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.45033940572674,
+            "resamples": 20000,
+            "seed": 1785,
+            "upper": 0.4557219221804721
+          },
+          "pairs": [
+            {
+              "candidate_ns": 3140899.035,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 7096670.3125,
+              "ratio": 0.442587706162375
+            },
+            {
+              "candidate_ns": 3146566.342857143,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 6885016.433333334,
+              "ratio": 0.45701653341352366
+            },
+            {
+              "candidate_ns": 3138499.55,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 6918814.154761905,
+              "ratio": 0.45361813163313736
+            },
+            {
+              "candidate_ns": 3146521.4944444443,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 6865771.814814815,
+              "ratio": 0.4582910092722493
+            },
+            {
+              "candidate_ns": 3143887.592857143,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 7017129.420138888,
+              "ratio": 0.4480304415982849
+            },
+            {
+              "candidate_ns": 3154811.5358288772,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 6993511.101010101,
+              "ratio": 0.45110553057865527
+            },
+            {
+              "candidate_ns": 3140316.0170454546,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 7007657.344444444,
+              "ratio": 0.4481263655870739
+            },
+            {
+              "candidate_ns": 3141531.5458333334,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 6936615.635416666,
+              "ratio": 0.45289110871206995
+            },
+            {
+              "candidate_ns": 3134802.5666666664,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 6870355.012820513,
+              "ratio": 0.4562795606365215
+            },
+            {
+              "candidate_ns": 3156748.177840909,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 6929015.811942959,
+              "ratio": 0.45558391891672245
+            },
+            {
+              "candidate_ns": 3152101.6460526315,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 6904886.095238095,
+              "ratio": 0.45650306211806385
+            },
+            {
+              "candidate_ns": 3154758.037857143,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 6875072.724673202,
+              "ratio": 0.4588690424372348
+            }
+          ]
+        },
+        "comb_plain_32": {
+          "geometric_mean_ratio": 0.9110857280281013,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.8983873769416895,
+            "resamples": 20000,
+            "seed": 1785,
+            "upper": 0.9201522351497652
+          },
+          "pairs": [
+            {
+              "candidate_ns": 101210.40933560923,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 118811.44093406593,
+              "ratio": 0.8518574351082541
+            },
+            {
+              "candidate_ns": 101040.93524816175,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 109241.47015078997,
+              "ratio": 0.9249320345898977
+            },
+            {
+              "candidate_ns": 101005.22060016221,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 111771.89180327869,
+              "ratio": 0.9036728194413486
+            },
+            {
+              "candidate_ns": 100404.4653092006,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 109485.6939901743,
+              "ratio": 0.9170555681750651
+            },
+            {
+              "candidate_ns": 100925.11433823529,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 109740.80088888889,
+              "ratio": 0.919668104485775
+            },
+            {
+              "candidate_ns": 100387.00725187222,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 109481.704004329,
+              "ratio": 0.9169295286809093
+            },
+            {
+              "candidate_ns": 102576.77803268857,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 109858.62728475229,
+              "ratio": 0.9337161820419506
+            },
+            {
+              "candidate_ns": 100172.8288726683,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 109670.8043049543,
+              "ratio": 0.9133955888034192
+            },
+            {
+              "candidate_ns": 100657.71259406567,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 110068.01655328798,
+              "ratio": 0.9145046467275402
+            },
+            {
+              "candidate_ns": 100695.97044511235,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 111327.39914285715,
+              "ratio": 0.9045030353749451
+            },
+            {
+              "candidate_ns": 100529.26851365546,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 109535.18293963255,
+              "ratio": 0.9177806236838034
+            },
+            {
+              "candidate_ns": 100551.74993917275,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 109581.69931997138,
+              "ratio": 0.9175961913637444
+            }
+          ]
+        }
+      }
+    },
+    "1788": {
+      "real": {
+        "resolver_errors/render/httpx": {
+          "geometric_mean_ratio": 1.0876995768787454,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 1.0800980360413315,
+            "resamples": 20000,
+            "seed": 1788,
+            "upper": 1.0962727245170802
+          },
+          "pairs": [
+            {
+              "candidate_ns": 31830.724229691878,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 29168.82959770115,
+              "ratio": 1.0912581913194253
+            },
+            {
+              "candidate_ns": 32391.61111111111,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 29368.78091843501,
+              "ratio": 1.1029266485752782
+            },
+            {
+              "candidate_ns": 31670.969345238096,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 29057.543452380953,
+              "ratio": 1.0899396708169768
+            },
+            {
+              "candidate_ns": 32142.867323852617,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 29520.3021978022,
+              "ratio": 1.0888393725944197
+            },
+            {
+              "candidate_ns": 31439.066620879123,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 29378.468723893064,
+              "ratio": 1.0701397311191445
+            },
+            {
+              "candidate_ns": 31748.518973214283,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 29467.725375939848,
+              "ratio": 1.0773997167469425
+            },
+            {
+              "candidate_ns": 32260.476325145442,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 29114.65,
+              "ratio": 1.1080496013225452
+            },
+            {
+              "candidate_ns": 32064.03199404762,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 29833.00833333333,
+              "ratio": 1.074783730684696
+            },
+            {
+              "candidate_ns": 32355.41236494598,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 28958.095462794918,
+              "ratio": 1.1173183818844683
+            },
+            {
+              "candidate_ns": 31909.988864942527,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 29664.880952380954,
+              "ratio": 1.0756823503241255
+            },
+            {
+              "candidate_ns": 31945.073214285716,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 29437.47607758621,
+              "ratio": 1.0851838360765174
+            },
+            {
+              "candidate_ns": 31332.67628205128,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 29227.544742063492,
+              "ratio": 1.0720256031960886
+            }
+          ]
+        },
+        "resolver_errors/render/numpy": {
+          "geometric_mean_ratio": 1.094437349255794,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 1.0852515468490138,
+            "resamples": 20000,
+            "seed": 1788,
+            "upper": 1.1040911753951135
+          },
+          "pairs": [
+            {
+              "candidate_ns": 32398.08134920635,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 29601.452119309262,
+              "ratio": 1.094476082410593
+            },
+            {
+              "candidate_ns": 32976.930252100836,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 29336.839285714286,
+              "ratio": 1.1240791801371428
+            },
+            {
+              "candidate_ns": 32518.503826530614,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 29198.012499999997,
+              "ratio": 1.1137231969652255
+            },
+            {
+              "candidate_ns": 32498.43867481203,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 29967.317336309527,
+              "ratio": 1.0844627268466138
+            },
+            {
+              "candidate_ns": 32075.86443452381,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 29580.789915966387,
+              "ratio": 1.084347798880472
+            },
+            {
+              "candidate_ns": 32315.85119047619,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 29843.36462585034,
+              "ratio": 1.0828487871801218
+            },
+            {
+              "candidate_ns": 32825.127380952385,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 29559.178571428572,
+              "ratio": 1.1104884833532087
+            },
+            {
+              "candidate_ns": 32859.524999999994,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 30364.647321428572,
+              "ratio": 1.0821638944843193
+            },
+            {
+              "candidate_ns": 32702.093112244896,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 29372.130357142858,
+              "ratio": 1.1133715094755543
+            },
+            {
+              "candidate_ns": 32305.03050595238,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 30272.798763736264,
+              "ratio": 1.0671306197380905
+            },
+            {
+              "candidate_ns": 32779.700834879404,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 29829.67261904762,
+              "ratio": 1.098895762400961
+            },
+            {
+              "candidate_ns": 32158.21607142857,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 29809.44266917293,
+              "ratio": 1.078792932438304
+            }
+          ]
+        },
+        "resolver_errors/render/rooster": {
+          "geometric_mean_ratio": 1.1268016712838158,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 1.067778409659922,
+            "resamples": 20000,
+            "seed": 1788,
+            "upper": 1.2007283942521059
+          },
+          "pairs": [
+            {
+              "candidate_ns": 32521.998033216783,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 31563.611441798945,
+              "ratio": 1.030363654462831
+            },
+            {
+              "candidate_ns": 33368.51520467836,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 31628.010288065845,
+              "ratio": 1.0550304904026562
+            },
+            {
+              "candidate_ns": 35235.07361111111,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 30117.54012345679,
+              "ratio": 1.169918707393655
+            },
+            {
+              "candidate_ns": 32579.60648148148,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 30259.42905982906,
+              "ratio": 1.0766761797476403
+            },
+            {
+              "candidate_ns": 41819.44994479205,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 30239.334199696772,
+              "ratio": 1.3829487669477658
+            },
+            {
+              "candidate_ns": 33714.76510721247,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 32775.20318930041,
+              "ratio": 1.0286668525740454
+            },
+            {
+              "candidate_ns": 33845.080176767675,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 32850.06481481482,
+              "ratio": 1.030289601179238
+            },
+            {
+              "candidate_ns": 44427.791747888245,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 31437.74063899064,
+              "ratio": 1.4131992581167458
+            },
+            {
+              "candidate_ns": 32781.19943019943,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 30010.3208590535,
+              "ratio": 1.0923308545803172
+            },
+            {
+              "candidate_ns": 33437.45053606237,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 31079.382105263157,
+              "ratio": 1.0758724360353318
+            },
+            {
+              "candidate_ns": 34631.60925925926,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 32631.10859728507,
+              "ratio": 1.0613065491173852
+            },
+            {
+              "candidate_ns": 34891.959836459835,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 29461.257973251028,
+              "ratio": 1.184333671974888
+            }
+          ]
+        },
+        "resolver_errors/resolve_and_render/httpx": {
+          "geometric_mean_ratio": 1.005622707626589,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 1.0019146570623725,
+            "resamples": 20000,
+            "seed": 1788,
+            "upper": 1.0089200354294638
+          },
+          "pairs": [
+            {
+              "candidate_ns": 510322.12606837606,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 510802.0512733829,
+              "ratio": 0.9990604477726539
+            },
+            {
+              "candidate_ns": 517221.76091954025,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 510790.37883141765,
+              "ratio": 1.0125910399934241
+            },
+            {
+              "candidate_ns": 512017.4365203762,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 504940.33261494257,
+              "ratio": 1.014015723142541
+            },
+            {
+              "candidate_ns": 510207.0267857143,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 508631.89445088385,
+              "ratio": 1.003096802131394
+            },
+            {
+              "candidate_ns": 511520.66964285716,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 506277.61257002805,
+              "ratio": 1.0103560910904468
+            },
+            {
+              "candidate_ns": 506966.43500525213,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 505065.2509920635,
+              "ratio": 1.0037642344418949
+            },
+            {
+              "candidate_ns": 509459.0385338346,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 507498.31043956045,
+              "ratio": 1.0038635164963918
+            },
+            {
+              "candidate_ns": 508760.57886904763,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 513377.8990147783,
+              "ratio": 0.9910060013206806
+            },
+            {
+              "candidate_ns": 514732.0332195378,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 509844.7931547619,
+              "ratio": 1.0095857408575954
+            },
+            {
+              "candidate_ns": 512235.743785014,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 507863.68690476194,
+              "ratio": 1.0086087211844148
+            },
+            {
+              "candidate_ns": 512407.693328373,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 507333.126984127,
+              "ratio": 1.0100024344446263
+            },
+            {
+              "candidate_ns": 508949.41071428574,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 508057.21565276827,
+              "ratio": 1.0017560917039061
+            }
+          ]
+        },
+        "resolver_errors/resolve_and_render/numpy": {
+          "geometric_mean_ratio": 1.0050161096829011,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 1.00193837265933,
+            "resamples": 20000,
+            "seed": 1788,
+            "upper": 1.0079089764553482
+          },
+          "pairs": [
+            {
+              "candidate_ns": 517255.7322443182,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 517014.3044642857,
+              "ratio": 1.0004669653778393
+            },
+            {
+              "candidate_ns": 522480.19561157795,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 517934.0029761905,
+              "ratio": 1.0087775519839668
+            },
+            {
+              "candidate_ns": 517198.1794217687,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 514466.5784774436,
+              "ratio": 1.005309579005908
+            },
+            {
+              "candidate_ns": 517423.71709183673,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 517927.6324404762,
+              "ratio": 0.9990270545205997
+            },
+            {
+              "candidate_ns": 519810.4726190476,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 516657.1398809524,
+              "ratio": 1.0061033371934467
+            },
+            {
+              "candidate_ns": 520235.9107142857,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 515402.7862244898,
+              "ratio": 1.0093773736172447
+            },
+            {
+              "candidate_ns": 519257.7806122449,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 516730.4946428571,
+              "ratio": 1.0048909170168765
+            },
+            {
+              "candidate_ns": 518885.802537594,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 515138.071978022,
+              "ratio": 1.0072751962307533
+            },
+            {
+              "candidate_ns": 517771.6964285714,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 513689.6316964286,
+              "ratio": 1.0079465585448202
+            },
+            {
+              "candidate_ns": 521551.2003968254,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 513873.78881448414,
+              "ratio": 1.0149402669477523
+            },
+            {
+              "candidate_ns": 515320.94345238095,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 518446.57337662333,
+              "ratio": 0.9939711629225645
+            },
+            {
+              "candidate_ns": 515794.7259778911,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 514624.95343137253,
+              "ratio": 1.0022730583480628
+            }
+          ]
+        },
+        "resolver_errors/resolve_and_render/rooster": {
+          "geometric_mean_ratio": 1.0068386293130713,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 1.0039005010264914,
+            "resamples": 20000,
+            "seed": 1788,
+            "upper": 1.0097293535883427
+          },
+          "pairs": [
+            {
+              "candidate_ns": 540320.1876543211,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 531712.8508230452,
+              "ratio": 1.0161879420780453
+            },
+            {
+              "candidate_ns": 538079.2828282828,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 534242.4074074074,
+              "ratio": 1.0071818997662412
+            },
+            {
+              "candidate_ns": 536983.0089653146,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 531482.1944444445,
+              "ratio": 1.0103499507196474
+            },
+            {
+              "candidate_ns": 536774.0185185185,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 529855.878429263,
+              "ratio": 1.013056644968749
+            },
+            {
+              "candidate_ns": 534921.5415263749,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 531504.8518518519,
+              "ratio": 1.0064283320511913
+            },
+            {
+              "candidate_ns": 533053.1898148148,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 534468.4629629629,
+              "ratio": 0.9973519987684546
+            },
+            {
+              "candidate_ns": 536610.9120370371,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 532365.0618753674,
+              "ratio": 1.007975448551625
+            },
+            {
+              "candidate_ns": 536201.8032407407,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 531468.3611111111,
+              "ratio": 1.0089063479145468
+            },
+            {
+              "candidate_ns": 535270.8230994153,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 536274.153671215,
+              "ratio": 0.998129071548701
+            },
+            {
+              "candidate_ns": 537531.0193602694,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 533705.0260007483,
+              "ratio": 1.0071687414828951
+            },
+            {
+              "candidate_ns": 532513.0496794872,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 529884.4814814815,
+              "ratio": 1.0049606438570473
+            },
+            {
+              "candidate_ns": 531567.6172839506,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 529173.0354497354,
+              "ratio": 1.0045251395551176
+            }
+          ]
+        }
+      },
+      "stress": {
+        "comb_plain_32": {
+          "geometric_mean_ratio": 0.7745181780841839,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.7701613959845617,
+            "resamples": 20000,
+            "seed": 1788,
+            "upper": 0.7786698243749863
+          },
+          "pairs": [
+            {
+              "candidate_ns": 76874.40930316091,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 99416.52072902943,
+              "ratio": 0.7732558808076828
+            },
+            {
+              "candidate_ns": 76974.68375591616,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 99161.0229468599,
+              "ratio": 0.7762594764393129
+            },
+            {
+              "candidate_ns": 76775.08084291188,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 99406.20690063466,
+              "ratio": 0.7723368915952642
+            },
+            {
+              "candidate_ns": 77573.78830980067,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 99166.54843268242,
+              "ratio": 0.7822576215049005
+            },
+            {
+              "candidate_ns": 78274.66484162895,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 99231.01515468227,
+              "ratio": 0.7888124969760074
+            },
+            {
+              "candidate_ns": 76896.06009730208,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 101389.57918871252,
+              "ratio": 0.7584217304440962
+            },
+            {
+              "candidate_ns": 76711.45322897761,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 99553.1587962963,
+              "ratio": 0.770557701598832
+            },
+            {
+              "candidate_ns": 77614.5359219269,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 99298.78361513687,
+              "ratio": 0.781626250556563
+            },
+            {
+              "candidate_ns": 76913.20178571428,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 99273.41847826086,
+              "ratio": 0.7747612902295383
+            },
+            {
+              "candidate_ns": 76873.800598659,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 98961.86801328168,
+              "ratio": 0.7768022384979815
+            },
+            {
+              "candidate_ns": 77366.63576091392,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 99942.5746350365,
+              "ratio": 0.77411089361502
+            },
+            {
+              "candidate_ns": 77463.397248572,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 101198.55252100842,
+              "ratio": 0.7654595378969566
+            }
+          ]
+        },
+        "shared_identified_12": {
+          "geometric_mean_ratio": 0.003235993331498727,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.0032212809196307153,
+            "resamples": 20000,
+            "seed": 1788,
+            "upper": 0.0032503870177353774
+          },
+          "pairs": [
+            {
+              "candidate_ns": 38332.0605999462,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 11939891.645098038,
+              "ratio": 0.003210419469399754
+            },
+            {
+              "candidate_ns": 38159.395910493826,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 11814662.905555556,
+              "ratio": 0.0032298336580174713
+            },
+            {
+              "candidate_ns": 38806.89655748663,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 11830415.2625,
+              "ratio": 0.003280264952363639
+            },
+            {
+              "candidate_ns": 38378.11887026692,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 11847356.155844156,
+              "ratio": 0.0032393825563634686
+            },
+            {
+              "candidate_ns": 38637.716104868916,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 11860825.18627451,
+              "ratio": 0.0032575908925443864
+            },
+            {
+              "candidate_ns": 38137.91377965044,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 11921087.894230768,
+              "ratio": 0.0031991974321494056
+            },
+            {
+              "candidate_ns": 38181.79505306775,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 11782042.347222222,
+              "ratio": 0.003240677119283112
+            },
+            {
+              "candidate_ns": 38543.80708215298,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 11860226.891666666,
+              "ratio": 0.003249837244617551
+            },
+            {
+              "candidate_ns": 38328.57681058496,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 11815497.922794119,
+              "ratio": 0.003243923959957927
+            },
+            {
+              "candidate_ns": 38206.89181419139,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 11828364.256410256,
+              "ratio": 0.003230107814230152
+            },
+            {
+              "candidate_ns": 37950.916527001864,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 11907731.673809525,
+              "ratio": 0.003187081936895929
+            },
+            {
+              "candidate_ns": 38586.48934624698,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 11818784.75490196,
+              "ratio": 0.00326484407208134
+            }
+          ]
+        },
+        "shared_identified_16": {
+          "geometric_mean_ratio": 0.00021751797754423273,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.00021617272955811356,
+            "resamples": 20000,
+            "seed": 1788,
+            "upper": 0.00021899707330065202
+          },
+          "pairs": [
+            {
+              "candidate_ns": 49759.54028978139,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 229360868.5,
+              "ratio": 0.00021694869144507704
+            },
+            {
+              "candidate_ns": 49919.46088861076,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 232029038.5,
+              "ratio": 0.00021514316143929872
+            },
+            {
+              "candidate_ns": 50692.33613976276,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 228049814.5,
+              "ratio": 0.00022228624149905966
+            },
+            {
+              "candidate_ns": 49900.40826413602,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 230552270.5,
+              "ratio": 0.00021643858963486557
+            },
+            {
+              "candidate_ns": 50335.19235364397,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 229323792.0,
+              "ratio": 0.0002194939823498295
+            },
+            {
+              "candidate_ns": 50013.53730662353,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 230227969.0,
+              "ratio": 0.0002172348456352127
+            },
+            {
+              "candidate_ns": 49995.502552816906,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 225306916.5,
+              "ratio": 0.0002218995463142691
+            },
+            {
+              "candidate_ns": 49924.69292541844,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 227985994.0,
+              "ratio": 0.00021898140341646797
+            },
+            {
+              "candidate_ns": 49754.18380370095,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 231432401.5,
+              "ratio": 0.00021498365605345434
+            },
+            {
+              "candidate_ns": 49804.9426713948,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 232123030.5,
+              "ratio": 0.00021456269360310113
+            },
+            {
+              "candidate_ns": 49661.6620294599,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 228556508.0,
+              "ratio": 0.0002172839551322682
+            },
+            {
+              "candidate_ns": 50533.799925941596,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 234895668.5,
+              "ratio": 0.0002151329577452025
+            }
+          ]
+        },
+        "shared_unidentified_10": {
+          "geometric_mean_ratio": 0.20568026929447097,
+          "paired_bootstrap": {
+            "confidence": 0.95,
+            "lower": 0.20416564962589143,
+            "resamples": 20000,
+            "seed": 1788,
+            "upper": 0.20708517127824197
+          },
+          "pairs": [
+            {
+              "candidate_ns": 716885.3850328948,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 1,
+              "parent_ns": 3464502.5962566845,
+              "ratio": 0.2069230329939637
+            },
+            {
+              "candidate_ns": 727563.6464285714,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 2,
+              "parent_ns": 3484225.966666667,
+              "ratio": 0.20881643538310066
+            },
+            {
+              "candidate_ns": 720708.2175,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 3,
+              "parent_ns": 3490311.71722488,
+              "ratio": 0.2064882096184319
+            },
+            {
+              "candidate_ns": 725107.9759615385,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 4,
+              "parent_ns": 3570261.15,
+              "ratio": 0.2030966210865383
+            },
+            {
+              "candidate_ns": 724920.2638888889,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 5,
+              "parent_ns": 3496645.2742105266,
+              "ratio": 0.2073187890220181
+            },
+            {
+              "candidate_ns": 719621.622368421,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 6,
+              "parent_ns": 3573066.125,
+              "ratio": 0.20140170855875808
+            },
+            {
+              "candidate_ns": 718580.9479166667,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 7,
+              "parent_ns": 3476838.655,
+              "ratio": 0.20667652980769877
+            },
+            {
+              "candidate_ns": 727172.2,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 8,
+              "parent_ns": 3485739.1253588516,
+              "ratio": 0.2086134888035084
+            },
+            {
+              "candidate_ns": 719072.857142857,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 9,
+              "parent_ns": 3469057.3175,
+              "ratio": 0.20728191878393692
+            },
+            {
+              "candidate_ns": 718383.3232371795,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 10,
+              "parent_ns": 3559885.265625,
+              "ratio": 0.20179957207442606
+            },
+            {
+              "candidate_ns": 722908.0728571429,
+              "order": [
+                "parent",
+                "candidate"
+              ],
+              "pair": 11,
+              "parent_ns": 3572299.0535714286,
+              "ratio": 0.2023649369820847
+            },
+            {
+              "candidate_ns": 719677.8440789473,
+              "order": [
+                "candidate",
+                "parent"
+              ],
+              "pair": 12,
+              "parent_ns": 3466971.76,
+              "ratio": 0.20758110936529445
+            }
+          ]
+        }
+      }
+    }
+  },
+  "endpoints": [
+    {
+      "case": "resolver_errors/render/rooster",
+      "classification": "inconclusive",
+      "geometric_mean_ratio": 0.9819468400081709,
+      "kind": "real",
+      "lower": 0.9272446559585212,
+      "pr": 1785,
+      "upper": 1.0337199764359626
+    },
+    {
+      "case": "resolver_errors/resolve_and_render/rooster",
+      "classification": "inconclusive",
+      "geometric_mean_ratio": 0.9988789051342934,
+      "kind": "real",
+      "lower": 0.9948261259720458,
+      "pr": 1785,
+      "upper": 1.0037196046402692
+    },
+    {
+      "case": "resolver_errors/render/httpx",
+      "classification": "faster",
+      "geometric_mean_ratio": 0.9914257808136973,
+      "kind": "real",
+      "lower": 0.9860359273154887,
+      "pr": 1785,
+      "upper": 0.9968529715088583
+    },
+    {
+      "case": "resolver_errors/resolve_and_render/httpx",
+      "classification": "inconclusive",
+      "geometric_mean_ratio": 1.0032224049518164,
+      "kind": "real",
+      "lower": 0.9988424774064808,
+      "pr": 1785,
+      "upper": 1.007601710347849
+    },
+    {
+      "case": "resolver_errors/render/numpy",
+      "classification": "inconclusive",
+      "geometric_mean_ratio": 0.9930520803833064,
+      "kind": "real",
+      "lower": 0.9824077026115211,
+      "pr": 1785,
+      "upper": 1.005643297329733
+    },
+    {
+      "case": "resolver_errors/resolve_and_render/numpy",
+      "classification": "inconclusive",
+      "geometric_mean_ratio": 1.0022802729588558,
+      "kind": "real",
+      "lower": 0.9979961070197958,
+      "pr": 1785,
+      "upper": 1.007076965326992
+    },
+    {
+      "case": "comb_plain_32",
+      "classification": "faster",
+      "geometric_mean_ratio": 0.9110857280281013,
+      "kind": "stress",
+      "lower": 0.8983873769416895,
+      "pr": 1785,
+      "upper": 0.9201522351497652
+    },
+    {
+      "case": "comb_plain_1024",
+      "classification": "faster",
+      "geometric_mean_ratio": 0.4532170453067769,
+      "kind": "stress",
+      "lower": 0.45033940572674,
+      "pr": 1785,
+      "upper": 0.4557219221804721
+    },
+    {
+      "case": "balanced_plain_1024",
+      "classification": "faster",
+      "geometric_mean_ratio": 0.9638701700722326,
+      "kind": "stress",
+      "lower": 0.960950316302717,
+      "pr": 1785,
+      "upper": 0.9669833998851418
+    },
+    {
+      "case": "comb_excluded_256",
+      "classification": "faster",
+      "geometric_mean_ratio": 0.026471788602011652,
+      "kind": "stress",
+      "lower": 0.026270541915882815,
+      "pr": 1785,
+      "upper": 0.026641941300304478
+    },
+    {
+      "case": "balanced_excluded_256",
+      "classification": "faster",
+      "geometric_mean_ratio": 0.1934157086573833,
+      "kind": "stress",
+      "lower": 0.19268858762360022,
+      "pr": 1785,
+      "upper": 0.19410973826222463
+    },
+    {
+      "case": "resolver_errors/render/rooster",
+      "classification": "slower",
+      "geometric_mean_ratio": 1.1268016712838158,
+      "kind": "real",
+      "lower": 1.067778409659922,
+      "pr": 1788,
+      "upper": 1.2007283942521059
+    },
+    {
+      "case": "resolver_errors/resolve_and_render/rooster",
+      "classification": "slower",
+      "geometric_mean_ratio": 1.0068386293130713,
+      "kind": "real",
+      "lower": 1.0039005010264914,
+      "pr": 1788,
+      "upper": 1.0097293535883427
+    },
+    {
+      "case": "resolver_errors/render/httpx",
+      "classification": "slower",
+      "geometric_mean_ratio": 1.0876995768787454,
+      "kind": "real",
+      "lower": 1.0800980360413315,
+      "pr": 1788,
+      "upper": 1.0962727245170802
+    },
+    {
+      "case": "resolver_errors/resolve_and_render/httpx",
+      "classification": "slower",
+      "geometric_mean_ratio": 1.005622707626589,
+      "kind": "real",
+      "lower": 1.0019146570623725,
+      "pr": 1788,
+      "upper": 1.0089200354294638
+    },
+    {
+      "case": "resolver_errors/render/numpy",
+      "classification": "slower",
+      "geometric_mean_ratio": 1.094437349255794,
+      "kind": "real",
+      "lower": 1.0852515468490138,
+      "pr": 1788,
+      "upper": 1.1040911753951135
+    },
+    {
+      "case": "resolver_errors/resolve_and_render/numpy",
+      "classification": "slower",
+      "geometric_mean_ratio": 1.0050161096829011,
+      "kind": "real",
+      "lower": 1.00193837265933,
+      "pr": 1788,
+      "upper": 1.0079089764553482
+    },
+    {
+      "case": "comb_plain_32",
+      "classification": "faster",
+      "geometric_mean_ratio": 0.7745181780841839,
+      "kind": "stress",
+      "lower": 0.7701613959845617,
+      "pr": 1788,
+      "upper": 0.7786698243749863
+    },
+    {
+      "case": "shared_identified_12",
+      "classification": "faster",
+      "geometric_mean_ratio": 0.003235993331498727,
+      "kind": "stress",
+      "lower": 0.0032212809196307153,
+      "pr": 1788,
+      "upper": 0.0032503870177353774
+    },
+    {
+      "case": "shared_identified_16",
+      "classification": "faster",
+      "geometric_mean_ratio": 0.00021751797754423273,
+      "kind": "stress",
+      "lower": 0.00021617272955811356,
+      "pr": 1788,
+      "upper": 0.00021899707330065202
+    },
+    {
+      "case": "shared_unidentified_10",
+      "classification": "faster",
+      "geometric_mean_ratio": 0.20568026929447097,
+      "kind": "stress",
+      "lower": 0.20416564962589143,
+      "pr": 1788,
+      "upper": 0.20708517127824197
+    }
+  ],
+  "schema": "uv-future.resolver-error-portable-analysis.v1"
+}

@@ -1,0 +1,190 @@
+{
+  "specimen-pr1785-candidate-real": {
+    "mode": "inspect",
+    "observations": [
+      {
+        "fixture": {
+          "name": "rooster",
+          "python": "3.10",
+          "requirements": [
+            "rooster-blue"
+          ],
+          "size": "small"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.10\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mall versions of rooster-blue\u001b[39m only support \u001b[36m>=3.11, <4.0\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.10) does not satisfy Python>=3.11,<4.0 and all versions of rooster-blue depend on Python>=3.11,<4.0, we can conclude that all versions of rooster-blue cannot be used.\nAnd because you require rooster-blue, we can conclude that your requirements are unsatisfiable."
+      },
+      {
+        "fixture": {
+          "name": "httpx",
+          "python": "3.6",
+          "requirements": [
+            "httpx>=0.23"
+          ],
+          "size": "medium"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.6\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mhttpx>=0.23.0,<=0.24.1\u001b[39m only supports \u001b[36m>=3.7\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.6) does not satisfy Python>=3.7 and httpx>=0.23.0,<=0.24.1 depends on Python>=3.7, we can conclude that httpx>=0.23.0,<=0.24.1 cannot be used.\nAnd because only the following versions of httpx are available:\n    httpx<=0.24.1\n    httpx>=0.25.0\nwe can conclude that httpx>=0.23.0,<0.25.0 cannot be used. (1)\n\nBecause the requested Python version (>=3.6) does not satisfy Python>=3.8 and httpx>=0.25.0 depends on Python>=3.8, we can conclude that httpx>=0.25.0 cannot be used.\nAnd because we know from (1) that httpx>=0.23.0,<0.25.0 cannot be used, we can conclude that httpx>=0.23.0 cannot be used.\nAnd because you require httpx>=0.23, we can conclude that your requirements are unsatisfiable."
+      },
+      {
+        "fixture": {
+          "name": "numpy",
+          "python": "3.7",
+          "requirements": [
+            "numpy>=1.22"
+          ],
+          "size": "large"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.7\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mnumpy>=1.22.0,<=1.24.4\u001b[39m only supports \u001b[36m>=3.8\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.7) does not satisfy Python>=3.8 and numpy>=1.22.0,<=1.24.4 depends on Python>=3.8, we can conclude that numpy>=1.22.0,<=1.24.4 cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=1.24.4\n    numpy>=1.25.0\nwe can conclude that numpy>=1.22.0,<1.25.0 cannot be used. (1)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.9 and all of:\n    numpy>=1.25.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\ndepend on Python>=3.9, we can conclude that all of:\n    numpy>=1.25.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\n cannot be used.\nAnd because we know from (1) that numpy>=1.22.0,<1.25.0 cannot be used, we can conclude that all of:\n    numpy>=1.22.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\n cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=1.25.2\n    numpy>=1.26.0,<=1.26.1\n    numpy>=1.26.2\nwe can conclude that all of:\n    numpy>=1.22.0,<1.26.0\n    numpy>1.26.1,<=2.0.2\n cannot be used. (2)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.9 and numpy>=1.26.0,<=1.26.1 depends on Python>=3.9,<3.13, we can conclude that numpy>=1.26.0,<=1.26.1 cannot be used.\nAnd because we know from (2) that all of:\n    numpy>=1.22.0,<1.26.0\n    numpy>1.26.1,<=2.0.2\n cannot be used, we can conclude that numpy>=1.22.0,<=2.0.2 cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=2.0.2\n    numpy>=2.1.0\nwe can conclude that numpy>=1.22.0,<2.1.0 cannot be used. (3)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.10 and numpy>=2.1.0 depends on Python>=3.10, we can conclude that numpy>=2.1.0 cannot be used.\nAnd because we know from (3) that numpy>=1.22.0,<2.1.0 cannot be used, we can conclude that numpy>=1.22.0 cannot be used.\nAnd because you require numpy>=1.22, we can conclude that your requirements are unsatisfiable."
+      }
+    ]
+  },
+  "specimen-pr1785-parent-real": {
+    "mode": "inspect",
+    "observations": [
+      {
+        "fixture": {
+          "name": "rooster",
+          "python": "3.10",
+          "requirements": [
+            "rooster-blue"
+          ],
+          "size": "small"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.10\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mall versions of rooster-blue\u001b[39m only support \u001b[36m>=3.11, <4.0\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.10) does not satisfy Python>=3.11,<4.0 and all versions of rooster-blue depend on Python>=3.11,<4.0, we can conclude that all versions of rooster-blue cannot be used.\nAnd because you require rooster-blue, we can conclude that your requirements are unsatisfiable."
+      },
+      {
+        "fixture": {
+          "name": "httpx",
+          "python": "3.6",
+          "requirements": [
+            "httpx>=0.23"
+          ],
+          "size": "medium"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.6\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mhttpx>=0.23.0,<=0.24.1\u001b[39m only supports \u001b[36m>=3.7\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.6) does not satisfy Python>=3.7 and httpx>=0.23.0,<=0.24.1 depends on Python>=3.7, we can conclude that httpx>=0.23.0,<=0.24.1 cannot be used.\nAnd because only the following versions of httpx are available:\n    httpx<=0.24.1\n    httpx>=0.25.0\nwe can conclude that httpx>=0.23.0,<0.25.0 cannot be used. (1)\n\nBecause the requested Python version (>=3.6) does not satisfy Python>=3.8 and httpx>=0.25.0 depends on Python>=3.8, we can conclude that httpx>=0.25.0 cannot be used.\nAnd because we know from (1) that httpx>=0.23.0,<0.25.0 cannot be used, we can conclude that httpx>=0.23.0 cannot be used.\nAnd because you require httpx>=0.23, we can conclude that your requirements are unsatisfiable."
+      },
+      {
+        "fixture": {
+          "name": "numpy",
+          "python": "3.7",
+          "requirements": [
+            "numpy>=1.22"
+          ],
+          "size": "large"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.7\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mnumpy>=1.22.0,<=1.24.4\u001b[39m only supports \u001b[36m>=3.8\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.7) does not satisfy Python>=3.8 and numpy>=1.22.0,<=1.24.4 depends on Python>=3.8, we can conclude that numpy>=1.22.0,<=1.24.4 cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=1.24.4\n    numpy>=1.25.0\nwe can conclude that numpy>=1.22.0,<1.25.0 cannot be used. (1)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.9 and all of:\n    numpy>=1.25.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\ndepend on Python>=3.9, we can conclude that all of:\n    numpy>=1.25.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\n cannot be used.\nAnd because we know from (1) that numpy>=1.22.0,<1.25.0 cannot be used, we can conclude that all of:\n    numpy>=1.22.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\n cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=1.25.2\n    numpy>=1.26.0,<=1.26.1\n    numpy>=1.26.2\nwe can conclude that all of:\n    numpy>=1.22.0,<1.26.0\n    numpy>1.26.1,<=2.0.2\n cannot be used. (2)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.9 and numpy>=1.26.0,<=1.26.1 depends on Python>=3.9,<3.13, we can conclude that numpy>=1.26.0,<=1.26.1 cannot be used.\nAnd because we know from (2) that all of:\n    numpy>=1.22.0,<1.26.0\n    numpy>1.26.1,<=2.0.2\n cannot be used, we can conclude that numpy>=1.22.0,<=2.0.2 cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=2.0.2\n    numpy>=2.1.0\nwe can conclude that numpy>=1.22.0,<2.1.0 cannot be used. (3)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.10 and numpy>=2.1.0 depends on Python>=3.10, we can conclude that numpy>=2.1.0 cannot be used.\nAnd because we know from (3) that numpy>=1.22.0,<2.1.0 cannot be used, we can conclude that numpy>=1.22.0 cannot be used.\nAnd because you require numpy>=1.22, we can conclude that your requirements are unsatisfiable."
+      }
+    ]
+  },
+  "specimen-pr1788-candidate-real": {
+    "mode": "inspect",
+    "observations": [
+      {
+        "fixture": {
+          "name": "rooster",
+          "python": "3.10",
+          "requirements": [
+            "rooster-blue"
+          ],
+          "size": "small"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.10\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mall versions of rooster-blue\u001b[39m only support \u001b[36m>=3.11, <4.0\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.10) does not satisfy Python>=3.11,<4.0 and all versions of rooster-blue depend on Python>=3.11,<4.0, we can conclude that all versions of rooster-blue cannot be used.\nAnd because you require rooster-blue, we can conclude that your requirements are unsatisfiable."
+      },
+      {
+        "fixture": {
+          "name": "httpx",
+          "python": "3.6",
+          "requirements": [
+            "httpx>=0.23"
+          ],
+          "size": "medium"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.6\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mhttpx>=0.23.0,<=0.24.1\u001b[39m only supports \u001b[36m>=3.7\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.6) does not satisfy Python>=3.7 and httpx>=0.23.0,<=0.24.1 depends on Python>=3.7, we can conclude that httpx>=0.23.0,<=0.24.1 cannot be used.\nAnd because only the following versions of httpx are available:\n    httpx<=0.24.1\n    httpx>=0.25.0\nwe can conclude that httpx>=0.23.0,<0.25.0 cannot be used. (1)\n\nBecause the requested Python version (>=3.6) does not satisfy Python>=3.8 and httpx>=0.25.0 depends on Python>=3.8, we can conclude that httpx>=0.25.0 cannot be used.\nAnd because we know from (1) that httpx>=0.23.0,<0.25.0 cannot be used, we can conclude that httpx>=0.23.0 cannot be used.\nAnd because you require httpx>=0.23, we can conclude that your requirements are unsatisfiable."
+      },
+      {
+        "fixture": {
+          "name": "numpy",
+          "python": "3.7",
+          "requirements": [
+            "numpy>=1.22"
+          ],
+          "size": "large"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.7\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mnumpy>=1.22.0,<=1.24.4\u001b[39m only supports \u001b[36m>=3.8\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.7) does not satisfy Python>=3.8 and numpy>=1.22.0,<=1.24.4 depends on Python>=3.8, we can conclude that numpy>=1.22.0,<=1.24.4 cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=1.24.4\n    numpy>=1.25.0\nwe can conclude that numpy>=1.22.0,<1.25.0 cannot be used. (1)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.9 and all of:\n    numpy>=1.25.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\ndepend on Python>=3.9, we can conclude that all of:\n    numpy>=1.25.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\n cannot be used.\nAnd because we know from (1) that numpy>=1.22.0,<1.25.0 cannot be used, we can conclude that all of:\n    numpy>=1.22.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\n cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=1.25.2\n    numpy>=1.26.0,<=1.26.1\n    numpy>=1.26.2\nwe can conclude that all of:\n    numpy>=1.22.0,<1.26.0\n    numpy>1.26.1,<=2.0.2\n cannot be used. (2)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.9 and numpy>=1.26.0,<=1.26.1 depends on Python>=3.9,<3.13, we can conclude that numpy>=1.26.0,<=1.26.1 cannot be used.\nAnd because we know from (2) that all of:\n    numpy>=1.22.0,<1.26.0\n    numpy>1.26.1,<=2.0.2\n cannot be used, we can conclude that numpy>=1.22.0,<=2.0.2 cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=2.0.2\n    numpy>=2.1.0\nwe can conclude that numpy>=1.22.0,<2.1.0 cannot be used. (3)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.10 and numpy>=2.1.0 depends on Python>=3.10, we can conclude that numpy>=2.1.0 cannot be used.\nAnd because we know from (3) that numpy>=1.22.0,<2.1.0 cannot be used, we can conclude that numpy>=1.22.0 cannot be used.\nAnd because you require numpy>=1.22, we can conclude that your requirements are unsatisfiable."
+      }
+    ]
+  },
+  "specimen-pr1788-parent-real": {
+    "mode": "inspect",
+    "observations": [
+      {
+        "fixture": {
+          "name": "rooster",
+          "python": "3.10",
+          "requirements": [
+            "rooster-blue"
+          ],
+          "size": "small"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.10\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mall versions of rooster-blue\u001b[39m only support \u001b[36m>=3.11, <4.0\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.10) does not satisfy Python>=3.11,<4.0 and all versions of rooster-blue depend on Python>=3.11,<4.0, we can conclude that all versions of rooster-blue cannot be used.\nAnd because you require rooster-blue, we can conclude that your requirements are unsatisfiable."
+      },
+      {
+        "fixture": {
+          "name": "httpx",
+          "python": "3.6",
+          "requirements": [
+            "httpx>=0.23"
+          ],
+          "size": "medium"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.6\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mhttpx>=0.23.0,<=0.24.1\u001b[39m only supports \u001b[36m>=3.7\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.6) does not satisfy Python>=3.7 and httpx>=0.23.0,<=0.24.1 depends on Python>=3.7, we can conclude that httpx>=0.23.0,<=0.24.1 cannot be used.\nAnd because only the following versions of httpx are available:\n    httpx<=0.24.1\n    httpx>=0.25.0\nwe can conclude that httpx>=0.23.0,<0.25.0 cannot be used. (1)\n\nBecause the requested Python version (>=3.6) does not satisfy Python>=3.8 and httpx>=0.25.0 depends on Python>=3.8, we can conclude that httpx>=0.25.0 cannot be used.\nAnd because we know from (1) that httpx>=0.23.0,<0.25.0 cannot be used, we can conclude that httpx>=0.23.0 cannot be used.\nAnd because you require httpx>=0.23, we can conclude that your requirements are unsatisfiable."
+      },
+      {
+        "fixture": {
+          "name": "numpy",
+          "python": "3.7",
+          "requirements": [
+            "numpy>=1.22"
+          ],
+          "size": "large"
+        },
+        "hints": [
+          "The `--python-version` value (\u001b[36m>=3.7\u001b[39m) includes Python versions that are not supported by your dependencies (e.g., \u001b[36mnumpy>=1.22.0,<=1.24.4\u001b[39m only supports \u001b[36m>=3.8\u001b[39m). Consider using a higher `--python-version` value."
+        ],
+        "report": "Because the requested Python version (>=3.7) does not satisfy Python>=3.8 and numpy>=1.22.0,<=1.24.4 depends on Python>=3.8, we can conclude that numpy>=1.22.0,<=1.24.4 cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=1.24.4\n    numpy>=1.25.0\nwe can conclude that numpy>=1.22.0,<1.25.0 cannot be used. (1)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.9 and all of:\n    numpy>=1.25.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\ndepend on Python>=3.9, we can conclude that all of:\n    numpy>=1.25.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\n cannot be used.\nAnd because we know from (1) that numpy>=1.22.0,<1.25.0 cannot be used, we can conclude that all of:\n    numpy>=1.22.0,<=1.25.2\n    numpy>=1.26.2,<=2.0.2\n cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=1.25.2\n    numpy>=1.26.0,<=1.26.1\n    numpy>=1.26.2\nwe can conclude that all of:\n    numpy>=1.22.0,<1.26.0\n    numpy>1.26.1,<=2.0.2\n cannot be used. (2)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.9 and numpy>=1.26.0,<=1.26.1 depends on Python>=3.9,<3.13, we can conclude that numpy>=1.26.0,<=1.26.1 cannot be used.\nAnd because we know from (2) that all of:\n    numpy>=1.22.0,<1.26.0\n    numpy>1.26.1,<=2.0.2\n cannot be used, we can conclude that numpy>=1.22.0,<=2.0.2 cannot be used.\nAnd because only the following versions of numpy are available:\n    numpy<=2.0.2\n    numpy>=2.1.0\nwe can conclude that numpy>=1.22.0,<2.1.0 cannot be used. (3)\n\nBecause the requested Python version (>=3.7) does not satisfy Python>=3.10 and numpy>=2.1.0 depends on Python>=3.10, we can conclude that numpy>=2.1.0 cannot be used.\nAnd because we know from (3) that numpy>=1.22.0,<2.1.0 cannot be used, we can conclude that numpy>=1.22.0 cannot be used.\nAnd because you require numpy>=1.22, we can conclude that your requirements are unsatisfiable."
+      }
+    ]
+  }
+}
