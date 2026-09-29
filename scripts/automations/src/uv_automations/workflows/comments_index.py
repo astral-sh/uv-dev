@@ -3,6 +3,7 @@
 import logging
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -417,6 +418,29 @@ def _load_index(
 
 
 def _inspect_alias(
+    github: IndexReader,
+    scope: CommentScope,
+    manifest: ManifestArtifact,
+    *,
+    expected_name: str,
+) -> _InspectedAlias:
+    # A failed read does not invalidate an immutable checkpoint. Recheck the
+    # complete alias before discovery falls back to an older collection.
+    attempt = 1
+    while True:
+        try:
+            return _inspect_alias_once(
+                github, scope, manifest, expected_name=expected_name
+            )
+        except subprocess.CalledProcessError:
+            if attempt == 3:
+                raise
+            logger.info("Retrying feedback checkpoint reads (attempt %s/3)...", attempt)
+            time.sleep(attempt * 5)
+            attempt += 1
+
+
+def _inspect_alias_once(
     github: IndexReader,
     scope: CommentScope,
     manifest: ManifestArtifact,
