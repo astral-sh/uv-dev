@@ -5,11 +5,12 @@ import json
 import os
 import subprocess
 import unittest
+from collections.abc import Iterator
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import override
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from uv_automations.cli import main as automation_main
 from uv_automations.github import ISSUE_FIELDS, GitHub, decode_issue
@@ -544,3 +545,221 @@ class IssueCliTests(unittest.TestCase):
             )
         self.assertEqual(error.exception.code, 2)
         get_issue.assert_not_called()
+
+
+@unittest.skipUnless(
+    HAS_SECURE_DIRECTORY_DESCRIPTORS,
+    "requires no-follow directory descriptors",
+)
+class IssueReadRetryTests(unittest.TestCase):
+    def arguments(self, root: Path) -> list[str]:
+        return [
+            "issues",
+            "prepare",
+            "--repo",
+            "astral-sh/uv",
+            "--issue",
+            "123",
+            "--path",
+            str(root / "issue.json"),
+            "--workspace",
+            str(root),
+            "--runner-temp",
+            str(root),
+            "--github-output",
+            str(root / "github-output"),
+        ]
+
+    def test_completed_read_failure_then_success_creates_context_once(self) -> None:
+        encoded = json.dumps(ISSUE.to_payload(), separators=(",", ":"))
+        for failed_reads in (1, 2):
+            with (
+                self.subTest(failed_reads=failed_reads),
+                TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                destination = root / "issue.json"
+                github_output = root / "github-output"
+                results = iter(
+                    [
+                        subprocess.CalledProcessError(
+                            1, ["gh"], output="partial untrusted response"
+                        )
+                        for _ in range(failed_reads)
+                    ]
+                    + [subprocess.CompletedProcess([], 0, encoded)]
+                )
+
+                def read(
+                    *arguments: object,
+                    destination: Path = destination,
+                    github_output: Path = github_output,
+                    results: Iterator[
+                        subprocess.CalledProcessError | subprocess.CompletedProcess[str]
+                    ] = results,
+                    **keywords: object,
+                ) -> subprocess.CompletedProcess[str]:
+                    self.assertFalse(destination.exists())
+                    self.assertFalse(github_output.exists())
+                    result = next(results)
+                    if isinstance(result, subprocess.CalledProcessError):
+                        raise result
+                    return result
+
+                with (
+                    patch("uv_automations.cli.logging.basicConfig"),
+                    patch(
+                        "uv_automations.github.subprocess.run", side_effect=read
+                    ) as run,
+                    patch("time.sleep") as sleep,
+                    redirect_stdout(io.StringIO()) as output,
+                    redirect_stderr(io.StringIO()) as errors,
+                ):
+                    automation_main(self.arguments(root))
+
+                self.assertEqual(output.getvalue(), "")
+                self.assertEqual(errors.getvalue(), "")
+                self.assertEqual(destination.read_text(), encoded + "\n")
+                self.assertEqual(
+                    github_output.read_text(),
+                    f"issue-number=123\nissue-json={encoded}\npath={destination.resolve()}\n",
+                )
+                self.assertEqual(
+                    sleep.call_args_list, [call(5), call(10)][:failed_reads]
+                )
+                expected = call(
+                    [
+                        "gh",
+                        "issue",
+                        "view",
+                        "123",
+                        "--repo",
+                        "astral-sh/uv",
+                        "--json",
+                        ISSUE_FIELDS,
+                    ],
+                    input=None,
+                    check=True,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    env=None,
+                    timeout=60,
+                )
+                self.assertEqual(run.call_args_list, [expected] * (failed_reads + 1))
+
+    def test_exhausted_read_has_no_context_or_actions_output(self) -> None:
+        failures = [
+            subprocess.CalledProcessError(
+                status, ["gh", "private-command"], output="private response"
+            )
+            for status in (1, 2, 7)
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("uv_automations.cli.logging.basicConfig"),
+                patch(
+                    "uv_automations.github.subprocess.run", side_effect=failures
+                ) as run,
+                patch("time.sleep") as sleep,
+                redirect_stdout(io.StringIO()) as output,
+                redirect_stderr(io.StringIO()) as errors,
+                self.assertRaises(SystemExit) as error,
+            ):
+                automation_main(self.arguments(root))
+            self.assertEqual(error.exception.code, 1)
+            self.assertEqual(
+                errors.getvalue(), "uv-automations: command failed with status 7\n"
+            )
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(run.call_count, 3)
+            self.assertEqual(sleep.call_args_list, [call(5), call(10)])
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_exhausted_read_preserves_the_final_exception(self) -> None:
+        failures = [
+            subprocess.CalledProcessError(status, ["gh"]) for status in (1, 2, 7)
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch(
+                    "uv_automations.github.subprocess.run", side_effect=failures
+                ) as run,
+                patch("time.sleep") as sleep,
+                self.assertRaises(subprocess.CalledProcessError) as error,
+            ):
+                prepare_issue(
+                    GitHub(),
+                    REFERENCE,
+                    root / "issue.json",
+                    workspace=root,
+                    runner_temp=root,
+                )
+            self.assertIs(error.exception, failures[-1])
+            self.assertEqual(run.call_count, 3)
+            self.assertEqual(sleep.call_args_list, [call(5), call(10)])
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_other_read_failures_are_not_retried(self) -> None:
+        cases = [
+            ("timeout", subprocess.TimeoutExpired(["gh"], 60), 1),
+            ("os", OSError("issue read failed"), 2),
+            ("json", subprocess.CompletedProcess([], 0, "not JSON"), 2),
+            ("schema", subprocess.CompletedProcess([], 0, "[]"), 2),
+            (
+                "identity",
+                subprocess.CompletedProcess(
+                    [], 0, json.dumps({**ISSUE.to_payload(), "number": 456})
+                ),
+                2,
+            ),
+        ]
+        for name, failure, exit_code in cases:
+            with self.subTest(name=name), TemporaryDirectory() as directory:
+                root = Path(directory)
+                with (
+                    patch("uv_automations.cli.logging.basicConfig"),
+                    patch(
+                        "uv_automations.github.subprocess.run", side_effect=[failure]
+                    ) as run,
+                    patch("time.sleep") as sleep,
+                    redirect_stdout(io.StringIO()) as output,
+                    redirect_stderr(io.StringIO()),
+                    self.assertRaises(SystemExit) as error,
+                ):
+                    automation_main(self.arguments(root))
+                self.assertEqual(error.exception.code, exit_code)
+                self.assertEqual(output.getvalue(), "")
+                run.assert_called_once()
+                sleep.assert_not_called()
+                self.assertEqual(list(root.iterdir()), [])
+
+    def test_exclusive_create_failure_does_not_repeat_the_read(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            destination = root / "issue.json"
+            destination.write_text("existing", encoding="utf-8")
+            with (
+                patch("uv_automations.cli.logging.basicConfig"),
+                patch(
+                    "uv_automations.github.subprocess.run",
+                    side_effect=[
+                        subprocess.CalledProcessError(1, ["gh"]),
+                        subprocess.CompletedProcess(
+                            [], 0, json.dumps(ISSUE.to_payload())
+                        ),
+                    ],
+                ) as run,
+                patch("time.sleep") as sleep,
+                redirect_stdout(io.StringIO()) as output,
+                redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as error,
+            ):
+                automation_main(self.arguments(root))
+            self.assertEqual(error.exception.code, 2)
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(run.call_count, 2)
+            sleep.assert_called_once_with(5)
+            self.assertEqual(destination.read_text(), "existing")
+            self.assertFalse((root / "github-output").exists())

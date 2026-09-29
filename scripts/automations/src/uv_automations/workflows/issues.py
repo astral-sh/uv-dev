@@ -2,13 +2,18 @@
 
 import errno
 import json
+import logging
 import os
+import subprocess
+import time
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
 from uv_automations.github import IssueReader
 from uv_automations.models import Issue, IssueRef
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +113,19 @@ def _open_parent(destination: _Destination, flags: int, descriptors: ExitStack) 
     return descriptor
 
 
+def _read_issue(reader: IssueReader, reference: IssueRef) -> Issue:
+    attempt = 1
+    while True:
+        try:
+            return reader.get_issue(reference)
+        except subprocess.CalledProcessError:
+            if attempt == 3:
+                raise
+            logger.info("Retrying issue context read (attempt %s/3)...", attempt)
+            time.sleep(attempt * 5)
+            attempt += 1
+
+
 def prepare_issue(
     reader: IssueReader,
     reference: IssueRef,
@@ -120,7 +138,7 @@ def prepare_issue(
     target = _resolve_destination(
         destination, workspace=workspace, runner_temp=runner_temp
     )
-    issue = reader.get_issue(reference)
+    issue = _read_issue(reader, reference)
     if issue.reference != reference:
         raise ValueError("The collected issue does not match the requested issue")
 
