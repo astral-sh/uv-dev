@@ -16,6 +16,8 @@ use indoc::indoc;
 use insta::allow_duplicates;
 use predicates::prelude::predicate;
 use tracing::debug;
+use url::Url;
+use uv_test::archive::write_tar_gz;
 use uv_test::{LATEST_PYTHON_3_12, TestContext, uv_snapshot};
 
 use uv_fs::{Simplified, copy_dir_all, remove_symlink};
@@ -5873,6 +5875,97 @@ fn python_install_build_name_latest_revision() -> anyhow::Result<()> {
         .assert()
         .success();
     insta::assert_snapshot!(fs_err::read_to_string(&build)?, @"9");
+    Ok(())
+}
+
+#[test]
+fn python_install_build_name_revision_cached() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_managed_python_dirs()
+        .without_python_download_cache();
+    let platform = platform_key_from_env()?;
+    let key = format!("cpython-3.13.7+custom-{platform}").parse::<PythonInstallationKey>()?;
+    let python_cache = context.temp_dir.child("python-cache");
+    let executable = if cfg!(windows) {
+        "python/python.exe"
+    } else {
+        "python/bin/python3.13"
+    };
+    let sysconfig = if cfg!(windows) {
+        "python/Lib/_sysconfigdata__test.py"
+    } else {
+        "python/lib/python3.13/_sysconfigdata__test.py"
+    };
+    let mut downloads = serde_json::Map::new();
+    for revision in ["9", "10"] {
+        let directory = context.temp_dir.child(revision);
+        directory.create_dir_all()?;
+        let archive = directory.child("python.tar.gz");
+        // The archives have the same filename, but different payloads and no checksum.
+        write_tar_gz(
+            fs_err::File::create(archive.path())?,
+            &[
+                (executable, ""),
+                (
+                    sysconfig,
+                    "# system configuration generated and used by the sysconfig module\nbuild_time_vars = {}",
+                ),
+                ("python/ARCHIVE_REVISION", revision),
+            ],
+        )?;
+        downloads.insert(
+            revision.to_string(),
+            serde_json::json!({
+                "name": "cpython",
+                "arch": { "family": key.arch().family().to_string(), "variant": null },
+                "os": key.os().to_string(), "libc": key.libc().to_string(),
+                "major": 3, "minor": 13, "patch": 7,
+                "build_name": "custom", "build_revision": revision,
+                "url": Url::from_file_path(archive.path())
+                    .map_err(|()| anyhow::anyhow!("Invalid archive path"))?
+            }),
+        );
+    }
+    let catalog = context.temp_dir.child("downloads.json");
+    catalog.write_str(&serde_json::to_string(&serde_json::json!({
+        "version": 1, "downloads": downloads
+    }))?)?;
+    let context = context
+        .with_env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, catalog.path())
+        .with_env(EnvVars::UV_PYTHON_CACHE_DIR, python_cache.path());
+    let installation = context.temp_dir.child("managed").child(key.to_string());
+    let mut installed = Vec::new();
+    // Reinstall the latest revision offline to verify that its cache entry is reusable.
+    for (revision, offline) in [("9", false), ("10", false), ("10", true)] {
+        let mut command = context.python_install();
+        command
+            .args(["3.13.7+custom", "--no-bin"])
+            .env(EnvVars::UV_PYTHON_BUILD_REVISION, revision);
+        if offline {
+            command.args(["--reinstall", "--offline"]);
+        }
+        command.assert().success();
+        installed.push((
+            fs_err::read_to_string(installation.child("ARCHIVE_REVISION"))?,
+            fs_err::read_to_string(installation.child("BUILD"))?,
+        ));
+    }
+    insta::assert_debug_snapshot!(installed, @r#"
+    [
+        (
+            "9",
+            "9",
+        ),
+        (
+            "10",
+            "10",
+        ),
+        (
+            "10",
+            "10",
+        ),
+    ]
+    "#);
     Ok(())
 }
 
