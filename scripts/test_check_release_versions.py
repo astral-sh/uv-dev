@@ -11,7 +11,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from check_release_versions import ROOT, VERSION_GROUPS, check_release_versions
+# The standalone-script CI check excludes sibling modules from its source roots;
+# Python adds the script directory at runtime.
+from check_release_versions import (  # ty: ignore[unresolved-import]
+    ROOT,
+    VERSION_GROUPS,
+    check_release_versions,
+)
 
 
 def write_versions(root: Path, python_version: str, cargo_version: str) -> None:
