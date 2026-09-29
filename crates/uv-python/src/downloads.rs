@@ -1121,6 +1121,15 @@ fn resolve_download_list_source(
 }
 
 impl DownloadListSource<'_> {
+    /// The default remote manifest only contains native CPython builds.
+    fn uses_embedded_downloads(&self, request: &PythonDownloadRequest) -> bool {
+        self.implicit
+            && (request
+                .implementation()
+                .is_some_and(|implementation| *implementation != ImplementationName::CPython)
+                || request.os.as_ref().is_some_and(Os::is_emscripten))
+    }
+
     fn merge_downloads(
         &self,
         downloads: Vec<ManagedPythonDownload>,
@@ -1705,6 +1714,11 @@ impl ManagedPythonDownloadList {
                 downloads: filter_downloads(embedded_downloads()?, filter, limit),
             });
         };
+        if filter.is_some_and(|request| source.uses_embedded_downloads(request)) {
+            return Ok(Self {
+                downloads: filter_downloads(embedded_non_cpython_downloads()?, filter, limit),
+            });
+        }
         // Implicit metadata is merged with other implementations and deduplicated before limiting.
         let parse_limit = if source.implicit { None } else { limit };
         let predicate = |download: &ManagedPythonDownload| {
@@ -1999,6 +2013,9 @@ async fn find_matching_download(
     cache: &Cache,
     request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
+    if source.uses_embedded_downloads(request) {
+        return find_in_embedded_non_cpython(request);
+    }
     let predicate = |download: &ManagedPythonDownload| request.satisfied_by_download(download);
     let result = match &source.location {
         DownloadListLocation::Path(path) => fs_err::read(path.as_ref())

@@ -1088,6 +1088,59 @@ async fn python_list_remote_metadata_requires_explicit_preview() -> Result<()> {
 }
 
 #[tokio::test]
+async fn python_list_alternative_implementations_skip_remote_metadata() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_collapsed_whitespace();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("", "application/x-ndjson"))
+        .mount(&server)
+        .await;
+
+    for implementation in ["pypy", "graalpy", "pyodide"] {
+        let output = context
+            .python_list()
+            .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+            .env("UV_ASTRAL_MIRROR_URL", server.uri())
+            .env(
+                EnvVars::UV_PREVIEW_FEATURES,
+                "remote-python-download-metadata",
+            )
+            .arg(implementation)
+            .arg("--only-downloads")
+            .arg("--all-platforms")
+            .arg("--all-arches")
+            .output()?;
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            !output.stdout.is_empty(),
+            "missing {implementation} downloads"
+        );
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+
+    let output = context
+        .python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .env(
+            EnvVars::UV_PREVIEW_FEATURES,
+            "remote-python-download-metadata",
+        )
+        .env(
+            EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL,
+            format!("{}/custom.ndjson", server.uri()),
+        )
+        .arg("pypy")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(!server.received_requests().await.unwrap().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn python_list_remote_python_downloads_ndjson_parse_error_is_not_cached() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_collapsed_whitespace();
     let server = MockServer::start().await;
