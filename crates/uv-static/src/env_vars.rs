@@ -775,7 +775,7 @@ impl EnvVars {
 
     /// Used to override the Python download metadata source during tests without affecting user-visible settings.
     #[attr_hidden]
-    #[attr_added_in("0.11.7")]
+    #[attr_added_in("0.12.21")]
     pub const UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL: &'static str =
         "UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL";
 

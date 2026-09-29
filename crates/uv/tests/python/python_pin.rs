@@ -14,6 +14,8 @@ use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 #[cfg(unix)]
 use indoc::indoc;
 use insta::assert_snapshot;
+#[cfg(feature = "test-python-managed")]
+use uv_platform::Platform;
 use uv_platform::{Arch, Os};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 use uv_python_managed::downloads::ManagedPythonDownloadList;
@@ -821,8 +823,7 @@ fn python_pin_with_ndjson_manifest() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_sources()
         .with_managed_python_dirs()
-        .with_empty_python_install_mirror()
-        .with_python_download_cache();
+        .with_empty_python_install_mirror();
 
     let download_list = ManagedPythonDownloadList::new_only_embedded().unwrap();
     let download_request = PythonDownloadRequest::from_request(&PythonRequest::parse("3.12"))
@@ -836,13 +837,13 @@ fn python_pin_with_ndjson_manifest() {
     } else {
         download.key().version().to_string()
     };
-    let sha256 = download.sha256().unwrap();
+    let sha256 = download.sha256().unwrap().as_str();
     let manifest = context.temp_dir.child("python-downloads.ndjson");
     manifest
         .write_str(&format!(
             "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"install_only\"}}]}}\n",
             download.url(),
-            download.key().platform().as_cargo_dist_triple(),
+            Platform::from_env().unwrap().as_cargo_dist_triple(),
             sha256,
         ))
         .unwrap();
@@ -853,12 +854,10 @@ fn python_pin_with_ndjson_manifest() {
         .arg("--python-downloads-json-url")
         .arg(manifest.path())
         .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     Pinned `.python-version` to `3.12`
 
-    ----- stderr -----
     ");
 }
 
@@ -868,8 +867,7 @@ async fn python_pin_custom_ndjson_url_does_not_fallback() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_sources()
         .with_managed_python_dirs()
-        .with_empty_python_install_mirror()
-        .with_python_download_cache();
+        .with_empty_python_install_mirror();
     let server = MockServer::start().await;
 
     uv_snapshot!(context.filters(), context
@@ -879,14 +877,11 @@ async fn python_pin_custom_ndjson_url_does_not_fallback() -> Result<()> {
         .arg("--python-downloads-json-url")
         .arg(format!("{}/versions.ndjson", server.uri()))
         .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto"), @"
-    success: false
-    exit_code: 2
-    ----- stdout -----
-
+    exit_code: 2 (failure)
     ----- stderr -----
     error: Error while fetching remote python downloads NDJSON from 'http://[LOCALHOST]/versions.ndjson'
-      Caused by: Failed to download http://[LOCALHOST]/versions.ndjson
-      Caused by: HTTP status client error (404 Not Found) for url (http://[LOCALHOST]/versions.ndjson)
+      cause: Failed to download http://[LOCALHOST]/versions.ndjson
+      cause: HTTP status client error (404 Not Found) for url (http://[LOCALHOST]/versions.ndjson)
     ");
 
     Ok(())
@@ -898,8 +893,7 @@ async fn python_pin_custom_ndjson_url_reports_parse_errors() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_sources()
         .with_managed_python_dirs()
-        .with_empty_python_install_mirror()
-        .with_python_download_cache();
+        .with_empty_python_install_mirror();
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -914,13 +908,10 @@ async fn python_pin_custom_ndjson_url_reports_parse_errors() -> Result<()> {
         .arg("--python-downloads-json-url")
         .arg(format!("{}/versions.ndjson", server.uri()))
         .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto"), @"
-    success: false
-    exit_code: 2
-    ----- stdout -----
-
+    exit_code: 2 (failure)
     ----- stderr -----
     error: Unable to parse NDJSON line at http://[LOCALHOST]/versions.ndjson
-      Caused by: EOF while parsing an object at line 1 column 1
+      cause: EOF while parsing an object at line 1 column 1
     ");
 
     Ok(())

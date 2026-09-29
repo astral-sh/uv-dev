@@ -22,6 +22,7 @@ use uv_test::assert_link_target;
 use uv_test::{LATEST_PYTHON_3_12, assert_path_missing, uv_snapshot};
 
 use uv_fs::Simplified;
+use uv_platform::Platform;
 use uv_python_managed::{downloads::ManagedPythonDownloadList, platform_key_from_env};
 use uv_python_types::{PythonDownloadRequest, PythonRequest};
 use uv_static::EnvVars;
@@ -4281,8 +4282,7 @@ fn python_install_with_ndjson_manifest() {
         .with_filtered_exe_suffix()
         .with_filtered_latest_python_versions()
         .with_managed_python_dirs()
-        .with_empty_python_install_mirror()
-        .with_python_download_cache();
+        .with_empty_python_install_mirror();
 
     let download_list = ManagedPythonDownloadList::new_only_embedded().unwrap();
     let download_request = PythonDownloadRequest::from_request(&PythonRequest::parse("3.14"))
@@ -4296,13 +4296,13 @@ fn python_install_with_ndjson_manifest() {
     } else {
         download.key().version().to_string()
     };
-    let sha256 = download.sha256().unwrap();
+    let sha256 = download.sha256().unwrap().as_str();
     let manifest = context.temp_dir.child("python-downloads.ndjson");
     manifest
         .write_str(&format!(
             "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"install_only\"}}]}}\n",
             download.url(),
-            download.key().platform().as_cargo_dist_triple(),
+            Platform::from_env().unwrap().as_cargo_dist_triple(),
             sha256,
         ))
         .unwrap();
@@ -4312,10 +4312,7 @@ fn python_install_with_ndjson_manifest() {
         .arg("3.14")
         .arg("--python-downloads-json-url")
         .arg(manifest.path()), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Installed Python 3.14.[LATEST] in [TIME]
      + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
@@ -4330,8 +4327,7 @@ fn python_install_with_debug_ndjson_manifest() {
         .with_filtered_exe_suffix()
         .with_filtered_latest_python_versions()
         .with_managed_python_dirs()
-        .with_empty_python_install_mirror()
-        .with_python_download_cache();
+        .with_empty_python_install_mirror();
 
     let download_list = ManagedPythonDownloadList::new_only_embedded().unwrap();
     let download_request = PythonDownloadRequest::from_request(&PythonRequest::parse("3.12d"))
@@ -4345,13 +4341,13 @@ fn python_install_with_debug_ndjson_manifest() {
     } else {
         download.key().version().to_string()
     };
-    let sha256 = download.sha256().unwrap();
+    let sha256 = download.sha256().unwrap().as_str();
     let manifest = context.temp_dir.child("python-downloads.ndjson");
     manifest
         .write_str(&format!(
             "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"debug+full\"}}]}}\n",
             download.url(),
-            download.key().platform().as_cargo_dist_triple(),
+            Platform::from_env().unwrap().as_cargo_dist_triple(),
             sha256,
         ))
         .unwrap();
@@ -4361,10 +4357,7 @@ fn python_install_with_debug_ndjson_manifest() {
         .arg("3.12d")
         .arg("--python-downloads-json-url")
         .arg(manifest.path()), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Installed Python 3.12.[LATEST] in [TIME]
      + cpython-3.12.[LATEST]+debug-[PLATFORM] (python3.12d)

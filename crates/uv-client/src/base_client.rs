@@ -888,7 +888,7 @@ impl RedirectClientWithMiddleware {
     }
 
     /// Convenience method to make a `HEAD` request to a URL.
-    pub(crate) fn head<P: SerializationPolicy>(&self, url: SafeUrl<P>) -> RequestBuilder<'_> {
+    pub fn head<P: SerializationPolicy>(&self, url: SafeUrl<P>) -> RequestBuilder<'_> {
         RequestBuilder::new(self.client.head(url.into_unsafe_url()), self)
     }
 
