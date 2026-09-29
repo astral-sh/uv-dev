@@ -5,7 +5,9 @@
 //!
 #![cfg(all(feature = "test-python", feature = "test-pypi", unix))]
 
-use std::process::Command;
+use std::process::{Command, Output};
+
+use assert_cmd::assert::OutputAssertExt;
 
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
@@ -17,6 +19,17 @@ fn command(context: &TestContext, server: &PackseServer) -> Command {
     command.arg("--index-url").arg(server.index_url());
     command.env_remove(EnvVars::UV_EXCLUDE_NEWER);
     command
+}
+
+/// Check the complete resolution against the scenario's expected packages.
+fn assert_resolution(output: Output, expected: &[&str]) {
+    let output = output.assert().success();
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    let packages = stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(" + "))
+        .collect::<Vec<_>>();
+    assert_eq!(packages, expected);
 }
 
 /// There are two packages, `a` and `b`. All versions of `b` require a specific
@@ -56,7 +69,8 @@ fn backtrack_to_missing_package() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("backtracking/backtrack-to-missing-package.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b")
         , @"
@@ -67,8 +81,7 @@ fn backtrack_to_missing_package() {
              And because all versions of b depend on a==1.0.0 and you require b, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
-    context.assert_not_installed("b");
+    output.assert().failure();
 }
 
 /// There are two packages, `a` and `b`. The latest version of `b` requires
@@ -103,21 +116,21 @@ fn backtrack_with_missing_package() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("backtracking/backtrack-with-missing-package.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + b==2.0.0
     ");
 
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "2.0.0");
+    assert_resolution(output, &["a==1.0.0", "b==2.0.0"]);
 }
 
 /// The user requires an exact version of package `a` but only other versions exist
@@ -137,7 +150,8 @@ fn requires_exact_version_does_not_exist() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("does_not_exist/requires-exact-version-does-not-exist.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==2.0.0")
         , @"
     exit_code: 1 (failure)
@@ -146,7 +160,7 @@ fn requires_exact_version_does_not_exist() {
       cause: Because there is no version of a==2.0.0 and you require a==2.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires a version of `a` greater than `1.0.0` but only smaller or equal versions exist
@@ -167,7 +181,8 @@ fn requires_greater_version_does_not_exist() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("does_not_exist/requires-greater-version-does-not-exist.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>1.0.0")
         , @"
     exit_code: 1 (failure)
@@ -176,7 +191,7 @@ fn requires_greater_version_does_not_exist() {
       cause: Because only a<=1.0.0 is available and you require a>1.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires a version of `a` less than `1.0.0` but only larger versions exist
@@ -198,7 +213,8 @@ fn requires_less_version_does_not_exist() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("does_not_exist/requires-less-version-does-not-exist.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a<2.0.0")
         , @"
     exit_code: 1 (failure)
@@ -207,7 +223,7 @@ fn requires_less_version_does_not_exist() {
       cause: Because only a>=2.0.0 is available and you require a<2.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires any version of package `a` which does not exist.
@@ -225,7 +241,8 @@ fn requires_package_does_not_exist() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("does_not_exist/requires-package-does-not-exist.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 1 (failure)
@@ -234,7 +251,7 @@ fn requires_package_does_not_exist() {
       cause: Because a was not found in the package registry and you require a, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires package `a` but `a` requires package `b` which does not exist
@@ -257,7 +274,8 @@ fn transitive_requires_package_does_not_exist() {
     let server =
         PackseServer::new("does_not_exist/transitive-requires-package-does-not-exist.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 1 (failure)
@@ -267,7 +285,7 @@ fn transitive_requires_package_does_not_exist() {
              And because you require a, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// There is a non-contiguous range of compatible versions for the requested package `a`, but another dependency `c` excludes the range. This is the same as `dependency-excludes-range-of-compatible-versions` but some of the versions of `a` are incompatible for another reason e.g. dependency on non-existent package `d`.
@@ -335,7 +353,8 @@ fn dependency_excludes_non_contiguous_range_of_compatible_versions() {
         "excluded/dependency-excludes-non-contiguous-range-of-compatible-versions.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b>=2.0.0,<3.0.0")
         .arg("c")
@@ -352,9 +371,7 @@ fn dependency_excludes_non_contiguous_range_of_compatible_versions() {
     ");
 
     // Only the `2.x` versions of `a` are available since `a==1.0.0` and `a==3.0.0` require incompatible versions of `b`, but all available versions of `c` exclude that range of `a` so resolution fails.
-    context.assert_not_installed("a");
-    context.assert_not_installed("b");
-    context.assert_not_installed("c");
+    output.assert().failure();
 }
 
 /// There is a range of compatible versions for the requested package `a`, but another dependency `c` excludes that range.
@@ -413,7 +430,8 @@ fn dependency_excludes_range_of_compatible_versions() {
     let server =
         PackseServer::new("excluded/dependency-excludes-range-of-compatible-versions.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b>=2.0.0,<3.0.0")
         .arg("c")
@@ -430,9 +448,7 @@ fn dependency_excludes_range_of_compatible_versions() {
     ");
 
     // Only the `2.x` versions of `a` are available since `a==1.0.0` and `a==3.0.0` require incompatible versions of `b`, but all available versions of `c` exclude that range of `a` so resolution fails.
-    context.assert_not_installed("a");
-    context.assert_not_installed("b");
-    context.assert_not_installed("c");
+    output.assert().failure();
 }
 
 /// Only one version of the requested package `a` is compatible, but the user has banned that version.
@@ -467,7 +483,8 @@ fn excluded_only_compatible_version() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("excluded/excluded-only-compatible-version.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a!=2.0.0")
         .arg("b>=2.0.0,<3.0.0")
         , @"
@@ -488,8 +505,7 @@ fn excluded_only_compatible_version() {
     ");
 
     // Only `a==1.2.0` is available since `a==1.0.0` and `a==3.0.0` require incompatible versions of `b`. The user has excluded that version of `a` so resolution fails.
-    context.assert_not_installed("a");
-    context.assert_not_installed("b");
+    output.assert().failure();
 }
 
 /// Only one version of the requested package is available, but the user has banned that version.
@@ -509,7 +525,8 @@ fn excluded_only_version() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("excluded/excluded-only-version.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a!=1.0.0")
         , @"
     exit_code: 1 (failure)
@@ -522,7 +539,7 @@ fn excluded_only_version() {
     ");
 
     // Only `a==1.0.0` is available but the user excluded it.
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// Multiple optional dependencies are requested for the package via an 'all' extra.
@@ -566,22 +583,21 @@ fn all_extras_required() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/all-extras-required.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a[all]")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + b==1.0.0
      + c==1.0.0
     ");
 
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "1.0.0");
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "b==1.0.0", "c==1.0.0"]);
 }
 
 /// Optional dependencies are requested for the package, the extra is only available on an older version.
@@ -611,20 +627,21 @@ fn extra_does_not_exist_backtrack() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/extra-does-not-exist-backtrack.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a[extra]")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==3.0.0
     warning: The package `a==3.0.0` does not have an extra named `extra`
     ");
 
     // The resolver should not backtrack to `a==1.0.0` because missing extras are allowed during resolution. `b` should not be installed.
-    context.assert_installed("a", "3.0.0");
+    assert_resolution(output, &["a==3.0.0"]);
 }
 
 /// One of two incompatible optional dependencies are requested for the package.
@@ -655,21 +672,21 @@ fn extra_incompatible_with_extra_not_requested() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/extra-incompatible-with-extra-not-requested.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a[extra-c]")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + b==2.0.0
     ");
 
     // Because the user does not request both extras, it is okay that one is incompatible with the other.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "2.0.0");
+    assert_resolution(output, &["a==1.0.0", "b==2.0.0"]);
 }
 
 /// Multiple optional dependencies are requested for the package, but they have conflicting requirements with each other.
@@ -700,7 +717,8 @@ fn extra_incompatible_with_extra() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/extra-incompatible-with-extra.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a[extra-b,extra-c]")
         , @"
     exit_code: 1 (failure)
@@ -711,7 +729,7 @@ fn extra_incompatible_with_extra() {
     ");
 
     // Because both `extra_b` and `extra_c` are requested and they require incompatible versions of `b`, `a` cannot be installed.
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// Optional dependencies are requested for the package, but the extra is not compatible with other requested versions.
@@ -740,7 +758,8 @@ fn extra_incompatible_with_root() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/extra-incompatible-with-root.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a[extra]")
         .arg("b==2.0.0")
         , @"
@@ -752,8 +771,7 @@ fn extra_incompatible_with_root() {
     ");
 
     // Because the user requested `b==2.0.0` but the requested extra requires `b==1.0.0`, the dependencies cannot be satisfied.
-    context.assert_not_installed("a");
-    context.assert_not_installed("b");
+    output.assert().failure();
 }
 
 /// Optional dependencies are requested for the package.
@@ -779,20 +797,20 @@ fn extra_required() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/extra-required.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a[extra]")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + b==1.0.0
     ");
 
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "b==1.0.0"]);
 }
 
 /// Optional dependencies are requested for the package, but the extra does not exist.
@@ -812,20 +830,21 @@ fn missing_extra() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/missing-extra.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a[extra]")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.0.0
     warning: The package `a==1.0.0` does not have an extra named `extra`
     ");
 
     // Missing extras are ignored during resolution.
-    context.assert_installed("a", "1.0.0");
+    assert_resolution(output, &["a==1.0.0"]);
 }
 
 /// Multiple optional dependencies are requested for the package.
@@ -857,22 +876,21 @@ fn multiple_extras_required() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/multiple-extras-required.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a[extra-b,extra-c]")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + b==1.0.0
      + c==1.0.0
     ");
 
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "1.0.0");
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "b==1.0.0", "c==1.0.0"]);
 }
 
 /// The user requires two incompatible, existing versions of package `a`
@@ -895,7 +913,8 @@ fn direct_incompatible_versions() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("incompatible_versions/direct-incompatible-versions.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.0.0")
         .arg("a==2.0.0")
         , @"
@@ -905,8 +924,7 @@ fn direct_incompatible_versions() {
       cause: Because you require a==1.0.0 and a==2.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires `a`, which requires two incompatible, existing versions of package `b`
@@ -930,7 +948,8 @@ fn transitive_incompatible_versions() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("incompatible_versions/transitive-incompatible-versions.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.0.0")
         , @"
     exit_code: 1 (failure)
@@ -940,7 +959,7 @@ fn transitive_incompatible_versions() {
              And because you require a==1.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires packages `a` and `b` but `a` requires a different version of `b`
@@ -968,7 +987,8 @@ fn transitive_incompatible_with_root_version() {
     let server =
         PackseServer::new("incompatible_versions/transitive-incompatible-with-root-version.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b==1.0.0")
         , @"
@@ -979,8 +999,7 @@ fn transitive_incompatible_with_root_version() {
              And because you require b==1.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
-    context.assert_not_installed("b");
+    output.assert().failure();
 }
 
 /// The user requires package `a` and `b`; `a` and `b` require different versions of `c`
@@ -1012,7 +1031,8 @@ fn transitive_incompatible_with_transitive() {
     let server =
         PackseServer::new("incompatible_versions/transitive-incompatible-with-transitive.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b")
         , @"
@@ -1023,8 +1043,7 @@ fn transitive_incompatible_with_transitive() {
              And because you require a and b, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
-    context.assert_not_installed("b");
+    output.assert().failure();
 }
 
 /// A local version should be included in inclusive ordered comparisons.
@@ -1046,19 +1065,20 @@ fn local_greater_than_or_equal() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-greater-than-or-equal.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=1.2.3")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.3+foo
     ");
 
     // The version '1.2.3+foo' satisfies the constraint '>=1.2.3'.
-    context.assert_installed("a", "1.2.3+foo");
+    assert_resolution(output, &["a==1.2.3+foo"]);
 }
 
 /// A local version should be excluded in exclusive ordered comparisons.
@@ -1078,7 +1098,8 @@ fn local_greater_than() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-greater-than.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>1.2.3")
         , @"
     exit_code: 1 (failure)
@@ -1087,7 +1108,7 @@ fn local_greater_than() {
       cause: Because only a==1.2.3+foo is available and you require a>1.2.3, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// A local version should be included in inclusive ordered comparisons.
@@ -1109,19 +1130,20 @@ fn local_less_than_or_equal() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-less-than-or-equal.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a<=1.2.3")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.3+foo
     ");
 
     // The version '1.2.3+foo' satisfies the constraint '<=1.2.3'.
-    context.assert_installed("a", "1.2.3+foo");
+    assert_resolution(output, &["a==1.2.3+foo"]);
 }
 
 /// A local version should be excluded in exclusive ordered comparisons.
@@ -1141,7 +1163,8 @@ fn local_less_than() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-less-than.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a<1.2.3")
         , @"
     exit_code: 1 (failure)
@@ -1150,7 +1173,7 @@ fn local_less_than() {
       cause: Because only a==1.2.3+foo is available and you require a<1.2.3, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// Tests that we can select an older version with a local segment when newer versions are incompatible.
@@ -1174,18 +1197,19 @@ fn local_not_latest() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-not-latest.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=1")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.1+foo
     ");
 
-    context.assert_installed("a", "1.2.1+foo");
+    assert_resolution(output, &["a==1.2.1+foo"]);
 }
 
 /// If there is a 1.2.3 version with an sdist published and no compatible wheels, then the sdist will be used.
@@ -1207,19 +1231,20 @@ fn local_not_used_with_sdist() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-not-used-with-sdist.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.2.3")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.3+foo
     ");
 
     // The version '1.2.3' with an sdist satisfies the constraint '==1.2.3'.
-    context.assert_installed("a", "1.2.3+foo");
+    assert_resolution(output, &["a==1.2.3+foo"]);
 }
 
 /// A simple version constraint should not exclude published versions with local segments.
@@ -1241,19 +1266,20 @@ fn local_simple() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-simple.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.2.3")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.3+foo
     ");
 
     // The version '1.2.3+foo' satisfies the constraint '==1.2.3'.
-    context.assert_installed("a", "1.2.3+foo");
+    assert_resolution(output, &["a==1.2.3+foo"]);
 }
 
 /// A dependency depends on a conflicting local version of a direct dependency, but we can backtrack to a compatible version.
@@ -1285,22 +1311,22 @@ fn local_transitive_backtrack() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-transitive-backtrack.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b==2.0.0+foo")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + b==2.0.0+foo
     ");
 
     // Backtracking to '1.0.0' gives us compatible local versions of b.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "2.0.0+foo");
+    assert_resolution(output, &["a==1.0.0", "b==2.0.0+foo"]);
 }
 
 /// A dependency depends on a conflicting local version of a direct dependency.
@@ -1327,7 +1353,8 @@ fn local_transitive_conflicting() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-transitive-conflicting.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b==2.0.0+foo")
         , @"
@@ -1338,8 +1365,7 @@ fn local_transitive_conflicting() {
              And because you require b==2.0.0+foo, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
-    context.assert_not_installed("b");
+    output.assert().failure();
 }
 
 /// A transitive dependency has both a non-local and local version published, but the non-local version is unusable.
@@ -1367,21 +1393,21 @@ fn local_transitive_confounding() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-transitive-confounding.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + b==2.0.0+foo
     ");
 
     // The version '2.0.0+foo' satisfies the constraint '==2.0.0'.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "2.0.0+foo");
+    assert_resolution(output, &["a==1.0.0", "b==2.0.0+foo"]);
 }
 
 /// A transitive constraint on a local version should match an inclusive ordered operator.
@@ -1409,22 +1435,22 @@ fn local_transitive_greater_than_or_equal() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-transitive-greater-than-or-equal.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b==2.0.0+foo")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + b==2.0.0+foo
     ");
 
     // The version '2.0.0+foo' satisfies both >=2.0.0 and ==2.0.0+foo.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "2.0.0+foo");
+    assert_resolution(output, &["a==1.0.0", "b==2.0.0+foo"]);
 }
 
 /// A transitive constraint on a local version should not match an exclusive ordered operator.
@@ -1451,7 +1477,8 @@ fn local_transitive_greater_than() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-transitive-greater-than.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b==2.0.0+foo")
         , @"
@@ -1462,8 +1489,7 @@ fn local_transitive_greater_than() {
              And because you require b==2.0.0+foo, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
-    context.assert_not_installed("b");
+    output.assert().failure();
 }
 
 /// A transitive constraint on a local version should match an inclusive ordered operator.
@@ -1491,22 +1517,22 @@ fn local_transitive_less_than_or_equal() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-transitive-less-than-or-equal.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b==2.0.0+foo")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + b==2.0.0+foo
     ");
 
     // The version '2.0.0+foo' satisfies both <=2.0.0 and ==2.0.0+foo.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "2.0.0+foo");
+    assert_resolution(output, &["a==1.0.0", "b==2.0.0+foo"]);
 }
 
 /// A transitive constraint on a local version should not match an exclusive ordered operator.
@@ -1533,7 +1559,8 @@ fn local_transitive_less_than() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-transitive-less-than.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b==2.0.0+foo")
         , @"
@@ -1544,8 +1571,7 @@ fn local_transitive_less_than() {
              And because you require b==2.0.0+foo, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
-    context.assert_not_installed("b");
+    output.assert().failure();
 }
 
 /// A simple version constraint should not exclude published versions with local segments.
@@ -1573,22 +1599,22 @@ fn local_transitive() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-transitive.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b==2.0.0+foo")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + b==2.0.0+foo
     ");
 
     // The version '2.0.0+foo' satisfies both ==2.0.0 and ==2.0.0+foo.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "2.0.0+foo");
+    assert_resolution(output, &["a==1.0.0", "b==2.0.0+foo"]);
 }
 
 /// Even if there is a 1.2.3 version published, if it is unavailable for some reason (no sdist and no compatible wheels in this case), a 1.2.3 version with a local segment should be usable instead.
@@ -1610,19 +1636,20 @@ fn local_used_without_sdist() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("local/local-used-without-sdist.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.2.3")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.3+foo
     ");
 
     // The version '1.2.3+foo' satisfies the constraint '==1.2.3'.
-    context.assert_installed("a", "1.2.3+foo");
+    assert_resolution(output, &["a==1.2.3+foo"]);
 }
 
 /// An equal version constraint should match a post-release version if the post-release version is available.
@@ -1643,19 +1670,20 @@ fn post_equal_available() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-equal-available.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.2.3.post0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.3.post0
     ");
 
     // The version '1.2.3.post0' satisfies the constraint '==1.2.3.post0'.
-    context.assert_installed("a", "1.2.3.post0");
+    assert_resolution(output, &["a==1.2.3.post0"]);
 }
 
 /// An equal version constraint should not match a post-release version if the post-release version is not available.
@@ -1676,7 +1704,8 @@ fn post_equal_not_available() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-equal-not-available.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.2.3.post0")
         , @"
     exit_code: 1 (failure)
@@ -1685,7 +1714,7 @@ fn post_equal_not_available() {
       cause: Because there is no version of a==1.2.3.post0 and you require a==1.2.3.post0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// A greater-than-or-equal version constraint should match a post-release version if the constraint is itself a post-release version.
@@ -1707,19 +1736,20 @@ fn post_greater_than_or_equal_post() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-greater-than-or-equal-post.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=1.2.3.post0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.3.post1
     ");
 
     // The version '1.2.3.post1' satisfies the constraint '>=1.2.3.post0'.
-    context.assert_installed("a", "1.2.3.post1");
+    assert_resolution(output, &["a==1.2.3.post1"]);
 }
 
 /// A greater-than-or-equal version constraint should match a post-release version.
@@ -1739,19 +1769,20 @@ fn post_greater_than_or_equal() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-greater-than-or-equal.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=1.2.3")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.3.post1
     ");
 
     // The version '1.2.3.post1' satisfies the constraint '>=1.2.3'.
-    context.assert_installed("a", "1.2.3.post1");
+    assert_resolution(output, &["a==1.2.3.post1"]);
 }
 
 /// A greater-than version constraint should not match a post-release version if the post-release version is not available.
@@ -1773,7 +1804,8 @@ fn post_greater_than_post_not_available() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-greater-than-post-not-available.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>1.2.3.post2")
         , @"
     exit_code: 1 (failure)
@@ -1782,7 +1814,7 @@ fn post_greater_than_post_not_available() {
       cause: Because only a<=1.2.3.post1 is available and you require a>1.2.3.post2, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// A greater-than post-release constraint should exclude locals of the specified release but include development releases of later post-releases.
@@ -1803,20 +1835,21 @@ fn post_greater_than_post_prerelease_ordering() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-greater-than-post-prerelease-ordering.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("--prerelease=allow")
         .arg("a>1.2.3.post0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.3.post1.dev0
     ");
 
     // The local version has the same public version as the lower bound, while the development release belongs to a later post-release.
-    context.assert_installed("a", "1.2.3.post1.dev0");
+    assert_resolution(output, &["a==1.2.3.post1.dev0"]);
 }
 
 /// A greater-than version constraint should match a post-release version if the constraint is itself a post-release version.
@@ -1837,19 +1870,20 @@ fn post_greater_than_post() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-greater-than-post.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>1.2.3.post0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.3.post1
     ");
 
     // The version '1.2.3.post1' satisfies the constraint '>1.2.3.post0'.
-    context.assert_installed("a", "1.2.3.post1");
+    assert_resolution(output, &["a==1.2.3.post1"]);
 }
 
 /// A greater-than version constraint should not match a post-release version.
@@ -1869,7 +1903,8 @@ fn post_greater_than() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-greater-than.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>1.2.3")
         , @"
     exit_code: 1 (failure)
@@ -1878,7 +1913,7 @@ fn post_greater_than() {
       cause: Because only a==1.2.3.post1 is available and you require a>1.2.3, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// A less-than-or-equal version constraint should not match a post-release version.
@@ -1898,7 +1933,8 @@ fn post_less_than_or_equal() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-less-than-or-equal.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a<=1.2.3")
         , @"
     exit_code: 1 (failure)
@@ -1907,7 +1943,7 @@ fn post_less_than_or_equal() {
       cause: Because only a==1.2.3.post1 is available and you require a<=1.2.3, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// A less-than post-release constraint should include pre-releases of the base release but exclude development releases of the specified post-release.
@@ -1928,19 +1964,20 @@ fn post_less_than_post_prerelease_ordering() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-less-than-post-prerelease-ordering.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a<1.2.3.post1")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.2.3a1
     ");
 
     // The base pre-release is before the post-release boundary, while the development release belongs to the specified post-release and is excluded.
-    context.assert_installed("a", "1.2.3a1");
+    assert_resolution(output, &["a==1.2.3a1"]);
 }
 
 /// A less-than version constraint should not match a post-release version.
@@ -1960,7 +1997,8 @@ fn post_less_than() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-less-than.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a<1.2.3")
         , @"
     exit_code: 1 (failure)
@@ -1969,7 +2007,7 @@ fn post_less_than() {
       cause: Because only a==1.2.3.post1 is available and you require a<1.2.3, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// A greater-than version constraint should not match a post-release version with a local version identifier.
@@ -1990,7 +2028,8 @@ fn post_local_greater_than_post() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-local-greater-than-post.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>1.2.3.post1")
         , @"
     exit_code: 1 (failure)
@@ -1999,7 +2038,7 @@ fn post_local_greater_than_post() {
       cause: Because only a<=1.2.3.post1 is available and you require a>1.2.3.post1, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// A greater-than version constraint should not match a post-release version with a local version identifier.
@@ -2020,7 +2059,8 @@ fn post_local_greater_than() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-local-greater-than.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>1.2.3")
         , @"
     exit_code: 1 (failure)
@@ -2029,7 +2069,7 @@ fn post_local_greater_than() {
       cause: Because only a<=1.2.3.post1+local is available and you require a>1.2.3, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// A simple version constraint should not match a post-release version.
@@ -2049,7 +2089,8 @@ fn post_simple() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-simple.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.2.3")
         , @"
     exit_code: 1 (failure)
@@ -2058,7 +2099,7 @@ fn post_simple() {
       cause: Because there is no version of a==1.2.3 and you require a==1.2.3, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// A transitive less-than post-release constraint should include pre-releases of the base release but exclude development releases of the specified post-release.
@@ -2083,21 +2124,21 @@ fn post_transitive_less_than_post_prerelease_ordering() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("post/post-transitive-less-than-post-prerelease-ordering.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + b==1.2.3a1
     ");
 
     // The transitive dependency can use the base pre-release because it is before the post-release boundary.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "1.2.3a1");
+    assert_resolution(output, &["a==1.0.0", "b==1.2.3a1"]);
 }
 
 /// The user requires `a` which has multiple prereleases available with different labels.
@@ -2121,19 +2162,20 @@ fn package_multiple_prereleases_kinds() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-multiple-prereleases-kinds.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=1.0.0a1")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.0.0rc1
     ");
 
     // Release candidates should be the highest precedence prerelease kind.
-    context.assert_installed("a", "1.0.0rc1");
+    assert_resolution(output, &["a==1.0.0rc1"]);
 }
 
 /// The user requires `a` which has multiple alphas available.
@@ -2157,19 +2199,20 @@ fn package_multiple_prereleases_numbers() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-multiple-prereleases-numbers.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=1.0.0a1")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.0.0a3
     ");
 
     // The latest alpha version should be selected.
-    context.assert_installed("a", "1.0.0a3");
+    assert_resolution(output, &["a==1.0.0a3"]);
 }
 
 /// The user requires a non-prerelease version of `a` which only has prerelease versions available. There are pre-releases on the boundary of their range.
@@ -2191,19 +2234,20 @@ fn package_only_prereleases_boundary() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-only-prereleases-boundary.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a<0.2.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.1.0a1
     ");
 
     // Since there are only prerelease versions of `a` available, a prerelease is allowed. Since the user did not explicitly request a pre-release, pre-releases at the boundary should not be selected.
-    context.assert_installed("a", "0.1.0a1");
+    assert_resolution(output, &["a==0.1.0a1"]);
 }
 
 /// The user requires a version of package `a` which only matches prerelease versions but they did not include a prerelease specifier.
@@ -2224,19 +2268,20 @@ fn package_only_prereleases_in_range() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-only-prereleases-in-range.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>0.1.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.0.0a1
     ");
 
     // Since no stable version of `a` matches the requested range, the matching pre-release is selected.
-    context.assert_installed("a", "1.0.0a1");
+    assert_resolution(output, &["a==1.0.0a1"]);
 }
 
 /// The user requires any version of package `a` which only has prerelease versions available.
@@ -2256,19 +2301,20 @@ fn package_only_prereleases() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-only-prereleases.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.0.0a1
     ");
 
     // Since there are only prerelease versions of `a` available, it should be installed even though the user did not include a prerelease specifier.
-    context.assert_installed("a", "1.0.0a1");
+    assert_resolution(output, &["a==1.0.0a1"]);
 }
 
 /// An explicit pre-release specifier matches both pre-release and stable versions.
@@ -2294,19 +2340,20 @@ fn package_prerelease_specified_mixed_available() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-prerelease-specified-mixed-available.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=0.1.0a1")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.3.0
     ");
 
     // Stable versions are preferred even when the user provides a pre-release specifier.
-    context.assert_installed("a", "0.3.0");
+    assert_resolution(output, &["a==0.3.0"]);
 }
 
 /// The user requires a version of `a` with a prerelease specifier and only stable releases are available.
@@ -2331,19 +2378,20 @@ fn package_prerelease_specified_only_final_available() {
     let server =
         PackseServer::new("prereleases/package-prerelease-specified-only-final-available.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=0.1.0a1")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.3.0
     ");
 
     // The latest stable version should be selected.
-    context.assert_installed("a", "0.3.0");
+    assert_resolution(output, &["a==0.3.0"]);
 }
 
 /// The user requires a version of `a` with a prerelease specifier and only prerelease releases are available.
@@ -2369,19 +2417,20 @@ fn package_prerelease_specified_only_prerelease_available() {
         "prereleases/package-prerelease-specified-only-prerelease-available.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=0.1.0a1")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.3.0a1
     ");
 
     // The latest prerelease version should be selected.
-    context.assert_installed("a", "0.3.0a1");
+    assert_resolution(output, &["a==0.3.0a1"]);
 }
 
 /// The user requires a non-prerelease version of `a` but has enabled pre-releases. There are pre-releases on the boundary of their range.
@@ -2403,20 +2452,21 @@ fn package_prereleases_boundary() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-prereleases-boundary.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("--prerelease=allow")
         .arg("a<0.2.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.1.0
     ");
 
     // Since the user did not use a pre-release specifier, pre-releases at the boundary should not be selected even though pre-releases are allowed.
-    context.assert_installed("a", "0.1.0");
+    assert_resolution(output, &["a==0.1.0"]);
 }
 
 /// The user requires a non-prerelease version of `a` but has enabled pre-releases. There are pre-releases on the boundary of their range.
@@ -2438,20 +2488,21 @@ fn package_prereleases_global_boundary() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-prereleases-global-boundary.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("--prerelease=allow")
         .arg("a<0.2.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.1.0
     ");
 
     // Since the user did not use a pre-release specifier, pre-releases at the boundary should not be selected even though pre-releases are allowed.
-    context.assert_installed("a", "0.1.0");
+    assert_resolution(output, &["a==0.1.0"]);
 }
 
 /// An explicit pre-release specifier includes stable and pre-release candidates at the boundary of its range.
@@ -2477,19 +2528,20 @@ fn package_prereleases_specifier_boundary() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-prereleases-specifier-boundary.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a<0.2.0a2")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.1.0
     ");
 
     // The stable candidate is preferred over pre-releases at the boundary of the range.
-    context.assert_installed("a", "0.1.0");
+    assert_resolution(output, &["a==0.1.0"]);
 }
 
 /// A package graph with stable and pre-release candidates for `a`, and only pre-release candidates for `b`.
@@ -2519,22 +2571,22 @@ fn package_stable_prerelease_candidates() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-stable-prerelease-candidates.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=0")
         .arg("b>=0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==2.0.0
      + b==1.0.0rc2
     ");
 
     // The default resolution strategy selects the latest stable version of `a` and, because `b` has no stable releases, its latest pre-release.
-    context.assert_installed("a", "2.0.0");
-    context.assert_installed("b", "1.0.0rc2");
+    assert_resolution(output, &["a==2.0.0", "b==1.0.0rc2"]);
 }
 
 /// A same-distribution dependency batch remains order-independent after rejecting an earlier parent version.
@@ -2585,24 +2637,23 @@ fn prerelease_base_extra_stable_preference_after_backtrack() {
         "prereleases/prerelease-base-extra-stable-preference-after-backtrack.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("d==1.0.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + c==1.0.0
      + d==1.0.0
     ");
 
     // After rejecting `a==2.0.0`, the base and extra requirements from `a==1.0.0` retain the stable preference and select `c==1.0.0`.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("c", "1.0.0");
-    context.assert_installed("d", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "c==1.0.0", "d==1.0.0"]);
 }
 
 /// Base and extra requirements retain the stable preference when the explicit extra requirement appears first.
@@ -2635,20 +2686,21 @@ fn prerelease_base_extra_stable_preference_explicit_first() {
         "prereleases/prerelease-base-extra-stable-preference-explicit-first.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("c[extra]>=0.5a1")
         .arg("c>=1.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + c==1.0.0
     ");
 
     // Requirements on a distribution and one of its extras select the same stable version regardless of declaration order.
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["c==1.0.0"]);
 }
 
 /// Base and extra requirements retain the stable preference when the plain base requirement appears first.
@@ -2680,20 +2732,21 @@ fn prerelease_base_extra_stable_preference_plain_first() {
     let server =
         PackseServer::new("prereleases/prerelease-base-extra-stable-preference-plain-first.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("c>=1.0")
         .arg("c[extra]>=0.5a1")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + c==1.0.0
     ");
 
     // Requirements on a distribution and one of its extras select the same stable version regardless of declaration order.
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["c==1.0.0"]);
 }
 
 /// A capped pre-release branch does not affect candidate selection in a higher active range.
@@ -2736,15 +2789,16 @@ fn prerelease_capped_union_alternate_parent() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/prerelease-capped-union-alternate-parent.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("d")
         .arg("g!=2.5")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would download 4 packages
+    Would install 4 packages
      + a==3.6b1
      + c==3.5
      + d==3.0
@@ -2752,10 +2806,7 @@ fn prerelease_capped_union_alternate_parent() {
     ");
 
     // The active `c>=3.5,<4` requirement selects the final `3.5`; the rejected `c==2.0b1` branch does not affect that range.
-    context.assert_installed("a", "3.6b1");
-    context.assert_installed("c", "3.5");
-    context.assert_installed("d", "3.0");
-    context.assert_installed("g", "4.0");
+    assert_resolution(output, &["a==3.6b1", "c==3.5", "d==3.0", "g==4.0"]);
 }
 
 /// A rejected pre-release branch below 3 does not affect candidate selection in a disjoint active range above 3.
@@ -2794,24 +2845,23 @@ fn prerelease_capped_union_backtrack() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/prerelease-capped-union-backtrack.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("e!=2.5")
         .arg("a>=2.5")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==3.6b1
      + c==3.5
      + e==1.0
     ");
 
     // The failed `e==4.0` branch does not affect the active unmarked range, which selects the final `c==3.5`.
-    context.assert_installed("a", "3.6b1");
-    context.assert_installed("c", "3.5");
-    context.assert_installed("e", "1.0");
+    assert_resolution(output, &["a==3.6b1", "c==3.5", "e==1.0"]);
 }
 
 /// Equivalent requirements retain the stable preference when the explicit requirement appears first.
@@ -2838,20 +2888,21 @@ fn prerelease_equivalent_stable_preference_explicit_first() {
         "prereleases/prerelease-equivalent-stable-preference-explicit-first.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("c>0.5a1,>=1.0")
         .arg("c>=1.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + c==1.0.0
     ");
 
     // The explicit pre-release specifier does not override the stable preference, regardless of requirement order.
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["c==1.0.0"]);
 }
 
 /// Equivalent requirements retain the stable preference when the plain requirement appears first.
@@ -2877,20 +2928,21 @@ fn prerelease_equivalent_stable_preference_plain_first() {
     let server =
         PackseServer::new("prereleases/prerelease-equivalent-stable-preference-plain-first.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("c>=1.0")
         .arg("c>0.5a1,>=1.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + c==1.0.0
     ");
 
     // Equivalent requirement ranges retain the stable preference even when one names a pre-release.
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["c==1.0.0"]);
 }
 
 /// A pre-release extra requirement from a rejected parent does not affect a live plain extra requirement.
@@ -2940,24 +2992,23 @@ fn prerelease_extra_stable_preference_backtracks() {
     let server =
         PackseServer::new("prereleases/prerelease-extra-stable-preference-backtracks.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("d==1.0.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + c==1.0.0
      + d==1.0.0
     ");
 
     // The parent version with a pre-release requirement on `c[extra]` conflicts with `d==1.0.0`, so the selected alternate parent's plain requirement selects stable `c==1.0.0`.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("c", "1.0.0");
-    context.assert_installed("d", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "c==1.0.0", "d==1.0.0"]);
 }
 
 /// Requirements on the same extra retain the stable preference before constraining the base package.
@@ -2988,20 +3039,21 @@ fn prerelease_extra_stable_preference() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/prerelease-extra-stable-preference.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("c[extra]>=1.0")
         .arg("c[extra]>=0.5a1")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + c==1.0.0
     ");
 
     // The requirements on `c[extra]` prefer the stable candidate and pin the base package to the same version.
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["c==1.0.0"]);
 }
 
 /// A pre-release is selected when PubGrub rejects every stable candidate in the active range.
@@ -3038,22 +3090,22 @@ fn prerelease_fallback_after_stable_rejected() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/prerelease-fallback-after-stable-rejected.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.0.0")
         .arg("c>=1.0.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + c==1.5.0a1
     ");
 
     // The stable version of `c` and its newest pre-release conflict with the root requirement on `a`, so the remaining pre-release is selected.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("c", "1.5.0a1");
+    assert_resolution(output, &["a==1.0.0", "c==1.5.0a1"]);
 }
 
 /// An explicit requirement retains the stable preference alongside multiple plain requirements in the same dependency batch.
@@ -3086,7 +3138,8 @@ fn prerelease_multiple_redundant_stable_preference_explicit_first() {
         "prereleases/prerelease-multiple-redundant-stable-preference-explicit-first.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("c>=0.5a1")
         .arg("c<3.0")
         .arg("c>=1.0")
@@ -3094,13 +3147,13 @@ fn prerelease_multiple_redundant_stable_preference_explicit_first() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + c==1.5.0
     ");
 
     // The explicit requirement does not override the stable preference, so `c==1.5.0` is selected independently of requirement order.
-    context.assert_installed("c", "1.5.0");
+    assert_resolution(output, &["c==1.5.0"]);
 }
 
 /// A pre-release requirement retains the stable preference alongside multiple plain requirements in the same root dependency batch.
@@ -3132,7 +3185,8 @@ fn prerelease_multiple_redundant_stable_preference() {
     let server =
         PackseServer::new("prereleases/prerelease-multiple-redundant-stable-preference.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("c>=1.0")
         .arg("c<3.0")
         .arg("c>=0.5a1")
@@ -3140,13 +3194,13 @@ fn prerelease_multiple_redundant_stable_preference() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + c==1.5.0
     ");
 
     // The broader pre-release requirement does not override the stable preference, so `c==1.5.0` is selected even when that requirement appears last.
-    context.assert_installed("c", "1.5.0");
+    assert_resolution(output, &["c==1.5.0"]);
 }
 
 /// A broader pre-release requirement retains the stable preference when it appears before a narrower plain requirement.
@@ -3172,20 +3226,21 @@ fn prerelease_redundant_stable_preference_explicit_first() {
     let server =
         PackseServer::new("prereleases/prerelease-redundant-stable-preference-explicit-first.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("c>=0.5a1")
         .arg("c>=1.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + c==1.0.0
     ");
 
     // The broader requirement on `c>=0.5a1` does not override the stable preference after the active range is narrowed by `c>=1.0`.
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["c==1.0.0"]);
 }
 
 /// Root requirements retain the stable preference when a narrower plain requirement appears first.
@@ -3211,20 +3266,21 @@ fn prerelease_redundant_stable_preference_plain_first() {
     let server =
         PackseServer::new("prereleases/prerelease-redundant-stable-preference-plain-first.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("c>=1.0")
         .arg("c>=0.5a1")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + c==1.0.0
     ");
 
     // Requirements in the same root dependency batch retain the stable preference regardless of requirement order.
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["c==1.0.0"]);
 }
 
 /// The user requires a version of package `a` which only matches prerelease versions. They did not include a prerelease specifier for the package, but they opted into prereleases globally.
@@ -3247,19 +3303,20 @@ fn requires_package_only_prereleases_in_range_global_opt_in() {
         "prereleases/requires-package-only-prereleases-in-range-global-opt-in.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("--prerelease=allow")
         .arg("a>0.1.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.0.0a1
     ");
 
-    context.assert_installed("a", "1.0.0a1");
+    assert_resolution(output, &["a==1.0.0a1"]);
 }
 
 /// The user requires any version of package `a` has a prerelease version available and an older non-prerelease version.
@@ -3281,19 +3338,20 @@ fn requires_package_prerelease_and_final_any() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/requires-package-prerelease-and-final-any.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.1.0
     ");
 
     // Since the user did not provide a prerelease specifier, the older stable version should be selected.
-    context.assert_installed("a", "0.1.0");
+    assert_resolution(output, &["a==0.1.0"]);
 }
 
 /// The user requires package `a` which has a dependency on a package which only matches prerelease versions; the user has opted into allowing prereleases in `b` explicitly.
@@ -3322,22 +3380,22 @@ fn transitive_package_only_prereleases_in_range_opt_in() {
     let server =
         PackseServer::new("prereleases/transitive-package-only-prereleases-in-range-opt-in.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b>0.0.0a1")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==0.1.0
      + b==1.0.0a1
     ");
 
     // Since the user included a dependency on `b` with a prerelease specifier, a prerelease version can be selected.
-    context.assert_installed("a", "0.1.0");
-    context.assert_installed("b", "1.0.0a1");
+    assert_resolution(output, &["a==0.1.0", "b==1.0.0a1"]);
 }
 
 /// The user requires package `a` which has a dependency on a package which only matches prerelease versions but they did not include a prerelease specifier.
@@ -3362,21 +3420,21 @@ fn transitive_package_only_prereleases_in_range() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/transitive-package-only-prereleases-in-range.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==0.1.0
      + b==1.0.0a1
     ");
 
     // Since no stable version of `b` matches the transitive requirement, the matching pre-release is selected.
-    context.assert_installed("a", "0.1.0");
-    context.assert_installed("b", "1.0.0a1");
+    assert_resolution(output, &["a==0.1.0", "b==1.0.0a1"]);
 }
 
 /// The user requires any version of package `a` which requires `b` which only has prerelease versions available.
@@ -3400,21 +3458,21 @@ fn transitive_package_only_prereleases() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/transitive-package-only-prereleases.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==0.1.0
      + b==1.0.0a1
     ");
 
     // Since there are only prerelease versions of `b` available, it should be selected even though the user did not opt-in to prereleases.
-    context.assert_installed("a", "0.1.0");
-    context.assert_installed("b", "1.0.0a1");
+    assert_resolution(output, &["a==0.1.0", "b==1.0.0a1"]);
 }
 
 /// A transitive pre-release requirement discovered after the target was decided causes the target to be reconsidered without restarting resolution.
@@ -3450,15 +3508,16 @@ fn transitive_prerelease_after_decision() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/transitive-prerelease-after-decision.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would download 4 packages
+    Would install 4 packages
      + a==1.0.0
      + b==1.0.0
      + c==2.0.0a1
@@ -3466,10 +3525,7 @@ fn transitive_prerelease_after_decision() {
     ");
 
     // The requirement introduced through `d` moves the previously selected `c` package to the required pre-release.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "1.0.0");
-    context.assert_installed("c", "2.0.0a1");
-    context.assert_installed("d", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "b==1.0.0", "c==2.0.0a1", "d==1.0.0"]);
 }
 
 /// A transitive dependency has both a prerelease and a stable selector, but can only be satisfied by a prerelease. There are many prerelease versions and some are excluded.
@@ -3545,24 +3601,23 @@ fn transitive_prerelease_and_stable_dependency_many_versions_holes() {
         "prereleases/transitive-prerelease-and-stable-dependency-many-versions-holes.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + b==1.0.0
      + c==2.0.0b4
     ");
 
     // The selected version of `a` requires the highest matching pre-release of `c`.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "1.0.0");
-    context.assert_installed("c", "2.0.0b4");
+    assert_resolution(output, &["a==1.0.0", "b==1.0.0", "c==2.0.0b4"]);
 }
 
 /// A transitive dependency has both a prerelease and a stable selector, but can only be satisfied by a prerelease. There are many prerelease versions.
@@ -3638,24 +3693,23 @@ fn transitive_prerelease_and_stable_dependency_many_versions() {
         "prereleases/transitive-prerelease-and-stable-dependency-many-versions.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + b==1.0.0
      + c==2.0.0b9
     ");
 
     // The selected version of `a` requires a pre-release of `c`.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "1.0.0");
-    context.assert_installed("c", "2.0.0b9");
+    assert_resolution(output, &["a==1.0.0", "b==1.0.0", "c==2.0.0b9"]);
 }
 
 /// A transitive dependency has both a prerelease and a stable selector, but can only be satisfied by a prerelease. The user includes an opt-in to prereleases of the transitive dependency.
@@ -3691,7 +3745,8 @@ fn transitive_prerelease_and_stable_dependency_opt_in() {
     let server =
         PackseServer::new("prereleases/transitive-prerelease-and-stable-dependency-opt-in.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b")
         .arg("c>=0.0.0a1")
@@ -3699,17 +3754,15 @@ fn transitive_prerelease_and_stable_dependency_opt_in() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + b==1.0.0
      + c==2.0.0b1
     ");
 
     // Since the user explicitly opted-in to a prerelease for `c`, it can be installed.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "1.0.0");
-    context.assert_installed("c", "2.0.0b1");
+    assert_resolution(output, &["a==1.0.0", "b==1.0.0", "c==2.0.0b1"]);
 }
 
 /// A transitive dependency has both a prerelease and a stable selector, but can only be satisfied by a prerelease
@@ -3741,24 +3794,23 @@ fn transitive_prerelease_and_stable_dependency() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/transitive-prerelease-and-stable-dependency.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + b==1.0.0
      + c==2.0.0b1
     ");
 
     // The selected version of `a` requires the pre-release of `c`.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "1.0.0");
-    context.assert_installed("c", "2.0.0b1");
+    assert_resolution(output, &["a==1.0.0", "b==1.0.0", "c==2.0.0b1"]);
 }
 
 /// A pre-release requirement introduced by a rejected parent version does not affect the selected parent version.
@@ -3797,24 +3849,23 @@ fn transitive_prerelease_backtracks() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/transitive-prerelease-backtracks.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("d==1.0.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + c==1.0.0
      + d==1.0.0
     ");
 
     // The latest version of `a` is rejected, so its pre-release dependency no longer constrains `c`.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("c", "1.0.0");
-    context.assert_installed("d", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "c==1.0.0", "d==1.0.0"]);
 }
 
 /// Requirements from one parent retain the stable preference when the explicit requirement appears first.
@@ -3845,21 +3896,21 @@ fn transitive_prerelease_equivalent_stable_preference_explicit_first() {
         "prereleases/transitive-prerelease-equivalent-stable-preference-explicit-first.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + c==1.0.0
     ");
 
     // Requirements from one selected parent retain the stable preference even when one names a pre-release.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "c==1.0.0"]);
 }
 
 /// Requirements from one parent retain the stable preference when the plain requirement appears first.
@@ -3890,21 +3941,21 @@ fn transitive_prerelease_equivalent_stable_preference_plain_first() {
         "prereleases/transitive-prerelease-equivalent-stable-preference-plain-first.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + c==1.0.0
     ");
 
     // Requirements from one selected parent retain the stable preference regardless of requirement order.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "c==1.0.0"]);
 }
 
 /// An active transitive dependency with a pre-release specifier still prefers a matching stable version.
@@ -3930,21 +3981,21 @@ fn transitive_prerelease_prefers_stable() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/transitive-prerelease-prefers-stable.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + c==1.0.0
     ");
 
     // The selected version of `a` allows pre-release fallback for `c`, but the stable candidate remains preferred.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "c==1.0.0"]);
 }
 
 /// A transitive pre-release requirement retains the stable preference when its parent is prioritized before a compatible plain root requirement.
@@ -3975,22 +4026,22 @@ fn transitive_prerelease_redundant_stable_preference_parent_first() {
         "prereleases/transitive-prerelease-redundant-stable-preference-parent-first.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("c>=1.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + c==1.0.0
     ");
 
     // Resolving `a` first activates `c>=0.5a1`, but the resolver still prefers the stable `c==1.0.0` that satisfies both requirements.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "c==1.0.0"]);
 }
 
 /// A stable selection can be retained when a compatible plain root requirement is prioritized before a redundant transitive pre-release requirement.
@@ -4021,22 +4072,22 @@ fn transitive_prerelease_redundant_stable_preference_plain_first() {
         "prereleases/transitive-prerelease-redundant-stable-preference-plain-first.toml",
     );
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("c>=1.0")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==1.0.0
      + c==1.0.0
     ");
 
     // Resolving the root `c>=1.0` requirement first selects `c==1.0.0`. The later `c>=0.5a1` requirement is compatible with that decision, so it does not require a different solution.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("c", "1.0.0");
+    assert_resolution(output, &["a==1.0.0", "c==1.0.0"]);
 }
 
 /// The user requires a package where recent versions require a Python version greater than the current version, but an older version is compatible.
@@ -4065,18 +4116,19 @@ fn python_greater_than_current_backtrack() {
     let context = uv_test::test_context!("3.9");
     let server = PackseServer::new("requires_python/python-greater-than-current-backtrack.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.0.0
     ");
 
-    context.assert_installed("a", "1.0.0");
+    assert_resolution(output, &["a==1.0.0"]);
 }
 
 /// The user requires a package where recent versions require a Python version greater than the current version, but an excluded older version is compatible.
@@ -4104,7 +4156,8 @@ fn python_greater_than_current_excluded() {
     let context = uv_test::test_context!("3.9");
     let server = PackseServer::new("requires_python/python-greater-than-current-excluded.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=2.0.0")
         , @"
     exit_code: 1 (failure)
@@ -4129,7 +4182,7 @@ fn python_greater_than_current_excluded() {
              And because you require a>=2.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires a package which has many versions which all require a Python version greater than the current version
@@ -4172,7 +4225,8 @@ fn python_greater_than_current_many() {
     let context = uv_test::test_context!("3.9");
     let server = PackseServer::new("requires_python/python-greater-than-current-many.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.0.0")
         , @"
     exit_code: 1 (failure)
@@ -4181,7 +4235,7 @@ fn python_greater_than_current_many() {
       cause: Because there is no version of a==1.0.0 and you require a==1.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires a package which requires a Python version with a patch version greater than the current patch version
@@ -4203,7 +4257,8 @@ fn python_greater_than_current_patch() {
     let context = uv_test::test_context!("3.13.0");
     let server = PackseServer::new("requires_python/python-greater-than-current-patch.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.0.0")
         , @"
     exit_code: 1 (failure)
@@ -4213,7 +4268,7 @@ fn python_greater_than_current_patch() {
              And because you require a==1.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires a package which requires a Python version greater than the current version
@@ -4234,7 +4289,8 @@ fn python_greater_than_current() {
     let context = uv_test::test_context!("3.9");
     let server = PackseServer::new("requires_python/python-greater-than-current.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.0.0")
         , @"
     exit_code: 1 (failure)
@@ -4244,7 +4300,7 @@ fn python_greater_than_current() {
              And because you require a==1.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires a package which requires a Python version less than the current version
@@ -4265,7 +4321,7 @@ fn python_less_than_current() {
     let context = uv_test::test_context!("3.9");
     let server = PackseServer::new("requires_python/python-less-than-current.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
         .arg("a==1.0.0")
         , @"
     exit_code: 0 (success)
@@ -4277,6 +4333,7 @@ fn python_less_than_current() {
     ");
 
     // We ignore the upper bound on Python requirements
+    output.assert().success();
 }
 
 /// The user requires a package which requires a Python version that does not exist
@@ -4297,7 +4354,8 @@ fn python_version_does_not_exist() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("requires_python/python-version-does-not-exist.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a==1.0.0")
         , @"
     exit_code: 1 (failure)
@@ -4307,7 +4365,7 @@ fn python_version_does_not_exist() {
              And because you require a==1.0.0, we can conclude that your requirements are unsatisfiable.
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// Three independent packages used to test dependency-group selection.
@@ -4339,7 +4397,8 @@ fn dependency_groups() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("simple/dependency-groups.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("iniconfig==2.0.0")
         .arg("sniffio==1.3.1")
         .arg("sortedcontainers==2.4.0")
@@ -4348,18 +4407,23 @@ fn dependency_groups() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would download 4 packages
+    Would install 4 packages
      + iniconfig==2.0.0
      + sniffio==1.3.1
      + sortedcontainers==2.4.0
      + typing-extensions==4.10.0
     ");
 
-    context.assert_installed("iniconfig", "2.0.0");
-    context.assert_installed("sniffio", "1.3.1");
-    context.assert_installed("sortedcontainers", "2.4.0");
-    context.assert_installed("typing_extensions", "4.10.0");
+    assert_resolution(
+        output,
+        &[
+            "iniconfig==2.0.0",
+            "sniffio==1.3.1",
+            "sortedcontainers==2.4.0",
+            "typing-extensions==4.10.0",
+        ],
+    );
 }
 
 /// A single package with two stable versions.
@@ -4381,19 +4445,20 @@ fn single_package() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("simple/single-package.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==2.0.0
     ");
 
     // The latest version of 'a' should be selected.
-    context.assert_installed("a", "2.0.0");
+    assert_resolution(output, &["a==2.0.0"]);
 }
 
 /// A requirement that canonicalizes to the empty PEP 440 set is reported as empty.
@@ -4413,7 +4478,8 @@ fn canonical_empty_requirement() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("version_ranges/canonical-empty-requirement.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a<0.dev0")
         , @"
     exit_code: 1 (failure)
@@ -4422,7 +4488,7 @@ fn canonical_empty_requirement() {
       cause: you require a<0.dev0, which does not allow any versions
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// Two versions of a package use differently spelled but PEP 440-equivalent dependency ranges.
@@ -4453,7 +4519,8 @@ fn equivalent_dependency_ranges() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("version_ranges/equivalent-dependency-ranges.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("c>=2.0")
         , @"
@@ -4465,8 +4532,7 @@ fn equivalent_dependency_ranges() {
     ");
 
     // Both versions of `a` require the same logical range of `c`, which conflicts with the root requirement.
-    context.assert_not_installed("a");
-    context.assert_not_installed("c");
+    output.assert().failure();
 }
 
 /// Both wheels and source distributions are available, and the user has disabled binaries.
@@ -4486,7 +4552,7 @@ fn no_binary() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("wheels/no-binary.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
         .arg("--no-binary")
         .arg("a")
         .arg("a")
@@ -4500,6 +4566,7 @@ fn no_binary() {
     ");
 
     // The source distribution should be used for install
+    output.assert().success();
 }
 
 /// Both wheels and source distributions are available, and the user has disabled builds.
@@ -4519,7 +4586,7 @@ fn no_build() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("wheels/no-build.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
         .arg("--only-binary")
         .arg("a")
         .arg("a")
@@ -4533,6 +4600,7 @@ fn no_build() {
     ");
 
     // The wheel should be used for install
+    output.assert().success();
 }
 
 /// No wheels with matching ABI tags are available, nor are any source distributions available
@@ -4552,7 +4620,8 @@ fn no_sdist_no_wheels_with_matching_abi() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("wheels/no-sdist-no-wheels-with-matching-abi.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("--python-platform=x86_64-manylinux2014")
         .arg("a")
         , @"
@@ -4565,7 +4634,7 @@ fn no_sdist_no_wheels_with_matching_abi() {
     hint: You require CPython 3.12 (`cp312`), but we only found wheels for `a` (v1.0.0) with the following Python ABI tag: `graalpy240_310_native`
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// No wheels with matching platform tags are available, nor are any source distributions available
@@ -4585,7 +4654,8 @@ fn no_sdist_no_wheels_with_matching_platform() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("wheels/no-sdist-no-wheels-with-matching-platform.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("--python-platform=x86_64-manylinux2014")
         .arg("a")
         , @"
@@ -4598,7 +4668,7 @@ fn no_sdist_no_wheels_with_matching_platform() {
     hint: Wheels are available for `a` (v1.0.0) on the following platform: `macosx_10_0_ppc64`
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// No wheels with matching Python tags are available, nor are any source distributions available
@@ -4618,7 +4688,8 @@ fn no_sdist_no_wheels_with_matching_python() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("wheels/no-sdist-no-wheels-with-matching-python.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("--python-platform=x86_64-manylinux2014")
         .arg("a")
         , @"
@@ -4631,7 +4702,7 @@ fn no_sdist_no_wheels_with_matching_python() {
     hint: You require CPython 3.12 (`cp312`), but we only found wheels for `a` (v1.0.0) with the following Python implementation tag: `graalpy310`
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// No wheels are available, only source distributions but the user has disabled builds.
@@ -4651,7 +4722,8 @@ fn no_wheels_no_build() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("wheels/no-wheels-no-build.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("--only-binary")
         .arg("a")
         .arg("a")
@@ -4665,7 +4737,7 @@ fn no_wheels_no_build() {
     hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// No wheels with matching platform tags are available, just source distributions.
@@ -4685,7 +4757,7 @@ fn no_wheels_with_matching_platform() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("wheels/no-wheels-with-matching-platform.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
         .arg("a")
         , @"
     exit_code: 0 (success)
@@ -4695,6 +4767,8 @@ fn no_wheels_with_matching_platform() {
     Installed 1 package in [TIME]
      + a==1.0.0
     ");
+
+    output.assert().success();
 }
 
 /// No wheels are available, only source distributions.
@@ -4714,7 +4788,7 @@ fn no_wheels() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("wheels/no-wheels.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
         .arg("a")
         , @"
     exit_code: 0 (success)
@@ -4724,6 +4798,8 @@ fn no_wheels() {
     Installed 1 package in [TIME]
      + a==1.0.0
     ");
+
+    output.assert().success();
 }
 
 /// No source distributions are available, only wheels but the user has disabled using pre-built binaries.
@@ -4743,7 +4819,8 @@ fn only_wheels_no_binary() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("wheels/only-wheels-no-binary.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("--no-binary")
         .arg("a")
         .arg("a")
@@ -4757,7 +4834,7 @@ fn only_wheels_no_binary() {
     hint: A source distribution is required for `a` because using pre-built wheels is disabled for `a` (i.e., with `--no-binary-package a`)
     ");
 
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// No source distributions are available, only wheels.
@@ -4777,7 +4854,7 @@ fn only_wheels() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("wheels/only-wheels.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
         .arg("a")
         , @"
     exit_code: 0 (success)
@@ -4787,6 +4864,8 @@ fn only_wheels() {
     Installed 1 package in [TIME]
      + a==1.0.0
     ");
+
+    output.assert().success();
 }
 
 /// A wheel for a specific platform is available alongside the default.
@@ -4806,7 +4885,7 @@ fn specific_tag_and_default() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("wheels/specific-tag-and-default.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
         .arg("a")
         , @"
     exit_code: 0 (success)
@@ -4816,6 +4895,8 @@ fn specific_tag_and_default() {
     Installed 1 package in [TIME]
      + a==1.0.0
     ");
+
+    output.assert().success();
 }
 
 /// The user requires a version of package `a` which only matches yanked versions.
@@ -4836,7 +4917,8 @@ fn package_only_yanked_in_range() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("yanked/package-only-yanked-in-range.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>0.1.0")
         , @"
     exit_code: 1 (failure)
@@ -4850,7 +4932,7 @@ fn package_only_yanked_in_range() {
     ");
 
     // Since there are other versions of `a` available, yanked versions should not be selected without explicit opt-in.
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires any version of package `a` which only has yanked versions available.
@@ -4870,7 +4952,8 @@ fn package_only_yanked() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("yanked/package-only-yanked.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 1 (failure)
@@ -4881,7 +4964,7 @@ fn package_only_yanked() {
     ");
 
     // Yanked versions should not be installed, even if they are the only one available.
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires any version of `a` and both yanked and unyanked releases are available.
@@ -4905,19 +4988,20 @@ fn package_yanked_specified_mixed_available() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("yanked/package-yanked-specified-mixed-available.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a>=0.1.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.3.0
     ");
 
     // The latest unyanked version should be selected.
-    context.assert_installed("a", "0.3.0");
+    assert_resolution(output, &["a==0.3.0"]);
 }
 
 /// The user requires any version of package `a` has a yanked version available and an older unyanked version.
@@ -4938,19 +5022,20 @@ fn requires_package_yanked_and_unyanked_any() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("yanked/requires-package-yanked-and-unyanked-any.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.1.0
     ");
 
     // The unyanked version should be selected.
-    context.assert_installed("a", "0.1.0");
+    assert_resolution(output, &["a==0.1.0"]);
 }
 
 /// The user requires package `a` which has a dependency on a package which only matches yanked versions; the user has opted into allowing the yanked version of `b` explicitly.
@@ -4977,23 +5062,23 @@ fn transitive_package_only_yanked_in_range_opt_in() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("yanked/transitive-package-only-yanked-in-range-opt-in.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b==1.0.0")
         , @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Would download 2 packages
+    Would install 2 packages
      + a==0.1.0
      + b==1.0.0
     warning: `b==1.0.0` is yanked
     ");
 
     // Since the user included a dependency on `b` with an exact specifier, the yanked version can be selected.
-    context.assert_installed("a", "0.1.0");
-    context.assert_installed("b", "1.0.0");
+    assert_resolution(output, &["a==0.1.0", "b==1.0.0"]);
 }
 
 /// The user requires package `a` which has a dependency on a package which only matches yanked versions.
@@ -5018,7 +5103,8 @@ fn transitive_package_only_yanked_in_range() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("yanked/transitive-package-only-yanked-in-range.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 1 (failure)
@@ -5032,7 +5118,7 @@ fn transitive_package_only_yanked_in_range() {
     ");
 
     // Yanked versions should not be installed, even if they are the only valid version in a range.
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// The user requires any version of package `a` which requires `b` which only has yanked versions available.
@@ -5056,7 +5142,8 @@ fn transitive_package_only_yanked() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("yanked/transitive-package-only-yanked.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         , @"
     exit_code: 1 (failure)
@@ -5067,7 +5154,7 @@ fn transitive_package_only_yanked() {
     ");
 
     // Yanked versions should not be installed, even if they are the only one available.
-    context.assert_not_installed("a");
+    output.assert().failure();
 }
 
 /// A transitive dependency has both a yanked and an unyanked version, but can only be satisfied by a yanked. The user includes an opt-in to the yanked version of the transitive dependency.
@@ -5100,7 +5187,8 @@ fn transitive_yanked_and_unyanked_dependency_opt_in() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("yanked/transitive-yanked-and-unyanked-dependency-opt-in.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b")
         .arg("c==2.0.0")
@@ -5108,8 +5196,8 @@ fn transitive_yanked_and_unyanked_dependency_opt_in() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + b==1.0.0
      + c==2.0.0
@@ -5117,9 +5205,7 @@ fn transitive_yanked_and_unyanked_dependency_opt_in() {
     ");
 
     // Since the user explicitly selected the yanked version of `c`, it can be installed.
-    context.assert_installed("a", "1.0.0");
-    context.assert_installed("b", "1.0.0");
-    context.assert_installed("c", "2.0.0");
+    assert_resolution(output, &["a==1.0.0", "b==1.0.0", "c==2.0.0"]);
 }
 
 /// A transitive dependency has both a yanked and an unyanked version, but can only be satisfied by a yanked version
@@ -5150,7 +5236,8 @@ fn transitive_yanked_and_unyanked_dependency() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("yanked/transitive-yanked-and-unyanked-dependency.toml");
 
-    uv_snapshot!(context.filters(), command(&context, &server)
+    let output = uv_snapshot!(context.filters(), command(&context, &server)
+        .arg("--dry-run")
         .arg("a")
         .arg("b")
         , @"
@@ -5162,6 +5249,5 @@ fn transitive_yanked_and_unyanked_dependency() {
     ");
 
     // Since the user did not explicitly select the yanked version, it cannot be used.
-    context.assert_not_installed("a");
-    context.assert_not_installed("b");
+    output.assert().failure();
 }

@@ -328,7 +328,8 @@ fn render_header(output: &mut String) {
 fn render_install(output: &mut String, cases: &[&ScenarioCase]) -> Result<()> {
     render_header(output);
     output.push_str("#![cfg(all(feature = \"test-python\", feature = \"test-pypi\", unix))]\n\n");
-    output.push_str("use std::process::Command;\n\n");
+    output.push_str("use std::process::{Command, Output};\n\n");
+    output.push_str("use assert_cmd::assert::OutputAssertExt;\n\n");
     output.push_str("use uv_static::EnvVars;\n");
     output.push_str("use uv_test::packse::PackseServer;\n");
     output.push_str("use uv_test::{TestContext, uv_snapshot};\n\n");
@@ -339,6 +340,17 @@ fn render_install(output: &mut String, cases: &[&ScenarioCase]) -> Result<()> {
     output.push_str("    command.arg(\"--index-url\").arg(server.index_url());\n");
     output.push_str("    command.env_remove(EnvVars::UV_EXCLUDE_NEWER);\n");
     output.push_str("    command\n");
+    output.push_str("}\n\n");
+    output
+        .push_str("/// Check the complete resolution against the scenario's expected packages.\n");
+    output.push_str("fn assert_resolution(output: Output, expected: &[&str]) {\n");
+    output.push_str("    let output = output.assert().success();\n");
+    output.push_str("    let stderr = String::from_utf8_lossy(&output.get_output().stderr);\n");
+    output.push_str("    let packages = stderr\n");
+    output.push_str("        .lines()\n");
+    output.push_str("        .filter_map(|line| line.strip_prefix(\" + \"))\n");
+    output.push_str("        .collect::<Vec<_>>();\n");
+    output.push_str("    assert_eq!(packages, expected);\n");
     output.push_str("}\n\n");
 
     for case in cases {
@@ -367,7 +379,13 @@ fn render_install_case(output: &mut String, case: &ScenarioCase) -> Result<()> {
     )
     .unwrap();
     output.push('\n');
-    output.push_str("    uv_snapshot!(context.filters(), command(&context, &server)\n");
+    output
+        .push_str("    let output = uv_snapshot!(context.filters(), command(&context, &server)\n");
+    // Successful scenarios without a complete expected resolution exercise whether the
+    // selected distributions can be prepared and installed.
+    if !case.scenario.expected.satisfiable || !case.scenario.expected.packages.is_empty() {
+        output.push_str("        .arg(\"--dry-run\")\n");
+    }
     render_resolver_args(output, &case.scenario, ScenarioCommand::Install)?;
     output.push_str("        , @r#\"<snapshot>\n");
     output.push_str("    \"#);\n\n");
@@ -643,23 +661,17 @@ fn render_resolver_args(
 
 fn render_install_assertions(output: &mut String, scenario: &Scenario) {
     if scenario.expected.satisfiable {
+        if scenario.expected.packages.is_empty() {
+            output.push_str("    output.assert().success();\n");
+            return;
+        }
+        output.push_str("    assert_resolution(output, &[\n");
         for (name, version) in &scenario.expected.packages {
-            writeln!(
-                output,
-                "    context.assert_installed(\"{}\", \"{version}\");",
-                module_name(name.as_ref())
-            )
-            .unwrap();
+            writeln!(output, "        \"{name}=={version}\",").unwrap();
         }
+        output.push_str("    ]);\n");
     } else {
-        for requirement in &scenario.root.requires {
-            writeln!(
-                output,
-                "    context.assert_not_installed(\"{}\");",
-                module_name(requirement.name.as_ref())
-            )
-            .unwrap();
-        }
+        output.push_str("    output.assert().failure();\n");
     }
 }
 
