@@ -2582,6 +2582,8 @@ mod tests {
     }
 
     fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        // Accepted sockets can inherit the listener's nonblocking mode on Windows.
+        stream.set_nonblocking(false).unwrap();
         let mut reader = std::io::BufReader::new(stream);
         let mut request = String::new();
         loop {

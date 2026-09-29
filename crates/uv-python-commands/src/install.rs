@@ -421,11 +421,8 @@ async fn perform_install(
                 let version = request.take_version().unwrap();
                 // Drop the patch and prerelease parts from the request
                 request = request.with_version(version.only_minor());
-                let install_request = InstallRequest::new(
-                    PythonRequest::Key(request),
-                    python_arch,
-                    download_list,
-                )?;
+                let install_request =
+                    InstallRequest::new(PythonRequest::Key(request), python_arch, download_list)?;
                 minor_version_requests.insert(install_request);
             }
             minor_version_requests.into_iter().collect::<Vec<_>>()
