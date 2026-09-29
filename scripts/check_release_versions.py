@@ -1,7 +1,8 @@
-"""Check that uv's release packages use the same version within each format."""
+"""Check that uv's release packages use the same version."""
 
 # /// script
 # requires-python = ">=3.12"
+# dependencies = ["packaging"]
 # [tool.uv]
 # no-build = true
 # exclude-newer = "P7D"
@@ -11,6 +12,8 @@ import argparse
 import sys
 import tomllib
 from pathlib import Path
+
+from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION_GROUPS = (
@@ -47,6 +50,12 @@ def check_release_versions(root: Path, tag: str | None = None) -> str:
                 + "\n".join(mismatches)
             )
         matched_versions.append(expected)
+
+    if Version(matched_versions[0]) != Version(matched_versions[1]):
+        raise ValueError(
+            f"Release version in pyproject.toml ({matched_versions[0]}) "
+            f"does not match crates/uv/Cargo.toml ({matched_versions[1]})"
+        )
 
     if tag is not None and tag != matched_versions[1]:
         raise ValueError(

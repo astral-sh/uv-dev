@@ -171,6 +171,13 @@ jobs:
 
       - uses: depot/setup-action@15c09a5f77a0840ad4bce955686522a257853461 # v1.7.1
 
+      - name: Install uv
+        if: ${{ needs.docker-plan.outputs.push == 'true' && !inputs.push-dev }}
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.10"
+          checksum: "173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b"
+
       - name: Check tag consistency
         if: ${{ needs.docker-plan.outputs.push == 'true' }}
         run: |
@@ -179,7 +186,7 @@ jobs:
             exit 0
           fi
 
-          python3 scripts/check_release_versions.py --tag="${TAG}"
+          uv run --no-project --locked scripts/check_release_versions.py --tag="${TAG}"
           echo "Releasing ${TAG}"
         env:
           TAG: ${{ needs.docker-plan.outputs.tag }}
