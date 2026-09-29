@@ -594,6 +594,25 @@ impl PythonDownloadRequest {
         true
     }
 
+    /// Whether this request names a complete managed installation identity.
+    pub fn is_exact_installation_key(&self) -> bool {
+        self.implementation.is_some()
+            && self.version.as_ref().is_some_and(|version| match version {
+                // A prerelease without an explicit patch selects patch zero.
+                VersionRequest::MajorMinorPatch(..)
+                | VersionRequest::MajorMinorPrerelease(..)
+                | VersionRequest::MajorMinorPatchPrerelease(..) => true,
+                VersionRequest::Any
+                | VersionRequest::Default
+                | VersionRequest::Major(..)
+                | VersionRequest::MajorMinor(..)
+                | VersionRequest::Range(..) => false,
+            })
+            && matches!(self.arch, Some(ArchRequest::Explicit(_)))
+            && self.os.is_some()
+            && self.libc.is_some()
+    }
+
     /// Whether this request is satisfied by a Python download.
     fn satisfied_by_download(&self, download: &ManagedPythonDownload) -> bool {
         // First check the key
@@ -2465,6 +2484,18 @@ mod tests {
             request.libc,
             Some(Libc::Some(target_lexicon::Environment::Gnu))
         );
+    }
+
+    #[test]
+    fn exact_installation_key_distinguishes_build_names() {
+        let request = PythonDownloadRequest::from_str("cpython-3.12.0-linux-x86_64-gnu").unwrap();
+        let unnamed = PythonInstallationKey::from_str("cpython-3.12.0-linux-x86_64-gnu").unwrap();
+        let custom =
+            PythonInstallationKey::from_str("cpython-3.12.0+custom-linux-x86_64-gnu").unwrap();
+
+        assert!(request.is_exact_installation_key());
+        assert!(request.satisfied_by_key(&unnamed));
+        assert!(!request.satisfied_by_key(&custom));
     }
 
     /// Parse a request with `any` in various positions.
