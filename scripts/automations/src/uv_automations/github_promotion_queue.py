@@ -17,6 +17,7 @@ from uv_automations.promotion_models import (
 )
 from uv_automations.workflows.promotion_completion import (
     COMPLETION_ATTEMPTS,
+    CompletionRequestError,
     _retry_delay,
 )
 from uv_automations.workflows.promotion_queue import (
@@ -134,27 +135,59 @@ class PromotionQueueGitHub(PromotionGitHub):
     def create_upstream_base(self, destination: BranchRevision) -> None:
         if destination.repository != UV_REPOSITORY:
             raise ValueError("Unexpected promotion base destination")
-        self.get_repository(UV_REPOSITORY)
-        current = self.get_ref(UV_REPOSITORY, destination.ref)
-        if current == destination.sha:
-            return
-        if current is not None:
-            raise ValueError("The upstream base branch changed before creation")
-        try:
-            self._api(
-                "POST",
-                f"repos/{UV_REPOSITORY.name}/git/refs",
-                payload={
-                    "ref": f"refs/heads/{destination.ref}",
-                    "sha": str(destination.sha),
-                },
-            )
-        except PromotionReadError:
-            # Another identical promotion may have won the create-only race.
-            if self.get_ref(UV_REPOSITORY, destination.ref) != destination.sha:
-                raise
-        if self.get_ref(UV_REPOSITORY, destination.ref) != destination.sha:
-            raise ValueError("GitHub did not create the expected upstream base")
+        create_attempted = False
+        creation_error: PromotionReadError | None = None
+        for attempt in range(COMPLETION_ATTEMPTS):
+            waited = False
+            try:
+                if not create_attempted:
+                    self.get_repository(UV_REPOSITORY)
+                    current = self.get_ref(UV_REPOSITORY, destination.ref)
+                    if current == destination.sha:
+                        return
+                    if current is not None:
+                        raise ValueError(
+                            "The upstream base branch changed before creation"
+                        )
+                    # A lost response can follow a completed create-only write.
+                    # Once attempted, only the exact destination may be reread.
+                    create_attempted = True
+                    try:
+                        self._api(
+                            "POST",
+                            f"repos/{UV_REPOSITORY.name}/git/refs",
+                            payload={
+                                "ref": f"refs/heads/{destination.ref}",
+                                "sha": str(destination.sha),
+                            },
+                        )
+                    except PromotionReadError as error:
+                        creation_error = error
+                        if isinstance(
+                            error, CompletionRequestError
+                        ) and error.status in {409, 422}:
+                            # The create-only request also reports a concurrent
+                            # identical ref as a conflict or validation failure.
+                            # Reconcile that ref without repeating the POST,
+                            # while honoring the same Retry-After budget.
+                            error = CompletionRequestError(None, error.retry_after)
+                        _retry_delay(attempt, error, before_reconciliation=True)
+                        waited = True
+                current = self.get_ref(UV_REPOSITORY, destination.ref)
+            except PromotionReadError as error:
+                if attempt + 1 == COMPLETION_ATTEMPTS:
+                    raise
+                _retry_delay(attempt, error)
+                continue
+            if current == destination.sha:
+                return
+            if current is not None:
+                if creation_error is not None:
+                    raise creation_error
+                raise ValueError("GitHub did not create the expected upstream base")
+            if not waited:
+                _retry_delay(attempt)
+        raise PromotionReadError("Could not confirm the upstream base creation")
 
 
 class PromotionQueueCompletionGitHub(PromotionQueueGitHub, PromotionCompletionGitHub):
@@ -163,3 +196,7 @@ class PromotionQueueCompletionGitHub(PromotionQueueGitHub, PromotionCompletionGi
 
 class PromotionSyncCompletionGitHub(PromotionQueueGitHub, PromotionCompletionGitHub):
     """Use bounded completion response metadata only for fork synchronization."""
+
+
+class PromotionBaseCompletionGitHub(PromotionQueueGitHub, PromotionCompletionGitHub):
+    """Use bounded completion response metadata only for upstream-base creation."""
