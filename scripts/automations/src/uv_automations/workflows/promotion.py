@@ -283,7 +283,7 @@ class AlreadyPublished:
         if (
             self.base.repository != UV_REPOSITORY
             or self.upstream.scope.repository != UV_REPOSITORY
-            or not self.upstream.is_open
+            or (not self.upstream.is_open and self.upstream.merge is None)
             or not self.upstream.same_repository
             or self.upstream.details.base.ref != self.base.ref
             or self.upstream.details.head.ref != self.source.details.head.ref
@@ -344,7 +344,7 @@ def _publish_plan(
     if existing:
         upstream = existing[0]
         if (
-            not upstream.is_open
+            (not upstream.is_open and upstream.merge is None)
             or upstream.details.base.ref != base.ref
             or upstream.details.head.ref != source.details.head.ref
             or upstream.details.head.sha != approval.head

@@ -219,7 +219,7 @@ def _current(
     upstream = reader.get_promotion_pull_request(completion.upstream)
     if (
         upstream.scope != completion.upstream
-        or not upstream.is_open
+        or (not upstream.is_open and upstream.merge is None)
         or not upstream.same_repository
         or upstream.details.base.ref != completion.upstream_base
         or upstream.details.head.ref != completion.source_head.ref
