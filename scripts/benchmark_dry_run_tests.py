@@ -30,10 +30,15 @@ def main():
     parser.add_argument("--profile", default="ci-linux")
     parser.add_argument("--threads", type=int, default=20)
     parser.add_argument("--targeted-pairs", type=int, default=12)
+    parser.add_argument("--targeted-name", default="scenarios")
+    parser.add_argument("--targeted-filter", default="binary(=pip) and test(/^pip_install_scenarios::/)")
+    parser.add_argument("--targeted-filter-file", type=Path)
     parser.add_argument("--full-pairs", type=int, default=3)
     parser.add_argument("--full-filter", default="all()")
     parser.add_argument("--seed", type=int, default=29)
     args = parser.parse_args()
+    if args.targeted_filter_file:
+        args.targeted_filter = args.targeted_filter_file.read_text().strip()
     root = args.workspace.resolve()
     archives = args.archives.resolve()
     output = args.output.resolve()
@@ -69,7 +74,7 @@ def main():
     }
 
     for workload, filter_expr, pair_count in (
-        ("scenarios", "binary(=pip) and test(/^pip_install_scenarios::/)", args.targeted_pairs),
+        (args.targeted_name, args.targeted_filter, args.targeted_pairs),
         ("workspace", args.full_filter, args.full_pairs),
     ):
         if pair_count == 0:
