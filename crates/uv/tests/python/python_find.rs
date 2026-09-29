@@ -4,6 +4,8 @@ use assert_fs::prelude::{FileTouch, PathChild};
 use assert_fs::{fixture::FileWriteStr, prelude::PathCreateDir};
 use indoc::indoc;
 
+#[cfg(feature = "test-python-managed")]
+use uv_platform::Platform;
 use uv_platform::{Arch, Os};
 use uv_python::PythonRequest;
 use uv_python::downloads::{ManagedPythonDownloadList, PythonDownloadRequest};
@@ -1524,7 +1526,6 @@ fn python_find_prerelease_warning_with_ndjson_manifest() {
         .with_filtered_python_keys()
         .with_filtered_python_sources()
         .with_managed_python_dirs()
-        .with_python_download_cache()
         .with_filtered_python_install_bin()
         .with_filtered_python_names()
         .with_filtered_exe_suffix();
@@ -1543,27 +1544,29 @@ fn python_find_prerelease_warning_with_ndjson_manifest() {
     } else {
         download.key().version().to_string()
     };
-    let sha256 = download.sha256().unwrap();
+    let sha256 = download.sha256().unwrap().as_str();
     let manifest = context.temp_dir.child("python-downloads.ndjson");
     manifest
         .write_str(&format!(
             "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"install_only\"}}]}}\n",
             download.url(),
-            download.key().platform().as_cargo_dist_triple(),
+            Platform::from_env().unwrap().as_cargo_dist_triple(),
             sha256,
         ))
         .unwrap();
 
     uv_snapshot!(context.filters(), context
         .python_find()
-        .arg("3.14")
+        .env_remove(EnvVars::UV_PREVIEW)
+        .arg("--managed-python")
+        .arg(">=3.14")
         .arg("--resolve-links")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "remote-python-download-metadata")
         .env(
             EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL,
             manifest.path(),
         ), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.14.0rc3-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
 

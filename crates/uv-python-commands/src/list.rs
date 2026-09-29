@@ -117,11 +117,10 @@ pub async fn list(
 
     let mut output = BTreeSet::new();
     if let Some(download_request) = &download_request {
-        let client = client_builder.build()?;
         let download_list = ManagedPythonDownloadList::new_filtered(
-            &client,
+            client_builder,
+            cache,
             install_mirrors.python_downloads_json_url.as_deref(),
-            Some(cache),
             Some(download_request),
             None,
         )
