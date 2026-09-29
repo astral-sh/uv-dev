@@ -2442,11 +2442,21 @@ pub fn run_and_format_silent<T: AsRef<str>>(
                             "Installed",
                             "Checked",
                             "Uninstalled",
+                            "Would download",
+                            "Would install",
+                            "Would uninstall",
                         ]
                         .iter(),
-                        WindowsFilters::Universal => {
-                            ["Prepared", "Installed", "Checked", "Uninstalled"].iter()
-                        }
+                        WindowsFilters::Universal => [
+                            "Prepared",
+                            "Installed",
+                            "Checked",
+                            "Uninstalled",
+                            "Would download",
+                            "Would install",
+                            "Would uninstall",
+                        ]
+                        .iter(),
                     } {
                         snapshot = snapshot.replace(
                             &format!("{verb} {} packages", i + removed_packages),
