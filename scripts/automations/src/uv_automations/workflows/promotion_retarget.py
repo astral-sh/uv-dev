@@ -6,6 +6,7 @@ from typing import Protocol, assert_never
 
 from uv_automations.github_promotion import (
     PromotedParentReader,
+    PromotionReadError,
     PromotionRevisionReader,
     verified_promoted_parent,
 )
@@ -264,18 +265,11 @@ def _same_parent(parent: MergedPromotedParent, expected: MergedPromotedParent) -
     )
 
 
-def retarget(
+def _current_retarget(
     source_reader: RetargetReader,
     upstream_reader: RetargetHistoryReader,
-    writer: RetargetWriter,
     plan: RetargetPlan,
-) -> RetargetOutcome:
-    """Revalidate the plan and perform only a PR-base update.
-
-    GitHub has no expected-head/draft precondition for this mutation. The last
-    read is therefore an optimistic freshness check, not an atomic lease. The
-    returned PR is checked too; concurrent changes are never silently accepted.
-    """
+) -> PromotionPullRequest | SkippedRetarget:
     if source_reader.get_ref(plan.main.repository, "main") != plan.main.sha:
         return SkippedRetarget(plan.source, RetargetSkipReason.MAIN_CHANGED)
 
@@ -305,21 +299,55 @@ def retarget(
     ):
         return SkippedRetarget(plan.source, RetargetSkipReason.SOURCE_CHANGED)
     if current.details.base.ref == "main":
-        return SkippedRetarget(plan.source, RetargetSkipReason.ALREADY_TARGETED)
+        return current
     if current.details.base.sha != plan.base.sha:
         return SkippedRetarget(plan.source, RetargetSkipReason.SOURCE_CHANGED)
     if not current.draft or PROMOTION_LABEL in current.details.labels:
         return SkippedRetarget(plan.source, RetargetSkipReason.READY_FOR_PROMOTION)
+    return current
 
-    updated = writer.retarget_to_main(plan.source)
-    if (
-        not updated.is_open
-        or not updated.draft
-        or PROMOTION_LABEL in updated.details.labels
-        or not _same_head(updated, plan)
-        or updated.details.base.ref != "main"
-        or updated.details.base.sha != plan.main.sha
-    ):
+
+def _matches_retarget(updated: PromotionPullRequest, plan: RetargetPlan) -> bool:
+    return (
+        updated.is_open
+        and updated.draft
+        and PROMOTION_LABEL not in updated.details.labels
+        and _same_head(updated, plan)
+        and updated.details.base.ref == "main"
+        and updated.details.base.sha == plan.main.sha
+    )
+
+
+def retarget(
+    source_reader: RetargetReader,
+    upstream_reader: RetargetHistoryReader,
+    writer: RetargetWriter,
+    plan: RetargetPlan,
+) -> RetargetOutcome:
+    """Revalidate the plan and perform only a PR-base update.
+
+    GitHub has no expected-head/draft precondition for this mutation. The last
+    read is therefore an optimistic freshness check, not an atomic lease. The
+    returned PR is checked too; concurrent changes are never silently accepted.
+    """
+    current = _current_retarget(source_reader, upstream_reader, plan)
+    if isinstance(current, SkippedRetarget):
+        return current
+    if current.details.base.ref == "main":
+        return SkippedRetarget(plan.source, RetargetSkipReason.ALREADY_TARGETED)
+
+    try:
+        updated = writer.retarget_to_main(plan.source)
+    except PromotionReadError:
+        # The base update can commit before its response is lost or rejected.
+        # Reconcile once with fresh read-only evidence; never repeat the PATCH.
+        current = _current_retarget(source_reader, upstream_reader, plan)
+        if isinstance(current, PromotionPullRequest) and _matches_retarget(
+            current, plan
+        ):
+            return Retargeted(plan.source)
+        raise
+    if not _matches_retarget(updated, plan):
         raise ValueError("The pull request changed while retargeting it")
     return Retargeted(plan.source)
 
