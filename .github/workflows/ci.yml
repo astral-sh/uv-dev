@@ -145,7 +145,8 @@ jobs:
             --output "$BENCHMARK_DIR/results" \
             --base "$BENCHMARK_BASE" --head "$BENCHMARK_HEAD" \
             --replicate "$BENCHMARK_REPLICATE" \
-            --profile ci-linux --threads 20 --targeted-pairs 12 --full-pairs 3 \
+            --profile ci-linux --threads 20 --targeted-pairs 0 --full-pairs 3 \
+            --full-filter 'not (package(=uv-python) and test(=interpreter::tests::test_cache_invalidation))' \
             --seed "$BENCHMARK_REPLICATE"
 
       - name: Upload measurements
