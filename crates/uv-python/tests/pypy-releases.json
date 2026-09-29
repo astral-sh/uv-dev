@@ -1,0 +1,92 @@
+[
+  {
+    "date": "2025-02-26",
+    "files": [
+      {
+        "arch": "aarch64",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.19-aarch64.tar.gz",
+        "filename": "pypy3.10-v7.3.19-aarch64.tar.gz",
+        "platform": "linux"
+      },
+      {
+        "arch": "i686",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.19-linux32.tar.gz",
+        "filename": "pypy3.10-v7.3.19-linux32.tar.gz",
+        "platform": "linux"
+      },
+      {
+        "arch": "x64",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.19-linux64.tar.gz",
+        "filename": "pypy3.10-v7.3.19-linux64.tar.gz",
+        "platform": "linux"
+      },
+      {
+        "arch": "x64",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.19-macos_x86_64.tar.gz",
+        "filename": "pypy3.10-v7.3.19-macos_x86_64.tar.gz",
+        "platform": "darwin"
+      },
+      {
+        "arch": "arm64",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.19-macos_arm64.tar.gz",
+        "filename": "pypy3.10-v7.3.19-macos_arm64.tar.gz",
+        "platform": "darwin"
+      },
+      {
+        "arch": "x64",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.19-win64.zip",
+        "filename": "pypy3.10-v7.3.19-win64.zip",
+        "platform": "win64"
+      }
+    ],
+    "latest_pypy": true,
+    "pypy_version": "7.3.19",
+    "python_version": "3.10.16",
+    "stable": true
+  },
+  {
+    "date": "2025-02-06",
+    "files": [
+      {
+        "arch": "aarch64",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.18-aarch64.tar.bz2",
+        "filename": "pypy3.10-v7.3.18-aarch64.tar.bz2",
+        "platform": "linux"
+      },
+      {
+        "arch": "i686",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.18-linux32.tar.bz2",
+        "filename": "pypy3.10-v7.3.18-linux32.tar.bz2",
+        "platform": "linux"
+      },
+      {
+        "arch": "x64",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.18-linux64.tar.bz2",
+        "filename": "pypy3.10-v7.3.18-linux64.tar.bz2",
+        "platform": "linux"
+      },
+      {
+        "arch": "x64",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.18-macos_x86_64.tar.bz2",
+        "filename": "pypy3.10-v7.3.18-macos_x86_64.tar.bz2",
+        "platform": "darwin"
+      },
+      {
+        "arch": "arm64",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.18-macos_arm64.tar.bz2",
+        "filename": "pypy3.10-v7.3.18-macos_arm64.tar.bz2",
+        "platform": "darwin"
+      },
+      {
+        "arch": "x64",
+        "download_url": "https://downloads.python.org/pypy/pypy3.10-v7.3.18-win64.zip",
+        "filename": "pypy3.10-v7.3.18-win64.zip",
+        "platform": "win64"
+      }
+    ],
+    "latest_pypy": false,
+    "pypy_version": "7.3.18",
+    "python_version": "3.10.16",
+    "stable": true
+  }
+]
