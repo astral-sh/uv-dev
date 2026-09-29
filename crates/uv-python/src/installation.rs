@@ -28,7 +28,7 @@ use crate::implementation::LenientImplementationName;
 use crate::managed::{ManagedPythonInstallation, ManagedPythonInstallations};
 use crate::{
     Error, ImplementationName, Interpreter, MissingPythonHint, PythonDownloads, PythonPreference,
-    PythonSource, PythonVariant, PythonVersion, downloads,
+    PythonSource, PythonVariant, PythonVersion,
 };
 
 /// A Python interpreter and accompanying tools.
@@ -218,48 +218,26 @@ impl PythonInstallation {
             return Err(err);
         };
 
-        let download_list = if python_downloads_json_url.is_some() {
-            Some(
-                ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                    .await?,
-            )
-        } else {
-            None
-        };
-
         let downloads_enabled = preference.allows_managed()
             && python_downloads.is_automatic()
             && client_builder.connectivity.is_online();
 
         let download = match download_request.clone().fill() {
             Ok(download_request) => {
-                let download = if let Some(download_list) = download_list.as_ref() {
-                    match download_list.find(&download_request) {
-                        Ok(download) => Some(Cow::Borrowed(download)),
-                        Err(downloads::Error::NoDownloadFound(_)) => None,
-                        Err(err) => {
-                            if downloads_enabled {
-                                return Err(err.into());
-                            }
-                            None
+                let download = match ManagedPythonDownloadList::find_streaming(
+                    client_builder,
+                    cache,
+                    python_downloads_json_url,
+                    &download_request,
+                )
+                .await
+                {
+                    Ok(download) => download,
+                    Err(err) => {
+                        if downloads_enabled || python_downloads_json_url.is_some() {
+                            return Err(err.into());
                         }
-                    }
-                } else {
-                    match ManagedPythonDownloadList::find_streaming(
-                        client_builder,
-                        cache,
-                        python_downloads_json_url,
-                        &download_request,
-                    )
-                    .await
-                    {
-                        Ok(download) => download.map(Cow::Owned),
-                        Err(err) => {
-                            if downloads_enabled {
-                                return Err(err.into());
-                            }
-                            None
-                        }
+                        None
                     }
                 };
 
@@ -326,7 +304,7 @@ impl PythonInstallation {
         let retry_policy = client_builder.retry_policy();
         let client = client_builder.clone().retries(0).build()?;
         let installation = Self::fetch(
-            download.as_ref(),
+            &download,
             &client,
             &retry_policy,
             cache,
@@ -336,18 +314,14 @@ impl PythonInstallation {
         )
         .await?;
 
-        if let Some(download_list) = download_list.as_ref() {
-            installation.warn_if_outdated_prerelease(request, download_list);
-        } else {
-            installation
-                .download_and_warn_if_outdated_prerelease(
-                    request,
-                    client_builder,
-                    cache,
-                    python_downloads_json_url,
-                )
-                .await?;
-        }
+        installation
+            .download_and_warn_if_outdated_prerelease(
+                request,
+                client_builder,
+                cache,
+                python_downloads_json_url,
+            )
+            .await?;
 
         Ok(installation)
     }
@@ -576,9 +550,19 @@ impl PythonInstallation {
             return Ok(());
         }
 
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
+        let Ok(download_request) = PythonDownloadRequest::try_from(&self.interpreter().key())
+        else {
+            return Ok(());
+        };
+        let download_request = download_request.with_prereleases(false);
+        let download_list = ManagedPythonDownloadList::new_filtered(
+            client_builder,
+            cache,
+            python_downloads_json_url,
+            Some(&download_request),
+            Some(1),
+        )
+        .await?;
         self.warn_if_outdated_prerelease(request, &download_list);
 
         Ok(())

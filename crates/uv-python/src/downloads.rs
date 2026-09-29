@@ -1701,7 +1701,7 @@ impl ManagedPythonDownloadList {
         Ok(Self { downloads })
     }
 
-    /// Load matching Python distributions, stopping at `limit` for explicit NDJSON sources.
+    /// Load matching Python distributions, stopping at `limit` when the remote ordering suffices.
     pub async fn new_filtered(
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
@@ -1719,8 +1719,18 @@ impl ManagedPythonDownloadList {
                 downloads: filter_downloads(embedded_non_cpython_downloads()?, filter, limit),
             });
         }
-        // Implicit metadata is merged with other implementations and deduplicated before limiting.
-        let parse_limit = if source.implicit { None } else { limit };
+        // A single native CPython result cannot conflict with the embedded alternatives. Other
+        // implicit queries are merged and deduplicated before applying the limit.
+        let single_cpython = limit == Some(1)
+            && filter.is_some_and(|request| {
+                request.implementation() == Some(&ImplementationName::CPython)
+                    && request.os.as_ref().is_some_and(|os| !os.is_emscripten())
+            });
+        let parse_limit = if source.implicit && !single_cpython {
+            None
+        } else {
+            limit
+        };
         let predicate = |download: &ManagedPythonDownload| {
             filter.is_none_or(|request| request.satisfied_by_download(download))
         };

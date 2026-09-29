@@ -1428,6 +1428,71 @@ fn python_find_prerelease_version_specifiers() {
 
 #[test]
 #[cfg(feature = "test-python-managed")]
+fn automatic_discovery_propagates_explicit_manifest_errors() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("requirements.in").touch().unwrap();
+    for extension in ["json", "ndjson"] {
+        let manifest = context
+            .temp_dir
+            .child(format!("python-downloads.{extension}"));
+        manifest.write_str("{").unwrap();
+        let output = context
+            .pip_compile()
+            .arg("requirements.in")
+            .arg("--python-version")
+            .arg("3.99")
+            .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic")
+            .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, manifest.path())
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Unable to parse"),
+            "{output:?}"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn automatic_discovery_with_bounded_ndjson_manifest() {
+    for request_option in ["--python", "--python-version"] {
+        let context = uv_test::test_context_with_versions!(&[])
+            .with_managed_python_dirs()
+            .with_empty_python_install_mirror();
+        context.temp_dir.child("requirements.in").touch().unwrap();
+
+        let download_list = ManagedPythonDownloadList::new_only_embedded().unwrap();
+        let download_request = PythonDownloadRequest::from_request(&PythonRequest::parse("3.14"))
+            .unwrap()
+            .fill()
+            .unwrap();
+        let download = download_list.find(&download_request).unwrap();
+        let manifest = context.temp_dir.child("python-downloads.ndjson");
+        manifest
+            .write_str(&format!(
+                "{{\"version\":\"{}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"install_only\"}}]}}\ninvalid trailing record\n",
+                download.key().version(),
+                download.url(),
+                Platform::from_env().unwrap().as_cargo_dist_triple(),
+                download.sha256().unwrap().as_str(),
+            ))
+            .unwrap();
+
+        context
+            .pip_compile()
+            .arg("requirements.in")
+            .arg(request_option)
+            .arg("3.14")
+            .arg("--managed-python")
+            .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, manifest.path())
+            .assert()
+            .success();
+    }
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
 fn python_find_prerelease_warning_with_ndjson_manifest() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
@@ -1455,7 +1520,7 @@ fn python_find_prerelease_warning_with_ndjson_manifest() {
     let manifest = context.temp_dir.child("python-downloads.ndjson");
     manifest
         .write_str(&format!(
-            "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"install_only\"}}]}}\n",
+            "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"install_only\"}}]}}\ninvalid trailing record\n",
             download.url(),
             Platform::from_env().unwrap().as_cargo_dist_triple(),
             sha256,
