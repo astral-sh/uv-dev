@@ -1,11 +1,14 @@
+import io
+import json
 import os
 import subprocess
 import unittest
 from collections.abc import Mapping, Sequence
+from contextlib import redirect_stderr
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import override
+from typing import Any, cast, override
 from unittest.mock import patch
 
 from uv_automations.artifacts import CommitRange
@@ -19,6 +22,7 @@ from uv_automations.models import (
     RepositoryIdentity,
     RepositoryName,
 )
+from uv_automations.rebase_cli import main as rebase_main
 from uv_automations.workflows.rebase import (
     CloseOutcome,
     EmptyRebase,
@@ -65,15 +69,36 @@ class LocalGit(Git):
         return Git.command(self, local_arguments, check=check, input=input)
 
 
+@dataclass(frozen=True, slots=True)
+class FailedPushGit(LocalGit):
+    failure: subprocess.CalledProcessError = field(kw_only=True, compare=False)
+
+    @override
+    def command(
+        self,
+        arguments: Sequence[str],
+        *,
+        check: bool = True,
+        input: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        if "push" in arguments:
+            self.commands.append(tuple(arguments))
+            self.credentials.append((self.token_variable, tuple(arguments)))
+            raise self.failure
+        return LocalGit.command(self, arguments, check=check, input=input)
+
+
 @dataclass
 class FakeGitHub:
-    snapshots: list[PullRequestDetails]
+    snapshots: list[PullRequestDetails | BaseException]
     closed: list[tuple[PullRequestRef, str]] = field(default_factory=list)
 
     def get_pull_request(self, reference: PullRequestRef) -> PullRequestDetails:
         current = self.snapshots[0]
         if len(self.snapshots) > 1:
             self.snapshots.pop(0)
+        if isinstance(current, BaseException):
+            raise current
         if current.reference != reference:
             raise AssertionError("Unexpected pull request")
         return current
@@ -138,6 +163,17 @@ class RebaseTests(unittest.TestCase):
         repository.command(("config", "user.name", "Automation tests"))
         repository.command(("config", "user.email", "automation@example.invalid"))
         return repository
+
+    def failed_push(
+        self, repository: LocalGit, failure: subprocess.CalledProcessError
+    ) -> FailedPushGit:
+        return FailedPushGit(
+            path=repository.path,
+            remotes=repository.remotes,
+            commands=repository.commands,
+            credentials=repository.credentials,
+            failure=failure,
+        )
 
     def history(self, *, base_content: str, head_content: str) -> PreparedRebase:
         self.remote.command(("checkout", "--quiet", "-b", "feature", str(self.common)))
@@ -444,6 +480,387 @@ class RebaseTests(unittest.TestCase):
         )
         self.assertEqual(
             push_rebase(github, repository, verified, head), PushOutcome.STALE
+        )
+
+    def test_push_skips_a_genuine_late_lease_race(self) -> None:
+        rebase = self.history(base_content="upstream\n", head_content="feature\n")
+        repository = self.clone()
+        head = self.commit(repository, {"new.txt": "rebased\n"}, "rebased")
+        self.remote.command(("checkout", "--quiet", "--detach", str(rebase.base_sha)))
+        winner = self.commit(self.remote, {"winner.txt": "winner\n"}, "winner")
+        self.remote.command(("checkout", "--quiet", "main"))
+        original_command = LocalGit.command
+        rejected: list[subprocess.CalledProcessError] = []
+
+        def race(
+            current: LocalGit,
+            arguments: Sequence[str],
+            *,
+            check: bool = True,
+            input: str | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            if "push" in arguments:
+                self.remote.command(
+                    (
+                        "update-ref",
+                        "refs/heads/feature",
+                        str(winner),
+                        str(rebase.source.head_sha),
+                    )
+                )
+            try:
+                return original_command(current, arguments, check=check, input=input)
+            except subprocess.CalledProcessError as error:
+                if "push" in arguments:
+                    rejected.append(error)
+                raise
+
+        with patch.object(LocalGit, "command", race):
+            outcome = push_rebase(
+                FakeGitHub([details(rebase)]),
+                repository,
+                VerifiedRebaseSource(rebase, UV_DEV),
+                head,
+            )
+        self.assertEqual(outcome, PushOutcome.STALE)
+        self.assertEqual(len(rejected), 1)
+        self.assertIn("(stale info)", rejected[0].stderr)
+        self.assertEqual(self.remote.resolve_commit("refs/heads/feature"), winner)
+        self.assertEqual(
+            [
+                token
+                for token, arguments in repository.credentials
+                if "push" in arguments
+            ],
+            [None],
+        )
+        self.assertEqual(
+            [
+                token
+                for token, arguments in repository.credentials
+                if "ls-remote" in arguments
+            ],
+            ["GH_READ_TOKEN"] * 4,
+        )
+
+    def test_push_does_not_claim_an_unacknowledged_write_succeeded(self) -> None:
+        rebase = self.history(base_content="upstream\n", head_content="feature\n")
+        repository = self.clone()
+        head = self.commit(repository, {"new.txt": "rebased\n"}, "rebased")
+        original_command = LocalGit.command
+        failure = subprocess.CalledProcessError(1, ["git", "push"])
+
+        def lose_response(
+            current: LocalGit,
+            arguments: Sequence[str],
+            *,
+            check: bool = True,
+            input: str | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            result = original_command(current, arguments, check=check, input=input)
+            if "push" in arguments:
+                raise failure
+            return result
+
+        with patch.object(LocalGit, "command", lose_response):
+            outcome = push_rebase(
+                FakeGitHub([details(rebase)]),
+                repository,
+                VerifiedRebaseSource(rebase, UV_DEV),
+                head,
+            )
+        self.assertEqual(outcome, PushOutcome.STALE)
+        self.assertEqual(self.remote.resolve_commit("refs/heads/feature"), head)
+        self.assertEqual(
+            len(
+                [arguments for arguments in repository.commands if "push" in arguments]
+            ),
+            1,
+        )
+
+    def test_push_skips_a_deleted_head_after_a_late_lease_rejection(self) -> None:
+        rebase = self.history(base_content="upstream\n", head_content="feature\n")
+        repository = self.clone()
+        head = self.commit(repository, {"new.txt": "rebased\n"}, "rebased")
+        original_command = LocalGit.command
+
+        def delete_head(
+            current: LocalGit,
+            arguments: Sequence[str],
+            *,
+            check: bool = True,
+            input: str | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            if "push" in arguments:
+                self.remote.command(
+                    (
+                        "update-ref",
+                        "-d",
+                        "refs/heads/feature",
+                        str(rebase.source.head_sha),
+                    )
+                )
+            return original_command(current, arguments, check=check, input=input)
+
+        with patch.object(LocalGit, "command", delete_head):
+            outcome = push_rebase(
+                FakeGitHub([details(rebase)]),
+                repository,
+                VerifiedRebaseSource(rebase, UV_DEV),
+                head,
+            )
+        self.assertEqual(outcome, PushOutcome.STALE)
+        self.assertEqual(
+            self.remote.command(
+                ("show-ref", "--verify", "--quiet", "refs/heads/feature"), check=False
+            ).returncode,
+            1,
+        )
+        self.assertEqual(
+            len(
+                [arguments for arguments in repository.commands if "push" in arguments]
+            ),
+            1,
+        )
+
+    def test_push_skips_a_closed_pull_request_after_failure(self) -> None:
+        rebase = self.history(base_content="upstream\n", head_content="feature\n")
+        failure = subprocess.CalledProcessError(7, ["git", "push"])
+        repository = self.failed_push(self.clone(), failure)
+        head = self.commit(repository, {"new.txt": "rebased\n"}, "rebased")
+        current = details(rebase)
+        closed = replace(current, state=PullRequestState.CLOSED)
+        self.assertEqual(
+            push_rebase(
+                FakeGitHub([current, closed]),
+                repository,
+                VerifiedRebaseSource(rebase, UV_DEV),
+                head,
+            ),
+            PushOutcome.STALE,
+        )
+        self.assertEqual(
+            len(
+                [arguments for arguments in repository.commands if "push" in arguments]
+            ),
+            1,
+        )
+
+    def test_push_failure_with_unchanged_source_is_preserved(self) -> None:
+        rebase = self.history(base_content="upstream\n", head_content="feature\n")
+        failure = subprocess.CalledProcessError(7, ["git", "push"])
+        repository = self.failed_push(self.clone(), failure)
+        head = self.commit(repository, {"new.txt": "rebased\n"}, "rebased")
+        with self.assertRaises(subprocess.CalledProcessError) as raised:
+            push_rebase(
+                FakeGitHub([details(rebase)]),
+                repository,
+                VerifiedRebaseSource(rebase, UV_DEV),
+                head,
+            )
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(
+            self.remote.resolve_commit("refs/heads/feature"), rebase.source.head_sha
+        )
+        self.assertEqual(
+            len(
+                [arguments for arguments in repository.commands if "push" in arguments]
+            ),
+            1,
+        )
+
+    def assert_push_readback_error(
+        self, readback_error: BaseException, *, original_failure: bool
+    ) -> None:
+        rebase = self.history(base_content="upstream\n", head_content="feature\n")
+        failure = subprocess.CalledProcessError(7, ["git", "push"])
+        repository = self.failed_push(self.clone(), failure)
+        head = self.commit(repository, {"new.txt": "rebased\n"}, "rebased")
+        expected = failure if original_failure else readback_error
+        with self.assertRaises(type(expected)) as raised:
+            push_rebase(
+                FakeGitHub([details(rebase), readback_error]),
+                repository,
+                VerifiedRebaseSource(rebase, UV_DEV),
+                head,
+            )
+        self.assertIs(raised.exception, expected)
+        self.assertEqual(
+            len(
+                [arguments for arguments in repository.commands if "push" in arguments]
+            ),
+            1,
+        )
+
+    def test_push_readback_command_error_preserves_the_original_failure(self) -> None:
+        self.assert_push_readback_error(
+            subprocess.CalledProcessError(1, ["gh", "api"]), original_failure=True
+        )
+
+    def test_push_readback_timeout_preserves_the_original_failure(self) -> None:
+        self.assert_push_readback_error(
+            subprocess.TimeoutExpired(["gh", "api"], 60), original_failure=True
+        )
+
+    def test_push_readback_os_error_preserves_the_original_failure(self) -> None:
+        self.assert_push_readback_error(OSError("unavailable"), original_failure=True)
+
+    def test_push_readback_missing_field_preserves_the_original_failure(self) -> None:
+        self.assert_push_readback_error(KeyError("head"), original_failure=True)
+
+    def test_push_readback_wrong_type_preserves_the_original_failure(self) -> None:
+        self.assert_push_readback_error(
+            TypeError("expected object"), original_failure=True
+        )
+
+    def test_push_readback_invalid_value_preserves_the_original_failure(self) -> None:
+        self.assert_push_readback_error(
+            ValueError("unexpected identity"), original_failure=True
+        )
+
+    def test_push_readback_programming_error_is_not_masked(self) -> None:
+        self.assert_push_readback_error(
+            RuntimeError("unexpected"), original_failure=False
+        )
+
+    def test_push_readback_cancellation_is_not_masked(self) -> None:
+        self.assert_push_readback_error(KeyboardInterrupt(), original_failure=False)
+
+    def test_push_empty_successful_remote_read_is_not_proof_of_deletion(self) -> None:
+        rebase = self.history(base_content="upstream\n", head_content="feature\n")
+        failure = subprocess.CalledProcessError(7, ["git", "push"])
+        repository = self.failed_push(self.clone(), failure)
+        head = self.commit(repository, {"new.txt": "rebased\n"}, "rebased")
+        original_command = FailedPushGit.command
+
+        def malformed_readback(
+            current: FailedPushGit,
+            arguments: Sequence[str],
+            *,
+            check: bool = True,
+            input: str | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            if "ls-remote" in arguments and any(
+                "push" in command for command in current.commands
+            ):
+                return subprocess.CompletedProcess(list(arguments), 0, "", "")
+            return original_command(current, arguments, check=check, input=input)
+
+        with (
+            patch.object(FailedPushGit, "command", malformed_readback),
+            self.assertRaises(subprocess.CalledProcessError) as raised,
+        ):
+            push_rebase(
+                FakeGitHub([details(rebase)]),
+                repository,
+                VerifiedRebaseSource(rebase, UV_DEV),
+                head,
+            )
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(
+            len(
+                [arguments for arguments in repository.commands if "push" in arguments]
+            ),
+            1,
+        )
+
+    def test_push_cli_rejects_malformed_readback_without_a_summary(self) -> None:
+        rebase = self.history(base_content="upstream\n", head_content="feature\n")
+        failure = subprocess.CalledProcessError(7, ["git", "push"])
+        repository = self.failed_push(self.clone(), failure)
+        head = self.commit(repository, {"new.txt": "rebased\n"}, "rebased")
+        revision = {
+            "repo": {"full_name": str(UV_DEV.name), "id": UV_DEV.database_id},
+            "ref": "main",
+            "sha": str(rebase.base_sha),
+        }
+        responses = [
+            json.dumps(
+                {
+                    "number": 123,
+                    "state": "open",
+                    "html_url": "https://github.com/astral-sh/uv-dev/pull/123",
+                    "base": revision,
+                    "head": {
+                        **revision,
+                        "ref": "feature",
+                        "sha": str(rebase.source.head_sha),
+                    },
+                    "labels": [],
+                }
+            ),
+            "not JSON",
+        ]
+        github_calls: list[list[str]] = []
+        original_run = subprocess.run
+
+        def run_github(
+            command: list[str], **options: object
+        ) -> subprocess.CompletedProcess[str]:
+            if command[0] != "gh":
+                return original_run(command, **cast(dict[str, Any], options))
+            self.assertEqual(
+                command,
+                ["gh", "api", "--method", "GET", "repos/astral-sh/uv-dev/pulls/123"],
+            )
+            self.assertEqual(options["timeout"], 60)
+            self.assertEqual(options["check"], True)
+            environment = options["env"]
+            assert isinstance(environment, dict)
+            self.assertEqual(environment["GH_TOKEN"], "test-read-token")
+            github_calls.append(command)
+            return subprocess.CompletedProcess(command, 0, responses.pop(0))
+
+        summary = self.root / "summary.md"
+        stderr = io.StringIO()
+        with (
+            patch("uv_automations.rebase_cli.Git", return_value=repository),
+            patch("uv_automations.github.subprocess.run", side_effect=run_github),
+            patch("uv_automations.rebase_cli.logging.basicConfig"),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            rebase_main(
+                [
+                    "push",
+                    "--checkout",
+                    str(repository.path),
+                    "--repo",
+                    str(UV_DEV.name),
+                    "--repository-id",
+                    str(UV_DEV.database_id),
+                    "--pull-request",
+                    "123",
+                    "--base-ref",
+                    "main",
+                    "--base-sha",
+                    str(rebase.base_sha),
+                    "--head-repository",
+                    str(UV_DEV.name),
+                    "--head-repository-id",
+                    str(UV_DEV.database_id),
+                    "--head-ref",
+                    "feature",
+                    "--head-sha",
+                    str(rebase.source.head_sha),
+                    "--rebased-head",
+                    str(head),
+                    "--summary",
+                    str(summary),
+                ]
+            )
+        self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(
+            stderr.getvalue(), "uv-automations rebase: command failed with status 7\n"
+        )
+        self.assertEqual(len(github_calls), 2)
+        self.assertEqual(responses, [])
+        self.assertFalse(summary.exists())
+        self.assertEqual(
+            len(
+                [arguments for arguments in repository.commands if "push" in arguments]
+            ),
+            1,
         )
 
     def test_source_preflight_pins_repository_identity(self) -> None:
