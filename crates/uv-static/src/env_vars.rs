@@ -547,25 +547,35 @@ impl EnvVars {
     #[attr_added_in("0.11.14")]
     pub(crate) const UV_ASTRAL_MIRROR_URL: &'static str = "UV_ASTRAL_MIRROR_URL";
 
-    /// Pin managed CPython versions to a specific build version.
+    /// Pin managed CPython versions to a specific build revision.
     ///
     /// For CPython, this should be the build date (e.g., "20250814").
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_CPYTHON_BUILD: &'static str = "UV_PYTHON_CPYTHON_BUILD";
 
-    /// Pin managed PyPy versions to a specific build version.
+    /// Pin a named managed Python build to a specific build revision.
+    ///
+    /// This applies to requests with a publisher-defined build name, such as `3.13+custom`,
+    /// and to reinstalls of existing named builds.
+    ///
+    /// Requests for unnamed builds, such as `3.13` or `3.13+freethreaded`,
+    /// use implementation-specific variables such as `UV_PYTHON_CPYTHON_BUILD`.
+    #[attr_added_in("next release")]
+    pub const UV_PYTHON_BUILD_REVISION: &'static str = "UV_PYTHON_BUILD_REVISION";
+
+    /// Pin managed PyPy versions to a specific build revision.
     ///
     /// For PyPy, this should be the PyPy version (e.g., "7.3.20").
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_PYPY_BUILD: &'static str = "UV_PYTHON_PYPY_BUILD";
 
-    /// Pin managed GraalPy versions to a specific build version.
+    /// Pin managed GraalPy versions to a specific build revision.
     ///
     /// For GraalPy, this should be the GraalPy version (e.g., "24.2.2").
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_GRAALPY_BUILD: &'static str = "UV_PYTHON_GRAALPY_BUILD";
 
-    /// Pin managed Pyodide versions to a specific build version.
+    /// Pin managed Pyodide versions to a specific build revision.
     ///
     /// For Pyodide, this should be the Pyodide version (e.g., "0.28.1").
     #[attr_added_in("0.8.14")]

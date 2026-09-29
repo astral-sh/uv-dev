@@ -34,7 +34,7 @@ use crate::managed::{
 };
 #[cfg(windows)]
 use crate::microsoft_store::find_microsoft_store_pythons;
-use crate::python_version::python_build_versions_from_env;
+use crate::python_version::{PythonBuildRevisionPins, python_named_build_revision_from_env};
 use crate::virtualenv::Error as VirtualEnvError;
 use crate::virtualenv::{
     CondaEnvironmentKind, conda_environment_from_env, virtualenv_from_env,
@@ -387,7 +387,7 @@ pub enum Error {
     SourceNotAllowed(PythonRequest, PythonSource, PythonPreference),
 
     #[error(transparent)]
-    BuildVersion(#[from] crate::python_version::BuildVersionError),
+    BuildRevision(#[from] crate::python_version::BuildRevisionError),
 }
 
 impl uv_errors::Hinted for Error {
@@ -476,7 +476,8 @@ fn python_executables_from_installed<'a>(
                 );
                 let installations = ManagedPythonInstallations::find_matching_current_platform()?;
 
-                let build_versions = python_build_versions_from_env()?;
+                let build_revisions =
+                    PythonBuildRevisionPins::from_env(version.build_request(), None)?;
 
                 // Check that the Python version and platform satisfy the request to avoid
                 // unnecessary interpreter queries later
@@ -492,16 +493,19 @@ fn python_executables_from_installed<'a>(
                             return false;
                         }
 
-                        if let Some(requested_build) = build_versions.get(&installation.implementation()) {
-                            let Some(installation_build) = installation.build() else {
+                        if let Some(requested_build_revision) = build_revisions.get(
+                            Some(installation.implementation()),
+                            installation.key().build_name(),
+                        ) {
+                            let Some(installation_build_revision) = installation.build_revision() else {
                                 debug!(
-                                    "Skipping managed installation `{installation}`: a build version was requested but is not recorded for this installation"
+                                    "Skipping managed installation `{installation}`: a build revision was requested but is not recorded for this installation"
                                 );
                                 return false;
                             };
-                            if installation_build != requested_build {
+                            if installation_build_revision != requested_build_revision {
                                 debug!(
-                                    "Skipping managed installation `{installation}`: requested build version `{requested_build}` does not match installation build version `{installation_build}`"
+                                    "Skipping managed installation `{installation}`: requested build revision `{requested_build_revision}` does not match installation build revision `{installation_build_revision}`"
                                 );
                                 return false;
                             }
@@ -934,6 +938,13 @@ fn python_installations<'a>(
         .filter_ok(move |installation| {
             installation.satisfies_preferences(version, environments, preference)
         })
+        .map(move |result| {
+            let installation = result?;
+            Ok(version
+                .matches_build_revision(installation.managed_path())?
+                .then_some(installation))
+        })
+        .flatten_ok()
         .map_ok(PythonInstallation::maybe_with_test_source),
     )
 }
@@ -2267,9 +2278,13 @@ impl PythonRequest {
     }
 
     /// Check the interpreter's properties and local managed build identity against this request.
-    pub fn satisfied(&self, interpreter: &Interpreter, cache: &Cache) -> bool {
+    pub fn satisfied(
+        &self,
+        interpreter: &Interpreter,
+        cache: &Cache,
+    ) -> Result<bool, crate::Error> {
         if !self.satisfied_by_interpreter(interpreter, cache) {
-            return false;
+            return Ok(false);
         }
         let version = match self {
             Self::Version(version) | Self::ImplementationVersion(_, version) => version,
@@ -2277,14 +2292,22 @@ impl PythonRequest {
             Self::Default | Self::Implementation(_) => &VersionRequest::Default,
             // Wildcards and explicit paths impose no build identity restriction.
             Self::Any | Self::Directory(_) | Self::File(_) | Self::ExecutableName(_) => {
-                return true;
+                return Ok(true);
             }
         };
-        let key = ManagedPythonInstallation::key_from_interpreter(interpreter)
-            .unwrap_or_else(|| interpreter.key());
+        let managed_identity =
+            ManagedPythonInstallation::path_and_key_from_interpreter(interpreter);
+        let key = managed_identity.as_ref().map_or_else(
+            || Cow::Owned(interpreter.key()),
+            |(_, key)| Cow::Borrowed(key),
+        );
         // Version and variant compatibility are determined by the interpreter check, including
-        // its prerelease range semantics. Only the build name remains to be checked here.
-        version.matches_build_name(&key)
+        // its prerelease range semantics. Only the build name and revision remain to be checked.
+        if !version.matches_build_name(&key) {
+            return Ok(false);
+        }
+        Ok(version
+            .matches_build_revision(managed_identity.as_ref().map(|(path, _)| path.as_path()))?)
     }
 
     /// Check the interpreter's reported properties or executable path against this request.
@@ -3248,6 +3271,28 @@ impl VersionRequest {
     pub(crate) fn matches_build_name(&self, key: &PythonInstallationKey) -> bool {
         self.build_request()
             .is_none_or(|build_request| build_request.matches_build_name(key))
+    }
+
+    /// Check an explicitly requested build revision against a managed interpreter, regardless of
+    /// which discovery source provided its executable.
+    fn matches_build_revision(&self, managed_path: Option<&Path>) -> Result<bool, Error> {
+        if self
+            .build_request()
+            .is_some_and(|build_request| build_request.build_name().is_some())
+            && let Some(requested_revision) = python_named_build_revision_from_env()?
+            && let Some(path) = managed_path
+            && ManagedPythonInstallation::read_build_revision(path)
+                .ok()
+                .flatten()
+                .as_deref()
+                != Some(requested_revision.as_str())
+        {
+            debug!(
+                "The managed interpreter does not satisfy the requested build revision `{requested_revision}`"
+            );
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// Check the interpreter's reported version and Python variant.
@@ -4249,7 +4294,7 @@ mod tests {
                 arch: None,
                 os: None,
                 libc: None,
-                build: None,
+                build_revision: None,
                 prereleases: None
             })
         );
@@ -4269,7 +4314,7 @@ mod tests {
                 ))),
                 os: Some(Os::new(target_lexicon::OperatingSystem::Darwin(None))),
                 libc: Some(Libc::None),
-                build: None,
+                build_revision: None,
                 prereleases: None
             })
         );
@@ -4286,7 +4331,7 @@ mod tests {
                 arch: None,
                 os: None,
                 libc: None,
-                build: None,
+                build_revision: None,
                 prereleases: None
             })
         );
@@ -4306,7 +4351,7 @@ mod tests {
                 ))),
                 os: None,
                 libc: None,
-                build: None,
+                build_revision: None,
                 prereleases: None
             })
         );

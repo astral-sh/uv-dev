@@ -26,7 +26,7 @@ use uv_python::downloads::{
 };
 use uv_python::managed::{
     ManagedPythonInstallation, ManagedPythonInstallations, PythonExecutable,
-    PythonMinorVersionLink, compare_build_versions, create_link_to_executable,
+    PythonMinorVersionLink, compare_build_revisions, create_link_to_executable,
     python_executable_dir,
 };
 use uv_python::{
@@ -116,7 +116,8 @@ impl<'a> InstallRequest<'a> {
     }
 
     fn matches_installation(&self, installation: &ManagedPythonInstallation) -> bool {
-        self.download_request.satisfied_by_key(installation.key())
+        self.download_request
+            .satisfied_by_installation(installation)
             && self.download.key().build_name() == installation.key().build_name()
     }
 
@@ -518,7 +519,7 @@ async fn perform_install(
         }
     }
 
-    // Find requests that are already satisfied
+    // Find requests that are already satisfied.
     let mut changelog = Changelog::default();
     let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall {
         // In the reinstall case, we want to iterate over all matching installations instead of
@@ -543,13 +544,16 @@ async fn perform_install(
 
             let mut matching_installations = existing_installations
                 .iter()
+                // Reinstall matching keys even if their build revisions do not match.
                 .filter(|installation| {
                     if let PythonRequest::Key(download_request) = &request.request
                         && download_request.is_exact_installation_key()
                     {
                         download_request.satisfied_by_key(installation.key())
                     } else {
-                        request.matches_installation(installation)
+                        request
+                            .download_request
+                            .satisfied_by_key(installation.key())
                     }
                 })
                 .peekable();
@@ -573,9 +577,9 @@ async fn perform_install(
 
                 // Construct an install request matching the existing installation.
                 match InstallRequest::from_installation(installation, &download_list) {
-                    Ok(request) => {
+                    Ok(reinstall_request) => {
                         debug!("Will reinstall `{}`", installation.key());
-                        unsatisfied.push(Cow::Owned(request));
+                        unsatisfied.push(Cow::Owned(reinstall_request));
                     }
                     Err(err) => {
                         // This shouldn't really happen, but maybe a new version of uv dropped
@@ -598,18 +602,21 @@ async fn perform_install(
             if matches!(upgrade, PythonUpgrade::Enabled(_)) {
                 // If this is an upgrade, the requested version is a minor version but the
                 // requested download is the highest patch for that minor version. We need to
-                // install it unless an exact match is found (including build version).
+                // install it unless an exact match is found (including build revision).
                 if let Some(installation) = existing_installations
                     .iter()
                     .find(|inst| request.download.key() == inst.key())
                 {
-                    if matches_build(request.download.build(), installation.build()) {
+                    if matches_build_revision(
+                        request.download.build_revision(),
+                        installation.build_revision(),
+                    ) {
                         debug!("Found `{}` for request `{}`", installation.key(), request);
                         satisfied.push(installation);
                     } else {
-                        // Key matches but build version differs - track as existing for reinstall
+                        // Key matches but build revision differs - track as existing for reinstall
                         debug!(
-                            "Build version mismatch for `{}`, will upgrade",
+                            "Build revision mismatch for `{}`, will upgrade",
                             installation.key()
                         );
                         changelog.existing.insert(installation.key().clone());
@@ -627,6 +634,13 @@ async fn perform_install(
                 satisfied.push(installation);
             } else {
                 debug!("No installation found for request `{}`", request);
+                // A different revision may already occupy the selected installation key.
+                if existing_installations
+                    .iter()
+                    .any(|installation| installation.key() == request.download.key())
+                {
+                    changelog.existing.insert(request.download.key().clone());
+                }
                 unsatisfied.push(Cow::Borrowed(request));
             }
         }
@@ -634,22 +648,32 @@ async fn perform_install(
         (satisfied, unsatisfied)
     };
 
-    // For all satisfied installs, bytecode compile them now before any future
-    // early return.
+    let downloads_allowed = match python_downloads {
+        PythonDownloads::Automatic | PythonDownloads::Manual => true,
+        PythonDownloads::Never => false,
+    };
+    let mut deferred_compilation = FxHashSet::default();
+
+    // Compile satisfied installations before any early return, except when another request will
+    // replace the same directory. Those installations must wait for the replacement to finish.
     if let Some(ref sender) = bytecode_compilation_sender {
-        satisfied
+        for installation in satisfied
             .iter()
             .copied()
-            .cloned()
-            .try_for_each(|installation| {
+            .unique_by(|installation| installation.key())
+        {
+            if downloads_allowed && changelog.existing.contains(installation.key()) {
+                deferred_compilation.insert(installation.key().clone());
+            } else {
                 sender
-                    .send(installation)
-                    .map_err(|err| anyhow::anyhow!(err))
-            })?;
+                    .send(installation.clone())
+                    .map_err(|err| anyhow::anyhow!(err))?;
+            }
+        }
     }
 
     // Check if Python downloads are banned
-    if matches!(python_downloads, PythonDownloads::Never) && !unsatisfied.is_empty() {
+    if !downloads_allowed && !unsatisfied.is_empty() {
         writeln!(
             printer.stderr(),
             "Python downloads are not allowed (`python-downloads = \"never\"`). Change to `python-downloads = \"manual\"` to allow explicit installs.",
@@ -667,7 +691,8 @@ async fn perform_install(
             );
         })
         .map(|request| request.download)
-        // Ensure we only download each version once
+        // Revision pins come from the environment for each build identity, including expanded
+        // reinstall requests, so requests for the same key select the same revision.
         .unique_by(|download| download.key())
         .collect::<Vec<_>>();
 
@@ -712,6 +737,7 @@ async fn perform_install(
                     sender
                         .send(installation.clone())
                         .map_err(|err| anyhow::anyhow!(err))?;
+                    deferred_compilation.remove(installation.key());
                 }
                 changelog.installed.insert(installation.key().clone());
                 for request in &requests {
@@ -744,7 +770,13 @@ async fn perform_install(
         Some(python_executable_dir()?)
     };
 
-    let installations: Vec<_> = downloaded.iter().chain(satisfied.iter().copied()).collect();
+    // Prefer successful downloads over satisfied records for the same installation, which may
+    // still refer to the build revision that was replaced.
+    let installations: Vec<_> = downloaded
+        .iter()
+        .chain(satisfied.iter().copied())
+        .unique_by(|installation| installation.key())
+        .collect();
 
     // Ensure that the installations are _complete_ for both downloaded installations and existing
     // installations that match the request
@@ -755,6 +787,15 @@ async fn perform_install(
         installation.ensure_build_file()?;
         if let Err(e) = installation.ensure_dylib_patched() {
             e.warn_user(installation);
+        }
+
+        // After a failed replacement, finalize the retained installation before compiling it.
+        if let Some(ref sender) = bytecode_compilation_sender
+            && deferred_compilation.remove(installation.key())
+        {
+            sender
+                .send((**installation).clone())
+                .map_err(|err| anyhow::anyhow!(err))?;
         }
     }
 
@@ -1459,16 +1500,21 @@ fn read_bin_link(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Check if a download's build version matches an installation's build version.
+/// Check if a download's build revision matches an installation's build revision.
 ///
-/// Returns `true` if the build versions match (no upgrade needed), `false` if an upgrade is needed.
-fn matches_build(download_build: Option<&str>, installation_build: Option<&str>) -> bool {
-    match (download_build, installation_build) {
-        // Both have build, check if they match
-        (Some(d), Some(i)) => compare_build_versions(d, i) == std::cmp::Ordering::Equal,
+/// Returns `true` if the build revisions match (no upgrade needed), `false` if an upgrade is needed.
+fn matches_build_revision(
+    download_build_revision: Option<&str>,
+    installation_build_revision: Option<&str>,
+) -> bool {
+    match (download_build_revision, installation_build_revision) {
+        // Both have a build revision, check if they match.
+        (Some(download), Some(installed)) => {
+            compare_build_revisions(download, installed) == std::cmp::Ordering::Equal
+        }
         // Legacy installation without BUILD file needs upgrade
         (Some(_), None) => false,
-        // Download doesn't have build info, assume matches
+        // A download without a build revision matches any installed revision.
         (None, _) => true,
     }
 }

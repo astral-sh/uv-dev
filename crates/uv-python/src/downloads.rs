@@ -45,8 +45,8 @@ use crate::implementation::{
     Error as ImplementationError, ImplementationName, LenientImplementationName,
 };
 use crate::installation::{PythonInstallation, PythonInstallationKey};
-use crate::managed::ManagedPythonInstallation;
-use crate::python_version::{BuildVersionError, python_build_version_from_env};
+use crate::managed::{ManagedPythonInstallation, compare_build_revisions};
+use crate::python_version::{BuildRevisionError, PythonBuildRevisionPins};
 use crate::{
     Interpreter, PythonBuildName, PythonBuildRequest, PythonRequest, PythonVariant, PythonVersion,
     VersionRequest,
@@ -136,7 +136,7 @@ pub enum Error {
         python_builds_dir: PathBuf,
     },
     #[error(transparent)]
-    BuildVersion(#[from] BuildVersionError),
+    BuildRevision(#[from] BuildRevisionError),
     #[error("No download URL found for Python")]
     NoPythonDownloadUrlFound,
     #[error(transparent)]
@@ -215,7 +215,7 @@ pub struct ManagedPythonDownload {
     key: PythonInstallationKey,
     url: Cow<'static, str>,
     sha256: Option<Digest<32>>,
-    build: Option<&'static str>,
+    build_revision: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
@@ -225,7 +225,7 @@ pub struct PythonDownloadRequest {
     pub(crate) arch: Option<ArchRequest>,
     pub(crate) os: Option<Os>,
     pub(crate) libc: Option<Libc>,
-    pub(crate) build: Option<String>,
+    pub(crate) build_revision: Option<String>,
 
     /// Whether to allow pre-releases or not. If not set, defaults to true if [`Self::version`] is
     /// not None, and false otherwise.
@@ -328,7 +328,7 @@ impl PythonDownloadRequest {
             arch,
             os,
             libc,
-            build: None,
+            build_revision: None,
             prereleases,
         }
     }
@@ -433,16 +433,27 @@ impl PythonDownloadRequest {
         Ok(self)
     }
 
-    /// Fill the build field from the environment variable relevant for the [`ImplementationName`].
-    fn fill_build_from_env(mut self) -> Result<Self, Error> {
-        if self.build.is_some() {
+    /// Fill the build revision from the environment variable relevant for the
+    /// [`ImplementationName`].
+    fn fill_build_revision_from_env(mut self) -> Result<Self, Error> {
+        if self.build_revision.is_some() {
             return Ok(self);
         }
         let Some(implementation) = self.implementation else {
             return Ok(self);
         };
 
-        self.build = python_build_version_from_env(implementation)?;
+        let build_request = self
+            .version
+            .as_ref()
+            .and_then(VersionRequest::build_request);
+        self.build_revision =
+            PythonBuildRevisionPins::from_env(build_request, Some(implementation))?
+                .get(
+                    Some(implementation),
+                    build_request.and_then(PythonBuildRequest::build_name),
+                )
+                .map(str::to_owned);
         Ok(self)
     }
 
@@ -451,7 +462,7 @@ impl PythonDownloadRequest {
             self.implementation = Some(ImplementationName::CPython);
         }
         self = self.fill_platform()?;
-        self = self.fill_build_from_env()?;
+        self = self.fill_build_revision_from_env()?;
         Ok(self)
     }
 
@@ -528,7 +539,7 @@ impl PythonDownloadRequest {
     pub(crate) fn without_patch(mut self) -> Self {
         self.version = self.version.take().map(VersionRequest::only_minor);
         self.prereleases = None;
-        self.build = None;
+        self.build_revision = None;
         self
     }
 
@@ -594,6 +605,15 @@ impl PythonDownloadRequest {
         true
     }
 
+    /// Whether this request is satisfied by an installation, including its build revision.
+    pub fn satisfied_by_installation(&self, installation: &ManagedPythonInstallation) -> bool {
+        self.satisfied_by_key(installation.key())
+            && self
+                .build_revision
+                .as_deref()
+                .is_none_or(|build_revision| installation.build_revision() == Some(build_revision))
+    }
+
     /// Whether this request names a complete managed installation identity.
     pub fn is_exact_installation_key(&self) -> bool {
         self.implementation.is_some()
@@ -620,20 +640,20 @@ impl PythonDownloadRequest {
             return false;
         }
 
-        // Then check the build if specified
-        if let Some(ref requested_build) = self.build {
-            let Some(download_build) = download.build() else {
+        // Then check the build revision if specified.
+        if let Some(ref requested_build_revision) = self.build_revision {
+            let Some(download_build_revision) = download.build_revision() else {
                 debug!(
-                    "Skipping download `{}`: a build version was requested but is not available for this download",
+                    "Skipping download `{}`: a build revision was requested but is not available for this download",
                     download
                 );
                 return false;
             };
 
-            if download_build != requested_build {
+            if download_build_revision != requested_build_revision {
                 debug!(
-                    "Skipping download `{}`: requested build version `{}` does not match download build version `{}`",
-                    download, requested_build, download_build
+                    "Skipping download `{}`: requested build revision `{}` does not match download build revision `{}`",
+                    download, requested_build_revision, download_build_revision
                 );
                 return false;
             }
@@ -1132,6 +1152,35 @@ impl ManagedPythonDownloadList {
             .filter(move |download| request.satisfied_by_download(download))
     }
 
+    /// Iterate over matching downloads, applying build revision constraints from the environment
+    /// without filling in a default implementation or platform.
+    pub fn iter_matching_with_build_revisions(
+        &self,
+        request: &PythonDownloadRequest,
+    ) -> Result<impl Iterator<Item = &ManagedPythonDownload>, Error> {
+        let build_revisions = if request.build_revision.is_none() {
+            Some(PythonBuildRevisionPins::from_env(
+                request
+                    .version
+                    .as_ref()
+                    .and_then(VersionRequest::build_request),
+                None,
+            )?)
+        } else {
+            None
+        };
+        Ok(self.iter_matching(request).filter(move |download| {
+            let build_revision = build_revisions.as_ref().and_then(|revisions| {
+                let implementation = match download.key().implementation().as_ref() {
+                    LenientImplementationName::Known(implementation) => Some(*implementation),
+                    LenientImplementationName::Unknown(_) => None,
+                };
+                revisions.get(implementation, download.key().build_name())
+            });
+            build_revision.is_none_or(|revision| download.build_revision() == Some(revision))
+        }))
+    }
+
     /// Return the first [`ManagedPythonDownload`] matching a request, if any.
     ///
     /// If there is no stable version matching the request, a compatible pre-release version will
@@ -1403,8 +1452,8 @@ impl ManagedPythonDownload {
         self.sha256.as_ref()
     }
 
-    pub fn build(&self) -> Option<&'static str> {
-        self.build
+    pub fn build_revision(&self) -> Option<&'static str> {
+        self.build_revision
     }
 
     /// Download and extract a Python distribution, retrying on failure.
@@ -1453,9 +1502,22 @@ impl ManagedPythonDownload {
     ) -> Result<DownloadResult, Error> {
         let path = installation_dir.join(self.key().to_string());
 
-        // If it is not a reinstall and the dir already exists, return it.
+        // Reuse an existing directory only if it contains the selected build revision.
         if !reinstall && path.is_dir() {
-            return Ok(DownloadResult::AlreadyAvailable(path));
+            let matches_revision = if let Some(build_revision) = self.build_revision {
+                match fs_err::tokio::read_to_string(path.join("BUILD")).await {
+                    Ok(installed_build_revision) => {
+                        installed_build_revision.trim() == build_revision
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                    Err(err) => return Err(err.into()),
+                }
+            } else {
+                true
+            };
+            if matches_revision {
+                return Ok(DownloadResult::AlreadyAvailable(path));
+            }
         }
 
         // We improve filesystem compatibility by using neither the URL-encoded `%2B` nor the `+` it
@@ -1485,9 +1547,11 @@ impl ManagedPythonDownload {
             let hash_prefix = match self.sha256.as_ref() {
                 Some(digest) => {
                     // Shorten the hash to avoid too-long-filename errors
-                    &digest.as_str()[..9]
+                    digest.as_str()[..9].to_owned()
                 }
-                None => "none",
+                // Without a checksum, identify the archive by URL and revision rather than
+                // filename, so different builds cannot share a cache entry.
+                None => format!("url-{}", cache_digest(&(url.as_str(), self.build_revision))),
             };
             let target_cache_file = python_builds_dir.join(format!("{hash_prefix}-{filename}"));
 
@@ -1933,12 +1997,19 @@ fn parse_json_downloads(
                 key: installation_key,
                 url: Cow::Owned(entry.url),
                 sha256: entry.sha256,
-                build: entry
+                build_revision: entry
                     .build
                     .map(|revision| Box::leak(revision.into_boxed_str()) as &'static str),
             })
         })
-        .sorted_by(|left, right| right.key.cmp(&left.key))
+        .sorted_by(|left, right| {
+            right.key.cmp(&left.key).then_with(|| {
+                match (left.build_revision(), right.build_revision()) {
+                    (Some(left), Some(right)) => compare_build_revisions(right, left),
+                    (left, right) => right.cmp(&left),
+                }
+            })
+        })
         .collect()
 }
 
@@ -2095,6 +2166,10 @@ async fn read_url(
 mod tests {
     use std::assert_matches;
     use std::collections::HashSet;
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     use anyhow::Result;
 
@@ -2458,6 +2533,160 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    #[cfg(unix)]
+    fn download_build_revision_environment() -> Result<()> {
+        let invalid = OsString::from_vec(vec![0xff]);
+        for build_name in [None, Some("custom")] {
+            let downloads = ManagedPythonDownloadList {
+                downloads: parse_json_downloads(
+                    ["9", "10"]
+                        .map(|revision| {
+                            (
+                                revision.to_string(),
+                                JsonPythonDownload {
+                                    name: "cpython".to_string(),
+                                    arch: JsonArch {
+                                        family: "x86_64".to_string(),
+                                        variant: None,
+                                    },
+                                    os: "linux".to_string(),
+                                    libc: "gnu".to_string(),
+                                    major: 3,
+                                    minor: 13,
+                                    patch: 0,
+                                    prerelease: None,
+                                    url: format!("https://example.com/python-{revision}.tar.gz"),
+                                    sha256: None,
+                                    variant: None,
+                                    build_name: build_name.map(str::to_owned),
+                                    build: Some(revision.to_string()),
+                                },
+                            )
+                        })
+                        .into_iter()
+                        .collect(),
+                ),
+            };
+            let request = PythonDownloadRequest::from_request(&PythonRequest::parse(
+                if build_name.is_some() {
+                    "cpython@3.13+custom"
+                } else {
+                    "cpython@3.13"
+                },
+            ))
+            .expect("Valid download request");
+
+            temp_env::with_vars(
+                [
+                    (EnvVars::UV_PYTHON_BUILD_REVISION, Some(invalid.clone())),
+                    (EnvVars::UV_PYTHON_CPYTHON_BUILD, Some(invalid.clone())),
+                    (EnvVars::UV_PYTHON_PYPY_BUILD, Some(invalid.clone())),
+                ],
+                || -> Result<()> {
+                    assert!(request.clone().fill_build_revision_from_env().is_err());
+                    assert!(
+                        downloads
+                            .iter_matching_with_build_revisions(&request)
+                            .is_err()
+                    );
+
+                    // An explicit revision takes precedence without reading environment pins.
+                    let mut explicit = request.clone();
+                    explicit.build_revision = Some("9".to_string());
+                    let explicit = explicit.fill_build_revision_from_env()?;
+                    assert_eq!(explicit.build_revision.as_deref(), Some("9"));
+                    assert_eq!(
+                        downloads
+                            .iter_matching_with_build_revisions(&explicit)?
+                            .map(ManagedPythonDownload::build_revision)
+                            .collect::<Vec<_>>(),
+                        [Some("9")],
+                    );
+
+                    // Download requests defer environment pins until the implementation is known.
+                    let mut unspecified = request.clone();
+                    unspecified.implementation = None;
+                    assert_eq!(
+                        unspecified.fill_build_revision_from_env()?.build_revision,
+                        None
+                    );
+                    Ok(())
+                },
+            )?;
+
+            temp_env::with_vars(
+                [
+                    (
+                        EnvVars::UV_PYTHON_BUILD_REVISION,
+                        Some(if build_name.is_some() {
+                            OsString::from("9")
+                        } else {
+                            invalid.clone()
+                        }),
+                    ),
+                    (
+                        EnvVars::UV_PYTHON_CPYTHON_BUILD,
+                        Some(if build_name.is_none() {
+                            OsString::from("9")
+                        } else {
+                            invalid.clone()
+                        }),
+                    ),
+                    (EnvVars::UV_PYTHON_PYPY_BUILD, Some(invalid.clone())),
+                ],
+                || -> Result<()> {
+                    let filled = request.clone().fill_build_revision_from_env()?;
+                    assert_eq!(filled.build_revision.as_deref(), Some("9"));
+                    if build_name.is_some() {
+                        assert_eq!(
+                            downloads
+                                .iter_matching_with_build_revisions(&request)?
+                                .map(ManagedPythonDownload::build_revision)
+                                .collect::<Vec<_>>(),
+                            [Some("9")],
+                        );
+                    } else {
+                        // Listing reads all implementation pins, even with an implementation filter.
+                        assert_matches!(
+                            downloads.iter_matching_with_build_revisions(&request).err(),
+                            Some(Error::BuildRevision(BuildRevisionError::NotUnicode(
+                                EnvVars::UV_PYTHON_PYPY_BUILD,
+                                _
+                            )))
+                        );
+                    }
+                    Ok(())
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn named_build_revision_pin_is_scoped() {
+        temp_env::with_vars(
+            [
+                (EnvVars::UV_PYTHON_BUILD_REVISION, Some("custom-build")),
+                (EnvVars::UV_PYTHON_CPYTHON_BUILD, Some("unnamed-build")),
+            ],
+            || {
+                let mut custom =
+                    PythonDownloadRequest::from_request(&PythonRequest::parse("3.13+custom"))
+                        .unwrap();
+                custom.implementation = Some(ImplementationName::CPython);
+                let custom = custom.fill_build_revision_from_env().unwrap();
+                assert_eq!(custom.build_revision.as_deref(), Some("custom-build"));
+
+                let mut unnamed =
+                    PythonDownloadRequest::from_request(&PythonRequest::parse("3.13")).unwrap();
+                unnamed.implementation = Some(ImplementationName::CPython);
+                let unnamed = unnamed.fill_build_revision_from_env().unwrap();
+                assert_eq!(unnamed.build_revision.as_deref(), Some("unnamed-build"));
+            },
+        );
+    }
+
     /// Parse a request with all of its fields.
     #[test]
     fn test_python_download_request_from_str_complete() {
@@ -2676,13 +2905,13 @@ mod tests {
         assert_matches!(result, Err(Error::TooManyParts(_)));
     }
 
-    /// Test that build filtering works correctly
+    /// Test that build revision filtering works correctly.
     #[tokio::test]
     async fn test_python_download_request_build_filtering() {
         let mut request = PythonDownloadRequest::default()
             .with_version(VersionRequest::from_str("3.12").unwrap())
             .with_implementation(ImplementationName::CPython);
-        request.build = Some("20240814".to_string());
+        request.build_revision = Some("20240814".to_string());
 
         let client_builder = uv_client::BaseClientBuilder::default();
         let cache = uv_cache::Cache::temp().expect("failed to create temp cache");
@@ -2700,18 +2929,18 @@ mod tests {
             "Should find at least one matching download"
         );
         for download in downloads {
-            assert_eq!(download.build(), Some("20240814"));
+            assert_eq!(download.build_revision(), Some("20240814"));
         }
     }
 
-    /// Test that an invalid build results in no matches
+    /// Test that an invalid build revision results in no matches.
     #[tokio::test]
     async fn test_python_download_request_invalid_build() {
-        // Create a request with a non-existent build
+        // Create a request with a non-existent build revision.
         let mut request = PythonDownloadRequest::default()
             .with_version(VersionRequest::from_str("3.12").unwrap())
             .with_implementation(ImplementationName::CPython);
-        request.build = Some("99999999".to_string());
+        request.build_revision = Some("99999999".to_string());
 
         let client_builder = uv_client::BaseClientBuilder::default();
         let cache = uv_cache::Cache::temp().expect("failed to create temp cache");
@@ -2917,7 +3146,7 @@ mod tests {
             key,
             url: Cow::Borrowed(url),
             sha256: Some(Digest::from_bytes([0xab; 32])),
-            build: Some("20240713"),
+            build_revision: Some("20240713"),
         }
     }
 
