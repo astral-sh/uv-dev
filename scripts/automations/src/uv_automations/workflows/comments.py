@@ -6,6 +6,7 @@ import os
 import re
 import stat
 import subprocess
+import time
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -896,6 +897,25 @@ def fetch_commit(repository: Git, scope: CommentScope, commit: CommitSha) -> Non
         raise ValueError("Git fetched a different pull request commit")
 
 
+def _collect_comments_with_retry(
+    github: CommentReader,
+    scope: CommentScope,
+    *,
+    previous: CollectionCheckpoint | None,
+    through: Timestamp,
+) -> CollectedComments:
+    attempt = 1
+    while True:
+        try:
+            return collect_comments(github, scope, previous=previous, through=through)
+        except subprocess.CalledProcessError:
+            if attempt == 3:
+                raise
+            logger.info("Retrying feedback collection (attempt %s/3)...", attempt)
+            time.sleep(attempt * 5)
+            attempt += 1
+
+
 def prepare_feedback(
     github: CommentReader,
     repository: Git,
@@ -962,7 +982,7 @@ def prepare_feedback(
     if resume is None:
         sessions = None
     try:
-        collection = collect_comments(
+        collection = _collect_comments_with_retry(
             github,
             scope,
             previous=resume.collection if resume is not None else None,
@@ -977,7 +997,9 @@ def prepare_feedback(
         resume = None
         # Cursor expiry does not invalidate an independently verified, current
         # Codex lineage. Only the collection falls back to a complete bootstrap.
-        collection = collect_comments(github, scope, previous=None, through=through)
+        collection = _collect_comments_with_retry(
+            github, scope, previous=None, through=through
+        )
     # The three-dot diff and all metadata describe the same immutable head.
     diff = repository.output(
         "diff",
