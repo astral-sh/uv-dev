@@ -109,7 +109,7 @@ jobs:
       - name: Build the exact parent and head
         env:
           BENCHMARK_BASE: "7af826859382eb191e47467540850caa8f493e5b"
-          BENCHMARK_HEAD: "b9c6c5310587dce451a8dc1e2b870a2ef612ac29"
+          BENCHMARK_HEAD: "6cafee7245d9c76ed28a21ae25d12dc67a2db525"
         run: |
           benchmark_commit=$(git rev-parse HEAD)
           cp scripts/benchmark_dry_run_tests.py "$BENCHMARK_DIR/benchmark_dry_run_tests.py"
@@ -138,7 +138,7 @@ jobs:
           INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
           BENCHMARK_REPLICATE: ${{ matrix.replicate }}
           BENCHMARK_BASE: "7af826859382eb191e47467540850caa8f493e5b"
-          BENCHMARK_HEAD: "b9c6c5310587dce451a8dc1e2b870a2ef612ac29"
+          BENCHMARK_HEAD: "6cafee7245d9c76ed28a21ae25d12dc67a2db525"
         run: |
           uv run --project "$GITHUB_WORKSPACE" --only-dev --python 3.12 "$BENCHMARK_DIR/benchmark_dry_run_tests.py" \
             --archives "$BENCHMARK_DIR/archives" \
