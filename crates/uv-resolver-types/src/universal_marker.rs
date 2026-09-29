@@ -805,6 +805,10 @@ fn decode_conflict_item(raw_extra: &ExtraName) -> Option<ConflictItem> {
         return None;
     }
     let (len, tail) = tail.split_once('-')?;
+    // Encoders use the shortest decimal length. Other spellings may be ordinary package extras.
+    if len.starts_with('0') {
+        return None;
+    }
     let len = len.parse::<usize>().ok()?;
     let (package, tail) = tail.split_at_checked(len)?;
     let package = PackageName::from_str(package).ok()?;
@@ -1365,10 +1369,12 @@ mod tests {
 
         for name in [
             "extra-three-pkg-cpu",
+            "extra-03-pkg-cpu",
             "extra-4-pkg-cpu",
             "extra-3-pkg",
             "group-3-pkg",
             "project-3-pkg-tail",
+            "project-03-pkg",
             "project-0",
             "unknown-3-pkg-cpu",
             "extra-999999999999999999999999-pkg-cpu",
@@ -1402,6 +1408,10 @@ mod tests {
                 python,
             ),
             (
+                ConflictItem::from((package.clone(), create_extra("extra-03-pkg-foo"))),
+                python,
+            ),
+            (
                 ConflictItem::from((package.clone(), create_extra("project-3-pkg-tail"))),
                 python,
             ),
@@ -1411,6 +1421,7 @@ mod tests {
             ("extra-3-pkg-foo", darwin),
             ("extra-3-pkg-missing", python),
             ("extra-three-pkg-cpu", python),
+            ("extra-03-pkg-foo", python),
             ("project-3-pkg-tail", python),
         ] {
             let included = MarkerTree::from_str(&format!("extra == '{name}'"))
