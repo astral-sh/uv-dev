@@ -407,7 +407,7 @@ jobs:
               --arg head_ref "$HEAD_REF" \
               --arg head_sha "$PROMOTED_HEAD" \
               --argjson repository_id "$UV_REPOSITORY_ID" \
-              '.[0].state == "open" and .[0].base.ref == $base_ref and .[0].head.ref == $head_ref and .[0].head.sha == $head_sha and .[0].base.repo.id == $repository_id and .[0].head.repo.id == $repository_id' \
+              '(.[0].state == "open" or (.[0].state == "closed" and (.[0].merged_at | type) == "string" and (.[0].merge_commit_sha | type) == "string" and (.[0].merge_commit_sha | test("^[0-9a-f]{40}$")))) and .[0].base.ref == $base_ref and .[0].head.ref == $head_ref and .[0].head.sha == $head_sha and .[0].base.repo.id == $repository_id and .[0].head.repo.id == $repository_id' \
               <<< "$existing_pull_requests" > /dev/null; then
               reject "An upstream pull request already exists with a different state, base, or head."
             fi

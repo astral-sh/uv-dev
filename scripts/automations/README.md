@@ -191,6 +191,10 @@ describes the exact open cross-repository parent and missing upstream ref when t
 needs to copy a stacked base. Its serialized `CopyUpstreamBaseClaim`, like `PromotionApprovalClaim`,
 is an untrusted request to revalidate, not reconstructed publication authority.
 
+An exact upstream publication can be open or merged. A merge does not prevent an interrupted
+promotion from finishing its metadata, canonical receipt, and source closure; closed-unmerged
+upstream pull requests and changed revisions still reject completion.
+
 Before ordinary planning, `promotions prepare` can recognize an already-closed direct `uv-dev`
 promotion. Its read-only `ObservedClosedPromotion` result requires an unedited bot-App receipt and
 an exact current source/upstream revision, followed by a fresh read of both pull requests. It emits
