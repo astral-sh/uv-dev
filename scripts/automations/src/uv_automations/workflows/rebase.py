@@ -1,5 +1,6 @@
 """Prepare, transport, and publish rebases without trusting agent conclusions."""
 
+import subprocess
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -320,15 +321,44 @@ def push_rebase(
         != source.head_sha
     ):
         return PushOutcome.STALE
-    repository.command(
-        (
-            *_GIT_CREDENTIALS,
-            "push",
-            f"--force-with-lease=refs/heads/{source.head_ref}:{source.head_sha}",
-            _repository_url(source.head_repository),
-            f"{head_sha}:refs/heads/{source.head_ref}",
+    try:
+        repository.command(
+            (
+                *_GIT_CREDENTIALS,
+                "push",
+                f"--force-with-lease=refs/heads/{source.head_ref}:{source.head_sha}",
+                _repository_url(source.head_repository),
+                f"{head_sha}:refs/heads/{source.head_ref}",
+            )
         )
-    )
+    except subprocess.CalledProcessError:
+        # A concurrent publisher can change the source after the preflight. Only
+        # a successful read proving staleness turns a failed push into a skip.
+        try:
+            if not rebase.matches(
+                github.get_pull_request(source.reference),
+                head_repository=verified.head_repository,
+            ):
+                return PushOutcome.STALE
+            if (
+                _remote_head(read_repository, source.repository.name, source.base_ref)
+                != rebase.base_sha
+                or _remote_head(
+                    read_repository, source.head_repository, source.head_ref
+                )
+                != source.head_sha
+            ):
+                return PushOutcome.STALE
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            OSError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ):
+            pass
+        raise
     return PushOutcome.PUSHED
 
 
