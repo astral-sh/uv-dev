@@ -15,6 +15,7 @@ from uv_automations.github_promotion_completion import PromotionCompletionGitHub
 from uv_automations.github_promotion_queue import (
     PromotionQueueCompletionGitHub,
     PromotionQueueGitHub,
+    PromotionSyncCompletionGitHub,
 )
 from uv_automations.json import loads
 from uv_automations.models import CommitSha, RepositoryIdentity, RepositoryName
@@ -567,8 +568,8 @@ def run(command: PromotionCommand) -> None:
         case SyncPromotionSource():
             if command.repository != UV_DEV_REPOSITORY:
                 raise ValueError("This synchronization stage is only for uv-dev")
-            main = PromotionQueueGitHub().sync_uv_dev_main(
-                PromotionGitHub(token_variable="GH_UPSTREAM_TOKEN")
+            main = PromotionSyncCompletionGitHub().sync_uv_dev_main(
+                PromotionCompletionGitHub(token_variable="GH_UPSTREAM_TOKEN")
             )
             write_output(command.github_output, "main-sha", str(main))
             return

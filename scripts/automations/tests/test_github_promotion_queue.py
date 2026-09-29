@@ -69,7 +69,9 @@ class PromotionSyncTests(unittest.TestCase):
             patch.object(
                 PromotionQueueGitHub, "get_repository", return_value=UV_DEV_REPOSITORY
             ),
-            patch.object(PromotionQueueGitHub, "get_ref", side_effect=(OLD, MAIN)),
+            patch.object(
+                PromotionQueueGitHub, "get_ref", side_effect=(OLD, MAIN, MAIN)
+            ),
             patch.object(PromotionQueueGitHub, "_api") as api,
         ):
             self.assertEqual(github.sync_uv_dev_main(PublicHistory()), MAIN)

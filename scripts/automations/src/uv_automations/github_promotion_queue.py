@@ -15,8 +15,13 @@ from uv_automations.promotion_models import (
     BranchRevision,
     PromotionApprovalClaim,
 )
+from uv_automations.workflows.promotion_completion import (
+    COMPLETION_ATTEMPTS,
+    _retry_delay,
+)
 from uv_automations.workflows.promotion_queue import (
     QueuedPromotion,
+    _main_contains,
     is_public_main_revision,
 )
 
@@ -58,22 +63,72 @@ class PromotionQueueGitHub(PromotionGitHub):
         )
 
     def sync_uv_dev_main(self, upstream_reader: PromotionRevisionReader) -> CommitSha:
-        self.get_repository(UV_DEV_REPOSITORY)
-        source_main = self.get_ref(UV_DEV_REPOSITORY, "main")
-        if source_main is None or not is_public_main_revision(
-            upstream_reader, source_main
-        ):
-            raise ValueError("The uv-dev main branch is not public uv history")
-        self._api(
-            "POST",
-            f"repos/{UV_DEV_REPOSITORY.name}/merge-upstream",
-            payload={"branch": "main"},
-        )
+        intended: CommitSha | None = None
+        merge_attempted = False
+        already_synchronized = False
+        for attempt in range(COMPLETION_ATTEMPTS):
+            waited = False
+            try:
+                if intended is None:
+                    self.get_repository(UV_DEV_REPOSITORY)
+                    intended = upstream_reader.get_ref(UV_REPOSITORY, "main")
+                    if intended is None:
+                        raise ValueError("The public uv main branch is missing")
+                if not merge_attempted and not already_synchronized:
+                    source_main = self.get_ref(UV_DEV_REPOSITORY, "main")
+                    if source_main is None:
+                        raise ValueError(
+                            "The uv-dev main branch is not public uv history"
+                        )
+                    if _main_contains(
+                        upstream_reader, UV_REPOSITORY, intended, source_main
+                    ):
+                        already_synchronized = source_main == intended
+                    elif _main_contains(
+                        upstream_reader, UV_REPOSITORY, source_main, intended
+                    ):
+                        already_synchronized = True
+                    else:
+                        raise ValueError(
+                            "The uv-dev main branch is not public uv history"
+                        )
+                    if not already_synchronized:
+                        # A failed response can follow a completed synchronization.
+                        # Once attempted, only read-only reconciliation is allowed.
+                        merge_attempted = True
+                        try:
+                            self._api(
+                                "POST",
+                                f"repos/{UV_DEV_REPOSITORY.name}/merge-upstream",
+                                payload={"branch": "main"},
+                            )
+                        except PromotionReadError as error:
+                            _retry_delay(attempt, error, before_reconciliation=True)
+                            waited = True
+                main = self._synchronized_main(upstream_reader, intended)
+                if main is not None:
+                    return main
+            except PromotionReadError as error:
+                if attempt + 1 == COMPLETION_ATTEMPTS:
+                    raise
+                _retry_delay(attempt, error)
+                continue
+            if not waited:
+                _retry_delay(attempt)
+        raise PromotionReadError("Could not confirm the uv-dev synchronization")
+
+    def _synchronized_main(
+        self, upstream_reader: PromotionRevisionReader, intended: CommitSha
+    ) -> CommitSha | None:
         main = self.get_ref(UV_DEV_REPOSITORY, "main")
         if main is None:
-            raise ValueError("The synchronized uv-dev main branch is missing")
+            return None
         if not is_public_main_revision(upstream_reader, main):
             raise ValueError("The synchronized uv-dev main is not public uv history")
+        if not _main_contains(upstream_reader, UV_REPOSITORY, main, intended):
+            return None
+        if self.get_ref(UV_DEV_REPOSITORY, "main") != main:
+            return None
         return main
 
     def create_upstream_base(self, destination: BranchRevision) -> None:
@@ -104,3 +159,7 @@ class PromotionQueueGitHub(PromotionGitHub):
 
 class PromotionQueueCompletionGitHub(PromotionQueueGitHub, PromotionCompletionGitHub):
     """Use bounded completion response metadata only for queue receipt recording."""
+
+
+class PromotionSyncCompletionGitHub(PromotionQueueGitHub, PromotionCompletionGitHub):
+    """Use bounded completion response metadata only for fork synchronization."""
