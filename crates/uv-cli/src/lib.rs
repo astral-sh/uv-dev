@@ -6166,8 +6166,8 @@ pub enum PythonCommand {
     ///
     /// Supports CPython and PyPy. CPython distributions are downloaded from the Astral
     /// `python-build-standalone` project. PyPy distributions are downloaded from `python.org`.
-    /// Available CPython versions are fetched at runtime and fall back to metadata bundled with
-    /// each uv release if that fetch fails.
+    /// Available Python versions are bundled with each uv release. Enable the
+    /// `remote-python-download-metadata` preview feature to fetch new CPython versions at runtime.
     ///
     /// Python versions are installed into the uv Python directory, which can be retrieved with `uv
     /// python dir`.

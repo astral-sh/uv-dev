@@ -1172,8 +1172,6 @@ impl TestContext {
             "archive-v$1/[HASH]".to_string(),
         ));
 
-        let python_downloads_json = workspace_root.join("crates/uv-python/download-metadata.json");
-
         Self {
             root: ChildPath::new(root.path()),
             temp_dir,
@@ -1197,9 +1195,6 @@ impl TestContext {
                         .bucket(CacheBucket::Python)
                         .into()
                 }),
-            ), (
-                EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL.into(),
-                python_downloads_json.into_os_string(),
             )],
             _root: root,
             _extra_tempdirs: vec![],

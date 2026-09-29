@@ -97,9 +97,9 @@ impl<'a> InstallRequest<'a> {
     async fn new_streaming(
         request: PythonRequest,
         arch: Option<PythonArchitecture>,
-        client: &uv_client::BaseClient,
-        python_downloads_json_url: Option<&str>,
+        client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
+        python_downloads_json_url: Option<&str>,
     ) -> Result<InstallRequest<'static>> {
         let download_request = PythonDownloadRequest::from_request(&request)
             .ok_or_else(|| {
@@ -112,9 +112,9 @@ impl<'a> InstallRequest<'a> {
             .fill()?;
 
         let download = match ManagedPythonDownloadList::find_streaming(
-            client,
+            client_builder,
+            cache,
             python_downloads_json_url,
-            Some(cache),
             &download_request,
         )
         .await
@@ -320,7 +320,6 @@ pub(crate) async fn install(
         config_discovery,
         compile_bytecode.then_some(sender),
         concurrency,
-        cache,
         preview,
         printer,
     );
@@ -381,7 +380,6 @@ async fn perform_install(
     config_discovery: ConfigDiscovery,
     bytecode_compilation_sender: Option<mpsc::UnboundedSender<ManagedPythonInstallation>>,
     concurrency: &Concurrency,
-    cache: &Cache,
     preview: Preview,
     printer: Printer,
 ) -> Result<ExitStatus> {
@@ -430,11 +428,17 @@ async fn perform_install(
         ) {
             if download_list.is_none() {
                 download_list = Some(
-                    ManagedPythonDownloadList::new(&client_builder, cache, python_downloads_json_url.as_deref())
-                        .await?,
+                    ManagedPythonDownloadList::new(
+                        &client_builder,
+                        cache,
+                        python_downloads_json_url.as_deref(),
+                    )
+                    .await?,
                 );
             }
-            let download_list = download_list.as_ref().unwrap();
+            let download_list = download_list
+                .as_ref()
+                .expect("download list should be loaded before resolving requests");
 
             is_unspecified_upgrade = true;
             // On upgrade, derive requests for all of the existing installations
@@ -484,11 +488,17 @@ async fn perform_install(
 
             if download_list.is_none() {
                 download_list = Some(
-                    ManagedPythonDownloadList::new(&client_builder, cache, python_downloads_json_url.as_deref())
-                        .await?,
+                    ManagedPythonDownloadList::new(
+                        &client_builder,
+                        cache,
+                        python_downloads_json_url.as_deref(),
+                    )
+                    .await?,
                 );
             }
-            let download_list = download_list.as_ref().unwrap();
+            let download_list = download_list
+                .as_ref()
+                .expect("download list should be loaded before resolving requests");
             version_requests
                 .into_iter()
                 .map(|request| InstallRequest::new(request, python_arch, download_list))
@@ -499,20 +509,26 @@ async fn perform_install(
             InstallRequest::new_streaming(
                 PythonRequest::parse(&targets[0]),
                 python_arch,
-                &client,
-                python_downloads_json_url.as_deref(),
+                &client_builder,
                 cache,
+                python_downloads_json_url.as_deref(),
             )
             .await?,
         ]
     } else {
         if download_list.is_none() {
             download_list = Some(
-                ManagedPythonDownloadList::new(&client_builder, cache, python_downloads_json_url.as_deref())
-                    .await?,
+                ManagedPythonDownloadList::new(
+                    &client_builder,
+                    cache,
+                    python_downloads_json_url.as_deref(),
+                )
+                .await?,
             );
         }
-        let download_list = download_list.as_ref().unwrap();
+        let download_list = download_list
+            .as_ref()
+            .expect("download list should be loaded before resolving requests");
         targets
             .iter()
             .map(|target| PythonRequest::parse(target.as_str()))
@@ -565,9 +581,15 @@ async fn perform_install(
         }
     }
 
-    let reinstall_download_list = if reinstall && download_list.is_none()
-    {
-        Some(ManagedPythonDownloadList::new(&client_builder, cache, python_downloads_json_url.as_deref()).await?)
+    let reinstall_download_list = if reinstall && download_list.is_none() {
+        Some(
+            ManagedPythonDownloadList::new(
+                &client_builder,
+                cache,
+                python_downloads_json_url.as_deref(),
+            )
+            .await?,
+        )
     } else {
         None
     };

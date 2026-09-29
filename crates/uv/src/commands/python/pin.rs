@@ -105,7 +105,6 @@ pub(crate) async fn pin(
                         &client_builder,
                         cache,
                         install_mirrors.python_downloads_json_url.as_deref(),
-                        Some(cache),
                     )
                     .await?,
                 )

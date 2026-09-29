@@ -172,7 +172,6 @@ impl PythonInstallation {
                 client_builder,
                 cache,
                 python_downloads_json_url,
-                cache,
             )
             .await?;
         Ok(installation)
@@ -204,7 +203,6 @@ impl PythonInstallation {
                         client_builder,
                         cache,
                         python_downloads_json_url,
-                        cache,
                     )
                     .await?;
                 return Ok(installation);
@@ -226,9 +224,6 @@ impl PythonInstallation {
             return Err(err);
         };
 
-        // Python downloads are performing their own retries to catch stream errors, disable the
-        // default retries to avoid the middleware performing uncontrolled retries.
-        let retry_policy = client_builder.retry_policy();
         let download_list = if python_downloads_json_url.is_some() {
             Some(
                 ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
@@ -237,7 +232,6 @@ impl PythonInstallation {
         } else {
             None
         };
-        let client = client_builder.clone().retries(0).build()?;
 
         let downloads_enabled = preference.allows_managed()
             && python_downloads.is_automatic()
@@ -262,9 +256,9 @@ impl PythonInstallation {
                     }
                 } else {
                     match ManagedPythonDownloadList::find_streaming(
-                        &client,
+                        client_builder,
+                        cache,
                         python_downloads_json_url,
-                        Some(cache),
                         &download_request,
                     )
                     .await
@@ -338,6 +332,9 @@ impl PythonInstallation {
             return Err(err);
         }
 
+        // Python downloads perform their own retries to catch stream errors.
+        let retry_policy = client_builder.retry_policy();
+        let client = client_builder.clone().retries(0).build()?;
         let installation = Self::fetch(
             download.as_ref(),
             &client,
@@ -356,8 +353,8 @@ impl PythonInstallation {
                 .download_and_warn_if_outdated_prerelease(
                     request,
                     client_builder,
-                    python_downloads_json_url,
                     cache,
+                    python_downloads_json_url,
                 )
                 .await?;
         }
@@ -584,7 +581,6 @@ impl PythonInstallation {
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
         python_downloads_json_url: Option<&str>,
-        cache: &Cache,
     ) -> Result<(), Error> {
         if !self.should_check_outdated_prerelease_warning(request) {
             return Ok(());
