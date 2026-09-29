@@ -1,0 +1,844 @@
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -6079,6 +6079,7 @@
+  "uv-distribution",
+  "uv-distribution-filename",
+  "uv-distribution-types",
++ "uv-errors",
+  "uv-extract",
+  "uv-install-wheel",
+  "uv-pep440",
+@@ -7303,6 +7304,7 @@
+  "arcstr",
+  "astral-pubgrub",
+  "clap",
++ "codspeed-criterion-compat",
+  "cyclonedx-bom",
+  "either",
+  "fs-err",
+diff --git a/crates/uv-bench/Cargo.toml b/crates/uv-bench/Cargo.toml
+--- a/crates/uv-bench/Cargo.toml
++++ b/crates/uv-bench/Cargo.toml
+@@ -17,6 +17,11 @@
+ doctest = false
+ bench = false
+ test = false
++
++[[bench]]
++name = "resolver_errors"
++path = "benches/resolver_errors.rs"
++harness = false
+ 
+ [[bench]]
+ name = "uv"
+@@ -48,6 +53,7 @@
+ uv-distribution = { workspace = true }
+ uv-distribution-filename = { workspace = true }
+ uv-distribution-types = { workspace = true }
++uv-errors = { workspace = true }
+ uv-extract = { workspace = true }
+ uv-install-wheel = { workspace = true }
+ uv-pep440 = { workspace = true }
+diff --git a/crates/uv-bench/benches/common/resolver.rs b/crates/uv-bench/benches/common/resolver.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/uv-bench/benches/common/resolver.rs
+@@ -0,0 +1,176 @@
++use std::sync::LazyLock;
++
++use uv_cache::Cache;
++use uv_client::RegistryClient;
++use uv_configuration::{BuildOptions, Concurrency, Constraints, IndexStrategy, NoSources};
++use uv_dispatch::{BuildDispatch, SharedState};
++use uv_distribution::DistributionDatabase;
++use uv_distribution_types::{
++    ConfigSettings, DependencyMetadata, ExtraBuildRequires, ExtraBuildVariables, IndexLocations,
++    PackageConfigSettings, RequiresPython,
++};
++use uv_install_wheel::LinkMode;
++use uv_pep440::Version;
++use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
++use uv_platform_tags::{Arch, Os, Platform, Tags, TagsOptions};
++use uv_preview::Preview;
++use uv_pypi_types::{Conflicts, ResolverMarkerEnvironment};
++use uv_python::{Interpreter, PythonVersion};
++use uv_resolver::{
++    ExcludeNewer, FlatIndex, InMemoryIndex, Manifest, OptionsBuilder, PythonRequirement,
++    ResolveError, Resolver, ResolverEnvironment, ResolverOutput,
++};
++use uv_types::{BuildIsolation, EmptyInstalledPackages, HashStrategy, SourceTreeEditablePolicy};
++use uv_workspace::WorkspaceCache;
++
++static MARKERS: LazyLock<MarkerEnvironment> = LazyLock::new(|| {
++    MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
++        implementation_name: "cpython",
++        implementation_version: "3.11.5",
++        os_name: "posix",
++        platform_machine: "arm64",
++        platform_python_implementation: "CPython",
++        platform_release: "21.6.0",
++        platform_system: "Darwin",
++        platform_version: "Darwin Kernel Version 21.6.0: Mon Aug 22 20:19:52 PDT 2022; root:xnu-8020.140.49~2/RELEASE_ARM64_T6000",
++        python_full_version: "3.11.5",
++        python_version: "3.11",
++        sys_platform: "darwin",
++    }).unwrap()
++});
++
++static PLATFORM: Platform = Platform::new(
++    Os::Macos {
++        major: 21,
++        minor: 6,
++    },
++    Arch::Aarch64,
++);
++
++static TAGS: LazyLock<Tags> = LazyLock::new(|| {
++    Tags::from_env(
++        PLATFORM.clone(),
++        (3, 11),
++        "cpython",
++        (3, 11),
++        TagsOptions::default(),
++    )
++    .unwrap()
++});
++
++pub(crate) struct Settings {
++    pub(crate) universal: bool,
++    pub(crate) python_version: Option<PythonVersion>,
++    pub(crate) exclude_newer: ExcludeNewer,
++    pub(crate) index_locations: IndexLocations,
++}
++
++pub(crate) async fn resolve(
++    manifest: Manifest,
++    cache: Cache,
++    client: &RegistryClient,
++    interpreter: &Interpreter,
++    settings: &Settings,
++) -> Result<ResolverOutput, ResolveError> {
++    let build_isolation = BuildIsolation::default();
++    let extra_build_requires = ExtraBuildRequires::default();
++    let extra_build_variables = ExtraBuildVariables::default();
++    let build_options = BuildOptions::default();
++    let concurrency = Concurrency::default();
++    let config_settings = ConfigSettings::default();
++    let config_settings_package = PackageConfigSettings::default();
++    let exclude_newer = settings.exclude_newer.clone();
++    let build_constraints = Constraints::default();
++    let flat_index = FlatIndex::default();
++    let hashes = HashStrategy::default();
++    let state = SharedState::default();
++    let index = InMemoryIndex::default();
++    let installed_packages = EmptyInstalledPackages;
++    let options = OptionsBuilder::new()
++        .exclude_newer(exclude_newer.clone())
++        .build();
++    let sources = NoSources::default();
++    let dependency_metadata = DependencyMetadata::default();
++    let conflicts = Conflicts::empty();
++    let workspace_cache = WorkspaceCache::default();
++
++    let python_requirement = if settings.universal {
++        PythonRequirement::from_requires_python(
++            interpreter,
++            RequiresPython::greater_than_equal_version(&Version::new([3, 11])),
++        )
++    } else if let Some(version) = &settings.python_version {
++        PythonRequirement::from_python_version(interpreter, version)
++    } else {
++        PythonRequirement::from_interpreter(interpreter)
++    };
++
++    let build_context = BuildDispatch::new(
++        client,
++        &cache,
++        &build_constraints,
++        interpreter,
++        &settings.index_locations,
++        &flat_index,
++        &dependency_metadata,
++        state,
++        IndexStrategy::default(),
++        &config_settings,
++        &config_settings_package,
++        build_isolation,
++        &extra_build_requires,
++        &extra_build_variables,
++        LinkMode::default(),
++        &build_options,
++        &hashes,
++        exclude_newer,
++        sources,
++        SourceTreeEditablePolicy::Project,
++        workspace_cache,
++        concurrency.clone(),
++        Preview::default(),
++    );
++
++    let markers = if settings.universal {
++        ResolverEnvironment::universal(vec![])
++    } else {
++        let markers = settings.python_version.as_ref().map_or_else(
++            || MARKERS.clone(),
++            |version| version.markers(MARKERS.clone()),
++        );
++        ResolverEnvironment::specific(ResolverMarkerEnvironment::from(markers))
++    };
++    let tags = settings.python_version.as_ref().map(|version| {
++        let version = (version.major(), version.minor());
++        Tags::from_env(
++            PLATFORM.clone(),
++            version,
++            "cpython",
++            version,
++            TagsOptions::default(),
++        )
++        .expect("Invalid benchmark Python tags")
++    });
++
++    let resolver = Resolver::new(
++        manifest,
++        options,
++        &python_requirement,
++        markers,
++        interpreter.markers(),
++        conflicts,
++        Some(tags.as_ref().unwrap_or(&TAGS)),
++        &flat_index,
++        &index,
++        &hashes,
++        &build_context,
++        installed_packages,
++        DistributionDatabase::new(
++            client,
++            &build_context,
++            concurrency.downloads_semaphore.clone(),
++        ),
++    )?;
++
++    resolver.resolve().await
++}
+diff --git a/crates/uv-bench/benches/resolver_errors.rs b/crates/uv-bench/benches/resolver_errors.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/uv-bench/benches/resolver_errors.rs
+@@ -0,0 +1,196 @@
++//! Fresh offline failures from the resolver-error benchmark owner.
++
++#[path = "common/resolver.rs"]
++mod resolver;
++
++use std::hint::black_box;
++use std::path::PathBuf;
++use std::str::FromStr;
++use std::time::Duration;
++
++use criterion::{BatchSize, BenchmarkId, Criterion, measurement::WallTime};
++use serde_json::{Value, json};
++use uv_cache::Cache;
++use uv_client::{BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder};
++use uv_distribution_types::{IndexLocations, Requirement};
++use uv_errors::Hinted;
++use uv_preview::Preview;
++use uv_python::{Interpreter, PythonEnvironment, PythonVersion};
++use uv_resolver::{ExcludeNewer, Manifest, NoSolutionError, ResolveError};
++
++async fn no_solution(
++    manifest: &Manifest,
++    cache: &Cache,
++    client: &RegistryClient,
++    interpreter: &Interpreter,
++    settings: &resolver::Settings,
++) -> anyhow::Result<Box<NoSolutionError>> {
++    match resolver::resolve(
++        manifest.clone(),
++        cache.clone(),
++        client,
++        interpreter,
++        settings,
++    )
++    .await
++    {
++        Err(ResolveError::NoSolution(error)) => Ok(error),
++        Err(error) => Err(error.into()),
++        Ok(_) => anyhow::bail!("The benchmark requirements unexpectedly resolved"),
++    }
++}
++
++fn absolute_input(name: &str) -> PathBuf {
++    let path = PathBuf::from(std::env::var_os(name).expect("Missing benchmark input"));
++    assert!(path.is_absolute());
++    assert_eq!(path.canonicalize().expect("Missing benchmark input"), path);
++    path
++}
++
++fn resolver_errors(criterion: &mut Criterion<WallTime>, measure: bool) -> Vec<Value> {
++    uv_preview::set(Preview::default()).expect("Failed to configure preview features");
++    let runtime = tokio::runtime::Builder::new_current_thread()
++        .max_blocking_threads(256)
++        .enable_all()
++        .build()
++        .expect("Failed to create resolver runtime");
++    let cache = Cache::from_path(absolute_input("UV_RESOLVER_ERROR_BENCH_CACHE"))
++        .init_no_wait()
++        .expect("Unexpected benchmark cache contention")
++        .expect("Failed to initialize cache");
++    let interpreter = PythonEnvironment::from_root(
++        absolute_input("UV_RESOLVER_ERROR_BENCH_ENVIRONMENT"),
++        &cache,
++    )
++    .expect("Missing benchmark Python environment")
++    .into_interpreter();
++    let client = RegistryClientBuilder::new(
++        BaseClientBuilder::default().connectivity(Connectivity::Offline),
++        cache.clone(),
++    )
++    .build()
++    .expect("Failed to create registry client");
++    let fixtures: Vec<Value> = serde_json::from_str(include_str!(
++        "../../../scripts/benchmark/resolver-errors.json"
++    ))
++    .expect("Invalid resolver-error fixtures");
++    let mut group = criterion.benchmark_group("resolver_errors");
++    let mut observations = Vec::new();
++    for fixture in fixtures {
++        let name = fixture["name"]
++            .as_str()
++            .expect("Invalid fixture name")
++            .to_owned();
++        let manifest = Manifest::simple(
++            fixture["requirements"]
++                .as_array()
++                .expect("Invalid fixture requirements")
++                .iter()
++                .map(|requirement| {
++                    Requirement::from(
++                        uv_pep508::Requirement::from_str(
++                            requirement.as_str().expect("Invalid fixture requirement"),
++                        )
++                        .expect("Invalid fixture requirement"),
++                    )
++                })
++                .collect(),
++        );
++        let settings = resolver::Settings {
++            universal: false,
++            python_version: Some(
++                PythonVersion::from_str(fixture["python"].as_str().unwrap())
++                    .expect("Invalid fixture Python version"),
++            ),
++            exclude_newer: ExcludeNewer::global(
++                jiff::civil::date(2024, 12, 1)
++                    .to_zoned(jiff::tz::TimeZone::UTC)
++                    .expect("Invalid fixture cutoff")
++                    .timestamp()
++                    .into(),
++            ),
++            index_locations: IndexLocations::default(),
++        };
++        let resolve = || {
++            runtime
++                .block_on(no_solution(
++                    &manifest,
++                    &cache,
++                    &client,
++                    &interpreter,
++                    &settings,
++                ))
++                .expect("Run the approved resolver-error fixture preparation first")
++        };
++        let error = resolve();
++        let report = error.to_string();
++        let hints: Vec<String> = error.hints().iter().map(str::to_owned).collect();
++        assert!(report.contains("unsatisfiable"));
++        observations.push(json!({"fixture": fixture, "report": report, "hints": hints}));
++        if measure {
++            group.bench_function(BenchmarkId::new("render", &name), |bencher| {
++                // Each timed render receives a fresh, previously unformatted error.
++                bencher.iter_batched(
++                    &resolve,
++                    |error| {
++                        let report = error.to_string();
++                        black_box((&error, &report));
++                        drop(report);
++                        drop(error);
++                    },
++                    BatchSize::PerIteration,
++                );
++            });
++            group.bench_function(BenchmarkId::new("resolve_and_render", &name), |bencher| {
++                bencher.iter(|| {
++                    let error = resolve();
++                    let report = error.to_string();
++                    black_box((&error, &report));
++                    drop(report);
++                    drop(error);
++                });
++            });
++        }
++    }
++    group.finish();
++    observations
++}
++
++fn main() {
++    assert_eq!(
++        std::env::args_os().count(),
++        1,
++        "Unexpected benchmark arguments"
++    );
++    let mode = std::env::var("UV_RESOLVER_ERROR_BENCH_MODE").expect("Missing mode");
++    assert!(matches!(mode.as_str(), "inspect" | "measure"));
++    let mut criterion = Criterion::default()
++        .sample_size(20)
++        .warm_up_time(Duration::from_secs(1))
++        .measurement_time(Duration::from_secs(3))
++        .nresamples(20_000)
++        .confidence_level(0.95)
++        .without_plots();
++    if mode == "measure" {
++        let output = PathBuf::from(
++            std::env::var_os("UV_RESOLVER_ERROR_BENCH_OUTPUT").expect("Missing output"),
++        );
++        assert!(output.is_absolute());
++        assert_eq!(
++            std::fs::symlink_metadata(&output).unwrap_err().kind(),
++            std::io::ErrorKind::NotFound
++        );
++        assert_eq!(
++            output.parent().unwrap().canonicalize().unwrap(),
++            output.parent().unwrap()
++        );
++        criterion = criterion.output_directory(&output);
++    } else {
++        assert!(std::env::var_os("UV_RESOLVER_ERROR_BENCH_OUTPUT").is_none());
++    }
++    let observations = resolver_errors(&mut criterion, mode == "measure");
++    println!(
++        "UV_RESOLVER_ERROR_BENCH={}",
++        json!({"mode": mode, "observations": observations})
++    );
++}
+diff --git a/crates/uv-resolver/Cargo.toml b/crates/uv-resolver/Cargo.toml
+--- a/crates/uv-resolver/Cargo.toml
++++ b/crates/uv-resolver/Cargo.toml
+@@ -85,6 +85,7 @@
+ url = { workspace = true }
+ 
+ [dev-dependencies]
++criterion = { version = "5.0.1", default-features = false, package = "codspeed-criterion-compat", features = ["async_tokio"] }
+ insta = { workspace = true }
+ toml = { workspace = true }
+ 
+diff --git a/crates/uv-resolver/src/error.rs b/crates/uv-resolver/src/error.rs
+--- a/crates/uv-resolver/src/error.rs
++++ b/crates/uv-resolver/src/error.rs
+@@ -2281,3 +2281,7 @@
+         assert_eq!(format!("{inner:?}"), format!("{tree:?}"));
+     }
+ }
++
++#[cfg(test)]
++#[path = "error_report_benchmark.rs"]
++mod report_performance;
+diff --git a/crates/uv-resolver/src/error_report_benchmark.rs b/crates/uv-resolver/src/error_report_benchmark.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/uv-resolver/src/error_report_benchmark.rs
+@@ -0,0 +1,368 @@
++//! Source-overlay benchmark for the real no-solution reporting pipeline.
++
++use std::hint::black_box;
++use std::path::PathBuf;
++use std::time::Duration;
++
++use criterion::{BatchSize, Criterion};
++use uv_distribution_types::{
++    ExcludeNewerValue, IncompatibleDist, IncompatibleWheel, RequiresPython,
++};
++use uv_pep508::MarkerEnvironmentBuilder;
++
++use super::*;
++use crate::resolver::UnavailableVersion;
++use crate::{ExcludeNewer, Manifest, VersionsResponse};
++
++const EXCLUDE_CASES: &[(&str, Shape)] = &[
++    ("comb_plain_32", Shape::Comb(32, false)),
++    ("comb_plain_1024", Shape::Comb(1024, false)),
++    ("balanced_plain_1024", Shape::Balanced(1024, false)),
++    ("comb_excluded_256", Shape::Comb(256, true)),
++    ("balanced_excluded_256", Shape::Balanced(256, true)),
++];
++const SHARED_CASES: &[(&str, Shape)] = &[
++    ("comb_plain_32", Shape::Comb(32, false)),
++    ("shared_identified_12", Shape::Shared(12, true)),
++    ("shared_identified_16", Shape::Shared(16, true)),
++    ("shared_unidentified_10", Shape::Shared(10, false)),
++];
++
++#[derive(Clone, Copy)]
++enum Shape {
++    Comb(usize, bool),
++    Balanced(usize, bool),
++    Shared(usize, bool),
++}
++
++struct Fixture {
++    name: &'static str,
++    shape: Shape,
++    tree: StackSafeErrorTree,
++}
++
++fn derived(cause1: Arc<ErrorTree>, cause2: Arc<ErrorTree>, id: usize) -> Arc<ErrorTree> {
++    Arc::new(ErrorTree::Derived(Derived {
++        terms: Map::default(),
++        shared_id: Some(id),
++        cause1,
++        cause2,
++    }))
++}
++
++fn plain_leaf(index: usize) -> Arc<ErrorTree> {
++    Arc::new(ErrorTree::External(External::NotRoot(
++        PubGrubPackage::from(PubGrubPackageInner::Root(None)),
++        Version::new([u64::try_from(index).unwrap() + 1]),
++    )))
++}
++
++fn excluded_leaf(index: usize) -> Arc<ErrorTree> {
++    // The ordinary root cause keeps adjacent exclusions from being collapsed
++    // into one unavailable-version statement before hint generation.
++    derived(
++        plain_leaf(index),
++        Arc::new(ErrorTree::External(External::Custom(
++            PubGrubPackage::base("example".parse().unwrap()),
++            Range::singleton(Version::new([2 * u64::try_from(index).unwrap() + 2])),
++            UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
++                IncompatibleDist::Wheel(IncompatibleWheel::ExcludeNewer(None)),
++            )),
++        ))),
++        index,
++    )
++}
++
++fn ordinary_tree(count: usize, excluded: bool, balanced: bool) -> ErrorTree {
++    assert!(count.is_power_of_two());
++    let leaf = |index| {
++        if excluded {
++            excluded_leaf(index)
++        } else {
++            plain_leaf(index)
++        }
++    };
++    let mut next_id = count;
++    let mut tree = if balanced {
++        let mut level: Vec<_> = (0..count).map(leaf).collect();
++        while level.len() > 1 {
++            level = level
++                .chunks_exact(2)
++                .map(|pair| {
++                    let node = derived(pair[0].clone(), pair[1].clone(), next_id);
++                    next_id += 1;
++                    node
++                })
++                .collect();
++        }
++        level.pop().unwrap()
++    } else {
++        let mut tree = leaf(0);
++        for index in 1..count {
++            tree = derived(tree, leaf(index), next_id);
++            next_id += 1;
++        }
++        tree
++    };
++    if excluded {
++        tree = derived(
++            tree,
++            Arc::new(ErrorTree::External(External::NoVersions(
++                PubGrubPackage::base("example".parse().unwrap()),
++                Range::singleton(Version::new([1_u64])),
++            ))),
++            next_id,
++        );
++    }
++    Arc::unwrap_or_clone(tree)
++}
++
++fn shared_tree(depth: usize, identified: bool) -> ErrorTree {
++    // This is the shared-diamond construction used by the error-tree tests.
++    // The dependency leaf also reaches the requested-range hint collector.
++    let mut tree = Arc::new(ErrorTree::External(External::FromDependencyOf(
++        PubGrubPackage::base("parent".parse().unwrap()),
++        Range::singleton(Version::new([1_u64])),
++        PubGrubPackage::base("dependency".parse().unwrap()),
++        Range::singleton(Version::new([2_u64])),
++    )));
++    for id in 0..depth {
++        tree = Arc::new(ErrorTree::Derived(Derived {
++            terms: Map::default(),
++            shared_id: identified.then_some(id),
++            cause1: tree.clone(),
++            cause2: tree,
++        }));
++    }
++    Arc::unwrap_or_clone(tree)
++}
++
++fn marker_environment() -> MarkerEnvironment {
++    MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
++        implementation_name: "cpython",
++        implementation_version: "3.12.0",
++        os_name: "posix",
++        platform_machine: "x86_64",
++        platform_python_implementation: "CPython",
++        platform_release: "",
++        platform_system: "Linux",
++        platform_version: "",
++        python_full_version: "3.12.0",
++        python_version: "3.12",
++        sys_platform: "linux",
++    })
++    .expect("valid fixed marker environment")
++}
++
++impl Fixture {
++    fn new(name: &'static str, shape: Shape) -> Self {
++        let tree = match shape {
++            Shape::Comb(count, excluded) => ordinary_tree(count, excluded, false),
++            Shape::Balanced(count, excluded) => ordinary_tree(count, excluded, true),
++            Shape::Shared(depth, identified) => shared_tree(depth, identified),
++        };
++        Self {
++            name,
++            shape,
++            tree: StackSafeErrorTree::new(tree),
++        }
++    }
++
++    fn error(&self) -> NoSolutionError {
++        let current_environment = marker_environment();
++        let python_requirement = PythonRequirement::from_marker_environment(
++            &current_environment,
++            RequiresPython::greater_than_equal_version(&Version::new([3_u64, 12])),
++        );
++        let env = ResolverEnvironment::universal(vec![]);
++        let mut options = Options::default();
++        let mut available_versions = FxHashMap::default();
++        let index = InMemoryIndex::default();
++        if let Shape::Comb(count, true) | Shape::Balanced(count, true) = self.shape {
++            let name: PackageName = "example".parse().unwrap();
++            available_versions.insert(
++                name.clone(),
++                std::iter::once(Version::new([1_u64]))
++                    .chain(
++                        (0..count)
++                            .map(|index| Version::new([2 * u64::try_from(index).unwrap() + 2])),
++                    )
++                    .collect(),
++            );
++            index
++                .implicit()
++                .done(name, Arc::new(VersionsResponse::Found(vec![])));
++            options.exclude_newer = ExcludeNewer::global(ExcludeNewerValue::absolute(
++                "2022-01-01T00:00:00Z".parse().unwrap(),
++            ));
++        }
++        let selector = CandidateSelector::for_resolution(&options, &Manifest::simple(vec![]), &env);
++        NoSolutionError::new(
++            (*self.tree).clone(),
++            index,
++            FxHashMap::default(),
++            available_versions,
++            FxHashMap::default(),
++            selector,
++            python_requirement,
++            IndexLocations::default(),
++            IndexCapabilities::default(),
++            FxHashMap::default(),
++            FxHashMap::default(),
++            ForkUrls::default(),
++            ForkIndexes::default(),
++            env,
++            current_environment,
++            None,
++            BTreeSet::default(),
++            options,
++        )
++    }
++
++    fn input_shape(&self) -> serde_json::Value {
++        let mut seen = FxHashSet::default();
++        let mut pending = vec![&*self.tree];
++        let mut external = 0;
++        let mut derived = 0;
++        let mut repeated_edges = 0;
++        while let Some(tree) = pending.pop() {
++            if !seen.insert(std::ptr::from_ref(tree)) {
++                repeated_edges += 1;
++                continue;
++            }
++            match tree {
++                ErrorTree::External(_) => external += 1,
++                ErrorTree::Derived(node) => {
++                    derived += 1;
++                    pending.push(&node.cause1);
++                    pending.push(&node.cause2);
++                }
++            }
++        }
++        serde_json::json!({
++            "unique_nodes": seen.len(), "external_nodes": external,
++            "derived_nodes": derived, "repeated_edges": repeated_edges,
++        })
++    }
++
++    fn inspect(&self) -> serde_json::Value {
++        let expected_shape = match self.shape {
++            Shape::Comb(count, false) | Shape::Balanced(count, false) => {
++                (2 * count - 1, count, count - 1, 0)
++            }
++            Shape::Comb(count, true) | Shape::Balanced(count, true) => {
++                (4 * count + 1, 2 * count + 1, 2 * count, 0)
++            }
++            Shape::Shared(depth, _) => (depth + 1, 1, depth, depth),
++        };
++        let input = self.input_shape();
++        assert_eq!(
++            input,
++            serde_json::json!({
++                "unique_nodes": expected_shape.0, "external_nodes": expected_shape.1,
++                "derived_nodes": expected_shape.2, "repeated_edges": expected_shape.3,
++            })
++        );
++        let error = self.error();
++        assert!(error.cached.get().is_none());
++        // Display calls report() -> cached() -> compute_report_and_hints().
++        // A fresh cache makes this a real execution of every reduction, the
++        // derivation reporter, and generate_hints, not a cached-string lookup.
++        let report = error.to_string();
++        assert!(error.cached.get().is_some());
++        assert!(!report.is_empty());
++        let hints: Vec<_> = error
++            .pubgrub_hints()
++            .iter()
++            .map(ToString::to_string)
++            .collect();
++        assert_eq!(error.to_string(), report);
++        let excluded = matches!(self.shape, Shape::Comb(_, true) | Shape::Balanced(_, true));
++        assert_eq!(hints.len(), usize::from(excluded));
++        if excluded {
++            assert!(matches!(
++                error.pubgrub_hints().get_index(0),
++                Some(PubGrubHint::ExcludeNewer { .. })
++            ));
++        }
++        serde_json::json!({
++            "case": self.name, "input": input,
++            "entrypoint": "NoSolutionError::fmt", "fresh_cache": true,
++            "cache_populated": true, "report": report, "hints": hints,
++        })
++    }
++}
++
++fn completed_report(error: NoSolutionError) {
++    let report = black_box(error.to_string());
++    let hints = black_box(
++        error
++            .pubgrub_hints()
++            .iter()
++            .map(ToString::to_string)
++            .collect::<Vec<_>>(),
++    );
++    black_box((&report, &hints));
++    // The complete operation includes the formatted outputs and error owner
++    // being dropped. Fixture construction is outside the measurement.
++    drop(hints);
++    drop(report);
++    drop(error);
++}
++
++#[test]
++#[ignore = "requires an explicit source-bound benchmark mode"]
++#[expect(clippy::print_stdout)]
++fn no_solution_error_benchmark() {
++    let suite = std::env::var("UV_NO_SOLUTION_BENCH_SUITE").expect("explicit benchmark suite");
++    let cases = match suite.as_str() {
++        "exclude_newer" => EXCLUDE_CASES,
++        "shared_derivation" => SHARED_CASES,
++        _ => panic!("unknown benchmark suite"),
++    };
++    let fixtures: Vec<_> = cases
++        .iter()
++        .map(|(name, shape)| Fixture::new(name, *shape))
++        .collect();
++    match std::env::var("UV_NO_SOLUTION_BENCH_MODE").as_deref() {
++        Ok("inspect") => {
++            let records: Vec<_> = fixtures.iter().map(Fixture::inspect).collect();
++            println!(
++                "UV_NO_SOLUTION_BENCH_RECORD={}",
++                serde_json::json!({
++                    "schema": "uv-future.no-solution-report-specimen.v1",
++                    "suite": suite, "records": records,
++                })
++            );
++        }
++        Ok("measure") => {
++            let output = PathBuf::from(std::env::var_os("UV_NO_SOLUTION_BENCH_OUTPUT").unwrap());
++            assert!(output.is_absolute());
++            assert!(
++                matches!(std::fs::symlink_metadata(&output), Err(error)
++                if error.kind() == std::io::ErrorKind::NotFound),
++                "Criterion output must be fresh"
++            );
++            let mut criterion = Criterion::default()
++                .sample_size(20)
++                .warm_up_time(Duration::from_secs(1))
++                .measurement_time(Duration::from_secs(3))
++                .nresamples(20_000)
++                .confidence_level(0.95)
++                .without_plots()
++                .with_output_color(false)
++                .output_directory(&output);
++            for fixture in &fixtures {
++                criterion.bench_function(fixture.name, |bench| {
++                    bench.iter_batched(
++                        || fixture.error(),
++                        completed_report,
++                        BatchSize::PerIteration,
++                    );
++                });
++            }
++            criterion.final_summary();
++        }
++        _ => panic!("explicit inspect or measure mode required"),
++    }
++}
+diff --git a/scripts/benchmark/resolver-errors.json b/scripts/benchmark/resolver-errors.json
+new file mode 100644
+--- /dev/null
++++ b/scripts/benchmark/resolver-errors.json
+@@ -0,0 +1,20 @@
++[
++  {
++    "name": "rooster",
++    "size": "small",
++    "python": "3.10",
++    "requirements": ["rooster-blue"]
++  },
++  {
++    "name": "httpx",
++    "size": "medium",
++    "python": "3.6",
++    "requirements": ["httpx>=0.23"]
++  },
++  {
++    "name": "numpy",
++    "size": "large",
++    "python": "3.7",
++    "requirements": ["numpy>=1.22"]
++  }
++]
