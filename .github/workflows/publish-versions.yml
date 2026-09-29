@@ -91,18 +91,50 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
+          set -euo pipefail
           pull_request_title="Add uv $VERSION"
-
-          gh pr list --state open --json title --jq ".[] | select(.title == \"$pull_request_title\") | .number" | \
-            xargs -I {} gh pr close {}
+          head="$(git rev-parse "refs/heads/$BRANCH_NAME")"
 
           gh auth setup-git
-          git push origin "$BRANCH_NAME"
+          git push origin "$head:refs/heads/$BRANCH_NAME"
 
-          gh pr create --base main --head "$BRANCH_NAME" \
+          gh pr create --repo astral-sh/versions --base main --head "$BRANCH_NAME" \
             --title "$pull_request_title" \
             --body "Automated versions update for $VERSION" \
             --label "automation"
+
+          # An older publication remains usable until the replacement exists.
+          replacement="$(
+            gh pr view "$BRANCH_NAME" --repo astral-sh/versions \
+              --json number,title,baseRefName,headRefName,headRefOid,isCrossRepository,state \
+              | jq --exit-status --raw-output --arg title "$pull_request_title" \
+                --arg branch "$BRANCH_NAME" --arg head "$head" \
+                'select(.title == $title and .baseRefName == "main" and
+                  .headRefName == $branch and .headRefOid == $head and
+                  .isCrossRepository == false and .state == "OPEN" and
+                  (.number | type) == "number" and .number > 0 and
+                  .number == (.number | floor)) | .number'
+          )"
+
+          # A concurrent publisher with a newer PR must remain available.
+          predecessors="$(
+            gh pr list --repo astral-sh/versions --state open --base main \
+              --label automation --limit 100 \
+              --json number,title,headRefName,isCrossRepository,author \
+              | jq --raw-output --arg title "$pull_request_title" \
+                --arg branch "$BRANCH_NAME" --arg prefix "update-versions-$VERSION-" \
+                --argjson replacement "$replacement" \
+                '.[] | select(.number < $replacement and
+                  .title == $title and .headRefName != $branch and
+                  .isCrossRepository == false and (.headRefName | startswith($prefix)) and
+                  (.author.login == "app/astral-releases-bot" or
+                   .author.login == "astral-versions-bot")) | .number'
+          )"
+          if [ -n "$predecessors" ]; then
+            while IFS= read -r predecessor; do
+              gh pr close --repo astral-sh/versions "$predecessor"
+            done <<< "$predecessors"
+          fi
 
       - name: "Merge Pull Request"
         if: ${{ !fromJson(inputs.plan).announcement_tag_is_implicit }}
