@@ -219,7 +219,7 @@ pub struct ManagedPythonDownload {
     key: PythonInstallationKey,
     url: Cow<'static, str>,
     sha256: Option<Digest<32>>,
-    build: Option<&'static str>,
+    build: Option<Cow<'static, str>>,
 }
 
 #[derive(Debug, Clone, Default, Eq, PartialEq, Hash)]
@@ -2049,8 +2049,8 @@ impl ManagedPythonDownload {
         self.sha256.as_ref()
     }
 
-    pub fn build(&self) -> Option<&'static str> {
-        self.build
+    pub fn build(&self) -> Option<&str> {
+        self.build.as_deref()
     }
 
     /// Download and extract a Python distribution, retrying on failure.
@@ -2549,9 +2549,7 @@ fn parse_json_downloads(
 
             let url = Cow::Owned(entry.url);
             let sha256 = entry.sha256;
-            let build = entry
-                .build
-                .map(|s| Box::leak(s.into_boxed_str()) as &'static str);
+            let build = entry.build.map(Cow::Owned);
 
             Some(ManagedPythonDownload {
                 key: PythonInstallationKey::new_from_version(
@@ -2614,7 +2612,6 @@ fn parse_ndjson_version_info(version_info: NdjsonPythonVersionInfo) -> Vec<Manag
     };
 
     let release = build.and_then(|value| value.parse::<u64>().ok());
-    let build = build.map(|value| Box::leak(value.to_owned().into_boxed_str()) as &'static str);
 
     let mut artifacts = version_info.artifacts;
     // Match the built-in metadata generator's deterministic tie-breaker when two artifacts have
@@ -2652,7 +2649,7 @@ fn parse_ndjson_version_info(version_info: NdjsonPythonVersionInfo) -> Vec<Manag
 
 fn parse_ndjson_artifact(
     version: &PythonVersion,
-    build: Option<&'static str>,
+    build: Option<&str>,
     release: Option<u64>,
     artifact: NdjsonPythonArtifact,
 ) -> Option<(ManagedPythonDownload, (usize, i8))> {
@@ -2684,7 +2681,7 @@ fn parse_ndjson_artifact(
             ),
             url: Cow::Owned(artifact.url),
             sha256: artifact.sha256,
-            build,
+            build: build.map(|build| Cow::Owned(build.to_owned())),
         },
         priority,
     ))
@@ -4265,7 +4262,7 @@ mod tests {
             key,
             url: Cow::Borrowed(url),
             sha256: Some(Digest::from_bytes([0xab; 32])),
-            build: Some("20240713"),
+            build: Some(Cow::Borrowed("20240713")),
         }
     }
 
