@@ -1612,32 +1612,32 @@ pub(crate) async fn find_best_python_installation(
             && !previous_fetch_failed
             && let Some(download_request) = PythonDownloadRequest::from_request(request)
         {
-            let (client, retry_policy, download_list) =
-                if let Some(download_state) = &mut download_state {
-                    download_state
-                } else {
-                    let download_list = ManagedPythonDownloadList::new(
+            let (client, retry_policy) = if let Some(download_state) = &mut download_state {
+                download_state
+            } else {
+                let retry_policy = client_builder.retry_policy();
+
+                // Python downloads perform their own retries to catch stream errors.
+                let client = client_builder.clone().retries(0).build()?;
+                download_state.insert((client, retry_policy))
+            };
+
+            let download = match download_request.clone().fill() {
+                Ok(request) => {
+                    ManagedPythonDownloadList::find_streaming(
                         client_builder,
                         cache,
                         python_downloads_json_url,
+                        &request,
                     )
-                    .await?;
-                    let retry_policy = client_builder.retry_policy();
-
-                    // Python downloads are performing their own retries to catch stream errors, disable
-                    // the default retries to avoid the middleware performing uncontrolled retries.
-                    let client = client_builder.clone().retries(0).build()?;
-                    download_state.insert((client, retry_policy, download_list))
-                };
-
-            let download = download_request
-                .clone()
-                .fill()
-                .map(|request| download_list.find(&request));
+                    .await
+                }
+                Err(error) => Err(error),
+            };
 
             let result = match download {
-                Ok(Ok(download)) => PythonInstallation::fetch(
-                    download,
+                Ok(Some(download)) => PythonInstallation::fetch(
+                    &download,
                     client,
                     retry_policy,
                     cache,
@@ -1647,8 +1647,7 @@ pub(crate) async fn find_best_python_installation(
                 )
                 .await
                 .map(Some),
-                Ok(Err(crate::downloads::Error::NoDownloadFound(_))) => Ok(None),
-                Ok(Err(error)) => Err(error.into()),
+                Ok(None) => Ok(None),
                 Err(error) => Err(error.into()),
             };
             if let Ok(Some(installation)) = result {
