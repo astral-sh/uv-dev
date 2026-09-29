@@ -13,6 +13,7 @@ from uv_automations.actions import append_summary, write_json_output, write_outp
 from uv_automations.github_promotion import PromotionGitHub, PromotionReadError
 from uv_automations.github_promotion_completion import PromotionCompletionGitHub
 from uv_automations.github_promotion_queue import (
+    PromotionBaseCompletionGitHub,
     PromotionQueueCompletionGitHub,
     PromotionQueueGitHub,
     PromotionSyncCompletionGitHub,
@@ -581,7 +582,7 @@ def run(command: PromotionCommand) -> None:
                 raise ValueError("Promotion base belongs to another source")
             reader = PromotionGitHub(token_variable="GH_READ_TOKEN")
             outcome = ensure_upstream_base(
-                reader, reader, PromotionQueueGitHub(), claim
+                reader, reader, PromotionBaseCompletionGitHub(), claim
             )
             match outcome:
                 case BaseCopyOutcome.CREATED | BaseCopyOutcome.UNCHANGED:
