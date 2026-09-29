@@ -1043,14 +1043,14 @@ fn warn_on_yanked() -> Result<()> {
     let requirements_in = context.temp_dir.child("requirements.txt");
     requirements_in.write_str("colorama==0.4.2")?;
 
-    uv_snapshot!(context.filters(), windows_filters=false, context.pip_sync()
+    uv_snapshot!(context.filters(), windows_filters=false, context.pip_sync().arg("--dry-run")
         .arg("requirements.txt")
         .arg("--strict"), @r#"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + colorama==0.4.2
     warning: `colorama==0.4.2` is yanked (reason: "Bad build, missing files, will not install")
     "#
@@ -2096,14 +2096,14 @@ fn duplicate_package_disjoint() -> Result<()> {
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\nMarkupSafe==2.1.2 ; python_version < '3.6'")?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.pip_sync().arg("--dry-run")
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + markupsafe==2.1.3
     "
     );
@@ -2727,19 +2727,19 @@ fn find_links() -> Result<()> {
         werkzeug @ https://files.pythonhosted.org/packages/c3/fc/254c3e9b5feb89ff5b9076a23218dafbc99c96ac5941e900b71206e6313b/werkzeug-3.0.1-py3-none-any.whl
     "})?;
 
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync().arg("--dry-run")
         .arg("requirements.txt")
         .arg("--find-links")
         .arg(context.workspace_root.join("test/links/")), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would download 4 packages
+    Would install 4 packages
      + markupsafe==2.1.3
      + numpy==1.26.3
      + tqdm==1000.0.0
-     + werkzeug==3.0.1 (from https://files.pythonhosted.org/packages/c3/fc/254c3e9b5feb89ff5b9076a23218dafbc99c96ac5941e900b71206e6313b/werkzeug-3.0.1-py3-none-any.whl)
+     + werkzeug @ https://files.pythonhosted.org/packages/c3/fc/254c3e9b5feb89ff5b9076a23218dafbc99c96ac5941e900b71206e6313b/werkzeug-3.0.1-py3-none-any.whl
     "
     );
 
@@ -2756,7 +2756,7 @@ fn find_links_no_index_match() -> Result<()> {
         tqdm==1000.0.0
     "})?;
 
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync().arg("--dry-run")
         .arg("requirements.txt")
         .arg("--no-index")
         .arg("--find-links")
@@ -2764,8 +2764,8 @@ fn find_links_no_index_match() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + tqdm==1000.0.0
     "
     );
@@ -2783,7 +2783,7 @@ fn find_links_offline_match() -> Result<()> {
         tqdm==1000.0.0
     "})?;
 
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync().arg("--dry-run")
         .arg("requirements.txt")
         .arg("--offline")
         .arg("--find-links")
@@ -2791,8 +2791,8 @@ fn find_links_offline_match() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + tqdm==1000.0.0
     "
     );
@@ -2975,15 +2975,15 @@ fn compatible_constraint() -> Result<()> {
     let constraints_txt = context.temp_dir.child("constraints.txt");
     constraints_txt.write_str("anyio==3.7.0")?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.pip_sync().arg("--dry-run")
         .arg("requirements.txt")
         .arg("--constraint")
         .arg("constraints.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + anyio==3.7.0
     "
     );
@@ -3025,15 +3025,15 @@ fn irrelevant_constraint() -> Result<()> {
     let constraints_txt = context.temp_dir.child("constraints.txt");
     constraints_txt.write_str("black==23.10.1")?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.pip_sync().arg("--dry-run")
         .arg("requirements.txt")
         .arg("--constraint")
         .arg("constraints.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + anyio==3.7.0
     "
     );
@@ -3048,13 +3048,13 @@ fn repeat_requirement_identical() -> Result<()> {
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("anyio\nanyio")?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.pip_sync().arg("--dry-run")
         .arg("requirements.in"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + anyio==4.3.0
     ");
 
@@ -3068,13 +3068,13 @@ fn repeat_requirement_compatible() -> Result<()> {
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("anyio\nanyio==4.0.0")?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.pip_sync().arg("--dry-run")
         .arg("requirements.in"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + anyio==4.0.0
     ");
 
@@ -5558,13 +5558,13 @@ fn preserve_markers() -> Result<()> {
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio ; python_version > '3.7'")?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.pip_sync().arg("--dry-run")
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + anyio==4.3.0
     "
     );
@@ -5724,14 +5724,14 @@ fn semicolon_trailing_space() -> Result<()> {
     let requirements = context.temp_dir.child("requirements.txt");
     requirements.write_str("iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl; python_version > '3.10'")?;
 
-    uv_snapshot!(context.pip_sync()
+    uv_snapshot!(context.pip_sync().arg("--dry-run")
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
+    Would download 1 package
+    Would install 1 package
+     + iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
     "
     );
 

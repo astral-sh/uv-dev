@@ -1741,35 +1741,47 @@ fn multiple_packages() -> Result<()> {
         "#,
         )?;
 
+    context.lock().assert().success();
+
     // Sync `foo` and `bar`.
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--package").arg("foo")
         .arg("--package").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 9 packages in [TIME]
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 6 packages
+    Would install 6 packages
      + anyio==4.3.0
-     + bar==0.1.0 (from file://[TEMP_DIR]/packages/bar)
-     + foo==0.1.0 (from file://[TEMP_DIR]/packages/foo)
+     + bar @ file://[TEMP_DIR]/packages/bar
+     + foo @ file://[TEMP_DIR]/packages/foo
      + idna==3.6
      + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
 
     // Sync `foo`, `bar`, and `baz`.
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--package").arg("foo")
         .arg("--package").arg("bar")
         .arg("--package").arg("baz"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 9 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + baz==0.1.0 (from file://[TEMP_DIR]/packages/baz)
+    Found up-to-date lockfile at: uv.lock
+    Would download 8 packages
+    Would install 8 packages
+     + anyio==4.3.0
+     + bar @ file://[TEMP_DIR]/packages/bar
+     + baz @ file://[TEMP_DIR]/packages/baz
+     + foo @ file://[TEMP_DIR]/packages/foo
+     + idna==3.6
      + iniconfig==2.0.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
     ");
 
     Ok(())
@@ -2686,29 +2698,37 @@ fn sync_non_project_dev_dependencies() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
+    context.lock().assert().success();
+
     // Syncing with `--no-dev` should omit all dependencies except `iniconfig`.
-    uv_snapshot!(context.filters(), context.sync().arg("--no-dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 11 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+    Found up-to-date lockfile at: uv.lock
+    Would download 2 packages
+    Would install 2 packages
+     + child @ file://[TEMP_DIR]/child
      + iniconfig==2.0.0
     ");
 
     // Syncing without `--no-dev` should include `anyio`, `requests`, `pysocks`, and their
     // dependencies, but not `typing-extensions`.
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 11 packages in [TIME]
-    Prepared 8 packages in [TIME]
-    Installed 8 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 10 packages
+    Would install 10 packages
      + anyio==4.3.0
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
+     + child @ file://[TEMP_DIR]/child
      + idna==3.6
+     + iniconfig==2.0.0
      + pysocks==1.7.1
      + requests==2.31.0
      + sniffio==1.3.1
@@ -2716,33 +2736,35 @@ fn sync_non_project_dev_dependencies() -> Result<()> {
     ");
 
     // Selecting a member excludes the non-project root's default dependency group.
-    uv_snapshot!(context.filters(), context.sync().arg("--package").arg("child"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--package").arg("child"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 11 packages in [TIME]
-    Uninstalled 8 packages in [TIME]
-     - anyio==4.3.0
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - idna==3.6
-     - pysocks==1.7.1
-     - requests==2.31.0
-     - sniffio==1.3.1
-     - urllib3==2.2.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 2 packages
+    Would install 2 packages
+     + child @ file://[TEMP_DIR]/child
+     + iniconfig==2.0.0
     ");
 
     // Explicitly requesting the root's group still includes its dependencies.
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--package").arg("child")
         .arg("--group").arg("dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 11 packages in [TIME]
-    Installed 8 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 10 packages
+    Would install 10 packages
      + anyio==4.3.0
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
+     + child @ file://[TEMP_DIR]/child
      + idna==3.6
+     + iniconfig==2.0.0
      + pysocks==1.7.1
      + requests==2.31.0
      + sniffio==1.3.1
@@ -3318,46 +3340,58 @@ fn sync_non_project_group_standard() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
     Resolved 4 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
     Resolved 4 packages in [TIME]
-    Uninstalled 3 packages in [TIME]
-     - anyio==4.3.0
-     - idna==3.6
-     - sniffio==1.3.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--no-default-groups"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-default-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
     Resolved 4 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - typing-extensions==4.10.0
+    Found up-to-date lockfile at: uv.lock
+    Checked in [TIME]
+    Would make no changes
     ");
     Ok(())
 }
@@ -3410,55 +3444,65 @@ fn sync_non_project_group() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+    Found up-to-date lockfile at: uv.lock
+    Would download 2 packages
+    Would install 2 packages
+     + child @ file://[TEMP_DIR]/child
      + iniconfig==2.0.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
      + anyio==4.3.0
+     + child @ file://[TEMP_DIR]/child
      + idna==3.6
+     + iniconfig==2.0.0
      + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 5 packages in [TIME]
-    Installed 1 package in [TIME]
-     - anyio==4.3.0
-     - child==0.1.0 (from file://[TEMP_DIR]/child)
-     - idna==3.6
-     - iniconfig==2.0.0
-     - sniffio==1.3.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("baz"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("baz"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + child @ file://[TEMP_DIR]/child
      + iniconfig==2.0.0
+     + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("bop"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("bop"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Group `bop` is not defined in any project's `dependency-groups` table
     ");
 
@@ -4981,53 +5025,58 @@ fn sync_dev() -> Result<()> {
 
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync().arg("--only-dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--no-dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 3 packages in [TIME]
-    Installed 1 package in [TIME]
-     - anyio==4.3.0
-     - idna==3.6
-     - sniffio==1.3.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
+     + typing-extensions==4.10.0
     ");
 
-    // Using `--no-default-groups` should remove dev dependencies
-    uv_snapshot!(context.filters(), context.sync().arg("--no-default-groups"), @"
+    // Using `--no-default-groups` should omit dev dependencies.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-default-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Uninstalled 3 packages in [TIME]
-     - anyio==4.3.0
-     - idna==3.6
-     - sniffio==1.3.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
     ");
 
     Ok(())
@@ -5057,122 +5106,56 @@ fn sync_group() -> Result<()> {
 
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 2 packages
+    Would install 2 packages
      + iniconfig==2.0.0
      + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
      + anyio==4.3.0
      + idna==3.6
-     + sniffio==1.3.1
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("bar"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 10 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Uninstalled 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     - anyio==4.3.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     - iniconfig==2.0.0
-     + requests==2.31.0
-     - sniffio==1.3.1
-     - typing-extensions==4.10.0
-     + urllib3==2.2.1
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("foo").arg("--group").arg("bar"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 10 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
      + iniconfig==2.0.0
      + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Checked 9 packages in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups").arg("--no-group").arg("bar"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 10 packages in [TIME]
-    Uninstalled 4 packages in [TIME]
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - requests==2.31.0
-     - urllib3==2.2.1
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups").arg("--no-dev"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 10 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
-     - iniconfig==2.0.0
+     + idna==3.6
      + requests==2.31.0
      + urllib3==2.2.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("foo").arg("--group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 7 packages in [TIME]
-    Installed 1 package in [TIME]
-     - anyio==4.3.0
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - idna==3.6
-     + iniconfig==2.0.0
-     - requests==2.31.0
-     - sniffio==1.3.1
-     - urllib3==2.2.1
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--dev").arg("--no-group").arg("dev"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 10 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - iniconfig==2.0.0
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--no-dev"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 10 packages in [TIME]
-    Checked 1 package in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 10 packages in [TIME]
-    Installed 8 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
      + anyio==4.3.0
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
@@ -5180,30 +5163,135 @@ fn sync_group() -> Result<()> {
      + iniconfig==2.0.0
      + requests==2.31.0
      + sniffio==1.3.1
+     + typing-extensions==4.10.0
+     + urllib3==2.2.1
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 10 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
+     + anyio==4.3.0
+     + certifi==2024.2.2
+     + charset-normalizer==3.3.2
+     + idna==3.6
+     + iniconfig==2.0.0
+     + requests==2.31.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+     + urllib3==2.2.1
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups").arg("--no-group").arg("bar"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 10 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups").arg("--no-dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 10 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 8 packages
+    Would install 8 packages
+     + anyio==4.3.0
+     + certifi==2024.2.2
+     + charset-normalizer==3.3.2
+     + idna==3.6
+     + requests==2.31.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+     + urllib3==2.2.1
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 10 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 2 packages
+    Would install 2 packages
+     + iniconfig==2.0.0
+     + typing-extensions==4.10.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--dev").arg("--no-group").arg("dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 10 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("dev").arg("--no-dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 10 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 10 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
+     + anyio==4.3.0
+     + certifi==2024.2.2
+     + charset-normalizer==3.3.2
+     + idna==3.6
+     + iniconfig==2.0.0
+     + requests==2.31.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
      + urllib3==2.2.1
     ");
 
     // Using `--no-default-groups` should exclude all groups
-    uv_snapshot!(context.filters(), context.sync().arg("--no-default-groups"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-default-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 8 packages in [TIME]
-     - anyio==4.3.0
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - idna==3.6
-     - iniconfig==2.0.0
-     - requests==2.31.0
-     - sniffio==1.3.1
-     - urllib3==2.2.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Installed 8 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
      + anyio==4.3.0
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
@@ -5211,17 +5299,28 @@ fn sync_group() -> Result<()> {
      + iniconfig==2.0.0
      + requests==2.31.0
      + sniffio==1.3.1
+     + typing-extensions==4.10.0
      + urllib3==2.2.1
     ");
 
     // Using `--no-default-groups` with `--group foo` and `--group bar` should include those groups,
     // excluding the remaining `dev` group.
-    uv_snapshot!(context.filters(), context.sync().arg("--no-default-groups").arg("--group").arg("foo").arg("--group").arg("bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-default-groups").arg("--group").arg("foo").arg("--group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - iniconfig==2.0.0
+    Found up-to-date lockfile at: uv.lock
+    Would download 8 packages
+    Would install 8 packages
+     + anyio==4.3.0
+     + certifi==2024.2.2
+     + charset-normalizer==3.3.2
+     + idna==3.6
+     + requests==2.31.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+     + urllib3==2.2.1
     ");
 
     Ok(())
@@ -5248,92 +5347,126 @@ fn sync_include_group() -> Result<()> {
 
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("bar"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 6 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + iniconfig==2.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("foo").arg("--group").arg("bar"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 6 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("foo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 6 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.6
      + iniconfig==2.0.0
      + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Uninstalled 4 packages in [TIME]
-     - anyio==4.3.0
-     - idna==3.6
-     - sniffio==1.3.1
-     - typing-extensions==4.10.0
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("foo").arg("--group").arg("bar"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-     + typing-extensions==4.10.0
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("foo"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - typing-extensions==4.10.0
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.10.0
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--no-default-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Uninstalled 4 packages in [TIME]
-     - anyio==4.3.0
-     - idna==3.6
-     - iniconfig==2.0.0
-     - sniffio==1.3.1
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
      + anyio==4.3.0
      + idna==3.6
      + iniconfig==2.0.0
      + sniffio==1.3.1
+     + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--no-default-groups").arg("--group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-default-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Checked 5 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 6 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-default-groups").arg("--group").arg("foo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 6 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
     ");
 
     Ok(())
@@ -5360,12 +5493,14 @@ fn sync_exclude_group() -> Result<()> {
 
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
      + anyio==4.3.0
      + idna==3.6
      + iniconfig==2.0.0
@@ -5373,33 +5508,36 @@ fn sync_exclude_group() -> Result<()> {
      + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("foo").arg("--no-group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("foo").arg("--no-group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Uninstalled 4 packages in [TIME]
-     - anyio==4.3.0
-     - idna==3.6
-     - iniconfig==2.0.0
-     - sniffio==1.3.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + iniconfig==2.0.0
-     - typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("bar").arg("--no-group").arg("bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("bar").arg("--no-group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - iniconfig==2.0.0
+    Found up-to-date lockfile at: uv.lock
+    Checked in [TIME]
+    Would make no changes
     ");
 
     Ok(())
@@ -5428,15 +5566,17 @@ fn sync_exclude_group_with_environment_variable() -> Result<()> {
     context.lock().assert().success();
 
     // Test single group exclusion via environment variable
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--group").arg("foo")
         .arg("--group").arg("bar")
         .env(EnvVars::UV_NO_GROUP, "bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -5444,20 +5584,27 @@ fn sync_exclude_group_with_environment_variable() -> Result<()> {
     ");
 
     // Test multiple group exclusion via environment variable (space-separated)
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--group").arg("foo")
         .arg("--group").arg("bar")
         .arg("--group").arg("baz")
         .env(EnvVars::UV_NO_GROUP, "bar baz"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
-    Checked 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
     ");
 
     // Test that CLI flag takes precedence over environment variable
     // When --no-group is used on CLI, it overrides UV_NO_GROUP env var
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--group").arg("foo")
         .arg("--group").arg("bar")
         .arg("--group").arg("baz")
@@ -5465,10 +5612,16 @@ fn sync_exclude_group_with_environment_variable() -> Result<()> {
         .env(EnvVars::UV_NO_GROUP, "baz"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
+     + anyio==4.3.0
      + certifi==2024.2.2
+     + idna==3.6
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
     ");
 
     Ok(())
@@ -5497,13 +5650,15 @@ fn sync_dev_group() -> Result<()> {
 
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
      + anyio==4.3.0
      + idna==3.6
      + iniconfig==2.0.0
@@ -5536,41 +5691,49 @@ fn sync_non_existent_group() -> Result<()> {
     context.lock().assert().success();
 
     // Requesting a non-existent group should fail.
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("baz"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("baz"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Group `baz` is not defined in the project's `dependency-groups` table
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--no-group").arg("baz"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-group").arg("baz"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Group `baz` is not defined in the project's `dependency-groups` table
     ");
 
     // Requesting an empty group should succeed.
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.10.0
     ");
 
     // Requesting with `--frozen` should respect the groups in the lockfile, rather than the
     // `pyproject.toml`.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 6 packages
+    Would install 6 packages
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
      + idna==3.6
      + requests==2.31.0
+     + typing-extensions==4.10.0
      + urllib3==2.2.1
     ");
 
@@ -5588,15 +5751,24 @@ fn sync_non_existent_group() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 6 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 6 packages
+    Would install 6 packages
+     + certifi==2024.2.2
+     + charset-normalizer==3.3.2
+     + idna==3.6
+     + requests==2.31.0
+     + typing-extensions==4.10.0
+     + urllib3==2.2.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group").arg("baz"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group").arg("baz"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Group `baz` is not defined in the project's `dependency-groups` table
     ");
 
@@ -5629,135 +5801,137 @@ fn sync_corner_groups() -> Result<()> {
 
     // --no-dev and --only-dev should error
     // (This one could be made to work with overloading)
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--no-dev")
         .arg("--only-dev"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the argument '--no-dev' cannot be used with '--only-dev'
 
-    Usage: uv sync --cache-dir [CACHE_DIR] --no-dev --exclude-newer <EXCLUDE_NEWER>
+    Usage: uv sync --cache-dir [CACHE_DIR] --dry-run --no-dev --exclude-newer <EXCLUDE_NEWER>
 
     For more information, try '--help'.
     ");
 
     // --dev and --only-group should error if they don't match
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--dev")
         .arg("--only-group").arg("bar"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the argument '--dev' cannot be used with '--only-group <ONLY_GROUP>'
 
-    Usage: uv sync --cache-dir [CACHE_DIR] --exclude-newer <EXCLUDE_NEWER>
+    Usage: uv sync --cache-dir [CACHE_DIR] --dry-run --exclude-newer <EXCLUDE_NEWER>
 
     For more information, try '--help'.
     ");
 
     // --dev and --only-group should error even if it's dev still
     // (This one could be made to work the same as --dev --only-dev)
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--dev")
         .arg("--only-group").arg("dev"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the argument '--dev' cannot be used with '--only-group <ONLY_GROUP>'
 
-    Usage: uv sync --cache-dir [CACHE_DIR] --exclude-newer <EXCLUDE_NEWER>
+    Usage: uv sync --cache-dir [CACHE_DIR] --dry-run --exclude-newer <EXCLUDE_NEWER>
 
     For more information, try '--help'.
     ");
 
     // --group and --only-dev should error if they don't match
     // (This one could be made to work the same as --dev --only-dev)
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--only-dev")
         .arg("--group").arg("bar"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the argument '--only-dev' cannot be used with '--group <GROUP>'
 
-    Usage: uv sync --cache-dir [CACHE_DIR] --only-dev --exclude-newer <EXCLUDE_NEWER>
+    Usage: uv sync --cache-dir [CACHE_DIR] --dry-run --only-dev --exclude-newer <EXCLUDE_NEWER>
 
     For more information, try '--help'.
     ");
 
     // --group and --only-dev should error even if it's dev still
     // (This one could be made to work the same as --dev --only-dev)
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--only-dev")
         .arg("--group").arg("dev"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the argument '--only-dev' cannot be used with '--group <GROUP>'
 
-    Usage: uv sync --cache-dir [CACHE_DIR] --only-dev --exclude-newer <EXCLUDE_NEWER>
+    Usage: uv sync --cache-dir [CACHE_DIR] --dry-run --only-dev --exclude-newer <EXCLUDE_NEWER>
 
     For more information, try '--help'.
     ");
 
     // --all-groups and --only-dev should error
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--all-groups")
         .arg("--only-dev"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the argument '--all-groups' cannot be used with '--only-dev'
 
-    Usage: uv sync --cache-dir [CACHE_DIR] --all-groups --exclude-newer <EXCLUDE_NEWER>
+    Usage: uv sync --cache-dir [CACHE_DIR] --dry-run --all-groups --exclude-newer <EXCLUDE_NEWER>
 
     For more information, try '--help'.
     ");
 
     // --all-groups and --only-group should error
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--all-groups")
         .arg("--only-group").arg("bar"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the argument '--all-groups' cannot be used with '--only-group <ONLY_GROUP>'
 
-    Usage: uv sync --cache-dir [CACHE_DIR] --all-groups --exclude-newer <EXCLUDE_NEWER>
+    Usage: uv sync --cache-dir [CACHE_DIR] --dry-run --all-groups --exclude-newer <EXCLUDE_NEWER>
 
     For more information, try '--help'.
     ");
 
     // --group and --only-group should error if they name disjoint things
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--group").arg("foo")
         .arg("--only-group").arg("bar"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the argument '--group <GROUP>' cannot be used with '--only-group <ONLY_GROUP>'
 
-    Usage: uv sync --cache-dir [CACHE_DIR] --group <GROUP> --exclude-newer <EXCLUDE_NEWER>
+    Usage: uv sync --cache-dir [CACHE_DIR] --dry-run --group <GROUP> --exclude-newer <EXCLUDE_NEWER>
 
     For more information, try '--help'.
     ");
 
     // --group and --only-group should error if they name same things
     // (This one would be fair to allow, but... is it worth it?)
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--group").arg("foo")
         .arg("--only-group").arg("foo"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the argument '--group <GROUP>' cannot be used with '--only-group <ONLY_GROUP>'
 
-    Usage: uv sync --cache-dir [CACHE_DIR] --group <GROUP> --exclude-newer <EXCLUDE_NEWER>
+    Usage: uv sync --cache-dir [CACHE_DIR] --dry-run --group <GROUP> --exclude-newer <EXCLUDE_NEWER>
 
     For more information, try '--help'.
     ");
 
     // --all-groups and --no-default-groups is redundant but should be --all-groups
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--all-groups")
         .arg("--no-default-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 9 packages in [TIME]
-    Prepared 8 packages in [TIME]
-    Installed 8 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 8 packages
+    Would install 8 packages
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
      + idna==3.6
@@ -5769,20 +5943,17 @@ fn sync_corner_groups() -> Result<()> {
     ");
 
     // --dev --only-dev should saturate as --only-dev
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--dev")
         .arg("--only-dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 9 packages in [TIME]
-    Uninstalled 7 packages in [TIME]
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - idna==3.6
-     - requests==2.31.0
-     - sniffio==1.3.1
-     - typing-extensions==4.10.0
-     - urllib3==2.2.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + iniconfig==2.0.0
     ");
     Ok(())
 }
@@ -5857,17 +6028,19 @@ fn sync_default_groups() -> Result<()> {
     context.lock().assert().success();
 
     // The `dev` group should be synced by default.
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 2 packages
+    Would install 2 packages
      + iniconfig==2.0.0
      + typing-extensions==4.10.0
     ");
 
-    // If we remove it from the `default-groups` list, it should be removed.
+    // Removing it from the `default-groups` list should omit it from the plan.
     pyproject_toml.write_str(
         r#"
         [project]
@@ -5886,12 +6059,15 @@ fn sync_default_groups() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - iniconfig==2.0.0
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
     ");
 
     // If we set a different default group, it should be synced instead.
@@ -5913,18 +6089,21 @@ fn sync_default_groups() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
+     + typing-extensions==4.10.0
     ");
 
-    // `--no-group` should remove from the defaults.
+    // `--no-group` should omit the group from the defaults.
     pyproject_toml.write_str(
         r#"
         [project]
@@ -5943,62 +6122,125 @@ fn sync_default_groups() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--no-group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 3 packages in [TIME]
-     - anyio==4.3.0
-     - idna==3.6
-     - sniffio==1.3.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
     ");
 
     // Using `--group` should include the defaults
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 5 packages
+    Would install 5 packages
      + anyio==4.3.0
      + idna==3.6
      + iniconfig==2.0.0
      + sniffio==1.3.1
+     + typing-extensions==4.10.0
     ");
 
     // Using `--all-groups` should include the defaults
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
+     + anyio==4.3.0
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
+     + idna==3.6
+     + iniconfig==2.0.0
      + requests==2.31.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
      + urllib3==2.2.1
     ");
 
     // Using `--only-group` should exclude the defaults
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 8 packages in [TIME]
-     - anyio==4.3.0
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - idna==3.6
-     - requests==2.31.0
-     - sniffio==1.3.1
-     - typing-extensions==4.10.0
-     - urllib3==2.2.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + iniconfig==2.0.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Installed 8 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
+     + anyio==4.3.0
+     + certifi==2024.2.2
+     + charset-normalizer==3.3.2
+     + idna==3.6
+     + iniconfig==2.0.0
+     + requests==2.31.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+     + urllib3==2.2.1
+    ");
+
+    // Using `--no-default-groups` should exclude all groups
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-default-groups"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 10 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 10 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
+     + anyio==4.3.0
+     + certifi==2024.2.2
+     + charset-normalizer==3.3.2
+     + idna==3.6
+     + iniconfig==2.0.0
+     + requests==2.31.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+     + urllib3==2.2.1
+    ");
+
+    // Using `--no-default-groups` with `--group foo` and `--group bar` should include those groups,
+    // excluding the remaining `dev` group.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-default-groups").arg("--group").arg("foo").arg("--group").arg("bar"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Resolved 10 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 8 packages
+    Would install 8 packages
      + anyio==4.3.0
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
@@ -6007,47 +6249,6 @@ fn sync_default_groups() -> Result<()> {
      + sniffio==1.3.1
      + typing-extensions==4.10.0
      + urllib3==2.2.1
-    ");
-
-    // Using `--no-default-groups` should exclude all groups
-    uv_snapshot!(context.filters(), context.sync().arg("--no-default-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 10 packages in [TIME]
-    Uninstalled 8 packages in [TIME]
-     - anyio==4.3.0
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - idna==3.6
-     - iniconfig==2.0.0
-     - requests==2.31.0
-     - sniffio==1.3.1
-     - urllib3==2.2.1
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 10 packages in [TIME]
-    Installed 8 packages in [TIME]
-     + anyio==4.3.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + iniconfig==2.0.0
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + urllib3==2.2.1
-    ");
-
-    // Using `--no-default-groups` with `--group foo` and `--group bar` should include those groups,
-    // excluding the remaining `dev` group.
-    uv_snapshot!(context.filters(), context.sync().arg("--no-default-groups").arg("--group").arg("foo").arg("--group").arg("bar"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 10 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - iniconfig==2.0.0
     ");
 
     Ok(())
@@ -6080,12 +6281,14 @@ fn sync_default_groups_all() -> Result<()> {
     context.lock().assert().success();
 
     // groups = "all" should behave like --all-groups in contexts where defaults exist
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Prepared 9 packages in [TIME]
-    Installed 9 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
      + anyio==4.3.0
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
@@ -6098,27 +6301,26 @@ fn sync_default_groups_all() -> Result<()> {
     ");
 
     // Using `--no-default-groups` should still work
-    uv_snapshot!(context.filters(), context.sync().arg("--no-default-groups"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-default-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 8 packages in [TIME]
-     - anyio==4.3.0
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - idna==3.6
-     - iniconfig==2.0.0
-     - requests==2.31.0
-     - sniffio==1.3.1
-     - urllib3==2.2.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
     ");
 
     // Using `--all-groups` should be redundant and work fine
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Installed 8 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
      + anyio==4.3.0
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
@@ -6126,39 +6328,61 @@ fn sync_default_groups_all() -> Result<()> {
      + iniconfig==2.0.0
      + requests==2.31.0
      + sniffio==1.3.1
+     + typing-extensions==4.10.0
      + urllib3==2.2.1
     ");
 
     // Using `--no-dev` should exclude just the dev group
-    uv_snapshot!(context.filters(), context.sync().arg("--no-dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - iniconfig==2.0.0
+    Found up-to-date lockfile at: uv.lock
+    Would download 8 packages
+    Would install 8 packages
+     + anyio==4.3.0
+     + certifi==2024.2.2
+     + charset-normalizer==3.3.2
+     + idna==3.6
+     + requests==2.31.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+     + urllib3==2.2.1
     ");
 
     // Using `--group` should be redundant and still work fine
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Installed 1 package in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
+     + anyio==4.3.0
+     + certifi==2024.2.2
+     + charset-normalizer==3.3.2
+     + idna==3.6
      + iniconfig==2.0.0
+     + requests==2.31.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+     + urllib3==2.2.1
     ");
 
     // Using `--only-group` should still disable defaults
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 6 packages in [TIME]
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - iniconfig==2.0.0
-     - requests==2.31.0
-     - typing-extensions==4.10.0
-     - urllib3==2.2.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -6227,12 +6451,14 @@ fn sync_disable_default_groups_with_environment_variable() -> Result<()> {
 
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Prepared 9 packages in [TIME]
-    Installed 9 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
      + anyio==4.3.0
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
@@ -6245,26 +6471,25 @@ fn sync_disable_default_groups_with_environment_variable() -> Result<()> {
     ");
 
     // Using `UV_NO_DEFAULT_GROUPS` should exclude all groups.
-    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_NO_DEFAULT_GROUPS, "true"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").env(EnvVars::UV_NO_DEFAULT_GROUPS, "true"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 8 packages in [TIME]
-     - anyio==4.3.0
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - idna==3.6
-     - iniconfig==2.0.0
-     - requests==2.31.0
-     - sniffio==1.3.1
-     - urllib3==2.2.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--all-groups"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Installed 8 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
      + anyio==4.3.0
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
@@ -6272,20 +6497,31 @@ fn sync_disable_default_groups_with_environment_variable() -> Result<()> {
      + iniconfig==2.0.0
      + requests==2.31.0
      + sniffio==1.3.1
+     + typing-extensions==4.10.0
      + urllib3==2.2.1
     ");
 
     // Using `UV_NO_DEFAULT_GROUPS` with `--group foo` and `--group bar` should include those groups,
     // excluding the remaining `dev` group.
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--group").arg("foo")
         .arg("--group").arg("bar")
         .env(EnvVars::UV_NO_DEFAULT_GROUPS, "true"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - iniconfig==2.0.0
+    Found up-to-date lockfile at: uv.lock
+    Would download 8 packages
+    Would install 8 packages
+     + anyio==4.3.0
+     + certifi==2024.2.2
+     + charset-normalizer==3.3.2
+     + idna==3.6
+     + requests==2.31.0
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
+     + urllib3==2.2.1
     ");
 
     Ok(())
@@ -6316,12 +6552,14 @@ fn sync_disable_default_groups_all_with_environment_variable() -> Result<()> {
 
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Prepared 9 packages in [TIME]
-    Installed 9 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 9 packages
+    Would install 9 packages
      + anyio==4.3.0
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
@@ -6334,19 +6572,15 @@ fn sync_disable_default_groups_all_with_environment_variable() -> Result<()> {
     ");
 
     // Using `UV_NO_DEFAULT_GROUPS` should exclude all groups.
-    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_NO_DEFAULT_GROUPS, "true"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").env(EnvVars::UV_NO_DEFAULT_GROUPS, "true"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 10 packages in [TIME]
-    Uninstalled 8 packages in [TIME]
-     - anyio==4.3.0
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - idna==3.6
-     - iniconfig==2.0.0
-     - requests==2.31.0
-     - sniffio==1.3.1
-     - urllib3==2.2.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + typing-extensions==4.10.0
     ");
 
     Ok(())
@@ -6407,13 +6641,15 @@ fn sync_group_member() -> Result<()> {
     // Generate a lockfile.
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + child @ file://[TEMP_DIR]/child
      + iniconfig==2.0.0
      + typing-extensions==4.10.0
     ");
@@ -6531,13 +6767,15 @@ fn sync_group_non_project_member() -> Result<()> {
         );
     });
 
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + child @ file://[TEMP_DIR]/child
      + iniconfig==2.0.0
      + typing-extensions==4.10.0
     ");
@@ -6574,13 +6812,14 @@ fn sync_group_transitive_self() -> Result<()> {
 
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--only-group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--only-group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
-     + idna==3.6 (from file://[TEMP_DIR]/)
+     + idna @ file://[TEMP_DIR]/
      + sniffio==1.3.1
     ");
 
@@ -6707,26 +6946,30 @@ fn sync_group_self() -> Result<()> {
         );
     });
 
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + iniconfig==2.0.0
-     + project==0.1.0 (from file://[TEMP_DIR]/)
+     + project @ file://[TEMP_DIR]/
      + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--only-group").arg("bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--only-group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 4 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + idna==3.6
-     - typing-extensions==4.10.0
+     + iniconfig==2.0.0
+     + project @ file://[TEMP_DIR]/
     ");
 
     Ok(())
@@ -7065,22 +7308,26 @@ fn sync_non_existent_extra_workspace_member() -> Result<()> {
     context.lock().assert().success();
 
     // Requesting an extra that only exists in the child should fail.
-    uv_snapshot!(context.filters(), context.sync().arg("--extra").arg("async"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra").arg("async"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Extra `async` is not defined in the `optional-dependencies` table for `project`
     ");
 
     // Unless we sync from the child directory.
-    uv_snapshot!(context.filters(), context.sync().arg("--package").arg("child").arg("--extra").arg("async"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--package").arg("child").arg("--extra").arg("async"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+     + child @ file://[TEMP_DIR]/child
      + idna==3.6
      + sniffio==1.3.1
     ");
@@ -7133,30 +7380,40 @@ fn sync_non_existent_extra_non_project_workspace() -> Result<()> {
 
     // Requesting an extra that only exists in the child should succeed, since we sync all members
     // by default.
-    uv_snapshot!(context.filters(), context.sync().arg("--extra").arg("async"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra").arg("async"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
     ");
 
     // Syncing from the child should also succeed.
-    uv_snapshot!(context.filters(), context.sync().arg("--package").arg("child").arg("--extra").arg("async"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--package").arg("child").arg("--extra").arg("async"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Checked 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
     // Syncing from an unrelated child should fail.
-    uv_snapshot!(context.filters(), context.sync().arg("--package").arg("other").arg("--extra").arg("async"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--package").arg("other").arg("--extra").arg("async"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Extra `async` is not defined in the `optional-dependencies` table for `other`
     ");
 
@@ -10426,15 +10683,17 @@ fn transitive_dev() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `child/pyproject.toml`, `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would create lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+     + child @ file://[TEMP_DIR]/child
      + idna==3.6
      + sniffio==1.3.1
     ");
@@ -11419,12 +11678,14 @@ fn sync_no_sources_missing_member() -> Result<()> {
     let init = src.child("__init__.py");
     init.touch()?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--no-sources"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-sources"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would create lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -11462,15 +11723,17 @@ fn sync_no_sources_package() -> Result<()> {
     ");
 
     // Sync with sources disabled for anyio only
-    uv_snapshot!(context.filters(), context.sync().arg("--no-sources-package").arg("anyio"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-sources-package").arg("anyio"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would update lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
      + anyio==3.7.0
      + idna==3.6
-     + iniconfig==2.0.0 (from git+https://github.com/pytest-dev/iniconfig@93f5930e668c0d1ddf4597e38dd0dea4e2665e7a)
+     + iniconfig @ git+https://github.com/pytest-dev/iniconfig@93f5930e668c0d1ddf4597e38dd0dea4e2665e7a
      + sniffio==1.3.1
     ");
 
@@ -11726,17 +11989,19 @@ fn sync_all() -> Result<()> {
     context.lock().assert().success();
 
     // Sync all workspace members.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 6 packages
+    Would install 6 packages
      + anyio==4.3.0
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+     + child @ file://[TEMP_DIR]/child
      + idna==3.6
      + iniconfig==2.0.0
-     + project==0.1.0 (from file://[TEMP_DIR]/)
+     + project @ file://[TEMP_DIR]/
      + sniffio==1.3.1
     ");
 
@@ -11804,65 +12069,86 @@ fn sync_all_extras() -> Result<()> {
     context.lock().assert().success();
 
     // Sync an extra that exists in both the parent and child.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--extra").arg("types"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--extra").arg("types"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
+     + child @ file://[TEMP_DIR]/child
      + iniconfig==2.0.0
      + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
 
     // Sync an extra that only exists in the child.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--extra").arg("testing"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--extra").arg("testing"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
-    Uninstalled 2 packages in [TIME]
-    Installed 1 package in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + child @ file://[TEMP_DIR]/child
+     + iniconfig==2.0.0
      + packaging==24.0
-     - sniffio==1.3.1
-     - typing-extensions==4.10.0
     ");
 
     // Sync all extras.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--all-extras"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--all-extras"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 7 packages
+    Would install 7 packages
      + anyio==4.3.0
+     + child @ file://[TEMP_DIR]/child
      + idna==3.6
+     + iniconfig==2.0.0
+     + packaging==24.0
      + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
 
     // Sync all extras excluding an extra that exists in both the parent and child.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--all-extras").arg("--no-extra").arg("types"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--all-extras").arg("--no-extra").arg("types"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - typing-extensions==4.10.0
+    Found up-to-date lockfile at: uv.lock
+    Would download 6 packages
+    Would install 6 packages
+     + anyio==4.3.0
+     + child @ file://[TEMP_DIR]/child
+     + idna==3.6
+     + iniconfig==2.0.0
+     + packaging==24.0
+     + sniffio==1.3.1
     ");
 
     // Sync an extra that doesn't exist.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--extra").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--extra").arg("foo"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Extra `foo` is not defined in any project's `optional-dependencies` table
     ");
 
     // Sync all extras excluding an extra that doesn't exist.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--all-extras").arg("--no-extra").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--all-extras").arg("--no-extra").arg("foo"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Extra `foo` is not defined in any project's `optional-dependencies` table
     ");
 
@@ -11890,12 +12176,14 @@ fn sync_extra_comma_separated() -> Result<()> {
 
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync().arg("--extra").arg("types,async"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra").arg("types,async"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -11976,34 +12264,40 @@ fn sync_all_extras_dynamic() -> Result<()> {
     context.lock().assert().success();
 
     // Sync an extra that exists in the parent.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--extra").arg("types"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--extra").arg("types"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
-     + project==0.1.0 (from file://[TEMP_DIR]/)
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + child @ file://[TEMP_DIR]/child
+     + project @ file://[TEMP_DIR]/
      + sniffio==1.3.1
     ");
 
     // Sync a dynamic extra that exists in the child.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--extra").arg("dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--extra").arg("dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - sniffio==1.3.1
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + child @ file://[TEMP_DIR]/child
+     + project @ file://[TEMP_DIR]/
      + typing-extensions==4.10.0
     ");
 
     // Sync a dynamic extra that doesn't exist in the child.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--extra").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--extra").arg("foo"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Extra `foo` is not defined in any project's `optional-dependencies` table
     ");
 
@@ -12072,45 +12366,55 @@ fn sync_all_groups() -> Result<()> {
     context.lock().assert().success();
 
     // Sync a group that exists in both the parent and child.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--group").arg("types"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--group").arg("types"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
+     + child @ file://[TEMP_DIR]/child
      + iniconfig==2.0.0
      + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
 
     // Sync a group that only exists in the child.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--group").arg("testing"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--group").arg("testing"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
-    Uninstalled 2 packages in [TIME]
-    Installed 1 package in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + child @ file://[TEMP_DIR]/child
+     + iniconfig==2.0.0
      + packaging==24.0
-     - sniffio==1.3.1
-     - typing-extensions==4.10.0
     ");
 
     // Sync a group that doesn't exist.
-    uv_snapshot!(context.filters(), context.sync().arg("--all-packages").arg("--group").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages").arg("--group").arg("foo"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Group `foo` is not defined in any project's `dependency-groups` table
     ");
 
     // Sync an empty group.
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("empty"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("empty"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - packaging==24.0
+    Found up-to-date lockfile at: uv.lock
+    Would download 2 packages
+    Would install 2 packages
+     + child @ file://[TEMP_DIR]/child
+     + iniconfig==2.0.0
     ");
 
     Ok(())
@@ -12163,12 +12467,14 @@ fn sync_multiple_sources_index_disjoint_extras() -> Result<()> {
     // Generate a lockfile.
     context.lock().assert().success();
 
-    uv_snapshot!(context.filters(), context.sync().arg("--extra").arg("cu124"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra").arg("cu124"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 4 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 2 packages
+    Would install 2 packages
      + jinja2==3.1.3
      + markupsafe==2.1.5
     ");
@@ -14429,44 +14735,57 @@ fn multiple_group_conflicts() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     Checked in [TIME]
+    Would make no changes
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("baz"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("baz"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 3 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + iniconfig==2.0.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("foo").arg("--group").arg("baz"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("foo").arg("--group").arg("baz"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 3 packages in [TIME]
-    Checked 1 package in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
+     + iniconfig==2.0.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("bar").arg("--group").arg("baz"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("bar").arg("--group").arg("baz"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 3 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - iniconfig==2.0.0
+    Found up-to-date lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + iniconfig==1.1.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("foo").arg("--group").arg("bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("foo").arg("--group").arg("bar"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Groups `bar` and `foo` are incompatible with the conflicts: {`project:bar`, `project:foo`}
     ");
 
@@ -14516,42 +14835,60 @@ fn transitive_group_conflicts_shallow() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Checked 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--group").arg("test"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("dev").arg("--group").arg("test"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Checked 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("test").arg("--group").arg("magic"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("test").arg("--group").arg("magic"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Groups `magic` and `test` are incompatible with the conflicts: {`example:magic`, `example:test`}
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--group").arg("magic"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("dev").arg("--group").arg("magic"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Groups `dev` and `magic` are incompatible with the conflicts: {`example:dev`, `example:magic`}
     ");
 
@@ -14597,43 +14934,65 @@ fn transitive_group_conflicts_deep() -> Result<()> {
         ]"#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.6
      + iniconfig==2.0.0
      + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
-    Checked 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--group").arg("test"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("dev").arg("--group").arg("test"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
-    Checked 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--group").arg("magic"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("dev").arg("--group").arg("magic"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Groups `dev` and `magic` are incompatible with the conflicts: {`example:dev`, `example:magic`}
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--no-dev").arg("--group").arg("intermediate").arg("--group").arg("magic"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-dev").arg("--group").arg("intermediate").arg("--group").arg("magic"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Groups `intermediate` and `magic` are incompatible with the conflicts: {`example:intermediate`, `example:magic`}
     ");
 
@@ -14673,46 +15032,62 @@ fn transitive_group_conflicts_siblings() -> Result<()> {
         ]"#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Checked 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--no-dev").arg("--group").arg("dev2"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-dev").arg("--group").arg("dev2"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - anyio==4.3.0
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.1
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev2"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("dev2"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Groups `dev` (enabled by default) and `dev2` are incompatible with the conflicts: {`example:dev`, `example:dev2`}
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("dev").arg("--group").arg("dev2"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group").arg("dev").arg("--group").arg("dev2"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Groups `dev` and `dev2` are incompatible with the conflicts: {`example:dev`, `example:dev2`}
     ");
 

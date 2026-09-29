@@ -1619,13 +1619,10 @@ fn add_remove_inline_optional() -> Result<()> {
         ] }
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--optional=types"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("typing-extensions").arg("--optional=types"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -1649,12 +1646,10 @@ fn add_remove_inline_optional() -> Result<()> {
         );
     });
 
-    uv_snapshot!(context.filters(), context.remove().arg("typing-extensions").arg("--optional=types"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("typing-extensions").arg("--optional=types"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-     - typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -1927,16 +1922,11 @@ fn update_existing_dev() -> Result<()> {
         dev = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -1984,16 +1974,11 @@ fn add_existing_dev() -> Result<()> {
         dev-dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -2038,16 +2023,11 @@ fn update_existing_dev_group() -> Result<()> {
         dev-dependencies = ["anyio"]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--group").arg("dev"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--group").arg("dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -2091,16 +2071,11 @@ fn add_existing_dev_group() -> Result<()> {
         dev-dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--group").arg("dev"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--group").arg("dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -2850,15 +2825,11 @@ fn add_path_adjacent_directory() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    uv_snapshot!(context.filters(), context.add().arg(dependency.path()).current_dir(project.path()), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg(dependency.path()).current_dir(project.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + dependency==0.1.0 (from file://[TEMP_DIR]/dependency)
     ");
 
     let pyproject_toml = context.read("project/pyproject.toml");
@@ -3015,46 +2986,36 @@ fn add_relative_and_absolute_paths() -> Result<()> {
         .touch()?;
 
     // Add the relative dependency using a relative path.
-    uv_snapshot!(context.filters(), context.add().arg("../relative_dep").current_dir(project.path()), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("../relative_dep").current_dir(project.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + relative-dep==0.1.0 (from file://[TEMP_DIR]/relative_dep)
     ");
 
     // Add the absolute dependency using an absolute path.
-    uv_snapshot!(context.filters(), context.add().arg(absolute_dep.path()).current_dir(project.path()), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg(absolute_dep.path()).current_dir(project.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 3 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + absolute-dep==0.1.0 (from file://[TEMP_DIR]/absolute_dep)
     ");
 
     // Add a dependency using a file:// URL (also absolute).
     let file_url = Url::from_file_path(file_url_dep.path()).unwrap();
-    uv_snapshot!(context.filters(), context.add().arg(file_url.as_str()).current_dir(project.path()), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg(file_url.as_str()).current_dir(project.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 4 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + file-url-dep==0.1.0 (from file://[TEMP_DIR]/file_url_dep)
     ");
 
     // Expanded variables retain the portability behavior from #18680 and stay relative.
-    uv_snapshot!(context.filters(), context.add().arg("file:///${PROJECT_ROOT}/../expanded_dep").current_dir(project.path()), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("file:///${PROJECT_ROOT}/../expanded_dep").current_dir(project.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + expanded-dep==0.1.0 (from file://[TEMP_DIR]/expanded_dep)
     ");
 
     // Check pyproject.toml - relative paths stay relative, absolute paths and file:// URLs
@@ -3670,17 +3631,10 @@ fn update_source_replace_url() -> Result<()> {
     "#})?;
 
     // Change the source. The existing URL should be removed.
-    uv_snapshot!(context.filters(), context.add().arg("requests @ git+https://github.com/psf/requests").arg("--tag=v2.32.3"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests @ git+https://github.com/psf/requests").arg("--tag=v2.32.3"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.32.3 (from git+https://github.com/psf/requests@0e322af87745eff34caffe4df68456ebc20d9068)
-     + urllib3==2.2.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -3705,15 +3659,10 @@ fn update_source_replace_url() -> Result<()> {
     });
 
     // Change the source again. The existing source should be replaced.
-    uv_snapshot!(context.filters(), context.add().arg("requests @ git+https://github.com/psf/requests").arg("--tag=v2.32.2"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests @ git+https://github.com/psf/requests").arg("--tag=v2.32.2"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - requests==2.32.3 (from git+https://github.com/psf/requests@0e322af87745eff34caffe4df68456ebc20d9068)
-     + requests==2.32.2 (from git+https://github.com/psf/requests@88dce9d854797c05d0ff296b70e0430535ef8aaf)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -3761,13 +3710,10 @@ fn add_non_normalized_source() -> Result<()> {
         uv_public_pypackage = { git = "https://github.com/astral-test/uv-public-pypackage", tag = "0.0.1" }
         "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0.0.1"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0.0.1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -4678,15 +4624,10 @@ fn add_lower_bound() -> Result<()> {
     "#})?;
 
     // Adding `anyio` should include a lower-bound.
-    uv_snapshot!(context.filters(), context.add().arg("anyio"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -4808,15 +4749,10 @@ fn add_lower_bound_raw() -> Result<()> {
     "#})?;
 
     // Adding `anyio` should _not_ set a lower-bound when using `--raw`.
-    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--raw"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio").arg("--raw"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -4855,15 +4791,10 @@ fn add_lower_bound_dev() -> Result<()> {
     "#})?;
 
     // Adding `anyio` should include a lower-bound.
-    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio").arg("--dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -4905,15 +4836,10 @@ fn add_lower_bound_optional() -> Result<()> {
     "#})?;
 
     // Adding `anyio` should include a lower-bound.
-    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--optional=io"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio").arg("--optional=io"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -5018,13 +4944,10 @@ fn add_lower_bound_local() -> Result<()> {
     "#})?;
 
     // Adding `a` should include a lower-bound, but no local segment.
-    uv_snapshot!(context.filters(), context.add().arg("a").arg("--index").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("a").arg("--index").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==1.2.3+foo
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -5098,7 +5021,7 @@ fn add_non_project() -> Result<()> {
 
     // Adding `iniconfig` should fail, since virtual workspace roots don't support production
     // dependencies.
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project is missing a `[project]` table; add a `[project]` table to use production dependencies, or run `uv add --dev` instead
@@ -5106,21 +5029,18 @@ fn add_non_project() -> Result<()> {
 
     // Adding `iniconfig` as optional should fail, since virtual workspace roots don't support
     // optional dependencies.
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--optional").arg("async"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig").arg("--optional").arg("async"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project is missing a `[project]` table; add a `[project]` table to use optional dependencies, or run `uv add --dev` instead
     ");
 
     // Adding `iniconfig` as a dev dependency should succeed.
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig").arg("--dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -5185,7 +5105,7 @@ fn add_virtual_empty() -> Result<()> {
     "#})?;
 
     // Add normal dep (doesn't make sense)
-    uv_snapshot!(context.filters(), context.add()
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync")
         .arg("sortedcontainers"), @"
     exit_code: 2 (failure)
     ----- stderr -----
@@ -5206,16 +5126,13 @@ fn add_virtual_empty() -> Result<()> {
     });
 
     // Add dependency-group (can make sense!)
-    uv_snapshot!(context.filters(), context.add()
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync")
         .arg("sortedcontainers")
         .arg("--group").arg("dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + sortedcontainers==2.4.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -5254,17 +5171,13 @@ fn add_virtual_dependency_group() -> Result<()> {
     "#})?;
 
     // Add to existing group
-    uv_snapshot!(context.filters(), context.add()
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync")
         .arg("sortedcontainers")
         .arg("--group").arg("dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
     Resolved 3 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + sniffio==1.3.1
-     + sortedcontainers==2.4.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -5286,14 +5199,13 @@ fn add_virtual_dependency_group() -> Result<()> {
     });
 
     // Add to new group
-    uv_snapshot!(context.filters(), context.add()
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync")
         .arg("sortedcontainers")
         .arg("--group").arg("baz"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
     Resolved 3 packages in [TIME]
-    Checked 2 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -5497,16 +5409,13 @@ fn remove_virtual_dependency_group() -> Result<()> {
     "#})?;
 
     // Remove from group
-    uv_snapshot!(context.filters(), context.remove()
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync")
         .arg("sortedcontainers")
         .arg("--group").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -5525,7 +5434,7 @@ fn remove_virtual_dependency_group() -> Result<()> {
     });
 
     // Remove from non-existent group
-    uv_snapshot!(context.filters(), context.remove()
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync")
         .arg("sortedcontainers")
         .arg("--group").arg("baz"), @"
     exit_code: 2 (failure)
@@ -5565,15 +5474,10 @@ fn add_repeat() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -5594,11 +5498,10 @@ fn add_repeat() -> Result<()> {
         );
     });
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Checked 3 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -5747,13 +5650,10 @@ fn add_requirements_file_non_editable() -> Result<()> {
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("./packages/child")?;
 
-    uv_snapshot!(context.filters(), context.add().arg("-r").arg("requirements.txt").arg("--no-workspace"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("-r").arg("requirements.txt").arg("--no-workspace"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/packages/child)
     ");
 
     let pyproject_toml_content = context.read("pyproject.toml");
@@ -5816,13 +5716,10 @@ fn add_requirements_file_editable() -> Result<()> {
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("-e ./packages/child")?;
 
-    uv_snapshot!(context.filters(), context.add().arg("-r").arg("requirements.txt").arg("--no-workspace"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("-r").arg("requirements.txt").arg("--no-workspace"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/packages/child)
     ");
 
     let pyproject_toml_content = context.read("pyproject.toml");
@@ -5886,13 +5783,10 @@ fn add_requirements_file_editable_override() -> Result<()> {
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("-e ./packages/child")?;
 
-    uv_snapshot!(context.filters(), context.add().arg("-r").arg("requirements.txt").arg("--no-workspace").arg("--no-editable"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("-r").arg("requirements.txt").arg("--no-workspace").arg("--no-editable"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/packages/child)
     ");
 
     let pyproject_toml_content = context.read("pyproject.toml");
@@ -5943,11 +5837,10 @@ fn add_requirements_file_with_marker_flag() -> Result<()> {
     pyproject_toml.write_str(base_pyproject_toml)?;
 
     // Add dependencies with a marker that does not apply for the current target.
-    uv_snapshot!(context.filters(), context.add().arg("-r").arg("requirements.win.txt").arg("-m").arg("python_version == '3.11'"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("-r").arg("requirements.win.txt").arg("-m").arg("python_version == '3.11'"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Checked in [TIME]
     ");
     let edited_pyproject_toml = context.read("pyproject.toml");
 
@@ -5972,16 +5865,10 @@ fn add_requirements_file_with_marker_flag() -> Result<()> {
     fs_err::remove_file(context.temp_dir.join("uv.lock"))?;
 
     // Add dependencies with a marker that applies for the current target.
-    uv_snapshot!(context.filters(), context.add().arg("-r").arg("requirements.win.txt").arg("-m").arg("python_version == '3.12'"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("-r").arg("requirements.win.txt").arg("-m").arg("python_version == '3.12'"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + iniconfig==2.0.0
-     + sniffio==1.3.1
     ");
     let edited_pyproject_toml = context.read("pyproject.toml");
 
@@ -6255,15 +6142,10 @@ fn add_group() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--group").arg("test"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--group").arg("test"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -6282,16 +6164,10 @@ fn add_group() -> Result<()> {
     "#
     );
 
-    uv_snapshot!(context.filters(), context.add().arg("requests").arg("--group").arg("test"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests").arg("--group").arg("test"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + requests==2.31.0
-     + urllib3==2.2.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -6311,11 +6187,10 @@ fn add_group() -> Result<()> {
     "#
     );
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--group").arg("second"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--group").arg("second"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Checked 3 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -6338,11 +6213,10 @@ fn add_group() -> Result<()> {
     "#
     );
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--group").arg("alpha"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--group").arg("alpha"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Checked 3 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -6393,16 +6267,10 @@ fn add_group_normalize() -> Result<()> {
     "#})?;
 
     // Add with a non-normalized group name.
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--group").arg("cloud_export_to_parquet"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig").arg("--group").arg("cloud_export_to_parquet"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + iniconfig==2.0.0
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -6423,13 +6291,10 @@ fn add_group_normalize() -> Result<()> {
     );
 
     // Add with a normalized group name (which doesn't match the `pyproject.toml`).
-    uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--group").arg("cloud-export-to-parquet"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("typing-extensions").arg("--group").arg("cloud-export-to-parquet"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -6451,16 +6316,10 @@ fn add_group_normalize() -> Result<()> {
     );
 
     // Remove with a non-normalized group name.
-    uv_snapshot!(context.filters(), context.remove().arg("iniconfig").arg("--group").arg("cloud_export_to_parquet"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("iniconfig").arg("--group").arg("cloud_export_to_parquet"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Uninstalled 5 packages in [TIME]
-     - anyio==3.7.0
-     - idna==3.6
-     - iniconfig==2.0.0
-     - sniffio==1.3.1
-     - typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -6481,11 +6340,10 @@ fn add_group_normalize() -> Result<()> {
     );
 
     // Remove with a normalized group name (which doesn't match the `pyproject.toml`).
-    uv_snapshot!(context.filters(), context.remove().arg("typing-extensions").arg("--group").arg("cloud-export-to-parquet"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("typing-extensions").arg("--group").arg("cloud-export-to-parquet"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Checked in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -6532,15 +6390,10 @@ fn add_group_before_commented_groups() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--group").arg("alpha"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--group").arg("alpha"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -6598,15 +6451,10 @@ fn add_group_between_commented_groups() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--group").arg("eta"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--group").arg("eta"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -6663,15 +6511,10 @@ fn add_group_to_unsorted() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--group").arg("alpha"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--group").arg("alpha"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -7468,19 +7311,10 @@ async fn add_requirements_from_remote_script() -> Result<()> {
 
     let script_url = format!("{}/script", server.uri());
 
-    uv_snapshot!(context.filters(), context.add().arg("-r").arg(&script_url), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("-r").arg(&script_url), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + markdown-it-py==3.0.0
-     + mdurl==0.1.2
-     + pygments==2.17.2
-     + rich==13.7.1
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml_content = context.read("pyproject.toml");
@@ -7532,14 +7366,11 @@ fn remove_repeated() -> Result<()> {
         anyio_local = anyio_local.portable_display(),
     })?;
 
-    uv_snapshot!(context.filters(), context.remove().arg("anyio"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("anyio"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + anyio==4.3.0+foo (from file://[WORKSPACE]/test/packages/anyio_local)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -7567,12 +7398,11 @@ fn remove_repeated() -> Result<()> {
         );
     });
 
-    uv_snapshot!(context.filters(), context.remove().arg("anyio").arg("--optional").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("anyio").arg("--optional").arg("foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 2 packages in [TIME]
-    Checked 1 package in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -7600,13 +7430,11 @@ fn remove_repeated() -> Result<()> {
         );
     });
 
-    uv_snapshot!(context.filters(), context.remove().arg("anyio").arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("anyio").arg("--dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-     - anyio==4.3.0+foo (from file://[WORKSPACE]/test/packages/anyio_local)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9196,24 +9024,10 @@ fn sorted_dependencies() -> Result<()> {
     ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().args(["typing-extensions", "anyio"]), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").args(["typing-extensions", "anyio"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 13 packages in [TIME]
-    Prepared 12 packages in [TIME]
-    Installed 12 packages in [TIME]
-     + anyio==4.3.0
-     + cachecontrol==0.14.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + filelock==3.13.1
-     + idna==3.6
-     + iniconfig==2.0.0
-     + msgpack==1.0.8
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + typing-extensions==4.10.0
-     + urllib3==2.2.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9312,25 +9126,10 @@ fn case_sensitive_sorted_dependencies() -> Result<()> {
     ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().args(["typing-extensions", "anyio"]), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").args(["typing-extensions", "anyio"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 14 packages in [TIME]
-    Prepared 13 packages in [TIME]
-    Installed 13 packages in [TIME]
-     + anyio==4.3.0
-     + cachecontrol==0.14.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + filelock==3.13.1
-     + idna==3.6
-     + iniconfig==2.0.0
-     + msgpack==1.0.8
-     + pyyaml==6.0.1
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + typing-extensions==4.10.0
-     + urllib3==2.2.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9431,18 +9230,10 @@ fn sorted_dependencies_name_specifiers() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), universal_windows_filters=true, context.add().args(["pytest-mock"]), @"
+    uv_snapshot!(context.filters(), universal_windows_filters=true, context.add().arg("--no-sync").args(["pytest-mock"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + pytest-mock==3.14.0
-     + typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9465,13 +9256,10 @@ fn sorted_dependencies_name_specifiers() -> Result<()> {
         );
     });
 
-    uv_snapshot!(context.filters(), universal_windows_filters=true, context.add().args(["pytest-randomly"]), @"
+    uv_snapshot!(context.filters(), universal_windows_filters=true, context.add().arg("--no-sync").args(["pytest-randomly"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 9 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + pytest-randomly==3.15.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9750,14 +9538,10 @@ fn update_offset() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().args(["typing-extensions", "iniconfig"]), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").args(["typing-extensions", "iniconfig"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + iniconfig==2.0.0
-     + typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9841,14 +9625,11 @@ fn add_warn_index_url() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("idna").arg("--index-url").arg("https://pypi.org/simple"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("idna").arg("--index-url").arg("https://pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: Indexes specified via `--index-url` will not be persisted to the `pyproject.toml` file; use `--default-index` instead.
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + idna==3.6
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9906,7 +9687,7 @@ fn add_warn_index_url() -> Result<()> {
         );
     });
 
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--extra-index-url").arg("https://test.pypi.org/simple"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig").arg("--extra-index-url").arg("https://test.pypi.org/simple"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     warning: Indexes specified via `--extra-index-url` will not be persisted to the `pyproject.toml` file; use `--index` instead.
@@ -9938,13 +9719,10 @@ fn add_no_warn_index_url() -> Result<()> {
         index-url = "https://test.pypi.org/simple"
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -10024,13 +9802,10 @@ fn add_index() -> Result<()> {
         constraint-dependencies = ["markupsafe<3"]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").arg("--index").arg("https://pypi.org/simple"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig==2.0.0").arg("--index").arg("https://pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -10098,14 +9873,10 @@ fn add_index() -> Result<()> {
     });
 
     // Adding a subsequent index should put it _above_ the existing index.
-    uv_snapshot!(context.filters(), context.add().arg("jinja2").arg("--index").arg("pytorch=https://astral-sh.github.io/pytorch-mirror/whl/cu121"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("jinja2").arg("--index").arg("pytorch=https://astral-sh.github.io/pytorch-mirror/whl/cu121"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + jinja2==3.1.4
-     + markupsafe==2.1.5
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -10210,11 +9981,10 @@ fn add_index() -> Result<()> {
     });
 
     // Adding a subsequent index with the same name should replace it.
-    uv_snapshot!(context.filters(), context.add().arg("jinja2").arg("--index").arg("pytorch=https://test.pypi.org/simple"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("jinja2").arg("--index").arg("pytorch=https://test.pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Checked 3 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -10324,13 +10094,10 @@ fn add_index() -> Result<()> {
     });
 
     // Adding a subsequent index with the same URL should bump it to the top.
-    uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--index").arg("https://pypi.org/simple"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("typing-extensions").arg("--index").arg("https://pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.12.2
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -10452,11 +10219,10 @@ fn add_index() -> Result<()> {
     });
 
     // Adding a subsequent index with the same URL should bump it to the top, but retain the name.
-    uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--index").arg("https://test.pypi.org/simple"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("typing-extensions").arg("--index").arg("https://test.pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Checked 4 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -10594,13 +10360,10 @@ fn add_default_index_url() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--default-index").arg("https://test.pypi.org/simple"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig").arg("--default-index").arg("https://test.pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -10663,13 +10426,10 @@ fn add_default_index_url() -> Result<()> {
     });
 
     // Adding another `--default-index` replaces the current default.
-    uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--default-index").arg("https://pypi.org/simple"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("typing-extensions").arg("--default-index").arg("https://pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -10763,13 +10523,10 @@ async fn add_index_credentials() -> Result<()> {
     "#})?;
 
     // Provide credentials for the index via the environment variable.
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").env(EnvVars::UV_DEFAULT_INDEX, proxy.authenticated_url("public", "heron", "/basic-auth/simple")), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig==2.0.0").env(EnvVars::UV_DEFAULT_INDEX, proxy.authenticated_url("public", "heron", "/basic-auth/simple")), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -10858,13 +10615,10 @@ async fn existing_index_credentials() -> Result<()> {
     ))?;
 
     // Provide credentials for the index via the environment variable.
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").env(EnvVars::UV_DEFAULT_INDEX, proxy.authenticated_url("public", "heron", "/basic-auth/simple")), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig==2.0.0").env(EnvVars::UV_DEFAULT_INDEX, proxy.authenticated_url("public", "heron", "/basic-auth/simple")), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -10948,13 +10702,10 @@ fn add_index_with_trailing_slash() -> Result<()> {
         constraint-dependencies = ["markupsafe<3"]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").arg("--index").arg("https://pypi.org/simple/"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig==2.0.0").arg("--index").arg("https://pypi.org/simple/"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -11041,13 +10792,10 @@ fn add_index_without_trailing_slash() -> Result<()> {
         constraint-dependencies = ["markupsafe<3"]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").arg("--index").arg("https://pypi.org/simple"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig==2.0.0").arg("--index").arg("https://pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -11698,13 +11446,10 @@ fn add_index_comments() -> Result<()> {
     "#})?;
 
     // Preserve the comment on the index URL, despite replacing it.
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").env(EnvVars::UV_DEFAULT_INDEX, "https://pypi.org/simple"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig==2.0.0").env(EnvVars::UV_DEFAULT_INDEX, "https://pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -11784,7 +11529,7 @@ fn add_self() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Requirement name `anyio` matches project name `anyio`, but self-dependencies are not permitted without the `--dev` or `--optional` flags. If your project name (`anyio`) is shadowing that of a third-party dependency, consider renaming the project.
@@ -11803,13 +11548,10 @@ fn add_self() -> Result<()> {
     "#})?;
 
     // However, recursive extras are fine.
-    uv_snapshot!(context.filters(), context.add().arg("anyio[types]").arg("--optional").arg("all"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio[types]").arg("--optional").arg("all"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -11838,11 +11580,10 @@ fn add_self() -> Result<()> {
     });
 
     // And recursive development dependencies
-    uv_snapshot!(context.filters(), context.add().arg("anyio[types]").arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio[types]").arg("--dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Checked 1 package in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -11895,19 +11636,10 @@ fn add_preserves_end_of_line_comments() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("requests==2.31.0"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests==2.31.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + anyio==3.7.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + urllib3==2.2.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -11949,19 +11681,10 @@ fn add_preserves_end_of_line_comment_on_non_last_deps() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("requests==2.31.0"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests==2.31.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + anyio==3.7.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + urllib3==2.2.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12302,19 +12025,10 @@ fn add_preserves_open_bracket_comment() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("requests==2.31.0"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests==2.31.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + anyio==3.7.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + urllib3==2.2.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12356,15 +12070,10 @@ fn add_preserves_empty_comment() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12408,16 +12117,10 @@ fn add_preserves_trailing_comment() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + iniconfig==2.0.0
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12442,13 +12145,10 @@ fn add_preserves_trailing_comment() -> Result<()> {
         );
     });
 
-    uv_snapshot!(context.filters(), context.add().arg("typing-extensions"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("typing-extensions"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12495,16 +12195,10 @@ fn add_preserves_trailing_depth() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + iniconfig==2.0.0
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12548,14 +12242,10 @@ fn add_preserves_first_own_line_comment() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("charset-normalizer"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("charset-normalizer"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + charset-normalizer==3.3.2
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12595,14 +12285,10 @@ fn add_preserves_first_line_bracket_comment() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("charset-normalizer"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("charset-normalizer"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + charset-normalizer==3.3.2
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12641,14 +12327,10 @@ fn add_no_indent() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("charset-normalizer"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("charset-normalizer"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + charset-normalizer==3.3.2
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12779,13 +12461,10 @@ fn remove_preserves_nearby_end_of_line_comments() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.remove().arg("typing-extensions"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("typing-extensions"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12830,14 +12509,10 @@ fn remove_preserves_comment_order_for_multiple_adjacent_matches() -> Result<()> 
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.remove().arg("typing-extensions"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("typing-extensions"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + iniconfig==2.0.0
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14459,16 +14134,10 @@ fn add_optional_normalize() -> Result<()> {
     "#})?;
 
     // Add with a non-normalized group name.
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--optional").arg("cloud_export_to_parquet"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig").arg("--optional").arg("cloud_export_to_parquet"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + iniconfig==2.0.0
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14489,13 +14158,10 @@ fn add_optional_normalize() -> Result<()> {
     );
 
     // Add with a normalized group name (which doesn't match the `pyproject.toml`).
-    uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--optional").arg("cloud-export-to-parquet"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("typing-extensions").arg("--optional").arg("cloud-export-to-parquet"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14517,16 +14183,10 @@ fn add_optional_normalize() -> Result<()> {
     );
 
     // Remove with a non-normalized group name.
-    uv_snapshot!(context.filters(), context.remove().arg("iniconfig").arg("--optional").arg("cloud_export_to_parquet"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("iniconfig").arg("--optional").arg("cloud_export_to_parquet"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Uninstalled 5 packages in [TIME]
-     - anyio==3.7.0
-     - idna==3.6
-     - iniconfig==2.0.0
-     - sniffio==1.3.1
-     - typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14547,11 +14207,10 @@ fn add_optional_normalize() -> Result<()> {
     );
 
     // Remove with a normalized group name (which doesn't match the `pyproject.toml`).
-    uv_snapshot!(context.filters(), context.remove().arg("typing-extensions").arg("--optional").arg("cloud-export-to-parquet"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("typing-extensions").arg("--optional").arg("cloud-export-to-parquet"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Checked in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14591,13 +14250,10 @@ fn add_bounds() -> Result<()> {
         requires-python = ">=3.12"
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("idna"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("idna"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + idna==3.6
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14627,14 +14283,10 @@ fn add_bounds() -> Result<()> {
         add-bounds = "major"
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + anyio==4.3.0
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14654,11 +14306,10 @@ fn add_bounds() -> Result<()> {
     );
 
     // Existing constraints take precedence over the bounds option
-    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--bounds").arg("minor"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio").arg("--bounds").arg("minor"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Checked 3 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14678,15 +14329,10 @@ fn add_bounds() -> Result<()> {
     );
 
     // Explicit constraints take precedence over the bounds option
-    uv_snapshot!(context.filters(), context.add().arg("anyio==4.2").arg("idna").arg("--bounds").arg("minor"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==4.2").arg("idna").arg("--bounds").arg("minor"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - anyio==4.3.0
-     + anyio==4.2.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14707,11 +14353,10 @@ fn add_bounds() -> Result<()> {
     );
 
     // Set bounds on the CLI.
-    uv_snapshot!(context.filters(), context.add().arg("sniffio").arg("--bounds").arg("minor"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("sniffio").arg("--bounds").arg("minor"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Checked 3 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14753,16 +14398,11 @@ fn add_bounds_requirement_over_bounds_kind() -> Result<()> {
         requires-python = ">=3.12"
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==4.2").arg("idna").arg("--bounds").arg("minor"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==4.2").arg("idna").arg("--bounds").arg("minor"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
     note: Using explicit requirement `anyio==4.2` over bounds preference `minor`
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.2.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14828,16 +14468,13 @@ fn add_path_with_existing_workspace() -> Result<()> {
     // Add the dependency from the project directory. It should automatically be added as a
     // workspace member, since it's in the same directory as the workspace.
     uv_snapshot!(context.filters(), context
-        .add()
+        .add().arg("--no-sync")
         .current_dir(&project_dir)
         .arg("../dep"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Added `dep` to workspace members
     Resolved 3 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + dep==0.1.0 (from file://[TEMP_DIR]/dep)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14904,16 +14541,13 @@ fn add_path_with_workspace() -> Result<()> {
 
     // Add the dependency with `--workspace` flag from the project directory.
     uv_snapshot!(context.filters(), context
-        .add()
+        .add().arg("--no-sync")
         .arg("./dep")
         .arg("--workspace"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Added `dep` to workspace members
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + dep==0.1.0 (from file://[TEMP_DIR]/dep)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -14970,15 +14604,12 @@ fn add_path_within_workspace_defaults_to_workspace() -> Result<()> {
     // Add the dependency without --workspace flag - it should still be added as workspace member
     // since it's within the workspace directory.
     uv_snapshot!(context.filters(), context
-        .add()
+        .add().arg("--no-sync")
         .arg("./dep"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Added `dep` to workspace members
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + dep==0.1.0 (from file://[TEMP_DIR]/dep)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -15034,15 +14665,12 @@ fn add_path_with_no_workspace() -> Result<()> {
 
     // Add the dependency with --no-workspace flag - it should be added as direct path dependency.
     uv_snapshot!(context.filters(), context
-        .add()
+        .add().arg("--no-sync")
         .arg("./dep")
         .arg("--no-workspace"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + dep==0.1.0 (from file://[TEMP_DIR]/dep)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -15102,17 +14730,13 @@ fn add_path_outside_workspace_no_default() -> Result<()> {
     // Add the dependency without --workspace flag - it should be a direct path dependency
     // since it's outside the workspace directory.
     uv_snapshot!(context.filters(), context
-        .add()
+        .add().arg("--no-sync")
         .current_dir(&workspace_dir)
         .arg("../external_dep"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + dep==0.1.0 (from file://[TEMP_DIR]/external_dep)
     ");
 
     let pyproject_toml = context.read("workspace/pyproject.toml");
@@ -15314,15 +14938,10 @@ fn add_multiline_indentation() -> Result<()> {
         dev = ["ruff", "typing-extensions"]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig").arg("--dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + iniconfig==2.0.0
-     + ruff==0.3.4
-     + typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
