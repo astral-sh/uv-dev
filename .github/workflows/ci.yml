@@ -140,7 +140,7 @@ jobs:
           BENCHMARK_BASE: "7af826859382eb191e47467540850caa8f493e5b"
           BENCHMARK_HEAD: "8d245af99af2bf399c602d37652fbefe98a11bf0"
         run: |
-          uv run --only-dev --python 3.12 "$BENCHMARK_DIR/benchmark_dry_run_tests.py" \
+          uv run --project "$GITHUB_WORKSPACE" --only-dev --python 3.12 "$BENCHMARK_DIR/benchmark_dry_run_tests.py" \
             --archives "$BENCHMARK_DIR/archives" \
             --output "$BENCHMARK_DIR/results" \
             --base "$BENCHMARK_BASE" --head "$BENCHMARK_HEAD" \
