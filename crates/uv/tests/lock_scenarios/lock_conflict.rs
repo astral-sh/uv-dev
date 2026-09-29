@@ -1,6 +1,7 @@
+use std::fmt::Write as _;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_fs::prelude::*;
 use insta::assert_snapshot;
 
@@ -12,6 +13,105 @@ use uv_test::uv_snapshot;
 //
 // They are split from `lock.rs` somewhat arbitrarily. Mostly because there are
 // a lot of them, and `lock.rs` was growing large enough as it is.
+
+/// Environment-only forks must not acquire the impossible combinations from unrelated conflicts.
+/// See: <https://github.com/astral-sh/uv/issues/21954>.
+#[test]
+fn many_conflicts_with_python_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(
+        r#"
+        name = "many-conflicts-with-python-forks"
+
+        [root]
+        requires = ["shared"]
+
+        [expected]
+        satisfiable = true
+
+        [packages.shared.versions."1.0.0"]
+        requires_python = ">=3.10"
+        sdist = false
+
+        [packages.shared.versions."1.0.1"]
+        requires_python = ">=3.12"
+        sdist = false
+        "#,
+    )?;
+    let server = PackseServer::from_scenario(&scenario);
+    let mut extras = String::new();
+    for index in 0..70 {
+        writeln!(&mut extras, "x{index:02} = []")?;
+    }
+    let conflicts = (0..70)
+        .map(|index| format!("{{ extra = \"x{index:02}\" }}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&format!(
+            r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.10,<3.15"
+        dependencies = ["shared"]
+
+        [project.optional-dependencies]
+        {extras}
+
+        [tool.uv]
+        conflicts = [[{conflicts}]]
+        "#,
+        ))?;
+
+    let mut lock_command = context.lock();
+    lock_command
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-build");
+    assert_cmd::Command::from_std(lock_command)
+        .timeout(Duration::from_mins(1))
+        .assert()
+        .success();
+
+    let lock = toml::from_str::<toml::Value>(&context.read("uv.lock"))?;
+    let packages = lock["package"].as_array().context("expected packages")?;
+    let project = packages
+        .iter()
+        .find(|package| package["name"].as_str() == Some("project"))
+        .context("expected project")?;
+    let markers = project["dependencies"]
+        .as_array()
+        .context("expected dependencies")?
+        .iter()
+        .map(|dependency| {
+            Ok(format!(
+                "{}: {}",
+                dependency["version"].as_str().context("expected version")?,
+                dependency["marker"].as_str().context("expected marker")?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .join("\n");
+    assert_snapshot!(markers, @"
+    1.0.0: python_full_version < '3.12'
+    1.0.1: python_full_version >= '3.12'
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-build")
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    Ok(())
+}
 
 /// Conflict discovery can provisionally visit a package that is later excluded after all
 /// transitive extras have been activated. Its dependencies must be evaluated under the package's
@@ -1141,6 +1241,58 @@ fn extra_unconditional() -> Result<()> {
      + anyio==4.2.0
     ");
 
+    Ok(())
+}
+
+/// Conflicting transitive extras must remain discoverable in an environment where the package
+/// also has a valid, non-conflicting activation in another environment.
+#[test]
+fn extra_unconditional_in_python_fork() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.10"
+        dependencies = [
+            "proxy[one] ; python_version < '3.12'",
+            "proxy[one,two] ; python_version >= '3.12'",
+        ]
+
+        [tool.uv.workspace]
+        members = ["proxy"]
+
+        [tool.uv.sources]
+        proxy = { workspace = true }
+        "#,
+    )?;
+    context.temp_dir.child("proxy/pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "proxy"
+        version = "0.1.0"
+        requires-python = ">=3.10"
+
+        [project.optional-dependencies]
+        one = ["anyio==4.1.0"]
+        two = ["anyio==4.2.0"]
+
+        [tool.uv]
+        conflicts = [[{ extra = "one" }, { extra = "two" }]]
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting extras `proxy[one]` and `proxy[two]` enabled simultaneously
+    ");
     Ok(())
 }
 
@@ -2389,10 +2541,10 @@ fn extra_conflict_environments_omit_redundant_markers() -> Result<()> {
         version = "4.11.0"
         source = { registry = "https://pypi.org/simple" }
         dependencies = [
-            { name = "exceptiongroup", marker = "python_full_version < '3.11' or (extra == 'extra-3-bar-a' and extra == 'extra-3-bar-b')" },
+            { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
             { name = "idna" },
             { name = "sniffio" },
-            { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-3-bar-a' and extra == 'extra-3-bar-b')" },
+            { name = "typing-extensions", marker = "python_full_version < '3.13'" },
         ]
         sdist = { url = "https://files.pythonhosted.org/packages/c6/78/7d432127c41b50bccba979505f272c16cbcadcc33645d5fa3a738110ae75/anyio-4.11.0.tar.gz", hash = "sha256:82a8d0b81e318cc5ce71a5f1f8b5c4e63619620b63141ef8c995fa0db95a57c4", size = 219094, upload-time = "2025-09-23T09:19:12.58Z" }
         wheels = [
@@ -2431,7 +2583,7 @@ fn extra_conflict_environments_omit_redundant_markers() -> Result<()> {
         version = "1.3.0"
         source = { registry = "https://pypi.org/simple" }
         dependencies = [
-            { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-3-bar-a' and extra == 'extra-3-bar-b')" },
+            { name = "typing-extensions" },
         ]
         sdist = { url = "https://files.pythonhosted.org/packages/0b/9f/a65090624ecf468cdca03533906e7c69ed7588582240cfe7cc9e770b50eb/exceptiongroup-1.3.0.tar.gz", hash = "sha256:b241f5885f560bc56a59ee63ca4c6a8bfa46ae4ad651af316d4e81817bb9fd88", size = 29749, upload-time = "2025-05-10T17:42:51.123Z" }
         wheels = [
@@ -6344,7 +6496,7 @@ fn extra_inferences() -> Result<()> {
         version = "8.1.7"
         source = { registry = "https://pypi.org/simple" }
         dependencies = [
-            { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-3-pkg-x1' and extra == 'extra-3-pkg-x2')" },
+            { name = "colorama", marker = "sys_platform == 'win32'" },
         ]
         sdist = { url = "https://files.pythonhosted.org/packages/96/d3/f04c7bfcf5c1862a2a5b845c6b2b360488cf47af55dfa79c98f6a6bf98b5/click-8.1.7.tar.gz", hash = "sha256:ca9853ad459e787e2192211578cc907e7594e294c7ccc834310722b41b9ca6de", size = 336121, upload-time = "2023-08-17T17:29:11.868Z" }
         wheels = [
@@ -6365,7 +6517,7 @@ fn extra_inferences() -> Result<()> {
         version = "4.8.0"
         source = { registry = "https://pypi.org/simple" }
         dependencies = [
-            { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-3-pkg-x1' and extra == 'extra-3-pkg-x2')" },
+            { name = "colorama", marker = "sys_platform == 'win32'" },
         ]
         sdist = { url = "https://files.pythonhosted.org/packages/75/32/cdfba08674d72fe7895a8ec7be8f171e8502274999cae9497e4545404873/colorlog-4.8.0.tar.gz", hash = "sha256:59b53160c60902c405cdec28d38356e09d40686659048893e026ecbd589516b1", size = 28770, upload-time = "2021-03-22T11:26:32.319Z" }
         wheels = [
@@ -6439,7 +6591,7 @@ fn extra_inferences() -> Result<()> {
         version = "42.0.5"
         source = { registry = "https://pypi.org/simple" }
         dependencies = [
-            { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-3-pkg-x1' and extra == 'extra-3-pkg-x2')" },
+            { name = "cffi", marker = "platform_python_implementation != 'PyPy'" },
         ]
         sdist = { url = "https://files.pythonhosted.org/packages/13/9e/a55763a32d340d7b06d045753c186b690e7d88780cafce5f88cb931536be/cryptography-42.0.5.tar.gz", hash = "sha256:6fe07eec95dfd477eb9530aef5bead34fec819b3aaf6c5bd6d20565da607bfe1", size = 671025, upload-time = "2024-02-24T01:17:48.141Z" }
         wheels = [
@@ -6756,7 +6908,6 @@ fn extra_inferences() -> Result<()> {
             { url = "https://files.pythonhosted.org/packages/a2/2f/461615adc53ba81e99471303b15ac6b2a6daa8d2a0f7f77fd15605e16d5b/greenlet-3.0.3-cp312-cp312-macosx_11_0_universal2.whl", hash = "sha256:70fb482fdf2c707765ab5f0b6655e9cfcf3780d8d87355a063547b41177599be", size = 273085, upload-time = "2023-12-21T22:03:01.176Z" },
             { url = "https://files.pythonhosted.org/packages/e9/55/2c3cfa3cdbb940cf7321fbcf544f0e9c74898eed43bf678abf416812d132/greenlet-3.0.3-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:d4d1ac74f5c0c0524e4a24335350edad7e5f03b9532da7ea4d3c54d527784f2e", size = 660514, upload-time = "2023-12-21T22:29:28.62Z" },
             { url = "https://files.pythonhosted.org/packages/38/77/efb21ab402651896c74f24a172eb4d7479f9f53898bd5e56b9e20bb24ffd/greenlet-3.0.3-cp312-cp312-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:149e94a2dd82d19838fe4b2259f1b6b9957d5ba1b25640d2380bea9c5df37676", size = 674295, upload-time = "2023-12-21T22:26:24.101Z" },
-            { url = "https://files.pythonhosted.org/packages/74/3a/92f188ace0190f0066dca3636cf1b09481d0854c46e92ec5e29c7cefe5b1/greenlet-3.0.3-cp312-cp312-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:15d79dd26056573940fcb8c7413d84118086f2ec1a8acdfa854631084393efcc", size = 669395, upload-time = "2023-12-21T22:31:35.992Z" },
             { url = "https://files.pythonhosted.org/packages/63/0f/847ed02cdfce10f0e6e3425cd054296bddb11a17ef1b34681fa01a055187/greenlet-3.0.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:881b7db1ebff4ba09aaaeae6aa491daeb226c8150fc20e836ad00041bcb11230", size = 670455, upload-time = "2023-12-21T22:03:16.291Z" },
             { url = "https://files.pythonhosted.org/packages/bd/37/56b0da468a85e7704f3b2bc045015301bdf4be2184a44868c71f6dca6fe2/greenlet-3.0.3-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fcd2469d6a2cf298f198f0487e0a5b1a47a42ca0fa4dfd1b6862c999f018ebbf", size = 625692, upload-time = "2023-12-21T22:03:06.294Z" },
             { url = "https://files.pythonhosted.org/packages/7c/68/b5f4084c0a252d7e9c0d95fc1cfc845d08622037adb74e05be3a49831186/greenlet-3.0.3-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:1f672519db1796ca0d8753f9e78ec02355e862d0998193038c7073045899f305", size = 1152597, upload-time = "2023-12-21T22:31:00.412Z" },
@@ -7143,7 +7294,7 @@ fn extra_inferences() -> Result<()> {
         source = { registry = "https://pypi.org/simple" }
         dependencies = [
             { name = "python-dateutil" },
-            { name = "time-machine", marker = "implementation_name != 'pypy' or (extra == 'extra-3-pkg-x1' and extra == 'extra-3-pkg-x2')" },
+            { name = "time-machine", marker = "implementation_name != 'pypy'" },
             { name = "tzdata" },
         ]
         sdist = { url = "https://files.pythonhosted.org/packages/b8/fe/27c7438c6ac8b8f8bef3c6e571855602ee784b85d072efddfff0ceb1cd77/pendulum-3.0.0.tar.gz", hash = "sha256:5d034998dea404ec31fae27af6b22cff1708f830a1ed7353be4d1019bb9f584e", size = 84524, upload-time = "2023-12-16T21:27:19.742Z" }
@@ -7528,7 +7679,7 @@ fn extra_inferences() -> Result<()> {
         version = "1.4.52"
         source = { registry = "https://pypi.org/simple" }
         dependencies = [
-            { name = "greenlet", marker = "platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64' or (extra == 'extra-3-pkg-x1' and extra == 'extra-3-pkg-x2')" },
+            { name = "greenlet", marker = "platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64'" },
         ]
         sdist = { url = "https://files.pythonhosted.org/packages/8a/a4/b5991829c34af0505e0f2b1ccf9588d1ba90f2d984ee208c90c985f1265a/SQLAlchemy-1.4.52.tar.gz", hash = "sha256:80e63bbdc5217dad3485059bdf6f65a7d43f33c8bde619df5c220edf03d87296", size = 8514200, upload-time = "2024-03-04T13:29:44.258Z" }
         wheels = [
@@ -8586,7 +8737,7 @@ fn overlapping_resolution_markers() -> Result<()> {
         version = "8.1.8"
         source = { registry = "https://pypi.org/simple" }
         dependencies = [
-            { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-14-ads-mega-model-cpu' and extra == 'extra-14-ads-mega-model-cu118')" },
+            { name = "colorama", marker = "sys_platform == 'win32'" },
         ]
         sdist = { url = "https://files.pythonhosted.org/packages/b9/2e/0090cbf739cee7d23781ad4b89a9894a41538e4fcf4c31dcdd705b78eb8b/click-8.1.8.tar.gz", hash = "sha256:ed53c9d8990d83c2a27deae68e4ee337473f6330c040a31d4225c9574d16096a", size = 226593, upload-time = "2024-12-21T18:38:44.339Z" }
         wheels = [
