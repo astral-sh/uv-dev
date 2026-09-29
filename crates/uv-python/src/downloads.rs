@@ -977,7 +977,13 @@ const NDJSON_KNOWN_FLAVORS: &[&str] = &["full", "install_only", "install_only_st
 struct VersionsCacheMeta {
     content_length: u64,
     etag: Option<String>,
+    #[serde(default = "complete_versions_cache")]
+    complete: bool,
     checked_at: Timestamp,
+}
+
+const fn complete_versions_cache() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1267,7 +1273,7 @@ async fn refresh_versions_cache_meta(
     let Some((_, current)) = read_versions_cache(&content_entry, &meta_entry).await else {
         return;
     };
-    // A concurrent fetch may have replaced the contents while HEAD was in flight.
+    // A concurrent fetch may have replaced the contents while revalidation was in flight.
     if current != *expected {
         return;
     }
@@ -1333,35 +1339,13 @@ async fn read_versions_cache_content(
     read_versions_cache(&content_entry, &meta_entry).await
 }
 
-async fn fetch_versions_cache_etag(client: &BaseClient, url: &DisplaySafeUrl) -> Option<String> {
-    let response = match client
-        .for_host(url)
-        .head(Url::from(url.clone()))
-        .send()
-        .await
-    {
-        Ok(response) => match response.error_for_status() {
-            Ok(response) => response,
-            Err(err) => {
-                debug!("Failed to validate Python downloads metadata with HEAD request: {err}");
-                return None;
-            }
-        },
-        Err(err) => {
-            debug!("Failed to send HEAD request for Python downloads metadata: {err}");
-            return None;
-        }
-    };
-
-    response_etag(&response)
-}
-
 async fn write_streamed_versions_cache_if_valid(
     cache: &Cache,
     url: &DisplaySafeUrl,
     source: &str,
     content: &[u8],
     etag: Option<String>,
+    complete: bool,
 ) {
     let shard = versions_cache_shard(cache, url);
     let Ok(_lock) = shard.lock().await else {
@@ -1369,9 +1353,19 @@ async fn write_streamed_versions_cache_if_valid(
         return;
     };
     let (content_entry, meta_entry) = versions_cache_entries(&shard);
+    if !complete
+        && let Some((_, current)) = read_versions_cache(&content_entry, &meta_entry).await
+        && (current.complete
+            || (etag.is_some()
+                && current.etag == etag
+                && current.content_length >= content.len() as u64))
+    {
+        return;
+    }
     let meta = VersionsCacheMeta {
         content_length: content.len() as u64,
         etag,
+        complete,
         checked_at: Timestamp::now(),
     };
     write_versions_cache_if_valid(&content_entry, &meta_entry, source, content, &meta).await;
@@ -1416,6 +1410,62 @@ async fn fetch_bytes_from_url(
     Ok((bytes.to_vec(), etag))
 }
 
+async fn fetch_complete_versions_cache(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    content_entry: &CacheEntry,
+    meta_entry: &CacheEntry,
+    cached: Option<&(Vec<u8>, VersionsCacheMeta)>,
+) -> Result<Vec<u8>, Error> {
+    let result = async {
+        let etag = cached.and_then(|(_, meta)| meta.etag.as_deref());
+        let response = fetch_http_response_conditional(client, url, etag).await?;
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            let Some((content, meta)) = cached.filter(|_| etag.is_some()) else {
+                return Err(io::Error::other(
+                    "Received unchanged Python metadata without a complete cache",
+                )
+                .into());
+            };
+            let meta = VersionsCacheMeta {
+                checked_at: Timestamp::now(),
+                ..meta.clone()
+            };
+            if let Err(err) = write_versions_cache_meta(meta_entry, &meta).await {
+                debug!("Failed to refresh Python downloads cache metadata: {err}");
+            }
+            return Ok(content.clone());
+        }
+        let etag = response_etag(&response);
+        let content = response
+            .bytes()
+            .await
+            .map_err(|err| Error::NetworkError(url.clone(), WrappedReqwestError::from(err)))?
+            .to_vec();
+        let meta = VersionsCacheMeta {
+            content_length: content.len() as u64,
+            etag,
+            complete: true,
+            checked_at: Timestamp::now(),
+        };
+        write_versions_cache_if_valid(content_entry, meta_entry, &url.to_string(), &content, &meta)
+            .await;
+        Ok(content)
+    }
+    .await;
+    match result {
+        Ok(content) => Ok(content),
+        Err(err) => {
+            if let Some((content, _)) = cached {
+                debug!("Using stale cached Python downloads metadata after fetch failure: {err}");
+                Ok(content.clone())
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
 async fn fetch_ndjson_cached(
     client: &BaseClient,
     url: &DisplaySafeUrl,
@@ -1433,7 +1483,9 @@ async fn fetch_ndjson_cached(
         .await
         .map_err(|err| io::Error::other(format!("Failed to lock Python downloads cache: {err}")))?;
     let (content_entry, meta_entry) = versions_cache_entries(&shard);
-    let cached = read_versions_cache(&content_entry, &meta_entry).await;
+    let cached = read_versions_cache(&content_entry, &meta_entry)
+        .await
+        .filter(|(_, meta)| meta.complete);
     let source = url.to_string();
 
     if client.connectivity().is_offline() {
@@ -1451,6 +1503,19 @@ async fn fetch_ndjson_cached(
     {
         debug!("Using fresh cached Python downloads metadata without revalidation");
         return Ok(content.clone());
+    }
+
+    // The official manifest supports prepending a validated delta. Other sources can
+    // revalidate the cached representation directly with a conditional GET.
+    if cached.is_none() || !supports_incremental_versions_cache(url) {
+        return fetch_complete_versions_cache(
+            client,
+            url,
+            &content_entry,
+            &meta_entry,
+            cached.as_ref(),
+        )
+        .await;
     }
 
     let head_result = client
@@ -1473,32 +1538,14 @@ async fn fetch_ndjson_cached(
     };
 
     let Some(head_response) = head_response else {
-        return match fetch_bytes_from_url(client, url).await {
-            Ok((content, etag)) => {
-                let meta = VersionsCacheMeta {
-                    content_length: content.len() as u64,
-                    etag,
-                    checked_at: Timestamp::now(),
-                };
-                write_versions_cache_if_valid(
-                    &content_entry,
-                    &meta_entry,
-                    &source,
-                    &content,
-                    &meta,
-                )
-                .await;
-                Ok(content)
-            }
-            Err(err) => {
-                if let Some((content, _)) = cached {
-                    debug!("Using stale cached Python downloads metadata after HEAD failure");
-                    Ok(content)
-                } else {
-                    Err(err)
-                }
-            }
-        };
+        return fetch_complete_versions_cache(
+            client,
+            url,
+            &content_entry,
+            &meta_entry,
+            cached.as_ref(),
+        )
+        .await;
     };
 
     let current_length = head_response
@@ -1563,6 +1610,7 @@ async fn fetch_ndjson_cached(
                         let meta = VersionsCacheMeta {
                             content_length: current_length,
                             etag: current_etag.clone(),
+                            complete: true,
                             checked_at: Timestamp::now(),
                         };
                         if let Err(err) =
@@ -1583,26 +1631,7 @@ async fn fetch_ndjson_cached(
         }
     }
 
-    match fetch_bytes_from_url(client, url).await {
-        Ok((content, etag)) => {
-            let meta = VersionsCacheMeta {
-                content_length: content.len() as u64,
-                etag,
-                checked_at: Timestamp::now(),
-            };
-            write_versions_cache_if_valid(&content_entry, &meta_entry, &source, &content, &meta)
-                .await;
-            Ok(content)
-        }
-        Err(err) => {
-            if let Some((content, _)) = cached {
-                debug!("Using stale cached Python downloads metadata after fetch failure");
-                Ok(content)
-            } else {
-                Err(err)
-            }
-        }
-    }
+    fetch_complete_versions_cache(client, url, &content_entry, &meta_entry, cached.as_ref()).await
 }
 
 impl ManagedPythonDownloadList {
@@ -1709,6 +1738,11 @@ impl ManagedPythonDownloadList {
         filter: Option<&PythonDownloadRequest>,
         limit: Option<usize>,
     ) -> Result<Self, Error> {
+        if limit == Some(0) {
+            return Ok(Self {
+                downloads: Vec::new(),
+            });
+        }
         let Some(source) = resolve_download_list_source(python_downloads_json_url)? else {
             return Ok(Self {
                 downloads: filter_downloads(embedded_downloads()?, filter, limit),
@@ -1758,24 +1792,14 @@ impl ManagedPythonDownloadList {
                     client_builder.retry_policy(),
                     "Python download metadata",
                     async |url| {
-                        if client.connectivity().is_offline() {
-                            let bytes = fetch_ndjson_cached(&client, &url, Some(cache)).await?;
-                            parse_ndjson_bytes_filtered(
-                                &url.to_string(),
-                                &bytes,
-                                predicate,
-                                parse_limit,
-                            )
-                        } else {
-                            fetch_ndjson_collect_streaming_cached(
-                                &client,
-                                &url,
-                                cache,
-                                predicate,
-                                parse_limit,
-                            )
-                            .await
-                        }
+                        fetch_ndjson_collect_streaming_cached(
+                            &client,
+                            &url,
+                            cache,
+                            predicate,
+                            parse_limit,
+                        )
+                        .await
                     },
                 )
                 .await
@@ -2041,14 +2065,7 @@ async fn find_matching_download(
                 urls,
                 client_builder.retry_policy(),
                 "Python download metadata",
-                async |url| {
-                    if client.connectivity().is_offline() {
-                        let bytes = fetch_ndjson_cached(&client, &url, Some(cache)).await?;
-                        parse_ndjson_bytes_find(&url.to_string(), &bytes, predicate)
-                    } else {
-                        fetch_ndjson_find_cached(&client, &url, cache, predicate).await
-                    }
-                },
+                async |url| fetch_ndjson_find_cached(&client, &url, cache, predicate).await,
             )
             .await
         }
@@ -2846,6 +2863,9 @@ fn parse_ndjson_bytes_filtered(
     predicate: impl Fn(&ManagedPythonDownload) -> bool,
     limit: Option<usize>,
 ) -> Result<Vec<ManagedPythonDownload>, Error> {
+    if limit == Some(0) {
+        return Ok(Vec::new());
+    }
     let mut downloads = Vec::new();
     parse_ndjson_bytes_with(source, buf, |download| {
         if predicate(&download) {
@@ -2874,85 +2894,17 @@ fn parse_ndjson_bytes_find(
     })
 }
 
-async fn fetch_ndjson_streaming<T>(
-    client: &BaseClient,
-    url: &DisplaySafeUrl,
-    mut visitor: impl FnMut(ManagedPythonDownload) -> ControlFlow<T, ()>,
-) -> Result<Option<T>, Error> {
-    let source = url.to_string();
-    let (reader, _) = read_url(url, client).await?;
-    let mut reader = BufReader::new(reader);
-    let mut line = Vec::new();
-
-    loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line).await? == 0 {
-            break;
-        }
-
-        if line.last() == Some(&b'\n') {
-            line.pop();
-        }
-        if line.last() == Some(&b'\r') {
-            line.pop();
-        }
-
-        if let Some(value) = visit_ndjson_line(&source, &line, &mut visitor)? {
-            return Ok(Some(value));
-        }
-    }
-
-    Ok(None)
-}
-
-async fn fetch_ndjson_find(
-    client: &BaseClient,
-    url: &DisplaySafeUrl,
-    predicate: impl Fn(&ManagedPythonDownload) -> bool,
-) -> Result<Option<ManagedPythonDownload>, Error> {
-    fetch_ndjson_streaming(client, url, |download| {
-        if predicate(&download) {
-            ControlFlow::Break(download)
-        } else {
-            ControlFlow::Continue(())
-        }
-    })
-    .await
-}
-
 async fn fetch_ndjson_find_cached(
     client: &BaseClient,
     url: &DisplaySafeUrl,
     cache: &Cache,
     predicate: impl Fn(&ManagedPythonDownload) -> bool,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
-    let source = url.to_string();
-    let cached = read_versions_cache_content(cache, url).await;
-    if let Some((content, meta)) = &cached
-        && versions_cache_is_fresh(cache, url, meta)
-    {
-        return parse_ndjson_bytes_find(&source, content, predicate);
-    }
-
-    if let Some((content, meta)) = &cached {
-        let etag = fetch_versions_cache_etag(client, url).await;
-        if etag.is_some() && etag == meta.etag {
-            refresh_versions_cache_meta(cache, url, meta).await;
-            return parse_ndjson_bytes_find(&source, content, predicate);
-        }
-    }
-
-    match fetch_ndjson_find(client, url, &predicate).await {
-        Ok(download) => Ok(download),
-        Err(err @ Error::InvalidPythonDownloadsNdjsonLine(..)) => Err(err),
-        Err(err) => {
-            if let Some((content, _)) = cached {
-                debug!("Using stale cached Python downloads metadata after fetch failure");
-                return parse_ndjson_bytes_find(&source, &content, predicate);
-            }
-            Err(err)
-        }
-    }
+    Ok(
+        fetch_ndjson_collect_streaming_cached(client, url, cache, predicate, Some(1))
+            .await?
+            .pop(),
+    )
 }
 
 async fn fetch_ndjson_collect_streaming_cached(
@@ -2962,89 +2914,95 @@ async fn fetch_ndjson_collect_streaming_cached(
     predicate: impl Fn(&ManagedPythonDownload) -> bool,
     limit: Option<usize>,
 ) -> Result<Vec<ManagedPythonDownload>, Error> {
+    if limit == Some(0) {
+        return Ok(Vec::new());
+    }
+
     let source = url.to_string();
     let cached = read_versions_cache_content(cache, url).await;
-    if let Some((content, meta)) = &cached
-        && versions_cache_is_fresh(cache, url, meta)
+    // An incomplete prefix can prove that a match exists, but cannot prove that there are no
+    // further matches. Unbounded requests always require the complete representation.
+    let cached_downloads = cached.as_ref().and_then(|(content, meta)| {
+        let downloads = parse_ndjson_bytes_filtered(&source, content, &predicate, limit).ok()?;
+        (meta.complete || limit.is_some_and(|limit| downloads.len() >= limit)).then_some(downloads)
+    });
+    if let Some(downloads) = &cached_downloads
+        && cached.as_ref().is_some_and(|(_, meta)| {
+            client.connectivity().is_offline() || versions_cache_is_fresh(cache, url, meta)
+        })
     {
-        return parse_ndjson_bytes_filtered(&source, content, predicate, limit);
+        return Ok(downloads.clone());
     }
 
-    let etag = fetch_versions_cache_etag(client, url).await;
-    if let Some((content, meta)) = &cached
-        && etag.is_some()
-        && etag == meta.etag
-    {
-        refresh_versions_cache_meta(cache, url, meta).await;
-        return parse_ndjson_bytes_filtered(&source, content, predicate, limit);
-    }
-
-    let response = match fetch_http_response(client, url).await {
-        Ok(response) => response,
-        Err(err) => {
-            if let Some((content, _)) = cached {
-                debug!("Using stale cached Python downloads metadata after fetch failure");
-                return parse_ndjson_bytes_filtered(&source, &content, predicate, limit);
+    let etag = cached
+        .as_ref()
+        .and_then(|(_, meta)| cached_downloads.as_ref().and(meta.etag.as_deref()));
+    let result = async {
+        let response = fetch_http_response_conditional(client, url, etag).await?;
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            if let (Some((_, meta)), Some(downloads), Some(_)) = (&cached, &cached_downloads, etag)
+            {
+                refresh_versions_cache_meta(cache, url, meta).await;
+                return Ok(downloads.clone());
             }
-            return Err(err);
+            return Err(io::Error::other(
+                "Received unchanged Python metadata without a usable cache",
+            )
+            .into());
         }
-    };
-    let etag = response_etag(&response);
-    let reader = response
-        .bytes_stream()
-        .map_err(io::Error::other)
-        .into_async_read()
-        .compat();
-    let mut reader = BufReader::new(reader);
-    let mut line = Vec::new();
-    let mut content = Vec::new();
-    let mut downloads = Vec::new();
-    let mut completed = true;
-    let mut visitor = |download| {
-        if predicate(&download) {
-            downloads.push(download);
-            if limit.is_some_and(|limit| downloads.len() >= limit) {
-                return ControlFlow::Break(());
-            }
-        }
-        ControlFlow::Continue(())
-    };
-
-    loop {
-        line.clear();
-        match reader.read_until(b'\n', &mut line).await {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(err) => {
-                if let Some((content, _)) = cached {
-                    debug!("Using stale cached Python downloads metadata after fetch failure");
-                    return parse_ndjson_bytes_filtered(&source, &content, predicate, limit);
+        let etag = response_etag(&response);
+        let content_length = response.content_length();
+        let reader = response
+            .bytes_stream()
+            .map_err(io::Error::other)
+            .into_async_read()
+            .compat();
+        let mut reader = BufReader::new(reader);
+        let mut line = Vec::new();
+        let mut content = Vec::new();
+        let mut downloads = Vec::new();
+        let mut complete = true;
+        let mut visitor = |download| {
+            if predicate(&download) {
+                downloads.push(download);
+                if limit.is_some_and(|limit| downloads.len() >= limit) {
+                    return ControlFlow::Break(());
                 }
-                return Err(err.into());
+            }
+            ControlFlow::Continue(())
+        };
+
+        loop {
+            line.clear();
+            if reader.read_until(b'\n', &mut line).await? == 0 {
+                break;
+            }
+            content.extend_from_slice(&line);
+            let reached_eof = line.last() != Some(&b'\n');
+            if visit_ndjson_line(&source, &line, &mut visitor)?.is_some() {
+                complete = reached_eof || content_length == Some(content.len() as u64);
+                break;
             }
         }
 
-        content.extend_from_slice(&line);
-
-        if line.last() == Some(&b'\n') {
-            line.pop();
-        }
-        if line.last() == Some(&b'\r') {
-            line.pop();
-        }
-
-        if visit_ndjson_line(&source, &line, &mut visitor)?.is_some() {
-            completed = false;
-            break;
-        }
+        write_streamed_versions_cache_if_valid(cache, url, &source, &content, etag, complete).await;
+        downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+        Ok(downloads)
     }
+    .await;
 
-    if completed {
-        write_streamed_versions_cache_if_valid(cache, url, &source, &content, etag).await;
+    match result {
+        Err(err @ Error::InvalidPythonDownloadsNdjsonLine(..)) => Err(err),
+        Err(err) => {
+            if let Some(downloads) = cached_downloads {
+                debug!("Using stale cached Python downloads metadata after fetch failure: {err}");
+                Ok(downloads)
+            } else {
+                Err(err)
+            }
+        }
+        Ok(downloads) => Ok(downloads),
     }
-
-    downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
-    Ok(downloads)
 }
 
 impl Error {
@@ -3152,12 +3110,21 @@ where
     }
 }
 
-/// Convert a [`Url`] into an [`AsyncRead`] stream.
 async fn fetch_http_response(client: &BaseClient, url: &DisplaySafeUrl) -> Result<Response, Error> {
+    fetch_http_response_conditional(client, url, None).await
+}
+
+async fn fetch_http_response_conditional(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    etag: Option<&str>,
+) -> Result<Response, Error> {
     let start = Instant::now();
-    let response = client
-        .for_host(url)
-        .get(Url::from(url.clone()))
+    let mut request = client.for_host(url).get(Url::from(url.clone()));
+    if let Some(etag) = etag {
+        request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+    }
+    let response = request
         .send()
         .await
         .map_err(|err| Error::from_reqwest_middleware(url.clone(), err))?;
@@ -3490,6 +3457,11 @@ mod tests {
         assert_eq!(downloads.len(), 1);
         assert_eq!(downloads[0].key().version().to_string(), "3.14.1");
         assert_eq!(downloads[0].build(), Some("20260420"));
+        assert!(
+            parse_ndjson_bytes_filtered("test.ndjson", ndjson, |_| true, Some(0))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3636,21 +3608,16 @@ mod tests {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
             let server = std::thread::spawn(move || {
-                for method in ["HEAD", "GET"] {
-                    let (mut stream, _) = listener.accept().unwrap();
-                    let request = read_http_request(&mut stream);
-                    assert!(request.starts_with(method));
-                    let etag = if method == "HEAD" { "old" } else { "new" };
-                    write!(
-                        stream,
-                        "HTTP/1.1 200 OK\r\nETag: \"{etag}\"\r\nContent-Length: {}\r\n\r\n",
-                        content.len()
-                    )
-                    .unwrap();
-                    if method == "GET" {
-                        stream.write_all(content).unwrap();
-                    }
-                }
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream);
+                assert!(request.starts_with("GET "));
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nETag: \"new\"\r\nContent-Length: {}\r\n\r\n",
+                    content.len()
+                )
+                .unwrap();
+                stream.write_all(content).unwrap();
             });
             let cache = Cache::temp().unwrap().init().await.unwrap();
             let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
@@ -3684,6 +3651,7 @@ mod tests {
         let old = VersionsCacheMeta {
             content_length: content.len() as u64,
             etag: Some("\"old\"".to_string()),
+            complete: true,
             checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
         };
         let new = VersionsCacheMeta {
@@ -3708,6 +3676,7 @@ mod tests {
         let meta = VersionsCacheMeta {
             content_length: content.len() as u64,
             etag: None,
+            complete: true,
             checked_at: Timestamp::now(),
         };
         write_versions_cache(&content_entry, &meta_entry, content, &meta)
@@ -3837,6 +3806,7 @@ mod tests {
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
                 etag: None,
+                complete: true,
                 checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
             },
         )
@@ -3854,152 +3824,180 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streaming_cache_reuses_matching_etag_without_get() {
-        let cached = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/token-a.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+    async fn versions_cache_revalidates_with_conditional_get() {
+        enum Query {
+            Full,
+            List,
+            Find,
+        }
+        let content = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/python.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
 "#;
-
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let address = listener.local_addr().unwrap();
-        let get_requests = Arc::new(AtomicUsize::new(0));
-        let get_requests_server = Arc::clone(&get_requests);
-        let server = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
-            while std::time::Instant::now() < deadline {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let request = read_http_request(&mut stream);
-                        if request.starts_with("HEAD ") {
-                            write!(
-                                stream,
-                                "HTTP/1.1 200 OK\r\nETag: \"v1\"\r\nContent-Length: {}\r\n\r\n",
-                                cached.len()
-                            )
-                            .unwrap();
-                            return;
-                        }
-                        if request.starts_with("GET ") {
-                            get_requests_server.fetch_add(1, Ordering::SeqCst);
-                        }
-                    }
-                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(StdDuration::from_millis(10));
-                    }
-                    Err(err) => panic!("failed to accept connection: {err}"),
-                }
-            }
-        });
-
-        let cache = Cache::temp().unwrap().init().await.unwrap();
-        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
-        let shard = versions_cache_shard(&cache, &url);
-        let (content_entry, meta_entry) = versions_cache_entries(&shard);
-        write_versions_cache(
-            &content_entry,
-            &meta_entry,
-            cached,
-            &VersionsCacheMeta {
-                content_length: cached.len() as u64,
+        for query in [Query::Full, Query::List, Query::Find] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream).to_ascii_lowercase();
+                assert!(request.starts_with("get "));
+                assert!(request.contains("if-none-match: \"v1\""));
+                stream
+                    .write_all(b"HTTP/1.1 304 Not Modified\r\nETag: \"v1\"\r\n\r\n")
+                    .unwrap();
+            });
+            let cache = Cache::temp().unwrap().init().await.unwrap();
+            let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+            let shard = versions_cache_shard(&cache, &url);
+            let (content_entry, meta_entry) = versions_cache_entries(&shard);
+            let old = VersionsCacheMeta {
+                content_length: content.len() as u64,
                 etag: Some("\"v1\"".to_string()),
+                complete: true,
                 checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
-            },
-        )
-        .await
-        .unwrap();
-
-        let client = BaseClientBuilder::default().retries(0).build().unwrap();
-        let downloads =
-            fetch_ndjson_collect_streaming_cached(&client, &url, &cache, |_| true, None)
+            };
+            write_versions_cache(&content_entry, &meta_entry, content, &old)
                 .await
                 .unwrap();
-
-        assert_eq!(downloads.len(), 1);
-        assert_eq!(
-            downloads[0].url().as_ref(),
-            "https://example.com/token-a.tar.gz"
-        );
-        assert_eq!(get_requests.load(Ordering::SeqCst), 0);
-        server.join().unwrap();
+            let client = BaseClientBuilder::default().retries(0).build().unwrap();
+            match query {
+                Query::Full => assert_eq!(
+                    fetch_ndjson_cached(&client, &url, Some(&cache))
+                        .await
+                        .unwrap(),
+                    content
+                ),
+                Query::List => assert_eq!(
+                    fetch_ndjson_collect_streaming_cached(&client, &url, &cache, |_| true, None)
+                        .await
+                        .unwrap()
+                        .len(),
+                    1
+                ),
+                Query::Find => assert!(
+                    fetch_ndjson_find_cached(&client, &url, &cache, |_| true)
+                        .await
+                        .unwrap()
+                        .is_some()
+                ),
+            }
+            let (cached, meta) = read_versions_cache_content(&cache, &url).await.unwrap();
+            assert_eq!(cached, content);
+            assert!(meta.checked_at > old.checked_at);
+            server.join().unwrap();
+        }
     }
 
     #[tokio::test]
-    async fn find_streaming_cache_reuses_matching_etag_without_get() {
-        let cached = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/token-a.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+    async fn versions_cache_prefixes_require_enough_matches() {
+        let first = br#"{"version":"3.14.2","artifacts":[{"url":"https://example.com/new.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
 "#;
-
+        let second = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/old.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+"#;
+        let content = [first.as_slice(), second.as_slice()].concat();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
-        let get_requests = Arc::new(AtomicUsize::new(0));
-        let get_requests_server = Arc::clone(&get_requests);
+        let response_content = content.clone();
         let server = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
-            while std::time::Instant::now() < deadline {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let request = read_http_request(&mut stream);
-                        if request.starts_with("HEAD ") {
-                            write!(
-                                stream,
-                                "HTTP/1.1 200 OK\r\nETag: \"v1\"\r\nContent-Length: {}\r\n\r\n",
-                                cached.len()
-                            )
-                            .unwrap();
-                            return;
-                        }
-                        if request.starts_with("GET ") {
-                            get_requests_server.fetch_add(1, Ordering::SeqCst);
-                            write!(
-                                stream,
-                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/x-ndjson\r\n\r\n",
-                                cached.len()
-                            )
-                            .unwrap();
-                            stream.write_all(cached).unwrap();
-                            return;
-                        }
-                    }
-                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(StdDuration::from_millis(10));
-                    }
-                    Err(err) => panic!("failed to accept connection: {err}"),
+            for conditional in [false, true, false] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream).to_ascii_lowercase();
+                assert!(request.starts_with("get "));
+                assert_eq!(request.contains("if-none-match: \"v1\""), conditional);
+                if conditional {
+                    stream
+                        .write_all(b"HTTP/1.1 304 Not Modified\r\nETag: \"v1\"\r\n\r\n")
+                        .unwrap();
+                } else {
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nETag: \"v1\"\r\nContent-Length: {}\r\n\r\n",
+                        response_content.len()
+                    )
+                    .unwrap();
+                    stream.write_all(&response_content).unwrap();
                 }
             }
         });
-
         let cache = Cache::temp().unwrap().init().await.unwrap();
         let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
-        let shard = versions_cache_shard(&cache, &url);
-        let (content_entry, meta_entry) = versions_cache_entries(&shard);
-        write_versions_cache(
-            &content_entry,
-            &meta_entry,
-            cached,
-            &VersionsCacheMeta {
-                content_length: cached.len() as u64,
-                etag: Some("\"v1\"".to_string()),
-                checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
-            },
-        )
-        .await
-        .unwrap();
-
-        let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu").unwrap();
-        let download = ManagedPythonDownloadList::find_streaming(
-            &BaseClientBuilder::default().retries(0),
-            &cache,
-            Some(url.as_str()),
-            &request,
-        )
-        .await
-        .unwrap()
-        .expect("matching download should be found");
-
-        assert_eq!(
-            download.url().as_ref(),
-            "https://example.com/token-a.tar.gz"
+        let client = BaseClientBuilder::default().retries(0).build().unwrap();
+        let offline = BaseClientBuilder::default()
+            .connectivity(Connectivity::Offline)
+            .retries(0)
+            .build()
+            .unwrap();
+        let latest = |download: &ManagedPythonDownload| download.key().version().patch() == Some(2);
+        let older = |download: &ManagedPythonDownload| download.key().version().patch() == Some(1);
+        assert!(
+            fetch_ndjson_find_cached(&client, &url, &cache, latest)
+                .await
+                .unwrap()
+                .is_some()
         );
-        assert_eq!(get_requests.load(Ordering::SeqCst), 0);
+        let (cached, mut meta) = read_versions_cache_content(&cache, &url).await.unwrap();
+        assert_eq!(cached, first);
+        assert!(!meta.complete);
+        assert!(
+            fetch_ndjson_find_cached(&offline, &url, &cache, latest)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            fetch_ndjson_find_cached(&offline, &url, &cache, older)
+                .await
+                .is_err()
+        );
+        assert!(
+            fetch_ndjson_cached(&offline, &url, Some(&cache))
+                .await
+                .is_err()
+        );
+        assert!(
+            fetch_ndjson_collect_streaming_cached(&offline, &url, &cache, |_| true, None)
+                .await
+                .is_err()
+        );
+
+        meta.checked_at = Timestamp::from(SystemTime::UNIX_EPOCH);
+        let shard = versions_cache_shard(&cache, &url);
+        let (_, meta_entry) = versions_cache_entries(&shard);
+        write_versions_cache_meta(&meta_entry, &meta).await.unwrap();
+        assert!(
+            fetch_ndjson_find_cached(&client, &url, &cache, latest)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            fetch_ndjson_find_cached(&client, &url, &cache, older)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let (cached, meta) = read_versions_cache_content(&cache, &url).await.unwrap();
+        assert_eq!(cached, content);
+        assert!(meta.complete);
+
+        // A bounded fetch must not discard a complete catalog cached by another request.
+        write_streamed_versions_cache_if_valid(
+            &cache,
+            &url,
+            "test",
+            first,
+            Some("\"v2\"".to_string()),
+            false,
+        )
+        .await;
+        assert_eq!(
+            read_versions_cache_content(&cache, &url).await.unwrap().0,
+            content
+        );
+        assert_eq!(
+            fetch_ndjson_cached(&offline, &url, Some(&cache))
+                .await
+                .unwrap(),
+            content
+        );
         server.join().unwrap();
     }
 
@@ -4011,15 +4009,12 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
-            for _ in 0..2 {
-                let (mut stream, _) = listener.accept().unwrap();
-                let _request = read_http_request(&mut stream);
-                write!(
-                    stream,
-                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
-                )
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            assert!(request.starts_with("GET "));
+            stream
+                .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
                 .unwrap();
-            }
         });
 
         let cache = Cache::temp().unwrap().init().await.unwrap();
@@ -4033,6 +4028,7 @@ mod tests {
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
                 etag: None,
+                complete: true,
                 checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
             },
         )
@@ -4081,6 +4077,7 @@ mod tests {
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
                 etag: None,
+                complete: true,
                 checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
             },
         )
