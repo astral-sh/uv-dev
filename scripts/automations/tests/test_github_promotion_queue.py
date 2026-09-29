@@ -131,7 +131,10 @@ class PromotionQueueWriterTests(unittest.TestCase):
             "id": 3000,
             "issue_url": "https://api.github.com/repos/astral-sh/uv-dev/issues/20",
             "user": {"login": bot.login, "id": bot.database_id, "type": "Bot"},
-            "performed_via_github_app": None,
+            "performed_via_github_app": {
+                "id": AUTOMATIONS_APP.database_id,
+                "slug": AUTOMATIONS_APP.slug,
+            },
             "body": queued.comment(),
             "created_at": str(TIME),
             "updated_at": str(TIME),
@@ -158,7 +161,9 @@ class PromotionQueueWriterTests(unittest.TestCase):
                 "get_unedited_promotion_comment",
                 return_value=None,
             ),
-            self.assertRaisesRegex(ValueError, "record was edited"),
+            self.assertRaisesRegex(
+                PromotionReadError, "Invalid GitHub promotion response"
+            ),
         ):
             PromotionQueueGitHub().create_queue_comment(queued)
 

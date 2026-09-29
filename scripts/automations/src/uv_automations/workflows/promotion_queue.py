@@ -34,6 +34,10 @@ from uv_automations.promotion_models import (
     current_promotion_approval,
     promotion_is_eligible,
 )
+from uv_automations.workflows.promotion_completion import (
+    COMPLETION_ATTEMPTS,
+    _retry_delay,
+)
 
 QUEUE_MARKER = "<!-- uv-automations:promotion-queue:v1 "
 MAX_QUEUE_JSON_BYTES = 4096
@@ -432,9 +436,9 @@ def current_queued_promotion(
     return current
 
 
-def record_queue(
-    reader: QueueRecordReader, writer: QueueWriter, queued: QueuedPromotion
-) -> QueueRecordOutcome:
+def _queue_record_outcome(
+    reader: QueueRecordReader, queued: QueuedPromotion
+) -> QueueRecordOutcome | None:
     source = reader.get_promotion_pull_request(queued.source)
     approval = _current_queue_approval(reader, source, queued.approval.head)
     if (
@@ -459,14 +463,76 @@ def record_queue(
         and existing.reason == ReplaySkipReason.AMBIGUOUS_RECORD
     ):
         raise ValueError("Conflicting promotion queue records")
-    # This writer never edits old records. Each changed approval retains its own
-    # exact head, and a retry of the same state does not create another comment.
-    if not _source_matches(
+    return None
+
+
+def _queue_is_current(reader: QueueRecordReader, queued: QueuedPromotion) -> bool:
+    return _source_matches(
         reader.get_promotion_pull_request(queued.source), queued
-    ) or not _approval_matches(reader, queued):
-        return QueueRecordOutcome.STALE
-    writer.create_queue_comment(queued)
-    return QueueRecordOutcome.RECORDED
+    ) and _approval_matches(reader, queued)
+
+
+def record_queue(
+    reader: QueueRecordReader, writer: QueueWriter, queued: QueuedPromotion
+) -> QueueRecordOutcome:
+    # A comment is not an idempotent write. Reconcile its canonical, unedited
+    # receipt after an ambiguous response; never repeat the POST here.
+    comment_attempted = False
+    receipt_observed = False
+    for attempt in range(COMPLETION_ATTEMPTS):
+        waited = False
+        try:
+            outcome = _queue_record_outcome(reader, queued)
+            if outcome is not None:
+                if outcome == QueueRecordOutcome.UNCHANGED:
+                    # A proven receipt removes write authority for this
+                    # invocation, even if a later read temporarily omits it.
+                    receipt_observed = True
+                    # Receipt collection performs several REST and GraphQL
+                    # reads. The exact source and approval must still match.
+                    if not _queue_is_current(reader, queued):
+                        return QueueRecordOutcome.STALE
+                    return (
+                        QueueRecordOutcome.RECORDED
+                        if comment_attempted
+                        else QueueRecordOutcome.UNCHANGED
+                    )
+                return outcome
+            if not comment_attempted and not receipt_observed:
+                if not _queue_is_current(reader, queued):
+                    return QueueRecordOutcome.STALE
+                comment_attempted = True
+                try:
+                    writer.create_queue_comment(queued)
+                except PromotionReadError as error:
+                    # A server-requested delay applies to reconciliation reads
+                    # too, including a final attempt with an ambiguous result.
+                    _retry_delay(attempt, error, before_reconciliation=True)
+                    waited = True
+                else:
+                    return (
+                        QueueRecordOutcome.RECORDED
+                        if _queue_is_current(reader, queued)
+                        else QueueRecordOutcome.STALE
+                    )
+                outcome = _queue_record_outcome(reader, queued)
+                if outcome is not None:
+                    if outcome == QueueRecordOutcome.UNCHANGED:
+                        receipt_observed = True
+                        return (
+                            QueueRecordOutcome.RECORDED
+                            if _queue_is_current(reader, queued)
+                            else QueueRecordOutcome.STALE
+                        )
+                    return outcome
+        except PromotionReadError as error:
+            if attempt + 1 == COMPLETION_ATTEMPTS:
+                raise
+            _retry_delay(attempt, error)
+            continue
+        if not waited:
+            _retry_delay(attempt)
+    raise PromotionReadError("Could not confirm the promotion queue comment")
 
 
 def _main_contains(
