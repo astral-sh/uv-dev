@@ -1762,7 +1762,7 @@ build-backend = "poetry.core.masonry.api"
 "#,
     )?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
             .arg("-r")
             .arg("pyproject.toml")
             .arg("--extra")
@@ -1770,8 +1770,8 @@ build-backend = "poetry.core.masonry.api"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would download 4 packages
+    Would install 4 packages
      + anyio==3.7.1
      + idna==3.6
      + iniconfig==2.0.0
@@ -3007,7 +3007,7 @@ async fn install_deduplicated_indices() {
         .await;
 
     uv_snapshot!(context
-        .pip_install()
+        .pip_install().arg("--dry-run")
         .arg("sniffio")  // Use a zero-dependency package
         .arg("--index")
         .arg(redirect_server.uri())
@@ -3019,8 +3019,8 @@ async fn install_deduplicated_indices() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + sniffio==1.3.1
     ");
 }
@@ -5314,7 +5314,7 @@ fn install_constraints_txt() -> Result<()> {
     let constraints_txt = context.temp_dir.child("constraints.txt");
     constraints_txt.write_str("idna<3.4")?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
             .arg("-r")
             .arg("requirements.txt")
             .arg("--constraint")
@@ -5322,8 +5322,8 @@ fn install_constraints_txt() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.3
      + sniffio==1.3.1
@@ -5344,7 +5344,7 @@ fn install_constraints_txt_from_stdin() -> Result<()> {
     let constraints_txt = context.temp_dir.child("constraints.txt");
     constraints_txt.write_str("idna<3.4")?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
             .arg("-r")
             .arg("requirements.txt")
             .arg("--constraint")
@@ -5353,8 +5353,8 @@ fn install_constraints_txt_from_stdin() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.3
      + sniffio==1.3.1
@@ -5384,14 +5384,14 @@ fn install_constraints_from_pyproject() -> Result<()> {
     "#,
     )?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
             .arg("-r")
             .arg("pyproject.toml"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.3
      + sniffio==1.3.1
@@ -5411,14 +5411,14 @@ fn install_constraints_inline() -> Result<()> {
     let constraints_txt = context.temp_dir.child("constraints.txt");
     constraints_txt.write_str("idna<3.4")?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
             .arg("-r")
             .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.3
      + sniffio==1.3.1
@@ -5433,15 +5433,15 @@ fn install_constraints_inline() -> Result<()> {
 fn install_constraints_remote() {
     let context = uv_test::test_context!("3.12");
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
             .arg("-c")
             .arg("https://raw.githubusercontent.com/apache/airflow/constraints-2-6/constraints-3.11.txt")
             .arg("typing_extensions>=4.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.7.1
     "
     ); // would yield typing-extensions==4.8.2 without constraint file
@@ -5455,14 +5455,14 @@ fn install_constraints_inline_remote() -> Result<()> {
     let requirementstxt = context.temp_dir.child("requirements.txt");
     requirementstxt.write_str("typing-extensions>=4.0\n-c https://raw.githubusercontent.com/apache/airflow/constraints-2-6/constraints-3.11.txt")?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
             .arg("-r")
             .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + typing-extensions==4.7.1
     " // would yield typing-extensions==4.8.2 without constraint file
     );
@@ -5481,7 +5481,7 @@ fn install_constraints_extra() -> Result<()> {
     let constraints_txt = context.temp_dir.child("constraints.txt");
     constraints_txt.write_str("python-dotenv==1.0.0")?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements.txt")
         .arg("-c")
@@ -5489,8 +5489,8 @@ fn install_constraints_extra() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 8 packages in [TIME]
-    Installed 8 packages in [TIME]
+    Would download 8 packages
+    Would install 8 packages
      + blinker==1.7.0
      + click==8.1.7
      + flask==3.0.2
@@ -5606,7 +5606,7 @@ fn explicit_prerelease_allows_direct_marker() {
         "prereleases/package-prerelease-specified-only-prerelease-available.toml",
     );
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--prerelease=explicit")
@@ -5614,12 +5614,10 @@ fn explicit_prerelease_allows_direct_marker() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.3.0a1
     ");
-
-    context.assert_installed("a", "0.3.0a1");
 }
 
 /// `--prerelease=explicit` should prefer a stable release over a newer pre-release for a direct
@@ -5629,7 +5627,7 @@ fn explicit_prerelease_prefers_stable_for_direct_marker() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-prerelease-specified-mixed-available.toml");
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--prerelease=explicit")
@@ -5637,12 +5635,10 @@ fn explicit_prerelease_prefers_stable_for_direct_marker() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==0.3.0
     ");
-
-    context.assert_installed("a", "0.3.0");
 }
 
 /// `unsafe-first-match` should prefer a compatible pre-release on the first index over a stable
@@ -5653,7 +5649,7 @@ fn prerelease_index_strategy_ordering() {
     let public = PackseServer::new("prereleases/package-stable-prerelease-candidates.toml");
 
     let context = uv_test::test_context!("3.12");
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("--index-url")
         .arg(public.index_url())
         .arg("--extra-index-url")
@@ -5663,14 +5659,13 @@ fn prerelease_index_strategy_ordering() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.0.0a1
     ");
-    context.assert_installed("a", "1.0.0a1");
 
     let context = uv_test::test_context!("3.12");
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("--index-url")
         .arg(public.index_url())
         .arg("--extra-index-url")
@@ -5680,11 +5675,10 @@ fn prerelease_index_strategy_ordering() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.0.0
     ");
-    context.assert_installed("a", "1.0.0");
 }
 
 /// `--prerelease=explicit` should not allow a pre-release based only on a transitive pre-release
@@ -5717,7 +5711,7 @@ fn prerelease_package_allows_transitive_prerelease() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/transitive-prerelease-and-stable-dependency.toml");
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--prerelease=disallow")
@@ -5728,14 +5722,12 @@ fn prerelease_package_allows_transitive_prerelease() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + b==1.0.0
      + c==2.0.0b1
     ");
-
-    context.assert_installed("c", "2.0.0b1");
 }
 
 /// Package-specific policies can tighten a globally permissive pre-release policy.
@@ -5780,7 +5772,7 @@ fn prerelease_package_combines_with_top_level_configuration() -> Result<()> {
         prerelease-package = { a = "disallow", c = "disallow" }
     "#})?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--prerelease-package")
@@ -5790,8 +5782,8 @@ fn prerelease_package_combines_with_top_level_configuration() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + b==1.0.0
      + c==2.0.0b1
@@ -5811,7 +5803,7 @@ fn prerelease_package_combines_with_uv_toml() -> Result<()> {
         prerelease-package = { a = "disallow", c = "disallow" }
     "#})?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--prerelease-package")
@@ -5821,8 +5813,8 @@ fn prerelease_package_combines_with_uv_toml() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + a==1.0.0
      + b==1.0.0
      + c==2.0.0b1
@@ -5894,7 +5886,7 @@ fn if_necessary_or_explicit_is_deprecated_alias() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-only-prereleases-in-range.toml");
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--prerelease=if-necessary-or-explicit")
@@ -5903,12 +5895,10 @@ fn if_necessary_or_explicit_is_deprecated_alias() {
     ----- stderr -----
     warning: The `if-necessary-or-explicit` pre-release mode is deprecated and will be removed in a future release. Use `if-necessary` instead.
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.0.0a1
     ");
-
-    context.assert_installed("a", "1.0.0a1");
 }
 
 /// Deprecated package-specific pre-release modes should warn and behave like `if-necessary`.
@@ -5917,7 +5907,7 @@ fn prerelease_package_if_necessary_or_explicit_is_deprecated_alias() {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("prereleases/package-only-prereleases-in-range.toml");
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--prerelease=disallow")
@@ -5928,12 +5918,10 @@ fn prerelease_package_if_necessary_or_explicit_is_deprecated_alias() {
     ----- stderr -----
     warning: The `if-necessary-or-explicit` pre-release mode is deprecated and will be removed in a future release. Use `if-necessary` instead.
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + a==1.0.0a1
     ");
-
-    context.assert_installed("a", "1.0.0a1");
 }
 
 /// `--prerelease=disallow` should continue to reject explicitly requested transitive
@@ -6043,16 +6031,16 @@ fn install_sdist_resolution_lowest() -> Result<()> {
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz")?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
             .arg("-r")
             .arg("requirements.in")
             .arg("--resolution=lowest-direct"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.2.0 (from https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz)
+    Would download 3 packages
+    Would install 3 packages
+     + anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz
      + idna==3.6
      + sniffio==1.3.1
     "
@@ -7334,14 +7322,14 @@ fn install_utf16le_requirements() -> Result<()> {
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_binary(&utf8_to_utf16_with_bom_le("tomli<=2.0.1"))?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + tomli==2.0.1
     "
     );
@@ -7357,14 +7345,14 @@ fn install_utf16be_requirements() -> Result<()> {
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_binary(&utf8_to_utf16_with_bom_be("tomli<=2.0.1"))?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + tomli==2.0.1
     "
     );
@@ -8795,15 +8783,15 @@ fn already_installed_remote_url() {
 fn find_links() {
     let context = uv_test::test_context!("3.12");
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("tqdm")
         .arg("--find-links")
         .arg(context.workspace_root.join("test/links/")), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + tqdm==1000.0.0
     "
     );
@@ -8885,14 +8873,14 @@ fn find_links_uppercase_file_url_from_requirements_file() -> Result<()> {
             ok==1.0.0
         "})?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + ok==1.0.0
     "
     );
@@ -8933,14 +8921,14 @@ async fn find_links_uppercase_http_url_from_requirements_file() -> Result<()> {
             ok==1.0.0
         "})?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + ok==1.0.0
     "
     );
@@ -8970,15 +8958,15 @@ fn find_links_directory_with_url_scheme() -> Result<()> {
             ok==1.0.0
         "})?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements.txt")
         .arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + ok==1.0.0
     "
     );
@@ -9007,14 +8995,14 @@ fn find_links_relative_to_requirements_file() -> Result<()> {
             ok==1.0.0
         "})?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements/requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + ok==1.0.0
     "
     );
@@ -9077,7 +9065,7 @@ fn find_links_multiple() -> Result<()> {
         second_links_dir.child("ok-2.0.0-py3-none-any.whl").path(),
     )?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("ok")
         .arg("--no-index")
@@ -9088,8 +9076,8 @@ fn find_links_multiple() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + ok==2.0.0
     "
     );
@@ -9122,7 +9110,7 @@ async fn find_links_uppercase_html() -> Result<()> {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("tqdm")
         .arg("--no-index")
         .arg("--find-links")
@@ -9130,8 +9118,8 @@ async fn find_links_uppercase_html() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + tqdm==1000.0.0
     "
     );
@@ -9236,7 +9224,7 @@ async fn reject_wheel_with_multiple_dist_info_directories() -> Result<()> {
 fn find_links_no_binary() {
     let context = uv_test::test_context!("3.12");
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("tqdm")
         .arg("--no-binary")
         .arg(":all:")
@@ -9245,8 +9233,8 @@ fn find_links_no_binary() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + tqdm==999.0.0
     "
     );
@@ -10308,7 +10296,7 @@ fn install_with_overrides_from_stdin() -> Result<()> {
     let overrides_txt = context.temp_dir.child("overrides.txt");
     overrides_txt.write_str("anyio==4.0.0")?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
         .arg("anyio==4.0.1")
         .arg("--override")
         .arg("-")
@@ -10316,8 +10304,8 @@ fn install_with_overrides_from_stdin() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.0.0
      + idna==3.6
      + sniffio==1.3.1
@@ -10889,14 +10877,14 @@ fn double_quoted_arguments() -> Result<()> {
         iniconfig
     "#})?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements.in"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + iniconfig==1.0.0
     "
     );
@@ -10921,14 +10909,14 @@ fn single_quoted_arguments() -> Result<()> {
         iniconfig
     "})?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements.in"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + iniconfig==1.0.0
     "
     );
@@ -10953,14 +10941,14 @@ fn unquoted_arguments() -> Result<()> {
         iniconfig
     "})?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements.in"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + iniconfig==1.0.0
     "
     );
@@ -10985,14 +10973,14 @@ fn concatenated_quoted_arguments() -> Result<()> {
         iniconfig
     "#})?;
 
-    uv_snapshot!(context.pip_install()
+    uv_snapshot!(context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements.in"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + iniconfig==1.0.0
     "
     );
@@ -11101,16 +11089,16 @@ fn tool_uv_sources_is_in_preview() -> Result<()> {
         iniconfig = { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" }
     "#})?;
 
-    // Install the editable packages.
-    uv_snapshot!(context.filters(), context.pip_install()
+    // Resolve the editable packages.
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("pyproject.toml"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
+    Would download 1 package
+    Would install 1 package
+     + iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
     "
     );
 
@@ -11138,15 +11126,15 @@ fn recursive_extra_transitive_url() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg(".[all]"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
-     + project==0.0.0 (from file://[TEMP_DIR]/)
+    Would download 2 packages
+    Would install 2 packages
+     + iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
+     + project @ file://[TEMP_DIR]/
     ");
 
     Ok(())
@@ -11240,7 +11228,7 @@ fn local_index_absolute() -> Result<()> {
     let root = context.temp_dir.child("simple-html");
     create_local_index_with_tqdm(&context, root.path())?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("tqdm")
         .arg("--index-url")
@@ -11248,8 +11236,8 @@ fn local_index_absolute() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + tqdm==1000.0.0
     "
     );
@@ -11266,7 +11254,7 @@ fn local_index_relative() -> Result<()> {
     let root = context.temp_dir.child("simple-html");
     create_local_index_with_tqdm(&context, root.path())?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("tqdm")
         .arg("--index-url")
@@ -11274,8 +11262,8 @@ fn local_index_relative() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + tqdm==1000.0.0
     "
     );
@@ -11298,15 +11286,15 @@ fn local_index_requirements_txt_absolute() -> Result<()> {
         tqdm
     ", SafeUrl::from_directory_path(root).unwrap().as_str()})?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("-r")
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + tqdm==1000.0.0
     "
     );
@@ -11331,15 +11319,15 @@ fn local_index_requirements_txt_relative() -> Result<()> {
     ",
     )?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("-r")
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + tqdm==1000.0.0
     "
     );
@@ -11374,15 +11362,15 @@ fn local_index_fallback() -> Result<()> {
     "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("iniconfig")
         .arg("--extra-index-url")
         .arg(SafeUrl::from_directory_path(root).unwrap().as_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + iniconfig==2.0.0
     "
     );
@@ -12598,16 +12586,16 @@ fn static_metadata_source_tree() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("-e")
         .arg("."), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
-     + example==0.0.0 (from file://[TEMP_DIR]/)
+     + example @ file://[TEMP_DIR]/
      + typing-extensions==4.10.0
     "
     );
@@ -13209,13 +13197,13 @@ fn virtual_dependency_group() -> Result<()> {
 
     // 'bar' using path sugar
     let context = new_context()?;
-    uv_snapshot!(context.filters(), context.pip_install()
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("--group").arg("bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would download 1 package
+    Would install 1 package
      + iniconfig==2.0.0
     ");
 
@@ -13938,20 +13926,20 @@ fn pip_install_no_sources_package() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    // Install with sources disabled for anyio only
-    uv_snapshot!(context.filters(), context.pip_install()
+    // Resolve with sources disabled for anyio only.
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run")
         .arg("--no-sources-package")
         .arg("anyio")
         .arg("."), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
+    Would download 5 packages
+    Would install 5 packages
      + anyio==4.3.0
      + idna==3.6
-     + iniconfig==2.0.0 (from git+https://github.com/pytest-dev/iniconfig@93f5930e668c0d1ddf4597e38dd0dea4e2665e7a)
-     + project==0.1.0 (from file://[TEMP_DIR]/)
+     + iniconfig @ git+https://github.com/pytest-dev/iniconfig@93f5930e668c0d1ddf4597e38dd0dea4e2665e7a
+     + project @ file://[TEMP_DIR]/
      + sniffio==1.3.1
     ");
 
