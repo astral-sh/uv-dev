@@ -208,6 +208,7 @@ their identities before timing and refuses to replace an existing result. For an
 older pilot that records Python identity but omits the command timeout, pass the
 original `--timeout` explicitly. Run kernel-network pilots inside the same `netem.sh`
 profile and supply the original `--git-root` or TLS certificate and key when used.
+Pass `--uv /absolute/path/to/uv` when the namespace launcher changes `PATH`.
 The output records the pilot's SHA-256. A repeat remains separate evidence; retain
 the original pilot and every planned control when reviewing a qualification study.
 `flat_index_oracle.py` accepts a manifest, profiles file, profile, selected filenames,

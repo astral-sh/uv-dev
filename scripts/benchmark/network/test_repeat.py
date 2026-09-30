@@ -69,6 +69,7 @@ class RepeatTests(unittest.TestCase):
             pairs=30,
             warmups=3,
             timeout=300,
+            uv=None,
             git_root=None,
             tls_certificate=None,
             tls_key=None,
@@ -194,6 +195,13 @@ class RepeatTests(unittest.TestCase):
             ValueError, "Repeated bound required_bytes differs"
         ):
             repeat.check_repeat(self.pilot, repeated)
+
+    def test_explicit_uv_does_not_require_path_lookup(self) -> None:
+        self.args.uv = self.root / "uv"
+        with patch.object(repeat.shutil, "which", return_value=None) as lookup:
+            command = repeat.command(self.pilot, self.args, self.root, 300)
+        self.assertEqual(command[0], str(self.args.uv.resolve()))
+        lookup.assert_not_called()
 
 
 if __name__ == "__main__":

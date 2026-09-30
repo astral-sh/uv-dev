@@ -118,7 +118,7 @@ def command(
 ) -> list[str]:
     profiles = temporary / "profiles.json"
     profiles.write_text(json.dumps({"repeat": pilot["profile"]}) + "\n")
-    uv = shutil.which("uv")
+    uv = str(args.uv.resolve()) if args.uv is not None else shutil.which("uv")
     require(uv is not None, "uv is required to run the benchmark")
     result = [
         uv,
@@ -281,6 +281,7 @@ def main() -> None:
     parser.add_argument("--pairs", type=int, default=30)
     parser.add_argument("--warmups", type=int, default=3)
     parser.add_argument("--timeout", type=float)
+    parser.add_argument("--uv", type=Path, help="uv executable used to run the harness")
     parser.add_argument("--git-root", type=Path)
     parser.add_argument("--tls-certificate", type=Path)
     parser.add_argument("--tls-key", type=Path)
