@@ -12407,7 +12407,10 @@ fn unsupported_git_scheme() {
 #[cfg(unix)]
 #[cfg(feature = "test-git")]
 fn install_git_submodule_relative_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_env(
+        EnvVars::UV_PREVIEW_FEATURES,
+        "git-partial-fetches,git-worktrees",
+    );
     let temp_dir = &context.temp_dir;
     let utilities_dir = temp_dir.child("utilities");
     utilities_dir.create_dir_all()?;

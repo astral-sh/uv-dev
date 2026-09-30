@@ -15,7 +15,8 @@ use uv_redacted::DisplaySafeUrl;
 
 use crate::GitFetchSettings;
 use crate::credentials::GIT_STORE;
-use crate::git::{GitDatabase, GitRemote};
+use crate::git::{GitDatabase, GitRemote, supports_relative_worktrees};
+use crate::resolver::GitCheckoutStrategy;
 
 /// A remote Git source that can be checked out locally.
 pub(crate) struct GitSource {
@@ -54,9 +55,21 @@ impl GitSource {
     pub(crate) fn fetch(self) -> Result<Fetch> {
         let lfs_requested = self.git.lfs().enabled();
 
+        let settings = match self.settings.checkout {
+            GitCheckoutStrategy::Clone => self.settings,
+            GitCheckoutStrategy::Worktree if supports_relative_worktrees() => self.settings,
+            GitCheckoutStrategy::Worktree => self.settings.with_worktrees(false),
+        };
+        // Relative worktrees enable a repository extension that older Git versions cannot read.
+        // Keep those databases separate so the regular cache remains usable without the feature.
+        let cache = match settings.checkout {
+            GitCheckoutStrategy::Clone => self.cache,
+            GitCheckoutStrategy::Worktree => self.cache.join("worktrees"),
+        };
+
         // The path to the repo, within the Git database.
         let ident = cache_digest(self.git.repository());
-        let db_path = self.cache.join("db").join(&ident);
+        let db_path = cache.join("db").join(&ident);
 
         // Authenticate the URL, if necessary.
         let remote = if let Some(credentials) = GIT_STORE.get(self.git.repository()) {
@@ -124,7 +137,7 @@ impl GitSource {
                 maybe_db,
                 self.git.reference(),
                 self.git.precise(),
-                self.settings,
+                settings,
                 lfs_requested,
             )?;
 
@@ -147,16 +160,12 @@ impl GitSource {
         } else {
             ident
         };
-        let checkout_path = self
-            .cache
-            .join("checkouts")
-            .join(&ident)
-            .join(short_id.as_str());
+        let checkout_path = cache.join("checkouts").join(&ident).join(short_id.as_str());
 
         // Check out `actual_rev` from the database to a scoped location on the
         // filesystem. This will use hard links and such to ideally make the
         // checkout operation here pretty fast.
-        let checkout = db.copy_to(actual_rev, &checkout_path, self.settings)?;
+        let checkout = db.copy_to(actual_rev, &checkout_path, settings)?;
 
         // Report the checkout operation to the reporter.
         if let Some(task) = maybe_task {
