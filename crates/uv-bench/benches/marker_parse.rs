@@ -1,4 +1,4 @@
-//! Parses long Boolean chains emitted by conflict-heavy lockfiles.
+//! Parses ordinary markers and long Boolean chains from conflict-heavy lockfiles.
 
 extern crate uv_performance_memory_allocator;
 
@@ -40,6 +40,34 @@ fn conflict_marker(count: usize) -> (Vec<String>, MarkerTree) {
 
 fn marker_parse(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("marker_parse");
+    for (name, source) in [
+        ("python-version", "python_version >= '3.10'"),
+        (
+            "platform",
+            "sys_platform == 'win32' or sys_platform == 'darwin'",
+        ),
+        (
+            "nested-environment",
+            "python_version < '3.12' and (sys_platform == 'win32' or platform_python_implementation != 'CPython')",
+        ),
+        ("extra", "extra == 'test' and python_version >= '3.10'"),
+        (
+            "quoted-operators",
+            "os_name not in 'a or b' and sys_platform != 'linux and darwin)'",
+        ),
+    ] {
+        MarkerTree::from_str(source).expect("valid benchmark marker");
+        group.throughput(Throughput::Bytes(source.len() as u64));
+        group.bench_with_input(
+            BenchmarkId::new("ordinary", name),
+            source,
+            |bench, source| {
+                bench.iter(|| {
+                    MarkerTree::from_str(black_box(source)).expect("valid benchmark marker")
+                });
+            },
+        );
+    }
     for count in [4, 16, 32, 64] {
         let (mut clauses, expected) = conflict_marker(count);
         for order in ["forward", "reverse"] {
@@ -58,6 +86,39 @@ fn marker_parse(criterion: &mut Criterion) {
                     MarkerTree::from_str(black_box(source)).expect("valid benchmark marker")
                 });
             });
+        }
+    }
+    for count in [4, 32, 256] {
+        for (name, distinct) in [("atoms_distinct", count), ("atoms_repeated", 4)] {
+            let terms = (0..count)
+                .map(|index| format!("extra == 'item-{:03}'", index % distinct))
+                .collect::<Vec<_>>();
+            for (operator, initial, combine) in [
+                ("or", MarkerTree::FALSE, MarkerTree::or as fn(_, _) -> _),
+                ("and", MarkerTree::TRUE, MarkerTree::and as fn(_, _) -> _),
+            ] {
+                let expected = terms.iter().fold(initial, |marker, term| {
+                    combine(
+                        marker,
+                        MarkerTree::from_str(term).expect("valid benchmark marker"),
+                    )
+                });
+                let source = terms.join(&format!(" {operator} "));
+                assert_eq!(
+                    MarkerTree::from_str(&source).expect("valid benchmark marker"),
+                    expected,
+                );
+                group.throughput(Throughput::Bytes(source.len() as u64));
+                group.bench_with_input(
+                    BenchmarkId::new(format!("{name}_{operator}"), count),
+                    &source,
+                    |bench, source| {
+                        bench.iter(|| {
+                            MarkerTree::from_str(black_box(source)).expect("valid benchmark marker")
+                        });
+                    },
+                );
+            }
         }
     }
     group.finish();

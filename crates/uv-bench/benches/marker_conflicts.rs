@@ -69,6 +69,35 @@ fn marker_conflicts(criterion: &mut Criterion<WallTime>) {
                 });
             },
         );
+        for (name, active, expected) in [
+            ("none", 0, environment),
+            ("one", 1, environment),
+            ("invalid", 2, MarkerTree::TRUE),
+        ] {
+            let known_conflicts = items
+                .iter()
+                .take(active)
+                .cloned()
+                .map(|item| (item, MarkerTree::TRUE))
+                .collect::<FxHashMap<_, _>>();
+            assert_eq!(
+                resolve_activated_extras(expanded, None, &known_conflicts),
+                expected
+            );
+            group.bench_with_input(
+                BenchmarkId::new(format!("resolve_activated_extras_{name}"), count),
+                &known_conflicts,
+                |benchmark, known_conflicts| {
+                    benchmark.iter(|| {
+                        black_box(resolve_activated_extras(
+                            black_box(expanded),
+                            None,
+                            black_box(known_conflicts),
+                        ))
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
