@@ -132,6 +132,11 @@ def main() -> None:
         help="Cargo target directory (default: CARGO_TARGET_DIR or target/uv-pgo)",
     )
     parser.add_argument(
+        "--corpus-dir",
+        type=Path,
+        help="Training corpus directory (default: <target-dir>/corpus)",
+    )
+    parser.add_argument(
         "--profile-dir",
         type=Path,
         help="Raw profile directory (default: <target-dir>/profiles)",
@@ -160,7 +165,7 @@ def main() -> None:
             os.environ.get("CARGO_TARGET_DIR", REPOSITORY_ROOT / "target" / "uv-pgo")
         )
     ).resolve()
-    corpus_directory = target_dir / "corpus"
+    corpus_directory = (args.corpus_dir or target_dir / "corpus").resolve()
     profile_dir = (args.profile_dir or target_dir / "profiles").resolve()
     merged_profile = target_dir / "uv.profdata"
 

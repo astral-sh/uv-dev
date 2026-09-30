@@ -25,6 +25,9 @@ def main() -> None:
         "--target-dir", type=Path, default=root / "target/bench-release"
     )
     parser.add_argument("--output", type=Path, default=root / ".cache/bench-release")
+    parser.add_argument(
+        "--corpus-dir", type=Path, default=root / ".cache/bench-release-corpus"
+    )
     args = parser.parse_args()
     build = args.target_dir.resolve()
     destination = args.output.resolve()
@@ -77,6 +80,8 @@ def main() -> None:
             target,
             "--target-dir",
             str(build / "pgo"),
+            "--corpus-dir",
+            str(args.corpus_dir.resolve()),
         ],
         cwd=root,
         env=environment,
