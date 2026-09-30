@@ -171,6 +171,9 @@ failing find-links source that is introduced only for the frozen installation.
 when the index does not advertise a metadata sidecar. This optimistic reference
 does not require full-archive integrity validation; use the full-artifact oracle
 when the operation must check an archive hash.
+`cache_revalidation_oracle.py` measures conditional index validation when the
+advertised strong hash matches an already validated local source revision. Its
+one-response bound applies to an unchanged index that requires revalidation.
 `zip_metadata_oracle.py` reads a known wheel metadata entry by its ZIP offset,
 verifies the received archive bytes, and reports its compressed-byte lower bound.
 With ranges disabled, it reads the necessary archive prefix instead.
