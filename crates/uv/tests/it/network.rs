@@ -252,11 +252,15 @@ where
 }
 
 /// Explicit requirements files share the configured download limit and retain their input order.
-#[test_case::test_case(1)]
-#[test_case::test_case(2)]
-#[test_case::test_case(12)]
 #[test]
-fn requirements_input_downloads_are_bounded(concurrency: usize) -> Result<()> {
+fn requirements_input_downloads_are_bounded() -> Result<()> {
+    for concurrency in [1, 2, 12] {
+        check_requirements_input_downloads(concurrency)?;
+    }
+    Ok(())
+}
+
+fn check_requirements_input_downloads(concurrency: usize) -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let response_gate = gate.clone();
