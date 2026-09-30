@@ -288,38 +288,19 @@ impl Osv {
 
         loop {
             let mut next_pending = Vec::new();
-            for pending_batch in pending.chunks(OSV_QUERY_BATCH_SIZE) {
-                let request = QueryBatchRequest {
-                    queries: pending_batch
-                        .iter()
-                        .map(|(dep, page_token)| QueryRequest {
-                            package: Package {
-                                name: dep.name().to_string(),
-                                ecosystem: "PyPI".to_string(),
-                            },
-                            version: dep.version().to_string(),
-                            page_token: page_token.clone(),
-                        })
-                        .collect(),
-                };
-
-                // NOTE: we need `uncached` here to access the underlying
-                // client for our POST request.
-                let batch_response: QueryBatchResponse = self
-                    .client
-                    .uncached()
-                    .for_host(&url)
-                    .raw_client()
-                    .post(url.as_ref())
-                    .json(&request)
-                    .send()
-                    .await?
-                    .error_for_status()
-                    .map_err(reqwest_middleware::Error::Reqwest)?
-                    .json()
-                    .await
-                    .map_err(reqwest_middleware::Error::Reqwest)?;
-
+            let mut responses =
+                futures::stream::iter(pending.chunks(OSV_QUERY_BATCH_SIZE).enumerate())
+                    .map(async |(index, pending_batch)| {
+                        let response = self.query_page(&url, pending_batch).await?;
+                        Ok::<_, Error>((index, pending_batch, response))
+                    })
+                    .buffer_unordered(self.concurrency.downloads)
+                    .try_collect::<Vec<_>>()
+                    .await?;
+            // A slow response must not hold an available request slot. Apply the completed
+            // batches in input order so findings and the next pagination round are deterministic.
+            responses.sort_unstable_by_key(|(index, _, _)| *index);
+            for (_, pending_batch, batch_response) in responses {
                 for ((dep, _), batch_result) in
                     pending_batch.iter().zip(batch_response.results.iter())
                 {
@@ -344,6 +325,47 @@ impl Osv {
         }
 
         Ok(result_map)
+    }
+
+    async fn query_page(
+        &self,
+        url: &DisplaySafeUrl,
+        pending: &[(&types::Dependency, Option<String>)],
+    ) -> Result<QueryBatchResponse, Error> {
+        let request = QueryBatchRequest {
+            queries: pending
+                .iter()
+                .map(|(dependency, page_token)| QueryRequest {
+                    package: Package {
+                        name: dependency.name().to_string(),
+                        ecosystem: "PyPI".to_string(),
+                    },
+                    version: dependency.version().to_string(),
+                    page_token: page_token.clone(),
+                })
+                .collect(),
+        };
+        let _permit = self
+            .concurrency
+            .downloads_semaphore
+            .acquire()
+            .await
+            .expect("Semaphore is open");
+        // Batch queries are POST requests and use the underlying uncached client.
+        Ok(self
+            .client
+            .uncached()
+            .for_host(url)
+            .raw_client()
+            .post(url.as_ref())
+            .json(&request)
+            .send()
+            .await?
+            .error_for_status()
+            .map_err(reqwest_middleware::Error::Reqwest)?
+            .json()
+            .await
+            .map_err(reqwest_middleware::Error::Reqwest)?)
     }
 
     /// Query OSV for vulnerabilities affecting the given dependencies, returning full vulnerability records.
