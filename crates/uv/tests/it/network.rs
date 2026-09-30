@@ -73,18 +73,21 @@ async fn source_revision_reuses_matching_index_hashes() -> Result<()> {
                 }
                 ResponseTemplate::new(200)
                     .insert_header("Cache-Control", "public, max-age=0")
-                    .set_body_json(json!({
-                        "meta": {"api-version": "1.0"},
-                        "name": "basic-package",
-                        "files": [{
-                            "filename": "basic_package-0.1.0.tar.gz",
-                            "url": "/files/basic_package-0.1.0.tar.gz",
-                            "hashes": hashes,
-                            "size": archive.len(),
-                            "upload-time": "2023-01-01T00:00:00Z"
-                        }]
-                    }))
-                    .insert_header("Content-Type", "application/vnd.pypi.simple.v1+json")
+                    .set_body_raw(
+                        json!({
+                            "meta": {"api-version": "1.0"},
+                            "name": "basic-package",
+                            "files": [{
+                                "filename": "basic_package-0.1.0.tar.gz",
+                                "url": "/files/basic_package-0.1.0.tar.gz",
+                                "hashes": hashes,
+                                "size": archive.len(),
+                                "upload-time": "2023-01-01T00:00:00Z"
+                            }]
+                        })
+                        .to_string(),
+                        "application/vnd.pypi.simple.v1+json",
+                    )
             })
             .mount(&server)
             .await;
