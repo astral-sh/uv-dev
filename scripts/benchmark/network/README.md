@@ -211,6 +211,10 @@ profile and supply the original `--git-root` or TLS certificate and key when use
 Pass `--uv /absolute/path/to/uv` when the namespace launcher changes `PATH`.
 The output records the pilot's SHA-256. A repeat remains separate evidence; retain
 the original pilot and every planned control when reviewing a qualification study.
+`make_direct_wheel_fixtures.py --directory DIR` creates direct-wheel requirements,
+an alternate version for registry overrides, a runtime dependency, and a local
+source project with an isolated build dependency. Use the same fixtures with and
+without `--no-deps` to check whether a configured flat index is necessary.
 `flat_index_oracle.py` accepts a manifest, profiles file, profile, selected filenames,
 and `--flat-package` names. It fetches the shared flat index once and the remaining
 Simple API pages independently, then verifies the selected metadata sidecars. Its
