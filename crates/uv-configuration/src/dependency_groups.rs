@@ -37,6 +37,7 @@ impl DependencyGroups {
             mut only_group,
             mut no_group,
             all_groups,
+            all_non_default_groups,
             no_default_groups,
             mut defaults,
         } = history.clone();
@@ -60,6 +61,14 @@ impl DependencyGroups {
             // If this is set we can ignore group/only_group/defaults as irrelevant
             // (`--all-groups --only-*` is rejected at the CLI level, don't worry about it).
             IncludeGroups::All
+        } else if all_non_default_groups {
+            match &mut defaults {
+                DefaultGroups::All => IncludeGroups::Some(group),
+                DefaultGroups::List(defaults) => {
+                    no_group.append(defaults);
+                    IncludeGroups::All
+                }
+            }
         } else {
             // Merge all these lists, they're equivalent now
             group.append(&mut only_group);
@@ -100,9 +109,24 @@ impl DependencyGroups {
             only_group,
             no_group,
             all_groups,
+            all_non_default_groups: false,
             no_default_groups,
             // This is unknown at CLI-time, use `.with_defaults(...)` to apply this later!
             defaults: DefaultGroups::default(),
+        })
+    }
+
+    /// Include every group except those configured as defaults.
+    pub fn from_all_non_default_groups(
+        dev_mode: Option<DevMode>,
+        no_group: Vec<GroupName>,
+    ) -> Self {
+        Self::from_history(DependencyGroupsHistory {
+            dev_mode,
+            no_group,
+            all_non_default_groups: true,
+            no_default_groups: true,
+            ..Default::default()
         })
     }
 
@@ -196,6 +220,7 @@ impl DependencyGroupsInner {
             no_group,
             // These reference no groups explicitly
             all_groups: _,
+            all_non_default_groups: _,
             no_default_groups: _,
             // This doesn't include defaults because the `dev` group may not be defined
             // but gets implicitly added as a default sometimes!
@@ -219,6 +244,7 @@ pub struct DependencyGroupsHistory {
     only_group: Vec<GroupName>,
     no_group: Vec<GroupName>,
     all_groups: bool,
+    all_non_default_groups: bool,
     no_default_groups: bool,
     defaults: DefaultGroups,
 }
@@ -239,6 +265,7 @@ impl DependencyGroupsHistory {
             only_group,
             no_group,
             all_groups,
+            all_non_default_groups: _,
             no_default_groups,
             // defaults aren't CLI flags!
             defaults: _,

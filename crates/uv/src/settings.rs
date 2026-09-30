@@ -3374,6 +3374,27 @@ impl AuditSettings {
             .unwrap_or_default();
 
         let no_dev = no_dev || environment.no_dev.value == Some(true);
+        let no_group = if no_group.is_empty() {
+            environment.no_group.clone().unwrap_or_default()
+        } else {
+            no_group
+        };
+
+        let groups = if no_default_groups && only_group.is_empty() && !only_dev {
+            DependencyGroups::from_all_non_default_groups(
+                DevMode::from_args(false, no_dev, false),
+                no_group,
+            )
+        } else {
+            DependencyGroups::from_args(
+                DevMode::from_args(only_group.is_empty() && !only_dev, no_dev, only_dev),
+                vec![],
+                no_group,
+                no_default_groups,
+                only_group.clone(),
+                only_group.is_empty() && !only_dev,
+            )
+        };
 
         // Resolve flags from CLI and environment variables.
         let locked = resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked);
@@ -3391,18 +3412,7 @@ impl AuditSettings {
                 vec![],
                 true,
             ),
-            groups: DependencyGroups::from_args(
-                DevMode::from_args(only_group.is_empty() && !only_dev, no_dev, only_dev),
-                vec![],
-                if no_group.is_empty() {
-                    environment.no_group.clone().unwrap_or_default()
-                } else {
-                    no_group
-                },
-                no_default_groups,
-                only_group.clone(),
-                only_group.is_empty() && !only_dev,
-            ),
+            groups,
             lock_check: locked,
             frozen,
             python_version,

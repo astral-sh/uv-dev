@@ -846,7 +846,7 @@ async fn audit_dependency_groups() {
     Found no known vulnerabilities and no adverse project statuses in 3 packages
     ");
 
-    // This is undesirable: `--no-default-groups` still audits `dev`; see astral-sh/uv#22089.
+    // --no-default-groups: excludes the default dev group (iniconfig + sniffio = 2).
     uv_snapshot!(context.filters(), context
         .audit()
         .arg("--preview-features")
@@ -858,7 +858,7 @@ async fn audit_dependency_groups() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Found no known vulnerabilities and no adverse project statuses in 3 packages
+    Found no known vulnerabilities and no adverse project statuses in 2 packages
     ");
 
     // --no-dev: excludes the dev group (iniconfig + sniffio = 2).
