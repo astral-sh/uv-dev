@@ -173,12 +173,14 @@ also be regenerated with `--refresh-locks`.
 
 Release-runtime workloads use `prepare-release-binaries.py` to build with and without the production
 PGO corpus in `scripts/build_uv_pgo.py`. Both binaries use the release profile and its fat LTO;
-function symbols are retained for walltime profiling. The build records the compiler, profile hash,
-training inputs, and both binary hashes. A separate CodSpeed job resolves the pinned Flask,
-JupyterLab, and Airflow graphs plus full held-out JupyterLab and Warehouse project manifests from
-warm metadata caches without an existing lock. `prepare-release-workloads.py` verifies the held-out
-manifests against their frozen hashes and primes their relocatable metadata caches. Release code
-generation is measured independently from the ordinary non-LTO profiling build.
+function symbols are retained for walltime profiling. The training corpus and its Python
+installations live in `.cache/bench-release-corpus`, outside Cargo's cleaned target directory. The
+build records the compiler, profile hash, training inputs, and both binary hashes. A separate
+CodSpeed job resolves the pinned Flask, JupyterLab, and Airflow graphs plus full held-out JupyterLab
+and Warehouse project manifests from warm metadata caches without an existing lock.
+`prepare-release-workloads.py` verifies the held-out manifests against their frozen hashes and
+primes their relocatable metadata caches. Release code generation is measured independently from the
+ordinary non-LTO profiling build.
 
 Run `python3 scripts/benchmark/prepare-resolver-errors.py` to prime the unsatisfiable requirements
 in `resolver-errors.json`. The fixed December 2024 cutoff selects 8 Rooster, 14 HTTPX, and 31 NumPy
