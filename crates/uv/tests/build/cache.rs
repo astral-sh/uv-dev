@@ -569,6 +569,54 @@ fn binary_payloads_use_archive_file_store() -> Result<()> {
     Ok(())
 }
 
+/// CI pruning removes extracted file objects even when installed environments retain hardlinks.
+#[test]
+fn prune_ci_removes_installed_archive_file_objects() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_file_counts()
+        .with_filtered_sizes_and_units();
+    let wheel = binary_payload_wheel(&context)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--preview-features", "content-addressed-cache", "--link-mode", "hardlink"])
+        .arg(&wheel), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + binary-payload==0.1.0 (from file://[TEMP_DIR]/binary_payload-0.1.0-py3-none-any.whl)
+    ");
+
+    let installed_module = context.site_packages().join("binary_payload/module.py");
+    let objects = context.cache_files(CacheBucket::Files)?;
+    let linked_object = objects
+        .iter()
+        .find(|object| uv_fs::is_same_file_allow_missing(&installed_module, object) == Some(true))
+        .context("installed module does not retain a file-store hardlink")?;
+
+    // The cleanup command does not require the preview feature to remain enabled.
+    uv_snapshot!(context.filters(), context.prune().arg("--ci"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Pruning cache at: [CACHE_DIR]/
+    Removed [N] files ([SIZE])
+    ");
+
+    assert!(!linked_object.exists());
+    assert!(!context.cache_dir.child("files-v0").exists());
+    assert_eq!(
+        fs_err::read(context.site_packages().join("binary_payload/native.so"))?,
+        BINARY_PAYLOAD_CONTENTS,
+    );
+    context
+        .assert_command("from binary_payload import module; print(module.VALUE, end='')")
+        .success()
+        .stdout("not binary");
+
+    Ok(())
+}
+
 /// Requires `UV_INTERNAL__TEST_ALT_FS`.
 #[test]
 fn binary_payload_copy_fallback_uses_archive_file_store() -> Result<()> {
