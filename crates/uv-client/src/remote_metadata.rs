@@ -6,6 +6,9 @@ use uv_distribution_filename::WheelFilename;
 use uv_metadata::{find_archive_dist_info, validate_archive_variant};
 use uv_redacted::SafeUrl;
 
+/// The initial remote ZIP prefetch, sized for a typical central directory.
+pub(crate) const CENTRAL_DIRECTORY_SIZE: u64 = 16_384;
+
 /// Read `METADATA` and, for a variant wheel, validate `variant.json` using HTTP range requests.
 ///
 /// This method is derived from `prefix-dev/rip`, which is available under the following BSD-3
@@ -52,8 +55,6 @@ pub(crate) async fn wheel_metadata_from_remote_zip(
     reader: &mut AsyncHttpRangeReader,
 ) -> Result<String, Error> {
     // Make sure we have the back part of the stream.
-    // Best guess for the central directory size inside the zip
-    const CENTRAL_DIRECTORY_SIZE: u64 = 16384;
     // Because the zip index is at the back
     reader
         .prefetch(reader.len().saturating_sub(CENTRAL_DIRECTORY_SIZE)..reader.len())
