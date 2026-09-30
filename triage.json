@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 18511,
+        "title": "Evaluate extras and groups when determining auditable packages",
+        "url": "https://github.com/astral-sh/uv/pull/18511",
+        "state": "merged",
+        "reason": "Closest implementation history: it established that uv audit includes all groups by default while retaining exclusion and subset-selection flags, including --no-default-groups. Its settings supplied the implicit all-groups state that conflicts with this flag."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11224,
+        "title": "fix handling of `--all-groups` and `--no-default-groups` flags",
+        "url": "https://github.com/astral-sh/uv/pull/11224",
+        "state": "merged",
+        "reason": "Adjacent shared-selector history: it intentionally established that an explicitly supplied --all-groups wins over --no-default-groups. This report differs because the user did not supply --all-groups; uv audit supplies that state implicitly."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal queries for --no-default-groups, the exact help text, no-effect/ignored wording, uv audit, and --no-group; conceptual queries for audit filtering, exclusions, subset selection, default groups, and all-groups precedence; and fix-oriented review of the audit roadmap, area:uv-audit issues, merged implementation and test work, and version-specific source history. No existing tracker covers this exact defect. astral-sh/uv#19973 was ruled out because it concerns uv tree’s broader CLI design. astral-sh/uv#10890 concerns explicit flag combinations and was resolved by astral-sh/uv#11224, so it is neither the same defect nor a prior fix that regressed."
+  },
+  "type": "bug",
+  "type_reason": "uv 0.12.19 and current main advertise and parse --no-default-groups for uv audit, but audit initializes the shared dependency-group selector with all-groups whenever no only-group option is used. The selector intentionally gives all-groups precedence over no-default-groups, so the flag cannot affect the audited set, while explicit no-group exclusions still win. This is source-confirmed incorrect behavior, not a missing capability or duplicate.",
+  "summary": "No prior tracker covers the exact defect. astral-sh/uv#18511 is the closest audit implementation history, while astral-sh/uv#11224 explains the shared explicit-flag precedence triggered by audit’s implicit all-groups state.",
+  "draft_response": "Thanks for the report. This is a bug in the current `uv audit` group-selection plumbing. In uv 0.12.19 and current main, `--no-default-groups` is parsed, but `uv audit` also initializes the shared selector as though all groups were selected. That all-groups state takes precedence over `--no-default-groups`, while explicit exclusions such as `--no-group dev` still apply, matching the behavior you observed. The intended behavior established in astral-sh/uv#18511 is to audit everything by default while still allowing subset selection, so the advertised flag should be effective. The next step is to adjust audit’s implicit default selection and add integration coverage for configured default groups with `--no-default-groups`."
+}
