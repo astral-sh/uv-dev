@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import email.utils
+import http.client
 import importlib.util
 import json
 import re
@@ -85,6 +86,14 @@ def main() -> None:
                 delay = retry_delay(error.headers.get("Retry-After"), args.max_delay)
                 sleeps.append(delay)
                 time.sleep(delay)
+            except (
+                urllib.error.URLError,
+                http.client.RemoteDisconnected,
+                ConnectionError,
+            ):
+                if attempt == 3:
+                    raise
+                sleeps.append(0)
 
     started = time.perf_counter()
     try:
@@ -108,7 +117,11 @@ def main() -> None:
                 "count": profile.get("fail_count", 0),
             },
         )
-        count = failure.get("count", 0) if failure.get("status") else 0
+        count = (
+            failure.get("count", 0)
+            if failure.get("status") or failure.get("disconnect")
+            else 0
+        )
         required_waves += count
         latency = max(
             0,
@@ -137,7 +150,7 @@ def main() -> None:
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
-        "scope": "One known distribution. Fetch and verify its index and advertised metadata, retrying transient HTTP responses up to three times per URL. Valid server delays are capped at the recorded maximum; missing or invalid advice has zero oracle backoff. The bound includes fixed numeric Retry-After waits on this serial request chain. HTTP-date waits have a conservative zero minimum because clock and whole-second rounding vary. It excludes headers, TCP/TLS, and CPU costs.",
+        "scope": "One known distribution. Fetch and verify its index and advertised metadata, retrying transient HTTP responses and disconnected requests up to three times per URL. Valid server delays are capped at the recorded maximum; missing or invalid advice and transport failures have zero oracle backoff. The bound includes fixed numeric Retry-After waits on this serial request chain. HTTP-date waits have a conservative zero minimum because clock and whole-second rounding vary. It excludes headers, TCP/TLS, and CPU costs.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")

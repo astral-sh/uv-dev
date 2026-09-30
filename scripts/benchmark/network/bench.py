@@ -665,6 +665,17 @@ class Handler(BaseHTTPRequestHandler):
                     "count": profile.get("fail_count", 0),
                 },
             )
+            if failure.get("disconnect") and event["attempt"] <= failure.get(
+                "count", 0
+            ):
+                event.update(
+                    status=0,
+                    response_length=0,
+                    injected_disconnect="before-headers",
+                )
+                self.close_connection = True
+                self.connection.shutdown(socket.SHUT_RDWR)
+                return
             retry_after = None
             if failure.get("status") and event["attempt"] <= failure.get("count", 0):
                 status, body = failure["status"], b"Injected transient failure"

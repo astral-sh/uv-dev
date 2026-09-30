@@ -42,7 +42,9 @@ def main() -> None:
         parser.error("the manifest has no packages")
     concurrency = min(args.concurrency, len(packages))
     paths = [f"/simple/{name}/" for name in packages]
-    expected = dict(zip(paths, (fixtures.simple[name] for name in packages), strict=True))
+    expected = dict(
+        zip(paths, (fixtures.simple[name] for name in packages), strict=True)
+    )
     server = bench.Server(fixtures, profile)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

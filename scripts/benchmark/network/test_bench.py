@@ -101,6 +101,19 @@ class ReplayTests(unittest.TestCase):
                 self.assertEqual(self.get(server, header), (206, expected))
         self.assertEqual(self.get(server, "bytes=999999-"), (416, b""))
 
+    def test_disconnect_before_headers_is_recorded(self) -> None:
+        server = self.server(
+            {"path_failures": {"/files/example.whl": {"disconnect": True, "count": 1}}}
+        )
+        with self.assertRaises(http.client.RemoteDisconnected):
+            self.get(server)
+        self.assertEqual(self.get(server), (200, self.body))
+        server.wait_idle()
+        events = sorted(server.events, key=lambda event: event["attempt"])
+        self.assertEqual([event["status"] for event in events], [0, 200])
+        self.assertEqual([event["bytes"] for event in events], [0, len(self.body)])
+        self.assertEqual(events[0]["injected_disconnect"], "before-headers")
+
     def test_connection_reuse_is_recorded(self) -> None:
         server = self.server({})
         connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
