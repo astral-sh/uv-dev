@@ -92,6 +92,9 @@ class CommentReader(Protocol):
     def get_conversation_comment(
         self, scope: CommentScope, identifier: int
     ) -> ConversationComment: ...
+    def find_retained_conversation_comment(
+        self, scope: CommentScope, identifier: int
+    ) -> ConversationComment | None: ...
     def get_review(self, scope: CommentScope, identifier: int) -> SubmittedReview: ...
 
 
@@ -834,7 +837,14 @@ def collect_comments(
         # the bounded batch being offered now, not the entire old discussion.
         record = records.get(revision.target)
         if record is None:
-            record = _read_feedback(github, scope, revision.target)
+            if revision.target.kind == CommentTargetKind.CONVERSATION_COMMENT:
+                record = github.find_retained_conversation_comment(
+                    scope, int(revision.target.identifier)
+                )
+                if record is None:
+                    continue
+            else:
+                record = _read_feedback(github, scope, revision.target)
         if record.revision.target != revision.target:
             raise ValueError("GitHub returned a different feedback target")
         if not _within_watermark(record, through):

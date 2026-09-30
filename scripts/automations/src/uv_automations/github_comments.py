@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
@@ -32,6 +33,7 @@ from uv_automations.json import (
     as_object,
     as_positive_integer,
     as_string,
+    loads,
 )
 from uv_automations.models import (
     PullRequestDetails,
@@ -97,6 +99,34 @@ def _conversation_comment(value: object) -> ConversationComment:
         as_string(data["body"]),
         Timestamp.parse(as_string(data["updated_at"])),
     )
+
+
+def _comment_response(value: str) -> tuple[int | None, str]:
+    header, separator, body = value.replace("\r\n", "\n").partition("\n\n")
+    if not separator or len(header) > 65_536:
+        return None, ""
+    lines = header.split("\n")
+    status = re.fullmatch(r"HTTP/[0-9.]+ ([1-5][0-9]{2})(?: [^\r\n]*)?", lines[0])
+    if status is None:
+        return None, ""
+    for line in lines[1:]:
+        key, colon, _ = line.partition(":")
+        if not colon or re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", key) is None:
+            return None, ""
+    return int(status[1]), body
+
+
+def _checked_conversation_comment(
+    scope: CommentScope, identifier: int, value: object
+) -> ConversationComment:
+    data = as_object(value)
+    if (
+        as_positive_integer(data["id"]) != identifier
+        or as_string(data["issue_url"])
+        != f"https://api.github.com/repos/{scope.repository.name}/issues/{scope.number}"
+    ):
+        raise ValueError("The conversation comment belongs to a different pull request")
+    return _conversation_comment(data)
 
 
 def _inline_comment(value: object) -> InlineComment:
@@ -354,20 +384,49 @@ class CommentGitHub(ActionsGitHub):
         self, scope: CommentScope, identifier: int
     ) -> ConversationComment:
         as_positive_integer(identifier)
-        data = as_object(
+        return _checked_conversation_comment(
+            scope,
+            identifier,
             self._api(
                 "GET", f"repos/{scope.repository.name}/issues/comments/{identifier}"
-            )
+            ),
         )
-        if (
-            as_positive_integer(data["id"]) != identifier
-            or as_string(data["issue_url"])
-            != f"https://api.github.com/repos/{scope.repository.name}/issues/{scope.number}"
-        ):
-            raise ValueError(
-                "The conversation comment belongs to a different pull request"
-            )
-        return _conversation_comment(data)
+
+    def find_retained_conversation_comment(
+        self, scope: CommentScope, identifier: int
+    ) -> ConversationComment | None:
+        """Distinguish a removed pending comment from inaccessible feedback."""
+        as_positive_integer(identifier)
+        response = subprocess.run(
+            [
+                self.executable,
+                "api",
+                "--method",
+                "GET",
+                f"repos/{scope.repository.name}/issues/comments/{identifier}",
+                "--include",
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
+            env=self._environment(),
+            timeout=60,
+        )
+        status, body = _comment_response(response.stdout)
+        if response.returncode != 0 and status == 404:
+            # GitHub also returns 404 for inaccessible resources. Only the exact
+            # pending comment may disappear; its enclosing PR must remain readable.
+            details = self.get_comment_pull_request(scope).details
+            if (
+                details.reference != scope.reference
+                or details.base.repository != scope.repository
+            ):
+                raise ValueError("GitHub returned a different pull request")
+            return None
+        response.check_returncode()
+        if status != 200:
+            raise ValueError("GitHub returned an invalid conversation comment response")
+        return _checked_conversation_comment(scope, identifier, loads(body))
 
     def get_review(self, scope: CommentScope, identifier: int) -> SubmittedReview:
         as_positive_integer(identifier)
