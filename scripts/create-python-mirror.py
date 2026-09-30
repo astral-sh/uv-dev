@@ -261,7 +261,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def main():
+def main() -> int:
     """Main function to run the CLI."""
     args = parse_arguments()
 
@@ -279,7 +279,7 @@ def main():
 
     if not urls:
         logger.error("No URLs found.")
-        return
+        return 0
 
     target = Path(args.target)
     logger.info(f"Downloading {len(urls)} files to {target}...")
@@ -295,9 +295,11 @@ def main():
         print(
             f"Example usage: `UV_PYTHON_INSTALL_MIRROR='file://{target.absolute()}' uv python install 3.13`"
         )
+        return 1 if errors else 0
     except (httpx.HTTPError, OSError, ValueError) as e:
         logger.error(f"Error during download: {e}")
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

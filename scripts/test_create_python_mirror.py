@@ -14,10 +14,15 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import hashlib
 import importlib.util
+import io
+import json
+import runpy
 import sys
 import unittest
+from contextlib import ExitStack, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import ModuleType
@@ -190,6 +195,93 @@ class PythonMirrorDownloadsTest(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertFalse(self.destination.exists())
         self.assert_final_files([])
+
+
+class PythonMirrorCliTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.target = self.root / "mirror"
+        self.requests = []
+
+    def run_cli(self, responses: dict[str, int], client_error: OSError | None = None):
+        original_open = builtins.open
+        original_client = httpx.AsyncClient
+        metadata = json.dumps({url: {"url": url, "sha256": None} for url in responses})
+
+        def open_metadata(path, *args, **kwargs):
+            if path == MIRROR.VERSIONS_FILE:
+                return io.StringIO(metadata)
+            return original_open(path, *args, **kwargs)
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            self.requests.append(url)
+            return httpx.Response(responses[url], content=CONTENT)
+
+        def client(*args, **kwargs):
+            if client_error is not None:
+                raise client_error
+            return original_client(
+                *args, transport=httpx.MockTransport(respond), **kwargs
+            )
+
+        output = io.StringIO()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(builtins, "open", open_metadata))
+            stack.enter_context(patch.object(httpx, "AsyncClient", client))
+            stack.enter_context(
+                patch.object(
+                    sys,
+                    "argv",
+                    [str(MIRROR.__file__), "--target", str(self.target)],
+                )
+            )
+            stack.enter_context(redirect_stdout(output))
+            try:
+                runpy.run_path(str(MIRROR.__file__), run_name="__main__")
+            except SystemExit as error:
+                return error.code, output.getvalue()
+        return 0, output.getvalue()
+
+    def test_complete_download_failure_exits_nonzero(self):
+        code, output = self.run_cli({URL: 503})
+        self.assertEqual(code, 1)
+        self.assertEqual(self.requests, [URL])
+        self.assertIn("Successfully downloaded: 0 files.", output)
+        self.assertIn("Failed downloads:", output)
+        self.assertFalse((self.target / MIRROR.sanitize_url(URL)).exists())
+
+    def test_mixed_download_failure_exits_nonzero(self):
+        other_url = URL.replace("python.tar.gz", "other-python.tar.gz")
+        code, output = self.run_cli({URL: 200, other_url: 503})
+        self.assertEqual(code, 1)
+        self.assertCountEqual(self.requests, [URL, other_url])
+        self.assertIn("Successfully downloaded: 1 files.", output)
+        self.assertIn("Failed downloads:", output)
+        self.assertEqual((self.target / MIRROR.sanitize_url(URL)).read_bytes(), CONTENT)
+        self.assertFalse((self.target / MIRROR.sanitize_url(other_url)).exists())
+
+    def test_successful_downloads_exit_zero(self):
+        code, output = self.run_cli({URL: 200})
+        self.assertEqual(code, 0)
+        self.assertEqual(self.requests, [URL])
+        self.assertIn("Successfully downloaded: 1 files.", output)
+        self.assertNotIn("Failed downloads:", output)
+        self.assertEqual((self.target / MIRROR.sanitize_url(URL)).read_bytes(), CONTENT)
+
+    def test_download_exception_exits_nonzero(self):
+        code, output = self.run_cli({URL: 200}, OSError("client unavailable"))
+        self.assertEqual(code, 1)
+        self.assertEqual(self.requests, [])
+        self.assertEqual(output, "")
+
+    def test_empty_selection_exits_zero(self):
+        code, output = self.run_cli({})
+        self.assertEqual(code, 0)
+        self.assertEqual(self.requests, [])
+        self.assertEqual(output, "")
 
 
 if __name__ == "__main__":
