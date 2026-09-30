@@ -70,7 +70,8 @@ For commands that require an installed environment or project files, pass
 run before timing with the same binary and isolated cache. `--config-template`
 and `--project-template` copy text templates to the trial's `uv.toml` and
 `pyproject.toml`; the former is selected with `--config-file`. Templates and
-arguments support `{base}`, `{index}`, `{work}`, `{python}`, and `{fixtures}`.
+arguments and `--requirement` values support `{base}`, `{index}`, `{work}`,
+`{python}`, and `{fixtures}`.
 Use `--env KEY=VALUE` for settings such as `UV_CONCURRENT_DOWNLOADS`, and repeat
 `--verify-file '{work}/uv.lock'` to compare generated files after normalizing the
 temporary origin and work directory. Inputs and environment overrides are saved
@@ -78,6 +79,8 @@ in the result. Each `/flat/NAME` endpoint serves a PEP 503 page for the manifest
 profiles may set exact-path response delays in `path_latency_ms`. A profile's
 `path_aliases` mapping can expose the same Simple API response through several
 index URLs while retaining each requested path in the trace.
+Set `head_ranges` to `false` to model a server that supports ranged `GET` but
+does not advertise that support in `HEAD` responses.
 `multi_index_oracle.py` requests those Simple API paths concurrently and then
 reads the selected wheel's metadata. Its bound includes all configured indexes,
 which is appropriate for an `unsafe-best-match` workload.
@@ -149,6 +152,9 @@ lower bound accounts for different response delays along each index-to-metadata 
 `find_links_oracle.py` accepts repeated `--index-path` arguments, fetches every
 configured flat index concurrently, and then verifies one selected metadata sidecar.
 It reports both a known-package minimum and an all-index transfer reference.
+`zip_metadata_oracle.py` reads a known wheel metadata entry by its ZIP offset,
+verifies the received archive bytes, and reports its compressed-byte lower bound.
+With ranges disabled, it reads the necessary archive prefix instead.
 
 Run protocol and bottleneck checks with:
 

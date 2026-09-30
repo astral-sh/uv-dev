@@ -104,6 +104,26 @@ class ReplayTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_head_can_omit_range_advertisement(self) -> None:
+        server = self.server({"head_ranges": False})
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        try:
+            connection.request("HEAD", "/files/example.whl")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertIsNone(response.getheader("Accept-Ranges"))
+            response.read()
+            connection.request(
+                "GET", "/files/example.whl", headers={"Range": "bytes=42-99"}
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.getheader("Accept-Ranges"), "bytes")
+            self.assertEqual(
+                (response.status, response.read()), (206, self.body[42:100])
+            )
+        finally:
+            connection.close()
+
     def test_conditional_requests_precede_ranges(self) -> None:
         server = self.server({})
         etag = f'"{hashlib.sha256(self.body).hexdigest()}"'

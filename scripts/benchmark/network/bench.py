@@ -423,7 +423,11 @@ class Handler(BaseHTTPRequestHandler):
                 "Cache-Control", profile.get("cache_control", "public, max-age=3600")
             )
             self.send_header("ETag", etag)
-            if is_artifact and profile.get("ranges", True):
+            if (
+                is_artifact
+                and profile.get("ranges", True)
+                and (not head or profile.get("head_ranges", True))
+            ):
                 self.send_header("Accept-Ranges", "bytes")
             if status == 206:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
@@ -827,9 +831,6 @@ def run_one(
 ) -> dict:
     with tempfile.TemporaryDirectory(prefix="trial-", dir=args.work_dir) as directory:
         work = Path(directory)
-        (work / "requirements.in").write_text(
-            "".join(f"{item}\n" for item in args.requirement)
-        )
         server = Server(
             fixtures, profile, work / "origin.sock" if args.http2_proxy else None
         )
@@ -849,6 +850,9 @@ def run_one(
                 "python": args.python,
                 "fixtures": args.directory.resolve(),
             }
+            (work / "requirements.in").write_text(
+                "".join(f"{expand(item, context)}\n" for item in args.requirement)
+            )
             for name, contents in args.templates.items():
                 (work / name).write_text(expand(contents, context))
             configuration = (
