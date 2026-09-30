@@ -78,10 +78,15 @@ pub fn resumable_bytes_stream<'a>(
                     if !state.can_resume() {
                         return Err(err.into());
                     }
+                    let first_retry = state.retry_state.total_retries() == 0;
                     let Some(backoff) = state.retry_state.should_retry(&err, 0) else {
                         return Err(err.into());
                     };
-                    state.retry_state.sleep_backoff(backoff).await;
+                    // A single interrupted response can continue immediately from validated
+                    // bytes. Repeated failures, including middleware retries, retain backoff.
+                    if !first_retry {
+                        state.retry_state.sleep_backoff(backoff).await;
+                    }
                     state.resume().await?;
                 }
             }

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
+use reqwest_retry::policies::ExponentialBackoff;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -72,12 +73,24 @@ async fn download(
     replies: Vec<Reply>,
     retries: u32,
 ) -> Result<(Vec<u8>, Option<reqwest_middleware::Error>, Vec<Headers>)> {
+    download_with_backoff(replies, retries, Duration::ZERO).await
+}
+
+async fn download_with_backoff(
+    replies: Vec<Reply>,
+    retries: u32,
+    backoff: Duration,
+) -> Result<(Vec<u8>, Option<reqwest_middleware::Error>, Vec<Headers>)> {
     let (url, server) = server(replies).await?;
     let client = BaseClientBuilder::default()
         .retries(retries)
         .no_retry_delay(true)
         .build()?;
-    let mut retry_state = RetryState::start(client.retry_policy(), url.clone());
+    let retry_policy = ExponentialBackoff::builder()
+        .jitter(reqwest_retry::Jitter::None)
+        .retry_bounds(backoff, backoff)
+        .build_with_max_retries(retries);
+    let mut retry_state = RetryState::start(retry_policy, url.clone());
     let response = retry_state
         .send(
             client
@@ -101,6 +114,48 @@ async fn download(
         .await
         .context("Server did not receive the expected requests")???;
     Ok((bytes, error, requests))
+}
+
+#[tokio::test]
+async fn first_interruption_resumes_without_backoff() -> Result<()> {
+    let (bytes, error, requests) = tokio::time::timeout(
+        Duration::from_secs(2),
+        download_with_backoff(
+            vec![
+                interrupted(),
+                range("Content-Range: bytes 4-9/10\r\n", 6, b"efghij"),
+            ],
+            1,
+            Duration::from_secs(60),
+        ),
+    )
+    .await??;
+    assert_eq!(bytes, b"abcdefghij");
+    assert!(error.is_none());
+    assert_eq!(requests.len(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn repeated_interruption_keeps_backoff() -> Result<()> {
+    let result = tokio::time::timeout(
+        Duration::from_millis(100),
+        download_with_backoff(
+            vec![
+                interrupted(),
+                range("Content-Range: bytes 4-9/10\r\n", 6, b"ef"),
+                range("Content-Range: bytes 6-9/10\r\n", 4, b"ghij"),
+            ],
+            2,
+            Duration::from_secs(60),
+        ),
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "a repeated interruption must wait for backoff"
+    );
+    Ok(())
 }
 
 #[tokio::test]
