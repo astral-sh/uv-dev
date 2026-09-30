@@ -14,6 +14,7 @@ import random
 import re
 import shutil
 import socket
+import ssl
 import statistics
 import subprocess
 import tempfile
@@ -171,8 +172,13 @@ class Limiter:
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, fixtures: Fixtures, profile: dict) -> None:
-        super().__init__(("127.0.0.1", 0), Handler)
+    def __init__(
+        self, fixtures: Fixtures, profile: dict, socket_path: Path | None = None
+    ) -> None:
+        self.public_url: str | None = None
+        if socket_path is not None:
+            self.address_family = socket.AF_UNIX
+        super().__init__(str(socket_path) if socket_path else ("127.0.0.1", 0), Handler)
         self.fixtures = fixtures
         self.profile = profile
         self.limiter = Limiter(profile.get("bytes_per_second", 0))
@@ -182,9 +188,16 @@ class Server(ThreadingHTTPServer):
         self.active = 0
         self.epoch = time.perf_counter()
 
+    def server_bind(self) -> None:
+        if self.address_family == socket.AF_UNIX:
+            self.socket.bind(self.server_address)
+            self.server_name, self.server_port = "localhost", 0
+        else:
+            super().server_bind()
+
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self.server_port}"
+        return self.public_url or f"http://127.0.0.1:{self.server_port}"
 
     def begin(self, method: str, path: str) -> dict:
         with self.lock:
@@ -227,7 +240,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def setup(self) -> None:
         super().setup()
-        self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if self.connection.family != socket.AF_UNIX:
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -518,6 +532,110 @@ def oracle(
     )
 
 
+class Http2Proxy:
+    """Expose the replay origin through a local Caddy TLS/HTTP2 listener."""
+
+    def __init__(self, work: Path, binary: Path, certificate: Path, key: Path) -> None:
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            port = reservation.getsockname()[1]
+        self.url = f"https://127.0.0.1:{port}"
+        self.log_path = work / "caddy.log"
+        self.process: subprocess.Popen | None = None
+        config = {
+            "admin": {"disabled": True},
+            "apps": {
+                "tls": {
+                    "certificates": {
+                        "load_files": [
+                            {"certificate": str(certificate), "key": str(key)}
+                        ]
+                    }
+                },
+                "http": {
+                    "servers": {
+                        "benchmark": {
+                            "listen": [f"127.0.0.1:{port}"],
+                            "protocols": ["h1", "h2"],
+                            "automatic_https": {"disable": True},
+                            "tls_connection_policies": [{}],
+                            "logs": {},
+                            "routes": [
+                                {
+                                    "handle": [
+                                        {
+                                            "handler": "reverse_proxy",
+                                            "upstreams": [
+                                                {"dial": f"unix/{work / 'origin.sock'}"}
+                                            ],
+                                        }
+                                    ]
+                                }
+                            ],
+                        }
+                    }
+                },
+            },
+        }
+        config_path = work / "caddy.json"
+        config_path.write_text(json.dumps(config))
+        env = os.environ.copy()
+        env.update(
+            XDG_DATA_HOME=str(work / "caddy-data"),
+            XDG_CONFIG_HOME=str(work / "caddy-config"),
+        )
+        with self.log_path.open("wb") as log:
+            self.process = subprocess.Popen(
+                [str(binary), "run", "--config", str(config_path)],
+                env=env,
+                stdout=log,
+                stderr=log,
+            )
+        context = ssl.create_default_context(cafile=str(certificate))
+        context.set_alpn_protocols(["h2"])
+        deadline = time.monotonic() + 30
+        try:
+            while True:
+                if self.process.poll() is not None:
+                    raise RuntimeError(self.log_path.read_text())
+                try:
+                    with (
+                        socket.create_connection(
+                            ("127.0.0.1", port), timeout=5
+                        ) as sock,
+                        context.wrap_socket(sock, server_hostname="127.0.0.1") as tls,
+                    ):
+                        if tls.selected_alpn_protocol() != "h2":
+                            raise RuntimeError("Replay proxy did not negotiate HTTP/2")
+                        break
+                except (ConnectionRefusedError, TimeoutError):
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
+        except BaseException:
+            self.stop()
+            raise
+
+    def stop(self) -> None:
+        if self.process is not None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+
+    def protocols(self) -> dict[str, int]:
+        protocols: Counter[str] = Counter()
+        for line in self.log_path.read_text().splitlines():
+            event = json.loads(line)
+            if event.get("logger", "").startswith("http.log.access"):
+                protocols[event["request"]["proto"]] += 1
+        if not protocols or set(protocols) != {"HTTP/2.0"}:
+            raise ValueError(f"Replay requests did not all use HTTP/2: {protocols}")
+        return dict(protocols)
+
+
 def run_one(
     binary: Path, fixtures: Fixtures, profile: dict, args: argparse.Namespace
 ) -> dict:
@@ -526,24 +644,36 @@ def run_one(
         (work / "requirements.in").write_text(
             "".join(f"{item}\n" for item in args.requirement)
         )
-        server = Server(fixtures, profile)
+        server = Server(
+            fixtures, profile, work / "origin.sock" if args.http2_proxy else None
+        )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        command = [str(binary), "--no-config", "--no-progress", "--color", "never"]
-        command.extend(
-            arg.format(index=server.url + "/simple", work=work, python=args.python)
-            for arg in args.command
-        )
-        env = {
-            key: value for key, value in os.environ.items() if not key.startswith("UV_")
-        }
-        env.update(
-            UV_CACHE_DIR=str(work / "cache"),
-            UV_PYTHON_DOWNLOADS="never",
-            NO_PROXY="127.0.0.1,localhost",
-            no_proxy="127.0.0.1,localhost",
-        )
+        proxy = None
         try:
+            if args.http2_proxy:
+                proxy = Http2Proxy(
+                    work, args.http2_proxy, args.tls_certificate, args.tls_key
+                )
+                server.public_url = proxy.url
+            command = [str(binary), "--no-config", "--no-progress", "--color", "never"]
+            command.extend(
+                arg.format(index=server.url + "/simple", work=work, python=args.python)
+                for arg in args.command
+            )
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if not key.startswith("UV_")
+            }
+            env.update(
+                UV_CACHE_DIR=str(work / "cache"),
+                UV_PYTHON_DOWNLOADS="never",
+                NO_PROXY="127.0.0.1,localhost",
+                no_proxy="127.0.0.1,localhost",
+            )
+            if proxy:
+                env["SSL_CERT_FILE"] = str(args.tls_certificate)
             if args.cache_mode != "cold":
                 subprocess.run(
                     command,
@@ -561,6 +691,8 @@ def run_one(
             )
             seconds = time.perf_counter() - start
         finally:
+            if proxy:
+                proxy.stop()
             server.shutdown()
             server.server_close()
             thread.join()
@@ -580,6 +712,7 @@ def run_one(
             "bytes": sum(event["bytes"] for event in server.events),
             "requests": len(server.events),
             "max_active": max((event["active"] for event in server.events), default=0),
+            "frontend_protocols": proxy.protocols() if proxy else None,
             "verified_tree": (
                 tree_digest(Path(args.verify_tree.format(work=work)))
                 if args.verify_tree
@@ -616,6 +749,9 @@ def main() -> None:
     run.add_argument("--python", default="3.12")
     run.add_argument("--requirement", action="append", default=[])
     run.add_argument("--verify-tree", help="Directory to compare after each command")
+    run.add_argument("--http2-proxy", type=Path, help="Path to the Caddy binary")
+    run.add_argument("--tls-certificate", type=Path)
+    run.add_argument("--tls-key", type=Path)
     run.add_argument("--pairs", type=int, default=20)
     run.add_argument("--warmups", type=int, default=2)
     run.add_argument(
@@ -651,6 +787,12 @@ def main() -> None:
         args.command.pop(0)
     if not args.command or args.pairs < 2:
         parser.error("provide a command and at least two pairs")
+    if args.http2_proxy:
+        if not args.tls_certificate or not args.tls_key:
+            parser.error("--http2-proxy requires --tls-certificate and --tls-key")
+        args.http2_proxy = args.http2_proxy.resolve()
+        args.tls_certificate = args.tls_certificate.resolve()
+        args.tls_key = args.tls_key.resolve()
     profile = json.loads(args.profiles.read_text())[args.profile]
     fixtures = Fixtures(args.manifest, args.directory, profile.get("pep658", True))
     args.work_dir.mkdir(parents=True, exist_ok=True)
@@ -675,6 +817,18 @@ def main() -> None:
         "command": args.command,
         "requirements": args.requirement,
         "verify_tree": args.verify_tree,
+        "http2_proxy": (
+            {
+                "binary": str(args.http2_proxy),
+                "version": subprocess.check_output(
+                    [args.http2_proxy, "version"], text=True
+                ).strip(),
+                "sha256": digest(args.http2_proxy),
+                "certificate_sha256": digest(args.tls_certificate),
+            }
+            if args.http2_proxy
+            else None
+        ),
         "warmups": args.warmups,
         "cache_mode": args.cache_mode,
         "pairs": [],

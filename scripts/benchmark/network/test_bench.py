@@ -7,6 +7,7 @@ import hashlib
 import http.client
 import importlib.util
 import os
+import socket
 import subprocess
 import tempfile
 import threading
@@ -80,6 +81,25 @@ class ReplayTests(unittest.TestCase):
                 self.assertEqual(self.get(server, header), (206, expected))
         self.assertEqual(self.get(server, "bytes=999999-"), (416, b""))
 
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix sockets unavailable")
+    def test_unix_origin(self) -> None:
+        socket_path = Path(self.directory.name) / "origin.sock"
+        server = Server(self.fixtures, {}, socket_path)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.servers.append((server, thread))
+        connection = http.client.HTTPConnection("localhost", timeout=10)
+        connection.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.sock.connect(str(socket_path))
+        try:
+            connection.request(
+                "GET", "/files/example.whl", headers={"Range": "bytes=0-3"}
+            )
+            response = connection.getresponse()
+            self.assertEqual((response.status, response.read()), (206, self.body[:4]))
+        finally:
+            connection.close()
+
     def test_interruption_then_resume(self) -> None:
         server = self.server({"cut_after_bytes": 16384, "cut_count": 1})
         with self.assertRaises(http.client.IncompleteRead) as raised:
@@ -120,6 +140,7 @@ class ReplayTests(unittest.TestCase):
             cache_mode="refresh",
             timeout=10,
             verify_tree=None,
+            http2_proxy=None,
         )
         completed = subprocess.CompletedProcess([], 0, b"example==1\n", b"")
         commands = []

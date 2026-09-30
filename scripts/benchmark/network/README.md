@@ -60,6 +60,23 @@ changes a host interface, route, or qdisc. On hosts that disable user namespaces
 invoke the wrapper with `sudo -n --preserve-env=HOME`; it drops back to the invoking
 user with `setpriv` before running the measured command.
 
+For TLS/HTTP2 measurements, generate a local test certificate for `127.0.0.1` and
+pass `--http2-proxy /absolute/path/to/caddy --tls-certificate CERT.pem --tls-key
+KEY.pem` to `run`. The proxy forwards to a Unix socket, so kernel shaping applies
+only to the client connection. The driver verifies TLS and ALPN before timing,
+trusts the supplied certificate only in the measured process, and checks Caddy's
+access log to ensure the requests used HTTP/2. The JSON records the proxy binary
+and certificate hashes. Use a certificate and key dedicated to this fixture.
+
+```sh
+mkdir -p "$HOME/code/tmp/uv-network-tls"
+openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
+  -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1 \
+  -addext basicConstraints=critical,CA:FALSE -addext extendedKeyUsage=serverAuth \
+  -keyout "$HOME/code/tmp/uv-network-tls/key.pem" \
+  -out "$HOME/code/tmp/uv-network-tls/cert.pem"
+```
+
 The `calibrate --profile slow --output PATH` subcommand measures one `HEAD` and
 two concurrent, byte-checked range transfers independently of uv. Use the same
 fixture directory and network namespace as the actual benchmark.
