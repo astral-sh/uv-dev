@@ -1,5 +1,8 @@
-use arcstr::ArcStr;
 use std::str::FromStr;
+
+use arcstr::ArcStr;
+use smallvec::SmallVec;
+
 use uv_normalize::{ExtraName, GroupName};
 use uv_pep440::{Version, VersionPattern, VersionSpecifier};
 
@@ -626,17 +629,8 @@ fn parse_marker_op<T: Pep508Url, R: Reporter>(
     parse_inner: fn(&mut Cursor, &mut R) -> Result<Option<MarkerTree>, Pep508Error<T>>,
     reporter: &mut R,
 ) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    let mut tree = None;
-
-    // marker_and or marker_expr
-    let first_element = parse_inner(cursor, reporter)?;
-
-    if let Some(expression) = first_element {
-        tree = Some(match tree {
-            Some(tree) => apply(tree, expression),
-            None => expression,
-        });
-    }
+    let mut expressions = SmallVec::<[MarkerTree; 4]>::new();
+    expressions.extend(parse_inner(cursor, reporter)?);
 
     loop {
         // wsp*
@@ -647,16 +641,26 @@ fn parse_marker_op<T: Pep508Url, R: Reporter>(
             value if value == op => {
                 cursor.take_while(|c| !c.is_whitespace());
 
-                if let Some(expression) = parse_inner(cursor, reporter)? {
-                    tree = Some(match tree {
-                        Some(tree) => apply(tree, expression),
-                        None => expression,
-                    });
-                }
+                expressions.extend(parse_inner(cursor, reporter)?);
             }
-            _ => return Ok(tree),
+            _ => break,
         }
     }
+
+    // Pair adjacent expressions instead of repeatedly extending one growing decision diagram.
+    // Long clauses can then share intermediate subgraphs without constructing every prefix.
+    while expressions.len() > 1 {
+        let length = expressions.len();
+        for (output, index) in (0..length).step_by(2).enumerate() {
+            expressions[output] = if index + 1 < length {
+                apply(expressions[index], expressions[index + 1])
+            } else {
+                expressions[index]
+            };
+        }
+        expressions.truncate(length.div_ceil(2));
+    }
+    Ok(expressions.first().copied())
 }
 
 /// ```text
