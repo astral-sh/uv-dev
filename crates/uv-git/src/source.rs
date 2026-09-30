@@ -147,9 +147,12 @@ impl GitSource {
         // Validate the resolved commit before checking out its contents.
         let git = self.git.clone().with_precise(actual_rev)?;
 
-        // Don’t use the full hash, in order to contribute less to reaching the
-        // path length limit on Windows.
-        let short_id = db.to_short_id(actual_rev)?;
+        // Keep checkout paths short for Windows. Worktree databases accumulate fetched objects,
+        // so Git's automatic abbreviation length can grow and invalidate earlier checkout paths.
+        let short_id = match settings.checkout {
+            GitCheckoutStrategy::Clone => db.to_short_id(actual_rev)?,
+            GitCheckoutStrategy::Worktree => actual_rev.as_short_str().to_owned(),
+        };
 
         // Compute the canonical URL for the repository checkout.
         let canonical = git.repository().clone().with_lfs(Some(lfs_requested));

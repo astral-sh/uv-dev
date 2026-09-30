@@ -139,6 +139,21 @@ fn run(partial_fetches: bool) -> Result<()> {
         assert!(paths.iter().all(|path| path.join(".git").is_dir()));
         return Ok(());
     }
+
+    // Git's automatic abbreviation length can change as the shared database grows.
+    // Changing it must not create another checkout for an already cached revision.
+    git(database.path(), &["config", "core.abbrev", "12"])?;
+    clear_source_metadata(&context)?;
+    set_revision(&context, &url, &revisions[0])?;
+    context
+        .lock()
+        .arg("--preview-features")
+        .arg(features)
+        .arg("--offline")
+        .assert()
+        .success();
+    assert_eq!(checkouts(checkout_root.path())?, paths);
+
     for path in &paths {
         let link = fs_err::read_to_string(path.join(".git"))?;
         let target = link
@@ -280,7 +295,13 @@ fn lfs() -> Result<()> {
     };
     let repository =
         RepositoryUrl::parse("https://github.com/astral-sh/test-lfs-repo")?.with_lfs(Some(true));
-    let checkout = root.child(cache_digest(&repository)).child("261c828");
-    git(checkout.path(), &["lfs", "fsck", "--objects", "HEAD"])?;
+    let checkout = checkouts(root.child(cache_digest(&repository)).path())?
+        .into_iter()
+        .find(|path| {
+            git(path, &["rev-parse", "HEAD"])
+                .is_ok_and(|head| head == "261c828b8e05251f3a3e4f6b47b149d691c7efbb")
+        })
+        .ok_or_else(|| anyhow!("missing LFS checkout"))?;
+    git(&checkout, &["lfs", "fsck", "--objects", "HEAD"])?;
     Ok(())
 }
