@@ -313,6 +313,10 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
             .spawn(move || {
                 let result = solver.solve(&requests);
 
+                // Callers may need exclusive access to the metadata index as soon as resolution
+                // completes, so release the solver's index handle before sending the result.
+                drop(requests);
+
                 // This may fail if the main thread returned early due to an error.
                 let _ = tx.send(result);
             })

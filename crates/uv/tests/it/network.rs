@@ -309,16 +309,21 @@ fn resolver_stops_unused_prefetch() -> Result<()> {
                 .expect("numeric fixture version");
             let mut metadata = format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n");
             let gate = if name == "choice" {
-                let pin = if number > 15 { 2 } else { 1 };
-                metadata.push_str(&format!("Requires-Dist: pin=={pin}.0\n"));
-                if number < 15 {
-                    started_tx.send_replace(true);
-                    Some(release_rx.clone())
-                } else if number == 15 {
-                    // Make the usable version wait until an unused prefetch is in flight.
-                    Some(started_rx.clone())
+                metadata.push_str(if number > 15 {
+                    "Requires-Dist: pin==2.0\n"
                 } else {
-                    None
+                    "Requires-Dist: pin==1.0\n"
+                });
+                match number {
+                    0..=14 => {
+                        started_tx.send_replace(true);
+                        Some(release_rx.clone())
+                    }
+                    15 => {
+                        // Make the usable version wait until an unused prefetch is in flight.
+                        Some(started_rx.clone())
+                    }
+                    _ => None,
                 }
             } else {
                 None
