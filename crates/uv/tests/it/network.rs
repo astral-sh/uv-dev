@@ -79,19 +79,22 @@ async fn resolution_reuses_verified_cached_wheel_metadata() -> Result<()> {
                 }
                 ResponseTemplate::new(200)
                     .insert_header("Cache-Control", "public, max-age=0")
-                    .set_body_json(json!({
-                        "meta": {"api-version": "1.0"},
-                        "name": "build-tag",
-                        "files": [{
-                            "filename": FILENAME,
-                            "url": format!("/files/{FILENAME}"),
-                            "hashes": hashes,
-                            "size": archive.len(),
-                            "core-metadata": true,
-                            "upload-time": "2023-01-01T00:00:00Z"
-                        }]
-                    }))
-                    .insert_header("Content-Type", "application/vnd.pypi.simple.v1+json")
+                    .set_body_raw(
+                        json!({
+                            "meta": {"api-version": "1.0"},
+                            "name": "build-tag",
+                            "files": [{
+                                "filename": FILENAME,
+                                "url": format!("/files/{FILENAME}"),
+                                "hashes": hashes,
+                                "size": archive.len(),
+                                "core-metadata": true,
+                                "upload-time": "2023-01-01T00:00:00Z"
+                            }]
+                        })
+                        .to_string(),
+                        "application/vnd.pypi.simple.v1+json",
+                    )
             })
             .mount(&server)
             .await;
