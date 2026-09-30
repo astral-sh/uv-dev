@@ -5,13 +5,14 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant, SystemTimeError};
+use std::time::{Duration, SystemTimeError};
 use std::{env, io};
 
-use futures::TryStreamExt;
+use futures::{FutureExt, TryStreamExt};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use reqwest::Response;
+use reqwest::header::{ACCEPT_ENCODING, HeaderValue};
 use reqwest_retry::RetryError;
 use reqwest_retry::policies::ExponentialBackoff;
 use serde::{Deserialize, Serialize};
@@ -27,8 +28,8 @@ use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::cache_digest;
 use uv_client::{
     BaseClient, BaseClientBuilder, CacheControl, CachedClient, CachedClientError, ClientBuildError,
-    Connectivity, RetriableError, RetryState, WrappedReqwestError, fetch_with_url_fallback,
-    retryable_on_request_failure,
+    Connectivity, RetriableError, RetryState, WrappedReqwestError,
+    fetch_with_url_fallback_with_retry_state, resumable_bytes_stream, retryable_on_request_failure,
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
@@ -1207,16 +1208,24 @@ impl ManagedPythonDownload {
         if urls.is_empty() {
             return Err(Error::NoPythonDownloadUrlFound);
         }
-        fetch_with_url_fallback(&urls, *retry_policy, &format!("`{}`", self.key()), |url| {
-            self.fetch_from_url(
-                url,
-                client,
-                installation_dir,
-                scratch_dir,
-                reinstall,
-                reporter,
-            )
-        })
+        fetch_with_url_fallback_with_retry_state(
+            &urls,
+            *retry_policy,
+            &format!("`{}`", self.key()),
+            async |url, retry_state| {
+                self.fetch_from_url(
+                    url,
+                    client,
+                    retry_state,
+                    installation_dir,
+                    scratch_dir,
+                    reinstall,
+                    reporter,
+                )
+                .await
+            },
+        )
+        .boxed_local()
         .await
     }
 
@@ -1225,6 +1234,7 @@ impl ManagedPythonDownload {
         &self,
         url: DisplaySafeUrl,
         client: &BaseClient,
+        retry_state: &mut RetryState,
         installation_dir: &Path,
         scratch_dir: &Path,
         reinstall: bool,
@@ -1273,7 +1283,7 @@ impl ManagedPythonDownload {
             // Download the archive to the cache, or return a reader if we have it in cache.
             // TODO(konsti): We should "tee" the write so we can do the download-to-cache and unpacking
             // in one step.
-            let (reader, size): (Box<dyn AsyncRead + Unpin>, Option<u64>) =
+            let (reader, size): (Box<dyn AsyncRead + Unpin + '_>, Option<u64>) =
                 match fs_err::tokio::File::open(&target_cache_file).await {
                     Ok(file) => {
                         debug!(
@@ -1297,6 +1307,7 @@ impl ManagedPythonDownload {
                         self.download_archive(
                             &url,
                             client,
+                            retry_state,
                             reporter,
                             &python_builds_dir,
                             &target_cache_file,
@@ -1331,7 +1342,7 @@ impl ManagedPythonDownload {
                 temp_dir.path().simplified_display()
             );
 
-            let (reader, size) = read_url(&url, client).await?;
+            let (reader, size) = read_url(&url, client, retry_state).await?;
             self.extract_reader(
                 reader,
                 temp_dir,
@@ -1417,6 +1428,7 @@ impl ManagedPythonDownload {
         &self,
         url: &DisplaySafeUrl,
         client: &BaseClient,
+        retry_state: &mut RetryState,
         reporter: Option<&dyn Reporter>,
         python_builds_dir: &Path,
         target_cache_file: &Path,
@@ -1427,7 +1439,7 @@ impl ManagedPythonDownload {
             target_cache_file.simplified_display()
         );
 
-        let (mut reader, size) = read_url(url, client).await?;
+        let (mut reader, size) = read_url(url, client, retry_state).await?;
         let temp_dir = tempfile::tempdir_in(python_builds_dir)?;
         let temp_file = temp_dir.path().join("download");
 
@@ -1703,24 +1715,6 @@ fn parse_json_downloads(
 }
 
 impl Error {
-    fn from_reqwest(
-        url: DisplaySafeUrl,
-        err: reqwest::Error,
-        retries: Option<u32>,
-        start: Instant,
-    ) -> Self {
-        let err = Self::NetworkError(url, WrappedReqwestError::from(err));
-        if let Some(retries) = retries {
-            Self::NetworkErrorWithRetries {
-                err: Box::new(err),
-                retries,
-                duration: start.elapsed(),
-            }
-        } else {
-            err
-        }
-    }
-
     fn from_reqwest_middleware(url: DisplaySafeUrl, err: reqwest_middleware::Error) -> Self {
         match err {
             reqwest_middleware::Error::Middleware(error) => {
@@ -1808,10 +1802,11 @@ where
 }
 
 /// Convert a [`Url`] into an [`AsyncRead`] stream.
-async fn read_url(
-    url: &DisplaySafeUrl,
-    client: &BaseClient,
-) -> Result<(impl AsyncRead + Unpin, Option<u64>), Error> {
+async fn read_url<'a>(
+    url: &'a DisplaySafeUrl,
+    client: &'a BaseClient,
+    retry_state: &'a mut RetryState,
+) -> Result<(impl AsyncRead + Unpin + 'a, Option<u64>), Error> {
     if url.scheme() == "file" {
         // Loads downloaded distribution from the given `file://` URL.
         let path = url
@@ -1823,27 +1818,23 @@ async fn read_url(
 
         Ok((Either::Left(reader), Some(size)))
     } else {
-        let start = Instant::now();
-        let response = client
-            .for_host(url)
-            .get(Url::from(url.clone()))
-            .send()
+        let client = client.for_host(url);
+        let response = retry_state
+            .send(
+                client
+                    .get(Url::from(url.clone()))
+                    .header(ACCEPT_ENCODING, HeaderValue::from_static("identity")),
+            )
             .await
             .map_err(|err| Error::from_reqwest_middleware(url.clone(), err))?;
-
-        let retry_count = response
-            .extensions()
-            .get::<reqwest_retry::RetryCount>()
-            .map(|retries| retries.value());
 
         // Check the status code.
         let response = response
             .error_for_status()
-            .map_err(|err| Error::from_reqwest(url.clone(), err, retry_count, start))?;
+            .map_err(|err| Error::NetworkError(url.clone(), WrappedReqwestError::from(err)))?;
 
         let size = response.content_length();
-        let stream = response
-            .bytes_stream()
+        let stream = resumable_bytes_stream(response, client, url, retry_state)
             .map_err(io::Error::other)
             .into_async_read();
 
@@ -1854,7 +1845,10 @@ async fn read_url(
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, HashSet};
+
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
 
     use crate::PythonVariant;
     use crate::implementation::LenientImplementationName;
@@ -1862,6 +1856,91 @@ mod tests {
     use uv_platform::{Arch, Libc, Os, Platform};
 
     use super::*;
+
+    async fn read_test_archive(
+        replies: Vec<&'static [u8]>,
+        retries: u32,
+    ) -> anyhow::Result<(Result<Vec<u8>, Error>, Vec<BTreeMap<String, String>>)> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url =
+            DisplaySafeUrl::parse(&format!("http://{}/archive.tar.gz", listener.local_addr()?))?;
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for reply in replies {
+                let (mut stream, _) = listener.accept().await?;
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(stream.read_u8().await?);
+                    anyhow::ensure!(request.len() < 16384, "Request headers too large");
+                }
+                requests.push(
+                    String::from_utf8(request)?
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .map(|(name, value)| (name.to_ascii_lowercase(), value.trim().to_owned()))
+                        .collect(),
+                );
+                stream.write_all(reply).await?;
+                stream.shutdown().await?;
+            }
+            Ok::<_, anyhow::Error>(requests)
+        });
+        let client = BaseClientBuilder::default()
+            .retries(retries)
+            .no_retry_delay(true)
+            .build()?;
+        let result = fetch_with_url_fallback_with_retry_state(
+            std::slice::from_ref(&url),
+            client.retry_policy(),
+            "Python archive",
+            async |url, retry_state| {
+                let (mut reader, size) = read_url(&url, &client, retry_state).await?;
+                assert_eq!(size, Some(10));
+                let mut bytes = Vec::new();
+                reader.read_to_end(&mut bytes).await?;
+                Ok::<_, Error>(bytes)
+            },
+        )
+        .await;
+        let requests = tokio::time::timeout(Duration::from_secs(10), server).await???;
+        Ok((result, requests))
+    }
+
+    #[tokio::test]
+    async fn python_archive_stream_resumes_at_the_last_byte() -> anyhow::Result<()> {
+        let (result, requests) = read_test_archive(
+            vec![
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 10\r\nAccept-Ranges: bytes\r\nETag: \"one\"\r\n\r\nabcd",
+                b"HTTP/1.1 206 Partial Content\r\nConnection: close\r\nContent-Length: 6\r\nContent-Range: bytes 4-9/10\r\nETag: \"one\"\r\n\r\nefghij",
+            ],
+            1,
+        )
+        .await?;
+        assert_eq!(result?, b"abcdefghij");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["accept-encoding"], "identity");
+        assert_eq!(requests[1]["range"], "bytes=4-");
+        assert_eq!(requests[1]["if-range"], "\"one\"");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn python_archive_stream_shares_middleware_and_body_retry_budget() -> anyhow::Result<()> {
+        let (result, requests) = read_test_archive(
+            vec![
+                b"HTTP/1.1 503 Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 10\r\nAccept-Ranges: bytes\r\nETag: \"one\"\r\n\r\nabcd",
+            ],
+            1,
+        )
+        .await?;
+        assert_matches!(
+            result,
+            Err(Error::NetworkErrorWithRetries { retries: 1, .. })
+        );
+        assert_eq!(requests.len(), 2);
+        Ok(())
+    }
 
     /// Parse a request with all of its fields.
     #[test]

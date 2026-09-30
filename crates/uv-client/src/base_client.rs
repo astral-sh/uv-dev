@@ -1195,6 +1195,44 @@ where
     F: AsyncFnMut(DisplaySafeUrl) -> Result<T, E>,
     E: RetriableError + From<SystemTimeError>,
 {
+    fetch_with_url_fallback_inner(
+        urls,
+        retry_policy,
+        subject,
+        true,
+        async |url, _: &mut RetryState| attempt(url).await,
+    )
+    .await
+}
+
+/// Try each URL while sharing the retry budget with response-body processing.
+///
+/// The callback must send requests through [`RetryState::send`]. Its reported retry count is not
+/// charged again, since middleware and body retries have already updated the shared state.
+pub async fn fetch_with_url_fallback_with_retry_state<T, E, F>(
+    urls: &[DisplaySafeUrl],
+    retry_policy: ExponentialBackoff,
+    subject: &str,
+    attempt: F,
+) -> Result<T, E>
+where
+    F: AsyncFnMut(DisplaySafeUrl, &mut RetryState) -> Result<T, E>,
+    E: RetriableError + From<SystemTimeError>,
+{
+    fetch_with_url_fallback_inner(urls, retry_policy, subject, false, attempt).await
+}
+
+async fn fetch_with_url_fallback_inner<T, E, F>(
+    urls: &[DisplaySafeUrl],
+    retry_policy: ExponentialBackoff,
+    subject: &str,
+    record_callback_retries: bool,
+    mut attempt: F,
+) -> Result<T, E>
+where
+    F: AsyncFnMut(DisplaySafeUrl, &mut RetryState) -> Result<T, E>,
+    E: RetriableError + From<SystemTimeError>,
+{
     let mut retry_state = RetryState::start(
         retry_policy,
         // The last URL will trigger backoff if it fails.
@@ -1204,7 +1242,7 @@ where
     'retry: loop {
         for (i, url) in urls.iter().enumerate() {
             let is_last = i == urls.len() - 1;
-            match attempt(url.clone()).await {
+            match attempt(url.clone(), &mut retry_state).await {
                 Ok(result) => return Ok(result),
                 Err(err) => {
                     if !is_last && err.should_try_next_url() {
@@ -1215,7 +1253,12 @@ where
                         continue;
                     }
                     // All URLs exhausted; apply the retry policy.
-                    if let Some(backoff) = retry_state.should_retry(&err, err.retries()) {
+                    let retries = if record_callback_retries {
+                        err.retries()
+                    } else {
+                        0
+                    };
+                    if let Some(backoff) = retry_state.should_retry(&err, retries) {
                         retry_state.sleep_backoff(backoff).await;
                         continue 'retry;
                     }
