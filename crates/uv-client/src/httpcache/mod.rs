@@ -258,6 +258,15 @@ pub(crate) struct CachePolicy {
 }
 
 impl CachePolicy {
+    /// The cache stores a complete derived value, even if its first response was partial.
+    /// Validators and freshness still refer to the full origin resource.
+    pub(crate) fn with_complete_payload(mut self) -> Self {
+        if self.response.status == 206 {
+            self.response.status = 200;
+        }
+        self
+    }
+
     /// Convert this to an owned archive value.
     ///
     /// It's necessary to call this in order to make decisions with this cache
@@ -1433,6 +1442,26 @@ mod tests {
         CachePolicyBuilder::new(request)
             .build(&response)
             .to_archived()
+    }
+
+    #[test]
+    fn partial_response_cache_requires_complete_payload() {
+        let request = http_request(http::Method::GET, "https://example.com/wheel.whl");
+        for (cache_control, storable) in [("public, max-age=3600", true), ("no-store", false)] {
+            let response = reqwest::Response::from(
+                http::Response::builder()
+                    .status(http::StatusCode::PARTIAL_CONTENT)
+                    .header(http::header::CACHE_CONTROL, cache_control)
+                    .body(Vec::new())
+                    .unwrap(),
+            );
+            let policy = CachePolicyBuilder::new(&request).build(&response);
+            assert!(!policy.to_archived().is_storable());
+            assert_eq!(
+                policy.with_complete_payload().to_archived().is_storable(),
+                storable
+            );
+        }
     }
 
     /// A server or proxy is free to send an arbitrarily large `Age` header, up
