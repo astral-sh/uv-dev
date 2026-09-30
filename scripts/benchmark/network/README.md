@@ -59,6 +59,12 @@ For installation files that embed their destination, `--normalize-tree-file GLOB
 replaces the trial URL and directory before hashing only matching relative paths.
 Managed Python workloads use this for `**/_sysconfigdata_*.py`.
 
+`make_requirements_fixtures.py --directory DIR --manifest MANIFEST` creates a
+chain of six remote requirements files ending in a pinned `iniconfig` requirement.
+`requirements_oracle.py` follows that chain and reads the known package metadata
+on one persistent HTTP/1.1 connection. Run both the oracle and paired command under
+the same kernel network profile to measure connection setup and remaining headroom.
+
 For commands that require an installed environment or project files, pass
 `--setup-commands PATH` with a JSON array of uv argument arrays. Those commands
 run before timing with the same binary and isolated cache. `--config-template`
