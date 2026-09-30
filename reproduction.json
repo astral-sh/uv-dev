@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Ubuntu 24.04.5 x86_64 with installed uv 0.12.13 and Python 3.12.3, a project with a production dependency, default `dev` group, and non-default `lint` group reproduced the issue. Both `uv audit --locked` and `uv audit --locked --no-default-groups` audited 3 packages, while `uv audit --locked --no-group dev` audited 2. The existing test `crates/uv/tests/build/audit.rs::audit_dependency_groups` covers other group filters but not `--no-default-groups`. Updated `$RUNNER_TEMP/issue-context/README.md` with the fixture and findings."
+}

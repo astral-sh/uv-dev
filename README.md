@@ -10,7 +10,12 @@ The reporter finds that `uv audit --no-default-groups` audits the same dependenc
 when `[tool.uv] default-groups = ["dev"]`, while `uv audit --no-group dev` successfully excludes the
 group. They reproduced this with uv 0.12.19 on Ubuntu 24.04 under WSL.
 
-Repository source confirms the behavior. `AuditSettings::resolve` passes the parsed
+The behavior was independently reproduced with the installed uv 0.12.13 on Ubuntu 24.04.5. A
+minimal project with one production dependency, a default `dev` group, and a non-default `lint`
+group caused both the default invocation and `--no-default-groups` to audit three packages;
+`--no-group dev` audited only two.
+
+Repository source explains the observed behavior. `AuditSettings::resolve` passes the parsed
 `no_default_groups` value into `DependencyGroups::from_args`, but it also sets the `all_groups`
 argument whenever neither `--only-group` nor `--only-dev` is used. The shared dependency-group
 selector intentionally gives all-groups precedence over no-default-groups, while explicit
@@ -22,6 +27,59 @@ No existing issue or pull request tracks this exact defect. The closest history 
 astral-sh/uv#18511, which established the intended audit behavior of including everything by
 default while allowing broad subset selection. Its implementation supplied the implicit
 all-groups state that conflicts with `--no-default-groups`.
+
+## Reproduction
+
+Outcome: **reproducible**.
+
+Environment used for the independent reproduction:
+
+- Ubuntu 24.04.5 LTS, Linux x86_64
+- uv 0.12.13 (`x86_64-unknown-linux-gnu`), the installed executable on `PATH`
+- CPython 3.12.3
+
+The installed uv is slightly older than the reporter's uv 0.12.19, but it exposes the same audit
+option and produces the reported behavior. All fixture files and the uv cache were isolated under
+`$RUNNER_TEMP`.
+
+Minimal `pyproject.toml`:
+
+```toml
+[project]
+name = "audit-groups-repro"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["iniconfig==2.0.0"]
+
+[dependency-groups]
+dev = ["typing-extensions==4.10.0"]
+lint = ["sniffio==1.3.1"]
+
+[tool.uv]
+default-groups = ["dev"]
+```
+
+After creating the lockfile with `uv lock`, the targeted commands were:
+
+```console
+$ uv audit --locked
+Found no known vulnerabilities and no adverse project statuses in 3 packages
+
+$ uv audit --locked --no-default-groups
+Found no known vulnerabilities and no adverse project statuses in 3 packages
+
+$ uv audit --locked --no-group dev
+Found no known vulnerabilities and no adverse project statuses in 2 packages
+```
+
+All three audit commands exited successfully. The first two identical package counts reproduce the
+ineffective `--no-default-groups` flag, while the third confirms that explicit group exclusion is
+effective in the same fixture.
+
+Existing integration coverage at `crates/uv/tests/build/audit.rs::audit_dependency_groups` verifies
+that audit includes all groups by default and that `--no-dev`, `--no-group`, and `--only-group`
+change the audited package count. Its fixture does not configure `tool.uv.default-groups`, and it
+does not invoke `--no-default-groups`, so it does not cover the reported behavior.
 
 ## Draft response
 
