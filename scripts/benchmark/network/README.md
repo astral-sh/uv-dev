@@ -89,6 +89,11 @@ only to the client connection. The driver verifies TLS and ALPN before timing,
 trusts the supplied certificate only in the measured process, and checks Caddy's
 access log to ensure the requests used HTTP/2. The JSON records the proxy binary
 and certificate hashes. Use a certificate and key dedicated to this fixture.
+`http2_oracle.py` accepts the same fixture, profile, proxy, certificate, and key
+paths and a `--filename`. It measures a known index-and-artifact transfer using
+`curl` on one verified HTTP/2 connection, checks both response bodies, and records
+the transfer timings, traffic, and optimistic network floor. Run it inside the
+same network namespace as the paired command when calibrating HTTP/2 results.
 
 ```sh
 mkdir -p "$HOME/code/tmp/uv-network-tls"
