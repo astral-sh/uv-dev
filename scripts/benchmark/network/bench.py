@@ -61,6 +61,26 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(file, "sha256").hexdigest()
 
 
+def tree_digest(root: Path) -> dict:
+    if not root.is_dir():
+        raise ValueError(f"Verification directory does not exist: {root}")
+    entries = []
+    for path in sorted(root.rglob("*")):
+        name = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            entries.append((name, "symlink", os.readlink(path)))
+        elif path.is_file():
+            entries.append((name, "file", path.stat().st_mode & 0o111, digest(path)))
+        elif path.is_dir():
+            entries.append((name, "directory"))
+        else:
+            raise ValueError(f"Unsupported verification entry: {path}")
+    return {
+        "entries": len(entries),
+        "sha256": hashlib.sha256(json.dumps(entries).encode()).hexdigest(),
+    }
+
+
 def prepare(manifest: Path, directory: Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     for item in json.loads(manifest.read_text()):
@@ -560,6 +580,11 @@ def run_one(
             "bytes": sum(event["bytes"] for event in server.events),
             "requests": len(server.events),
             "max_active": max((event["active"] for event in server.events), default=0),
+            "verified_tree": (
+                tree_digest(Path(args.verify_tree.format(work=work)))
+                if args.verify_tree
+                else None
+            ),
         }
 
 
@@ -590,6 +615,7 @@ def main() -> None:
     run.add_argument("--output", type=Path, required=True)
     run.add_argument("--python", default="3.12")
     run.add_argument("--requirement", action="append", default=[])
+    run.add_argument("--verify-tree", help="Directory to compare after each command")
     run.add_argument("--pairs", type=int, default=20)
     run.add_argument("--warmups", type=int, default=2)
     run.add_argument(
@@ -648,6 +674,7 @@ def main() -> None:
         "netem": netem_profile(),
         "command": args.command,
         "requirements": args.requirement,
+        "verify_tree": args.verify_tree,
         "warmups": args.warmups,
         "cache_mode": args.cache_mode,
         "pairs": [],
@@ -665,6 +692,8 @@ def main() -> None:
         }
         if pair["parent"]["stdout_sha256"] != pair["head"]["stdout_sha256"]:
             raise ValueError("Parent and head command outputs differ")
+        if pair["parent"]["verified_tree"] != pair["head"]["verified_tree"]:
+            raise ValueError("Parent and head installed file contents differ")
         if index >= args.warmups:
             data["pairs"].append(pair)
             args.output.write_text(json.dumps(data, indent=2) + "\n")

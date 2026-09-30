@@ -34,8 +34,9 @@ per-request timing and byte counters, every paired measurement, and a pointwise
 end of the candidate/parent interval is at most `0.95`. Re-run relevant workloads
 under `fast`, `range-fast`, warm-cache, and failure profiles before accepting a
 change. A successful command is required, and normalized standard output must
-match within each pair. Installation workloads also need a separate comparison of
-the installed distributions and their contents.
+match within each pair. Installation workloads should pass `--verify-tree
+'{work}/site'` (and install into that directory) to compare every installed file,
+executable bit, directory, and symlink after the timed command.
 
 `--required-bytes` and `--required-waves` record independently established lower
 bounds for a workload. The optimistic time floor is the maximum of required bytes

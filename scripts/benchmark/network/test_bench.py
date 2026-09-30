@@ -119,6 +119,7 @@ class ReplayTests(unittest.TestCase):
             command=["pip", "compile", "{work}/requirements.in"],
             cache_mode="refresh",
             timeout=10,
+            verify_tree=None,
         )
         completed = subprocess.CompletedProcess([], 0, b"example==1\n", b"")
         commands = []
@@ -132,6 +133,19 @@ class ReplayTests(unittest.TestCase):
         warm_command, timed_command = commands
         self.assertNotIn("--refresh", warm_command)
         self.assertEqual(timed_command, [*warm_command, "--refresh"])
+
+    def test_tree_digest_detects_content_changes(self) -> None:
+        root = Path(self.directory.name) / "installed"
+        root.mkdir()
+        file = root / "module.py"
+        file.write_text("answer = 42\n")
+        original = bench.tree_digest(root)
+        self.assertEqual(original, bench.tree_digest(root))
+        file.write_text("answer = 43\n")
+        self.assertNotEqual(original, bench.tree_digest(root))
+        file.write_text("answer = 42\n")
+        file.chmod(file.stat().st_mode | 0o111)
+        self.assertNotEqual(original, bench.tree_digest(root))
 
 
 if __name__ == "__main__":
