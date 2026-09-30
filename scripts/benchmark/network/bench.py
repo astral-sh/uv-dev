@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import copy
 import email.parser
 import hashlib
 import html
@@ -193,6 +194,22 @@ class Fixtures:
                     ),
                 }
             )
+        self.rebuild_indexes()
+
+    def with_file_urls(self, urls: dict[str, str]) -> Fixtures:
+        """Copy index responses while retaining the immutable artifact files."""
+        fixtures = copy.copy(self)
+        fixtures.packages = {
+            name: [
+                dict(file, url=urls.get(file["filename"], file["url"]))
+                for file in files
+            ]
+            for name, files in self.packages.items()
+        }
+        fixtures.rebuild_indexes()
+        return fixtures
+
+    def rebuild_indexes(self) -> None:
         self.simple = {
             name: json.dumps(
                 {"name": name, "meta": {"api-version": "1.4"}, "files": files},
@@ -250,7 +267,11 @@ class Server(ThreadingHTTPServer):
         socket_path: Path | None = None,
         *,
         git_root: Path | None = None,
+        limiter: Limiter | None = None,
+        origin: str = "index",
     ) -> None:
+        if profile.get("artifact_origins"):
+            raise ValueError("Use Replay to configure multiple artifact origins")
         self.public_url: str | None = None
         if socket_path is not None:
             self.address_family = socket.AF_UNIX
@@ -258,7 +279,8 @@ class Server(ThreadingHTTPServer):
         self.fixtures = fixtures
         self.git_root = git_root.resolve() if git_root else None
         self.profile = profile
-        self.limiter = Limiter(profile.get("bytes_per_second", 0))
+        self.limiter = limiter or Limiter(profile.get("bytes_per_second", 0))
+        self.origin = origin
         self.lock = threading.Lock()
         self.attempts: Counter[tuple[str, str]] = Counter()
         self.events: list[dict] = []
@@ -288,6 +310,7 @@ class Server(ThreadingHTTPServer):
             self.attempts[key] += 1
             self.active += 1
             return {
+                "origin": self.origin,
                 "method": method,
                 "path": path,
                 "attempt": self.attempts[key],
@@ -313,13 +336,103 @@ class Server(ThreadingHTTPServer):
                 raise TimeoutError("Fixture responses did not finish")
             time.sleep(0.01)
 
-    def reset(self) -> None:
+    def reset(self, limiter: Limiter | None = None, epoch: float | None = None) -> None:
         self.wait_idle()
         with self.lock:
             self.attempts.clear()
             self.events.clear()
-            self.limiter = Limiter(self.profile.get("bytes_per_second", 0))
-            self.epoch = time.perf_counter()
+            self.limiter = limiter or Limiter(self.profile.get("bytes_per_second", 0))
+            self.epoch = epoch if epoch is not None else time.perf_counter()
+
+
+class Replay:
+    """One index and optional artifact origins behind a shared bottleneck."""
+
+    def __init__(
+        self,
+        fixtures: Fixtures,
+        profile: dict,
+        socket_path: Path | None = None,
+        *,
+        git_root: Path | None = None,
+    ) -> None:
+        origins = profile.get("artifact_origins", {})
+        if origins and socket_path is not None:
+            raise ValueError("Artifact origins cannot currently use the HTTP/2 proxy")
+        self.profile = {
+            key: value for key, value in profile.items() if key != "artifact_origins"
+        }
+        limiter = Limiter(self.profile.get("bytes_per_second", 0))
+        self.servers: dict[str, Server] = {}
+        self.threads: list[threading.Thread] = []
+        self.file_urls: dict[str, str] = {}
+        try:
+            for name, config in origins.items():
+                if name == "index" or not re.fullmatch(r"[a-z][a-z0-9_-]*", name):
+                    raise ValueError(f"Invalid artifact origin name: {name}")
+                origin_profile = self.profile | config.get("profile", {})
+                if origin_profile.get("bytes_per_second", 0) != limiter.rate:
+                    raise ValueError(
+                        "Artifact origins must share the root bandwidth limit"
+                    )
+                server = Server(fixtures, origin_profile, limiter=limiter, origin=name)
+                self.servers[name] = server
+                for filename in config["filenames"]:
+                    if filename not in fixtures.files or filename in self.file_urls:
+                        raise ValueError(f"Unknown or duplicate artifact: {filename}")
+                    self.file_urls[filename] = server.url + f"/files/{filename}"
+            self.main = Server(
+                fixtures.with_file_urls(self.file_urls) if origins else fixtures,
+                self.profile,
+                socket_path,
+                git_root=git_root,
+                limiter=limiter,
+            )
+            self.servers["index"] = self.main
+            epoch = time.perf_counter()
+            for server in self.servers.values():
+                server.epoch = epoch
+        except BaseException:
+            for server in self.servers.values():
+                server.server_close()
+            raise
+
+    @property
+    def urls(self) -> dict[str, str]:
+        return {name: server.url for name, server in self.servers.items()}
+
+    @property
+    def events(self) -> list[dict]:
+        return sorted(
+            (event for server in self.servers.values() for event in server.events),
+            key=lambda event: event["start"],
+        )
+
+    def start(self) -> None:
+        for server in self.servers.values():
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self.threads.append(thread)
+
+    def wait_idle(self) -> None:
+        for server in self.servers.values():
+            server.wait_idle()
+
+    def reset(self) -> None:
+        self.wait_idle()
+        limiter = Limiter(self.profile.get("bytes_per_second", 0))
+        epoch = time.perf_counter()
+        for server in self.servers.values():
+            server.reset(limiter, epoch)
+
+    def stop(self) -> None:
+        for server in self.servers.values():
+            server.shutdown()
+        self.wait_idle()
+        for server in self.servers.values():
+            server.server_close()
+        for thread in self.threads:
+            thread.join()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -915,9 +1028,27 @@ def expand(value: str, context: dict) -> str:
 
 
 def normalize_output(value: bytes, context: dict) -> bytes:
-    return value.replace(str(context["base"]).encode(), b"[INDEX]").replace(
-        str(context["work"]).encode(), b"[WORK]"
-    )
+    origins = {"base": context["base"]} | {
+        key: url for key, url in context.items() if key.startswith("origin:")
+    }
+    for key, url in sorted(
+        origins.items(), key=lambda item: len(str(item[1])), reverse=True
+    ):
+        label = (
+            "[INDEX]" if key == "base" else f"[ORIGIN:{key.removeprefix('origin:')}]"
+        )
+        value = value.replace(str(url).encode(), label.encode())
+    return value.replace(str(context["work"]).encode(), b"[WORK]")
+
+
+def maximum_active(events: list[dict]) -> int:
+    active = maximum = 0
+    for _, change in sorted(
+        point for event in events for point in ((event["start"], 1), (event["end"], -1))
+    ):
+        active += change
+        maximum = max(maximum, active)
+    return maximum
 
 
 def run_one(
@@ -925,14 +1056,14 @@ def run_one(
 ) -> dict:
     with tempfile.TemporaryDirectory(prefix="trial-", dir=args.work_dir) as directory:
         work = Path(directory)
-        server = Server(
+        replay = Replay(
             fixtures,
             profile,
             work / "origin.sock" if args.http2_proxy else None,
             git_root=args.git_root,
         )
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        server = replay.main
+        replay.start()
         proxy = None
         try:
             if args.http2_proxy:
@@ -946,6 +1077,11 @@ def run_one(
                 "work": work,
                 "python": args.python,
                 "fixtures": args.directory.resolve(),
+                **{
+                    f"origin:{name}": url
+                    for name, url in replay.urls.items()
+                    if name != "index"
+                },
             }
             (work / "requirements.in").write_text(
                 "".join(f"{expand(item, context)}\n" for item in args.requirement)
@@ -989,7 +1125,7 @@ def run_one(
                     check=True,
                 )
             if args.setup_commands:
-                server.reset()
+                replay.reset()
             if args.cache_mode != "cold":
                 subprocess.run(
                     command,
@@ -999,7 +1135,7 @@ def run_one(
                     timeout=args.timeout,
                     check=True,
                 )
-                server.reset()
+                replay.reset()
             if args.cache_mode == "refresh":
                 command.append("--refresh")
             start = time.perf_counter()
@@ -1015,27 +1151,26 @@ def run_one(
         finally:
             if proxy:
                 proxy.stop()
-            server.shutdown()
-            server.wait_idle()
-            server.server_close()
-            thread.join()
+            replay.stop()
         output = normalize_output(result.stdout, context)
         if result.returncode:
             raise RuntimeError(
                 f"Command failed ({result.returncode}): {command}\n{result.stderr.decode(errors='replace')}"
             )
+        events = replay.events
         return {
             "seconds": seconds,
             "stdout_sha256": hashlib.sha256(output).hexdigest(),
             "stdout": output.decode(errors="replace"),
             "stderr": result.stderr.decode(errors="replace"),
-            "events": sorted(server.events, key=lambda event: event["start"]),
-            "bytes": sum(event["bytes"] for event in server.events),
-            "requests": len(server.events),
+            "origins": replay.urls,
+            "events": events,
+            "bytes": sum(event["bytes"] for event in events),
+            "requests": len(events),
             "origin_connections": len(
-                {event["origin_connection"] for event in server.events}
+                {(event["origin"], event["origin_connection"]) for event in events}
             ),
-            "max_active": max((event["active"] for event in server.events), default=0),
+            "max_active": maximum_active(events),
             "frontend_protocols": proxy.protocols() if proxy else None,
             "verified_tree": (
                 tree_digest(

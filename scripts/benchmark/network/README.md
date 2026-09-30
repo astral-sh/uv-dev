@@ -160,6 +160,18 @@ It reports both a known-package minimum and an all-index transfer reference.
 verifies the received archive bytes, and reports its compressed-byte lower bound.
 With ranges disabled, it reads the necessary archive prefix instead.
 
+For mixed artifact hosts, a `run` profile can set `artifact_origins` to a mapping
+of origin names to `filenames` arrays and optional `profile` overrides. The index
+links those files to separate loopback listeners, each with its own range and
+failure behavior. All listeners share the root response-body bandwidth cap.
+Traces identify the responding origin, and output comparison normalizes each
+temporary URL separately. This mode currently uses HTTP/1.1.
+`make_origin_fixtures.py --directory DIR` creates a small package that depends on
+the pinned NumPy wheel, plus profiles for mixed and uniform range capabilities.
+Copy or prepare the target wheel before timing. `artifact_origin_oracle.py`
+accepts repeated `--filename` arguments in dependency-discovery order and reads
+each index and metadata entry using known artifact capabilities and ZIP offsets.
+
 For Git fetch scheduling, `make_git_fixtures.py --directory PATH --packages 8`
 creates a deterministic bare monorepo, a hash-pinned bundle, and a project template
 that depends on eight subdirectories at the same branch. Pass its

@@ -18,6 +18,7 @@ import threading
 import time
 import unittest
 import urllib.request
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -359,6 +360,121 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(responses, [(200, self.body)] * 2)
         self.assertGreaterEqual(elapsed, 0.95)
         self.assertLess(elapsed, 3)
+
+    def test_artifact_origins_have_independent_capabilities(self) -> None:
+        directory = Path(self.directory.name)
+        wheel = directory / "example-1.0-py3-none-any.whl"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            archive.writestr(
+                "example-1.0.dist-info/METADATA",
+                "Metadata-Version: 2.1\nName: example\nVersion: 1.0\n",
+            )
+        manifest = directory / "manifest.json"
+        manifest.write_text(
+            json.dumps([{"filename": wheel.name, "sha256": bench.digest(wheel)}])
+        )
+        fixtures = bench.Fixtures(manifest, directory, pep658=False)
+        replay = bench.Replay(
+            fixtures,
+            {
+                "artifact_origins": {
+                    "no-range": {
+                        "filenames": [wheel.name],
+                        "profile": {"ranges": False},
+                    }
+                }
+            },
+        )
+        replay.start()
+        try:
+            indexed = json.loads(replay.main.fixtures.simple["example"])["files"][0]
+            self.assertEqual(indexed["url"], replay.file_urls[wheel.name])
+            self.assertEqual(
+                json.loads(fixtures.simple["example"])["files"][0]["url"],
+                f"/files/{wheel.name}",
+            )
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            for origin, status, expected in (
+                ("no-range", 200, wheel.read_bytes()),
+                ("index", 206, wheel.read_bytes()[:4]),
+            ):
+                with opener.open(
+                    urllib.request.Request(
+                        replay.urls[origin] + f"/files/{wheel.name}",
+                        headers={"Range": "bytes=0-3"},
+                    )
+                ) as response:
+                    self.assertEqual(response.status, status)
+                    self.assertEqual(response.read(), expected)
+            replay.wait_idle()
+            self.assertEqual(
+                {event["origin"] for event in replay.events}, {"index", "no-range"}
+            )
+            self.assertEqual(
+                bench.normalize_output(
+                    (replay.main.url + " " + indexed["url"]).encode(),
+                    {
+                        "base": replay.main.url,
+                        "work": directory,
+                        "origin:no-range": replay.urls["no-range"],
+                    },
+                ),
+                f"[INDEX] [ORIGIN:no-range]/files/{wheel.name}".encode(),
+            )
+            replay.reset()
+            self.assertFalse(replay.events)
+            self.assertIs(replay.main.limiter, replay.servers["no-range"].limiter)
+        finally:
+            replay.stop()
+
+    def test_bandwidth_is_shared_across_artifact_origins(self) -> None:
+        directory = Path(self.directory.name)
+        second = directory / "second.whl"
+        second.write_bytes(self.body)
+        manifest = directory / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                [
+                    {"kind": "raw", "filename": path.name, "sha256": bench.digest(path)}
+                    for path in (self.path, second)
+                ]
+            )
+        )
+        fixtures = bench.Fixtures(manifest, directory, pep658=False)
+        replay = bench.Replay(
+            fixtures,
+            {
+                "bytes_per_second": len(self.body) * 2,
+                "artifact_origins": {"files": {"filenames": [self.path.name]}},
+            },
+        )
+        replay.start()
+        try:
+
+            def fetch(url: str) -> bytes:
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with opener.open(url) as response:
+                    return response.read()
+
+            start = time.perf_counter()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                responses = list(
+                    pool.map(
+                        fetch,
+                        [
+                            replay.file_urls[self.path.name],
+                            replay.main.url + f"/files/{second.name}",
+                        ],
+                    )
+                )
+            elapsed = time.perf_counter() - start
+            self.assertEqual(responses, [self.body] * 2)
+            self.assertGreaterEqual(elapsed, 0.95)
+            self.assertLess(elapsed, 3)
+            replay.wait_idle()
+            self.assertEqual(bench.maximum_active(replay.events), 2)
+        finally:
+            replay.stop()
 
     def test_paired_interval(self) -> None:
         result = summary(
