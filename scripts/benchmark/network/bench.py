@@ -68,6 +68,24 @@ def network_floor(
     )
 
 
+def concurrent_latency_floor(
+    latencies_ms: list[float], concurrency: int, rtt_ms: float = 0
+) -> tuple[int, float]:
+    """Return request waves and the latency contribution expected by `network_floor`."""
+    if not latencies_ms or concurrency < 1:
+        raise ValueError(
+            "Concurrent request bounds require requests and a positive limit"
+        )
+    concurrency = min(concurrency, len(latencies_ms))
+    waves = math.ceil(len(latencies_ms) / concurrency)
+    durations = [latency + rtt_ms for latency in latencies_ms]
+    # Combine RTT with each request before taking the scheduling bound. Adding a
+    # full wave of RTT to the longest application delay can overstate the bound
+    # when short requests finish while that long request is still running.
+    duration = max(max(durations), sum(durations) / concurrency, waves * min(durations))
+    return waves, max(0, duration - waves * rtt_ms)
+
+
 def normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 

@@ -33,6 +33,18 @@ Server = bench.Server
 summary = bench.summary
 
 
+class NetworkFloorTests(unittest.TestCase):
+    def test_uniform_concurrent_requests(self) -> None:
+        self.assertEqual(bench.concurrent_latency_floor([150] * 9, 2), (5, 750))
+        self.assertEqual(bench.concurrent_latency_floor([150] * 9, 50), (1, 150))
+        self.assertEqual(bench.concurrent_latency_floor([150] * 9, 2, 100), (5, 750))
+
+    def test_heterogeneous_requests_overlap_rtt(self) -> None:
+        waves, latency = bench.concurrent_latency_floor([100, 0, 0], 2, 100)
+        with patch.dict(os.environ, {"UV_BENCH_NETEM": '{"rtt_ms":100}'}):
+            self.assertEqual(bench.network_floor({}, 0, waves, latency), 0.2)
+
+
 class ReplayTests(unittest.TestCase):
     def setUp(self) -> None:
         scratch = Path.home() / "code" / "tmp"

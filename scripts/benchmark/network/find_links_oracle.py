@@ -6,7 +6,6 @@ import argparse
 import concurrent.futures
 import importlib.util
 import json
-import math
 import threading
 import time
 import urllib.error
@@ -88,15 +87,15 @@ def main() -> None:
     metadata_bytes = len(metadata) if args.route == "metadata" else 0
     metadata_latency = minimum_latency(metadata_path) if args.route == "metadata" else 0
     index_latencies = list(map(minimum_latency, args.index_path))
-    index_waves = math.ceil(len(args.index_path) / concurrency)
+    index_waves, index_latency = bench.concurrent_latency_floor(
+        index_latencies, concurrency, bench.netem_profile().get("rtt_ms", 0)
+    )
     all_waves = index_waves + (1 if args.route == "metadata" else 0)
     waves = 2 if args.route == "metadata" else all_waves
     selected_bytes = len(fixtures.flat) + metadata_bytes
     selected_latency = min(map(minimum_latency, args.index_path)) + metadata_latency
     all_bytes = len(fixtures.flat) * len(args.index_path) + metadata_bytes
-    all_latency = (
-        max(max(index_latencies), sum(index_latencies) / concurrency) + metadata_latency
-    )
+    all_latency = index_latency + metadata_latency
     required_bytes = all_bytes if args.route == "versions" else selected_bytes
     required_latency = all_latency if args.route == "versions" else selected_latency
     data = {
@@ -127,7 +126,7 @@ def main() -> None:
         "scope": (
             "Read all configured find-links pages at the recorded concurrency to discover available versions. The all-index floor includes every response; wheel metadata is unnecessary."
             if args.route == "versions"
-            else "Known selected package with unlimited concurrent index requests, followed by its metadata. The optimistic selected-package floor assumes the fastest index suffices; the all-index reference retains every configured location."
+            else "Known selected package with index requests bounded by the recorded concurrency, followed by its metadata. The optimistic selected-package floor assumes the fastest index suffices; the all-index reference retains every configured location."
         ),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

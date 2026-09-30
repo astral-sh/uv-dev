@@ -29,8 +29,12 @@ def main() -> None:
     parser.add_argument("--package", required=True)
     parser.add_argument("--filename", required=True)
     parser.add_argument("--index-path", action="append", required=True)
+    parser.add_argument("--concurrency", type=int)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.concurrency is not None and args.concurrency < 1:
+        parser.error("--concurrency must be positive")
+    concurrency = min(args.concurrency or len(args.index_path), len(args.index_path))
     profile = json.loads(args.profiles.read_text())[args.profile]
     if not profile.get("pep658", True):
         parser.error("the metadata oracle requires PEP 658")
@@ -57,9 +61,7 @@ def main() -> None:
 
     start = time.perf_counter()
     try:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=len(args.index_path)
-        ) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = [pool.submit(read, path, index_body) for path in args.index_path]
             for future in futures:
                 future.result()
@@ -79,27 +81,32 @@ def main() -> None:
         )
 
     required_bytes = len(index_body) * len(args.index_path) + len(metadata)
-    required_latency = max(map(minimum_latency, args.index_path)) + minimum_latency(
-        metadata_path
+    index_waves, index_latency = bench.concurrent_latency_floor(
+        list(map(minimum_latency, args.index_path)),
+        concurrency,
+        bench.netem_profile().get("rtt_ms", 0),
     )
+    required_latency = index_latency + minimum_latency(metadata_path)
+    required_waves = index_waves + 1
     data = {
         "profile": profile,
         "netem": bench.netem_profile(),
         "manifest_sha256": bench.digest(args.manifest),
         "index_paths": args.index_path,
+        "concurrency": concurrency,
         "filename": args.filename,
         "seconds": seconds,
         "required_bytes": required_bytes,
-        "required_waves": 2,
+        "required_waves": required_waves,
         "required_latency_ms": required_latency,
         "optimistic_network_floor_seconds": bench.network_floor(
-            profile, required_bytes, 2, required_latency
+            profile, required_bytes, required_waves, required_latency
         ),
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
         "retry_scope": "Transient HTTP responses are retried up to three times per URL with zero oracle backoff. The optimistic floor excludes retries.",
-        "scope": "Known selected package with unlimited concurrent index requests, followed by its metadata. The reference includes every configured index, as required by unsafe-best-match.",
+        "scope": "Known selected package with index requests bounded by the recorded concurrency, followed by its metadata. The reference includes every configured index, as required by unsafe-best-match.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(data, indent=2) + "\n")
