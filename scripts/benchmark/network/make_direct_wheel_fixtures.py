@@ -52,6 +52,7 @@ def main() -> None:
     shutil.copyfile(args.directory / wheel["filename"], source / wheel["filename"])
     (source / "pyproject.toml").write_text(
         '[project]\nname = "uv-bench-direct-wheel"\nversion = "1.0"\n'
+        'dependencies = ["uv-bench-runtime==1.0"]\n'
         '[build-system]\nrequires = ["uv-bench-build-dependency==1.0"]\n'
         'build-backend = "backend"\nbackend-path = ["."]\n'
     )
