@@ -1,4 +1,4 @@
-"""Measure index revalidation for an already validated, unchanged source archive."""
+"""Measure index revalidation for unchanged, hash-identified cached content."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ def main() -> None:
     parser.add_argument("--profiles", type=Path, required=True)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--filename", required=True)
+    parser.add_argument("--identity", choices=["source", "metadata"], default="source")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     profile = json.loads(args.profiles.read_text())[args.profile]
@@ -39,6 +40,8 @@ def main() -> None:
         if any(file["filename"] == args.filename for file in files)
     )
     index = fixtures.simple[package]
+    if args.identity == "metadata" and not profile.get("pep658", True):
+        parser.error("metadata identity requires advertised PEP 658 hashes")
     etag = '"' + hashlib.sha256(index).hexdigest() + '"'
     server = bench.Server(fixtures, profile)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -75,7 +78,12 @@ def main() -> None:
         "netem": bench.netem_profile(),
         "manifest_sha256": bench.digest(args.manifest),
         "filename": args.filename,
-        "archive_sha256": fixtures.hashes[args.filename],
+        "identity": args.identity,
+        "identity_sha256": (
+            hashlib.sha256(fixtures.metadata[args.filename + ".metadata"]).hexdigest()
+            if args.identity == "metadata"
+            else fixtures.hashes[args.filename]
+        ),
         "seconds": seconds,
         "required_bytes": 0,
         "required_waves": 1,
@@ -84,7 +92,11 @@ def main() -> None:
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
-        "scope": "An index requiring revalidation is unchanged, and the advertised strong archive hash matches a previously validated local source revision. Only conditional index validation is required; fresh index caches can need no network requests.",
+        "scope": (
+            "An index requiring revalidation is unchanged, and the advertised strong PEP 658 hash matches a previously verified metadata sidecar. Only conditional index validation is required; fresh index caches can need no network requests."
+            if args.identity == "metadata"
+            else "An index requiring revalidation is unchanged, and the advertised strong archive hash matches a previously validated local source revision. Only conditional index validation is required; fresh index caches can need no network requests."
+        ),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(data, indent=2) + "\n")
