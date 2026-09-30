@@ -53,7 +53,9 @@ def complete_git_snapshot(
         raise ValueError(f"Unexpected source commit: {actual}")
     # Release archives may omit development packages that remain workspace members.
     # The repository-local attributes take precedence over tracked attributes.
-    (repository / "info/attributes").write_text("* -export-ignore -export-subst\n")
+    attributes = repository / "info/attributes"
+    attributes.parent.mkdir(exist_ok=True)
+    attributes.write_text("* -export-ignore -export-subst\n")
     return subprocess.check_output(
         [*command, "archive", "--format=tar", commit], env=environment
     )
