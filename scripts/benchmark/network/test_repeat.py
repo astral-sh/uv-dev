@@ -118,6 +118,7 @@ class RepeatTests(unittest.TestCase):
             templates={
                 "uv.toml": "offline = false\n",
                 "pyproject.toml": "[project]\n",
+                "uv.lock": "version = 1\n",
                 "pylock.toml": 'lock-version = "1.0"\n',
             },
             setup_commands=[["venv", "{work}/venv"]],
@@ -154,6 +155,7 @@ class RepeatTests(unittest.TestCase):
             Path(value("--config-template")).read_text(), "offline = false\n"
         )
         self.assertEqual(Path(value("--project-template")).read_text(), "[project]\n")
+        self.assertEqual(Path(value("--lock-template")).read_text(), "version = 1\n")
         self.assertEqual(
             Path(value("--pylock-template")).read_text(), 'lock-version = "1.0"\n'
         )

@@ -182,6 +182,7 @@ class Fixtures:
         self.metadata: dict[str, bytes] = {}
         self.hashes: dict[str, str] = {}
         self.packages: dict[str, list[dict]] = {}
+        self.osv: dict | None = None
         for item in json.loads(manifest.read_text()):
             path = directory / item["filename"]
             if digest(path) != item["sha256"]:
@@ -192,6 +193,11 @@ class Fixtures:
                 if not route.startswith("/") or route in self.routes:
                     raise ValueError(f"Invalid or duplicate fixture path: {route}")
                 self.routes[route] = path
+            if item.get("kind") == "osv":
+                if self.osv is not None:
+                    raise ValueError("Only one OSV fixture is supported")
+                self.osv = json.loads(path.read_text())
+                continue
             if item.get("kind") == "raw":
                 continue
             metadata = distribution_metadata(path)
@@ -253,6 +259,52 @@ class Fixtures:
                 )
                 links.append(f"<a {attributes}>{html.escape(file['filename'])}</a>")
         self.flat = ("<!doctype html>\n" + "\n".join(links) + "\n").encode()
+
+
+def osv_query_response(configuration: dict, request: bytes) -> tuple[bytes, dict]:
+    """Validate a pinned query batch and return its deterministic page results."""
+    payload = json.loads(request)
+    if not isinstance(payload, dict) or set(payload) != {"queries"}:
+        raise ValueError("Expected an OSV query batch")
+    queries = payload["queries"]
+    if not isinstance(queries, list) or not 1 <= len(queries) <= 1000:
+        raise ValueError("OSV query batches require between 1 and 1000 queries")
+    results = []
+    first = None
+    for query in queries:
+        if not isinstance(query, dict) or set(query) not in (
+            {"package", "version"},
+            {"package", "version", "page_token"},
+        ):
+            raise ValueError("Unexpected OSV query fields")
+        package = query["package"]
+        if not isinstance(package, dict) or set(package) != {"name", "ecosystem"}:
+            raise ValueError("Expected an OSV package name and ecosystem")
+        name = package["name"]
+        dependency = configuration["dependencies"].get(name)
+        if (
+            dependency is None
+            or package["ecosystem"] != "PyPI"
+            or query["version"] != dependency["version"]
+        ):
+            raise ValueError("Unknown OSV fixture dependency")
+        token = query.get("page_token")
+        page = 0 if token is None else int(token.removeprefix(name + ":"))
+        if not 0 <= page < dependency["pages"] or (
+            token is not None and (page == 0 or token != f"{name}:{page}")
+        ):
+            raise ValueError("Unexpected OSV page token")
+        first = first or f"{name}:{page}"
+        result = {"vulns": []}
+        if page + 1 < dependency["pages"]:
+            result["next_page_token"] = f"{name}:{page + 1}"
+        results.append(result)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return json.dumps({"results": results}, separators=(",", ":")).encode(), {
+        "query_sha256": hashlib.sha256(canonical).hexdigest(),
+        "query_count": len(queries),
+        "first_query": first,
+    }
 
 
 class Limiter:
@@ -321,9 +373,9 @@ class Server(ThreadingHTTPServer):
     def url(self) -> str:
         return self.public_url or f"http://127.0.0.1:{self.server_port}"
 
-    def begin(self, method: str, path: str) -> dict:
+    def begin(self, method: str, path: str, *, attempt_key: str | None = None) -> dict:
         with self.lock:
-            key = method, path
+            key = method, attempt_key or path
             self.attempts[key] += 1
             self.active += 1
             return {
@@ -488,8 +540,57 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.server.git_root and urlsplit(self.path).path.startswith("/git/"):
             self.respond(head=False)
+        elif (
+            getattr(self.server.fixtures, "osv", None) is not None
+            and urlsplit(self.path).path == "/v1/querybatch"
+        ):
+            self.respond_osv()
         else:
             self.send_error(405)
+
+    def respond_osv(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        if self.headers.get("Transfer-Encoding") or not 0 < length <= 1024**2:
+            self.close_connection = True
+            self.send_error(413, "OSV replay requires a bounded request body")
+            return
+        request = self.rfile.read(length)
+        try:
+            body, query = osv_query_response(self.server.fixtures.osv, request)
+        except (KeyError, TypeError, ValueError):
+            self.send_error(400, "Request does not match the pinned OSV fixture")
+            return
+        profile = self.server.profile
+        event = self.server.begin(
+            "POST", "/v1/querybatch", attempt_key=query["query_sha256"]
+        )
+        event.update(
+            query,
+            origin_connection=self.connection_id,
+            connection_opened=self.connection_start - self.server.epoch,
+            request_bytes=len(request),
+        )
+        seed = f"{profile.get('seed', 1)}:{query['query_sha256']}:{event['attempt']}"
+        jitter = random.Random(seed).uniform(-1, 1) * profile.get("jitter_ms", 0)
+        latency = profile.get("osv_query_latency_ms", {}).get(
+            query["first_query"], profile.get("latency_ms", 0)
+        )
+        try:
+            time.sleep(max(0, latency + jitter) / 1000)
+            failure = profile.get("osv_failures", {}).get(query["first_query"], {})
+            status = 200
+            if failure.get("status") and event["attempt"] <= failure.get("count", 0):
+                status, body = failure["status"], b"Injected transient failure"
+            event.update(status=status, response_length=len(body))
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.send_body(io.BytesIO(body).read, len(body), 0, event)
+        except (BrokenPipeError, ConnectionResetError) as error:
+            event["client_disconnect"] = type(error).__name__
+        finally:
+            self.server.end(event)
 
     def respond(self, *, head: bool) -> None:
         path = unquote(urlsplit(self.path).path)
@@ -1323,6 +1424,7 @@ def main() -> None:
     run.add_argument("--compare-stderr", action="store_true")
     run.add_argument("--config-template", type=Path)
     run.add_argument("--project-template", type=Path)
+    run.add_argument("--lock-template", type=Path)
     run.add_argument("--pylock-template", type=Path)
     run.add_argument("--git-root", type=Path, help="Directory of bare Git fixtures")
     run.add_argument(
@@ -1378,6 +1480,7 @@ def main() -> None:
         for name, path in (
             ("uv.toml", args.config_template),
             ("pyproject.toml", args.project_template),
+            ("uv.lock", args.lock_template),
             ("pylock.toml", args.pylock_template),
         )
         if path is not None

@@ -45,6 +45,17 @@ large payload. The `uv-bench-wheel-root==1.0` case discards that wheel; root ver
 `2.0` and `3.0` select the small and large choices, respectively. Its other manifest
 advertises wheel sidecars, and its `range` profile restores range support.
 
+`make_osv_fixtures.py --directory DIR` creates deterministic wheels, frozen
+direct-URL lockfiles, and hash-pinned OSV response fixtures. Use the generated
+project and lockfile with `--project-template` and `--lock-template`. The replay
+validates every dependency and pagination token, records a canonical request
+digest, and supports delays and transient failures for individual batches.
+`osv_oracle.py --packages N --concurrency C` retrieves those batches when their
+prerequisites finish. Its optimistic bound assumes at most 1,000 queries per
+request and permits arbitrary batching and overlap after each pagination token
+becomes available. Report this as a synthetic audit workload. The pagination
+control exercises the API contract with deliberately small response pages.
+
 Compare optimized binaries built from an exact parent and candidate commit:
 
 ```sh

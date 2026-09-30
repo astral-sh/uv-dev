@@ -109,6 +109,80 @@ class ReplayTests(unittest.TestCase):
             events[1]["origin_connection"], events[2]["origin_connection"]
         )
 
+    def test_osv_query_pages_and_failures_are_scoped_to_the_batch(self) -> None:
+        self.fixtures.osv = {
+            "dependencies": {
+                "first": {"version": "1.0", "pages": 2},
+                "second": {"version": "2.0", "pages": 1},
+            }
+        }
+        server = self.server({"osv_failures": {"first:0": {"status": 503, "count": 1}}})
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+
+        def send(queries: list[dict]) -> tuple[int, bytes]:
+            connection.request(
+                "POST",
+                "/v1/querybatch",
+                json.dumps({"queries": queries}),
+                {"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            return response.status, response.read()
+
+        first = {"package": {"name": "first", "ecosystem": "PyPI"}, "version": "1.0"}
+        second = {
+            "package": {"name": "second", "ecosystem": "PyPI"},
+            "version": "2.0",
+        }
+        try:
+            self.assertEqual(send([first])[0], 503)
+            self.assertEqual(send([second]), (200, b'{"results":[{"vulns":[]}]}'))
+            status, body = send([first])
+            self.assertEqual(status, 200)
+            self.assertEqual(
+                json.loads(body),
+                {"results": [{"vulns": [], "next_page_token": "first:1"}]},
+            )
+            self.assertEqual(
+                send([dict(first, page_token="first:1")]),
+                (200, b'{"results":[{"vulns":[]}]}'),
+            )
+            self.assertEqual(send([dict(first, page_token="second:1")])[0], 400)
+            self.assertEqual(send([dict(first, version="3.0")])[0], 400)
+        finally:
+            connection.close()
+        server.wait_idle()
+        events = sorted(server.events, key=lambda event: event["start"])
+        self.assertEqual([event["attempt"] for event in events], [1, 1, 2, 1])
+        self.assertEqual(events[0]["query_sha256"], events[2]["query_sha256"])
+        self.assertNotEqual(events[2]["query_sha256"], events[3]["query_sha256"])
+
+    def test_osv_response_order_and_batch_limit(self) -> None:
+        configuration = {
+            "dependencies": {
+                "first": {"version": "1.0", "pages": 2},
+                "second": {"version": "2.0", "pages": 1},
+            }
+        }
+        first = {"package": {"name": "first", "ecosystem": "PyPI"}, "version": "1.0"}
+        second = {
+            "package": {"name": "second", "ecosystem": "PyPI"},
+            "version": "2.0",
+        }
+        body, identity = bench.osv_query_response(
+            configuration, json.dumps({"queries": [second, first]}).encode()
+        )
+        self.assertEqual(
+            json.loads(body),
+            {"results": [{"vulns": []}, {"vulns": [], "next_page_token": "first:1"}]},
+        )
+        self.assertEqual(identity["first_query"], "second:0")
+        for queries in ([], [first] * 1001):
+            with self.assertRaisesRegex(ValueError, "between 1 and 1000"):
+                bench.osv_query_response(
+                    configuration, json.dumps({"queries": queries}).encode()
+                )
+
     def test_artifact_alias_supports_resumption(self) -> None:
         server = self.server({})
         connection = http.client.HTTPConnection("127.0.0.1", server.server_port)

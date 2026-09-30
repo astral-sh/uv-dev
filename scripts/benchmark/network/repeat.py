@@ -187,6 +187,7 @@ def command(
     for name, flag in (
         ("uv.toml", "--config-template"),
         ("pyproject.toml", "--project-template"),
+        ("uv.lock", "--lock-template"),
         ("pylock.toml", "--pylock-template"),
     ):
         if name in pilot.get("templates", {}):
