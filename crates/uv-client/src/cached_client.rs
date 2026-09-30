@@ -243,15 +243,19 @@ impl CachedClient {
         }
     }
 
-    async fn execute(&self, req: Request) -> reqwest_middleware::Result<Response> {
+    fn execute(
+        &self,
+        req: Request,
+    ) -> impl std::future::Future<Output = reqwest_middleware::Result<Response>> {
         if self.use_redirect_handler {
-            self.client.execute(req).await
+            futures::future::Either::Left(self.client.execute(req))
         } else {
-            self.client
-                .for_host(&DisplaySafeUrl::from_url(req.url().clone()))
-                .raw_client()
-                .execute(req)
-                .await
+            futures::future::Either::Right(
+                self.client
+                    .for_host(&DisplaySafeUrl::from_url(req.url().clone()))
+                    .raw_client()
+                    .execute(req),
+            )
         }
     }
 
