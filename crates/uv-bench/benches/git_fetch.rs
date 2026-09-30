@@ -10,18 +10,22 @@ use criterion::{
     measurement::WallTime,
 };
 use uv_bench::{git_fixtures, is_codspeed_simulation};
-use uv_git::{Fetch, GitHttpSettings, GitResolver};
+use uv_git::{Fetch, GitFetchSettings, GitResolver};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl};
 use uv_redacted::DisplaySafeUrl;
 
 fn fetch(runtime: &tokio::runtime::Runtime, git: &GitUrl, cache: &Path) -> Fetch {
     runtime
-        .block_on(GitResolver::default().fetch(
-            git,
-            GitHttpSettings::default().with_offline(true),
-            cache.to_path_buf(),
-            None,
-        ))
+        .block_on(
+            GitResolver::default().fetch(
+                git,
+                GitFetchSettings::default()
+                    .with_offline(true)
+                    .with_partial_fetches(true),
+                cache.to_path_buf(),
+                None,
+            ),
+        )
         .expect("Failed to fetch pinned Git repository")
 }
 

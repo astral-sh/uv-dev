@@ -26,7 +26,7 @@ use uv_distribution_types::{
     RegistryBuiltWheel,
 };
 use uv_extract::hash::Hasher;
-use uv_git::{GIT_LFS, GitError, GitHttpSettings, GitResolver, Reporter};
+use uv_git::{GIT_LFS, GitError, GitFetchSettings, GitResolver, Reporter};
 use uv_metadata::{read_metadata_async_seek, read_metadata_async_stream};
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifiers};
@@ -284,9 +284,9 @@ impl RegistryClient {
         self.client.uncached().for_host(url)
     }
 
-    /// Return the [`GitHttpSettings`] for fetching from the given URL.
-    pub fn git_http_settings(&self, url: &DisplaySafeUrl) -> GitHttpSettings {
-        self.client.uncached().git_http_settings(url)
+    /// Return the [`GitFetchSettings`] for fetching from the given URL.
+    pub fn git_fetch_settings(&self, url: &DisplaySafeUrl) -> GitFetchSettings {
+        self.client.uncached().git_fetch_settings(url)
     }
 
     /// Return the [`Connectivity`] mode used by this client.
@@ -1015,7 +1015,7 @@ impl RegistryClient {
                 let fetch = git
                     .fetch(
                         &wheel.git,
-                        self.git_http_settings(wheel.git.url()),
+                        self.git_fetch_settings(wheel.git.url()),
                         self.cache.bucket(CacheBucket::Git),
                         reporter,
                     )

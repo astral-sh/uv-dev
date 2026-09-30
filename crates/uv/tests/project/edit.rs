@@ -2,6 +2,8 @@
 
 #[cfg(feature = "test-git")]
 mod conditional_imports {
+    pub(crate) use anyhow::anyhow;
+    pub(crate) use std::process::Command;
     pub(crate) use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 }
 
@@ -843,6 +845,144 @@ fn add_git_lfs() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-git")]
+fn git_partial_fetches_preview() -> Result<()> {
+    fn git(repository: &Path, arguments: &[&str]) -> Result<String> {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(repository)
+            .output()?
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        Ok(String::from_utf8(output)?.trim().to_owned())
+    }
+
+    let context = uv_test::test_context!("3.12");
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        repository.path(),
+        &["config", "uploadpack.allowFilter", "true"],
+    )?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    repository.child("old.py").write_str("OLD = True\n")?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Initial version"])?;
+    let old_blob = git(repository.path(), &["rev-parse", "HEAD:old.py"])?;
+    fs_err::remove_file(repository.child("old.py"))?;
+    repository
+        .child("current.py")
+        .write_str("CURRENT = True\n")?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Replace module"])?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
+    let url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository path"))?;
+    let repository_url = RepositoryUrl::parse(url.as_str())?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dependency @ git+{url}@{revision}"]
+    "#})?;
+
+    // The default path includes objects used only by older revisions.
+    context
+        .lock()
+        .arg("--no-preview")
+        .arg("--offline")
+        .assert()
+        .success();
+    let database = context
+        .cache_dir
+        .child("git-v0/db")
+        .child(cache_digest(&repository_url));
+    let objects = git(
+        database.path(),
+        &[
+            "cat-file",
+            "--batch-check=%(objectname)",
+            "--batch-all-objects",
+        ],
+    )?;
+    assert!(objects.lines().any(|object| object == old_blob));
+    assert!(!fs_err::read_to_string(database.child(".git/config"))?.contains("promisor = true"));
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+
+    // An independent cache with preview enabled omits those historical blobs.
+    let partial_cache = context.cache_dir.child("partial");
+    let context = context.with_cache_dir(partial_cache.path());
+    context
+        .lock()
+        .arg("--preview-features")
+        .arg("git-partial-fetches")
+        .arg("--offline")
+        .assert()
+        .success();
+    let partial_database = partial_cache
+        .child("git-v0/db")
+        .child(cache_digest(&repository_url));
+    let objects = git(
+        partial_database.path(),
+        &[
+            "cat-file",
+            "--batch-check=%(objectname)",
+            "--batch-all-objects",
+        ],
+    )?;
+    assert!(!objects.lines().any(|object| object == old_blob));
+    assert!(
+        fs_err::read_to_string(partial_database.child(".git/config"))?.contains("promisor = true")
+    );
+
+    // Recreating the checkout after disabling preview must recover any objects
+    // missing from the partial database through the original repository.
+    fs_err::remove_dir_all(partial_cache.child("git-v0/checkouts"))?;
+    for entry in fs_err::read_dir(partial_cache.path())? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
+            fs_err::remove_dir_all(entry.path())?;
+        }
+    }
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    context
+        .lock()
+        .arg("--no-preview")
+        .arg("--offline")
+        .assert()
+        .success();
+    let checkout_root = partial_cache
+        .child("git-v0/checkouts")
+        .child(cache_digest(&repository_url));
+    let checkout = fs_err::read_dir(checkout_root.path())?
+        .next()
+        .transpose()?
+        .ok_or_else(|| anyhow!("missing Git checkout"))?;
+    assert_eq!(git(&checkout.path(), &["rev-parse", "HEAD"])?, revision);
+    assert!(checkout.path().join("current.py").is_file());
+    Ok(())
+}
+
+#[test]
 #[cfg(all(feature = "test-git", feature = "test-pypi"))]
 fn add_git_cache_compat_branch_and_tag() -> Result<()> {
     fn run(reference_arg: &str, reference_value: &str) -> Result<()> {
@@ -913,6 +1053,8 @@ fn add_git_cache_compat_branch_and_tag() -> Result<()> {
 
         context
             .sync()
+            .arg("--preview-features")
+            .arg("git-partial-fetches")
             .arg("--offline")
             .arg("--reinstall")
             .assert()
@@ -963,6 +1105,8 @@ fn add_git_cache_compat_downgrade() -> Result<()> {
 
     context
         .add()
+        .arg("--preview-features")
+        .arg("git-partial-fetches")
         .arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage")
         .arg("--rev")
         .arg("0dacfd662c64cb4ceb16e6cf65a157a8b715b979")
@@ -1056,6 +1200,8 @@ fn add_git_cache_compat_downgrade_lfs() -> Result<()> {
 
     context
         .add()
+        .arg("--preview-features")
+        .arg("git-partial-fetches")
         .arg("test-lfs-repo @ git+https://github.com/astral-sh/test-lfs-repo")
         .arg("--rev")
         .arg("261c828b8e05251f3a3e4f6b47b149d691c7efbb")
@@ -1163,6 +1309,8 @@ fn add_git_cache_compat_lfs() -> Result<()> {
 
     context
         .add()
+        .arg("--preview-features")
+        .arg("git-partial-fetches")
         .arg("--offline")
         .arg("--reinstall")
         .arg("git+https://github.com/astral-sh/test-lfs-repo")
