@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -55,6 +56,14 @@ class GitFixtures(unittest.TestCase):
                 )
             )
             destination = root / "prepared"
+            repository = destination / "fixture.git"
+            repository.mkdir(parents=True)
+            git_fixtures.git(
+                repository, "-c", "init.templateDir=", "init", "--bare", "--quiet"
+            )
+            # Git versions differ on whether an empty template creates this directory.
+            if (repository / "info").is_dir():
+                shutil.rmtree(repository / "info")
             subprocess.run(
                 [
                     sys.executable,
@@ -68,7 +77,6 @@ class GitFixtures(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            repository = destination / "fixture.git"
             self.assertEqual(
                 git_fixtures.git(repository, "rev-parse", "refs/heads/captured"),
                 commit,
