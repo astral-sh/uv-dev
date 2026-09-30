@@ -12,15 +12,17 @@ import zipfile
 from pathlib import Path
 
 
-def wheel(directory: Path, name: str, version: int, requires: str | None) -> dict:
+def wheel(
+    directory: Path, name: str, version: int, requires: str | list[str] | None
+) -> dict:
     stem = name.replace("-", "_")
     dist_info = f"{stem}-{version}.0.dist-info"
     metadata = (
         f"Metadata-Version: 2.3\nName: {name}\nVersion: {version}.0\n"
         "Requires-Python: >=3.8\n"
     )
-    if requires:
-        metadata += f"Requires-Dist: {requires}\n"
+    for requirement in [requires] if isinstance(requires, str) else requires or []:
+        metadata += f"Requires-Dist: {requirement}\n"
     contents = {
         f"{stem}/__init__.py": f'__version__ = "{version}.0"\n'.encode(),
         f"{dist_info}/METADATA": metadata.encode(),

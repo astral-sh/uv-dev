@@ -241,6 +241,7 @@ class Limiter:
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+    request_queue_size = 256
 
     def __init__(
         self,
@@ -262,7 +263,13 @@ class Server(ThreadingHTTPServer):
         self.attempts: Counter[tuple[str, str]] = Counter()
         self.events: list[dict] = []
         self.active = 0
+        self.connection_count = 0
         self.epoch = time.perf_counter()
+
+    def connection_opened(self) -> int:
+        with self.lock:
+            self.connection_count += 1
+            return self.connection_count
 
     def server_bind(self) -> None:
         if self.address_family == socket.AF_UNIX:
@@ -321,8 +328,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def setup(self) -> None:
         super().setup()
+        self.connection_id = self.server.connection_opened()
+        self.connection_start = time.perf_counter()
         if self.connection.family != socket.AF_UNIX:
             self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        time.sleep(self.server.profile.get("connection_latency_ms", 0) / 1000)
 
     def log_message(self, format: str, *args: object) -> None:
         pass
@@ -349,6 +359,8 @@ class Handler(BaseHTTPRequestHandler):
     def respond(self, *, head: bool) -> None:
         path = unquote(urlsplit(self.path).path)
         event = self.server.begin(self.command, path)
+        event["origin_connection"] = self.connection_id
+        event["connection_opened"] = self.connection_start - self.server.epoch
         event["range"] = self.headers.get("Range")
         event["if_none_match"] = self.headers.get("If-None-Match")
         event["if_range"] = self.headers.get("If-Range")
@@ -1020,6 +1032,9 @@ def run_one(
             "events": sorted(server.events, key=lambda event: event["start"]),
             "bytes": sum(event["bytes"] for event in server.events),
             "requests": len(server.events),
+            "origin_connections": len(
+                {event["origin_connection"] for event in server.events}
+            ),
             "max_active": max((event["active"] for event in server.events), default=0),
             "frontend_protocols": proxy.protocols() if proxy else None,
             "verified_tree": (

@@ -81,6 +81,10 @@ profiles may set exact-path response delays in `path_latency_ms`. A profile's
 index URLs while retaining each requested path in the trace.
 Set `head_ranges` to `false` to model a server that supports ranged `GET` but
 does not advertise that support in `HEAD` responses.
+Traces identify origin connections, including reuse across requests. Set
+`connection_latency_ms` to add a one-time delay after each origin connection is
+accepted; this isolates connection setup costs in application replay. Use kernel
+network shaping for measurements of actual TCP handshakes and packet loss.
 `multi_index_oracle.py` requests those Simple API paths concurrently and then
 reads the selected wheel's metadata. Its bound includes all configured indexes,
 which is appropriate for an `unsafe-best-match` workload.
@@ -168,6 +172,15 @@ profiles, and work directory for a single verified branch fetch. Its time and
 traffic are a realizable reference. The optimistic cold network floor assumes two
 dependent responses and gives no byte minimum, since negotiated Git pack contents
 and compression can differ.
+
+`make_pool_fixtures.py --directory PATH --width 50` creates two wide groups of
+packages joined by one shared dependency. Its `gate` profile delays that shared
+dependency's index response, leaving a gap between request bursts. Use
+`pool-project.toml` as the project template and compare the trace's
+`origin_connections` count as well as wall time. `connection_pool_oracle.py`
+reads the known graph with one persistent HTTP/1.1 connection per package and
+reports byte, latency, and connection counts. The origin accepts a backlog of
+256 connections to keep the replay server's listen queue out of these results.
 
 Run protocol and bottleneck checks with:
 

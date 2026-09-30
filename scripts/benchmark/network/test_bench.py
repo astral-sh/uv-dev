@@ -88,6 +88,26 @@ class ReplayTests(unittest.TestCase):
                 self.assertEqual(self.get(server, header), (206, expected))
         self.assertEqual(self.get(server, "bytes=999999-"), (416, b""))
 
+    def test_connection_reuse_is_recorded(self) -> None:
+        server = self.server({})
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        try:
+            for _ in range(2):
+                connection.request(
+                    "GET", "/files/example.whl", headers={"Range": "bytes=0-3"}
+                )
+                response = connection.getresponse()
+                self.assertEqual(response.read(), self.body[:4])
+        finally:
+            connection.close()
+        self.get(server, "bytes=0-3")
+        server.wait_idle()
+        events = sorted(server.events, key=lambda event: event["start"])
+        self.assertEqual(events[0]["origin_connection"], events[1]["origin_connection"])
+        self.assertNotEqual(
+            events[1]["origin_connection"], events[2]["origin_connection"]
+        )
+
     def test_artifact_alias_supports_resumption(self) -> None:
         server = self.server({})
         connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
