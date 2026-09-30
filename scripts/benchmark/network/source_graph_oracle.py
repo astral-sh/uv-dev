@@ -6,9 +6,11 @@ import argparse
 import concurrent.futures
 import importlib.util
 import json
+import struct
 import threading
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location(
@@ -17,6 +19,34 @@ spec = importlib.util.spec_from_file_location(
 assert spec is not None and spec.loader is not None
 bench = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench)
+
+
+def metadata_bytes(fixtures: bench.Fixtures, profile: dict, entry: dict) -> int:
+    """Return an optimistic body-byte bound for the selected metadata."""
+    filename = entry["filename"]
+    if entry["core-metadata"]:
+        return len(fixtures.metadata[filename + ".metadata"])
+    path = fixtures.files[filename]
+    if not filename.endswith(".whl"):
+        return path.stat().st_size
+    with zipfile.ZipFile(path) as archive:
+        entries = [
+            value
+            for value in archive.infolist()
+            if value.filename.endswith(".dist-info/METADATA")
+        ]
+        if len(entries) != 1:
+            raise ValueError("Expected one wheel metadata entry")
+        metadata = entries[0]
+    if profile.get("ranges", True):
+        return metadata.compress_size
+    with path.open("rb") as source:
+        source.seek(metadata.header_offset)
+        header = source.read(30)
+    if header[:4] != b"PK\x03\x04":
+        raise ValueError("Invalid ZIP local header")
+    name_size, extra_size = struct.unpack_from("<HH", header, 26)
+    return metadata.header_offset + 30 + name_size + extra_size + metadata.compress_size
 
 
 def main() -> None:
@@ -78,6 +108,10 @@ def main() -> None:
         server.server_close()
         thread.join()
     required_bytes = sum(len(body) for items in requests for _, body in items)
+    required_metadata_bytes = sum(
+        len(fixtures.simple[package]) + metadata_bytes(fixtures, profile, entry)
+        for package, entry in selected.values()
+    )
     required_latency = max(
         sum(
             max(
@@ -98,15 +132,19 @@ def main() -> None:
         "filenames": args.filename,
         "seconds": seconds,
         "required_bytes": required_bytes,
+        "required_metadata_bytes": required_metadata_bytes,
         "required_waves": 2,
         "required_latency_ms": required_latency,
         "optimistic_network_floor_seconds": bench.network_floor(
             profile, required_bytes, 2, required_latency
         ),
+        "optimistic_metadata_floor_seconds": bench.network_floor(
+            profile, required_metadata_bytes, 2, required_latency
+        ),
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
-        "scope": "Known selected versions with unlimited concurrency. Read each index, then its advertised metadata or complete distribution archive, verifying all response bytes. This is a realizable retrieval strategy; the full-archive byte count is not a universal lower bound for metadata discovery. The floor excludes headers, TCP/TLS, extraction, resolution, and CPU work.",
+        "scope": "Known selected versions with unlimited concurrency. Read each index, then its advertised metadata or complete distribution archive, verifying all response bytes. This is a realizable retrieval strategy; the full-archive byte count is not a universal lower bound for metadata discovery. The separate metadata bound charges a known compressed ZIP entry when ranges work, the required wheel prefix otherwise, and complete source archives. Both floors exclude headers, TCP/TLS, extraction, resolution, and CPU work.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
