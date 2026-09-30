@@ -69,7 +69,10 @@ fn show_settings_returns_before_running_commands() {
         preview: Preview {
             flags: [],
         },
-        python_preference: Managed,
+        python_preferences: PythonPreferences {
+            source: Managed,
+            arch: None,
+        },
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -203,7 +206,10 @@ fn pip_compile_baseline() {
         preview: Preview {
             flags: [],
         },
-        python_preference: Managed,
+        python_preferences: PythonPreferences {
+            source: Managed,
+            arch: None,
+        },
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -411,7 +417,10 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
         preview: Preview {
             flags: [],
         },
-        python_preference: Managed,
+        python_preferences: PythonPreferences {
+            source: Managed,
+            arch: None,
+        },
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -580,7 +589,10 @@ fn pip_install_baseline() {
         preview: Preview {
             flags: [],
         },
-        python_preference: Managed,
+        python_preferences: PythonPreferences {
+            source: Managed,
+            arch: None,
+        },
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -771,7 +783,10 @@ fn lock_baseline() {
         preview: Preview {
             flags: [],
         },
-        python_preference: Managed,
+        python_preferences: PythonPreferences {
+            source: Managed,
+            arch: None,
+        },
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -898,7 +913,10 @@ fn version_baseline() {
         preview: Preview {
             flags: [],
         },
-        python_preference: Managed,
+        python_preferences: PythonPreferences {
+            source: Managed,
+            arch: None,
+        },
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -1040,7 +1058,10 @@ fn tool_install_baseline() {
         preview: Preview {
             flags: [],
         },
-        python_preference: Managed,
+        python_preferences: PythonPreferences {
+            source: Managed,
+            arch: None,
+        },
         python_downloads: Automatic,
         no_progress: false,
         installer_metadata: true,
@@ -2534,8 +2555,8 @@ fn resolve_both_preview() -> anyhow::Result<()> {
     +            Pylock,
     +        ],
          },
-         python_preference: Managed,
-         python_downloads: Automatic,
+         python_preferences: PythonPreferences {
+             source: Managed,
     ...
              malware_check_url: None,
          },
@@ -2571,8 +2592,8 @@ fn resolve_both_preview() -> anyhow::Result<()> {
     -        ],
     +        flags: [],
          },
-         python_preference: Managed,
-         python_downloads: Automatic,
+         python_preferences: PythonPreferences {
+             source: Managed,
     ...
 
      ----- stderr -----
@@ -3955,8 +3976,8 @@ fn preview_features() {
     +            BuildLazyImports,
     +        ],
          },
-         python_preference: Managed,
-         python_downloads: Automatic,
+         python_preferences: PythonPreferences {
+             source: Managed,
     ...
     "
     );
@@ -3983,8 +4004,8 @@ fn preview_features() {
     +            JsonOutput,
     +        ],
          },
-         python_preference: Managed,
-         python_downloads: Automatic,
+         python_preferences: PythonPreferences {
+             source: Managed,
     ...
     "
     );
@@ -4155,8 +4176,8 @@ fn preview_precedence() -> anyhow::Result<()> {
     +            Pylock,
     +        ],
          },
-         python_preference: Managed,
-         python_downloads: Automatic,
+         python_preferences: PythonPreferences {
+             source: Managed,
     ...
     "
     );
@@ -4231,8 +4252,8 @@ fn preview_precedence() -> anyhow::Result<()> {
     +            FormatCommand,
     +        ],
          },
-         python_preference: Managed,
-         python_downloads: Automatic,
+         python_preferences: PythonPreferences {
+             source: Managed,
     ...
     "
     );
@@ -4283,7 +4304,7 @@ fn preview_precedence() -> anyhow::Result<()> {
     +            Pylock,
              ],
          },
-         python_preference: Managed,
+         python_preferences: PythonPreferences {
     ...
     "
     );
@@ -4401,8 +4422,8 @@ fn preview_features_uv_toml() -> anyhow::Result<()> {
     +            FormatCommand,
     +        ],
          },
-         python_preference: Managed,
-         python_downloads: Automatic,
+         python_preferences: PythonPreferences {
+             source: Managed,
     ...
     "
     );
@@ -4541,8 +4562,8 @@ fn preview_features_pyproject_toml() -> anyhow::Result<()> {
     +            FormatCommand,
     +        ],
          },
-         python_preference: Managed,
-         python_downloads: Automatic,
+         python_preferences: PythonPreferences {
+             source: Managed,
     ...
     "
     );
@@ -4673,8 +4694,8 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
     +            FormatCommand,
     +        ],
          },
-         python_preference: Managed,
-         python_downloads: Never,
+         python_preferences: PythonPreferences {
+             source: Managed,
     ...
     "
     );
