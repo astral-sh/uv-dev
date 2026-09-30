@@ -55,11 +55,114 @@ class Progress:
     def update(self, count: int):
         self.completed += count
 
+    def close(self):
+        pass
+
 
 class InterruptedStream(httpx.AsyncByteStream):
     async def __aiter__(self):
         yield b"partial archive"
         raise httpx.ReadError("interrupted response")
+
+
+class PythonMirrorPathsTest(unittest.IsolatedAsyncioTestCase):
+    def test_supported_paths_are_decoded(self):
+        self.assertEqual(
+            MIRROR.sanitize_url(URL.replace("python.tar.gz", "python%2Bdebug.tar.gz")),
+            Path("20220502") / "python+debug.tar.gz",
+        )
+        self.assertEqual(
+            MIRROR.sanitize_url("https://downloads.python.org/pypy/pypy.tar.bz2"),
+            Path("pypy.tar.bz2"),
+        )
+
+    def test_nonrelative_archive_paths_are_rejected(self):
+        prefix = MIRROR.PREFIXES[0]
+        for suffix in (
+            "",
+            "/python.tar.gz",
+            "../python.tar.gz",
+            "20220502/../../python.tar.gz",
+            "%2e%2e/python.tar.gz",
+            "20220502/%2e%2e/python.tar.gz",
+            "20220502//python.tar.gz",
+            "20220502/./python.tar.gz",
+            "20220502/",
+            "C%3A/python.tar.gz",
+            "C%3Apython.tar.gz",
+            "%5C%5Cserver%5Cpython.tar.gz",
+            "20220502%5C..%5Cpython.tar.gz",
+            "python.tar.gz%00",
+        ):
+            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+                MIRROR.sanitize_url(prefix + suffix)
+        with self.assertRaises(ValueError):
+            MIRROR.sanitize_url("https://example.com/python.tar.gz")
+
+    async def test_invalid_archive_cannot_replace_file_outside_target(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "mirror" / "archives"
+            target.mkdir(parents=True)
+            outside = root / "outside.tar.gz"
+            outside.write_bytes(b"outside mirror")
+            invalid_url = MIRROR.PREFIXES[0] + "../../outside.tar.gz"
+            requests = []
+            progress = Progress()
+            original_client = httpx.AsyncClient
+
+            def respond(request: httpx.Request) -> httpx.Response:
+                requests.append(str(request.url))
+                return httpx.Response(200, content=CONTENT)
+
+            def client(*args, **kwargs):
+                return original_client(
+                    *args, transport=httpx.MockTransport(respond), **kwargs
+                )
+
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(MIRROR.httpx, "AsyncClient", client))
+                stack.enter_context(patch.object(MIRROR, "tqdm", return_value=progress))
+                successful, errors = await MIRROR.download_files(
+                    {(invalid_url, CHECKSUM), (URL, CHECKSUM)}, target, 2
+                )
+
+            self.assertEqual(outside.read_bytes(), b"outside mirror")
+            self.assertEqual(successful, 1)
+            self.assertEqual(
+                errors, [(invalid_url, f"Invalid mirror archive path in {invalid_url}")]
+            )
+            self.assertEqual(requests, [URL])
+            self.assertEqual(progress.completed, 2)
+            self.assertEqual((target / MIRROR.sanitize_url(URL)).read_bytes(), CONTENT)
+
+    async def test_existing_file_cannot_make_unsupported_url_successful(self):
+        with TemporaryDirectory() as directory:
+            destination = Path(directory) / "python.tar.gz"
+            destination.write_bytes(CONTENT)
+            progress = Progress()
+            errors = []
+            requests = []
+            url = "https://example.com/python.tar.gz"
+
+            def respond(request: httpx.Request) -> httpx.Response:
+                requests.append(str(request.url))
+                return httpx.Response(200, content=CONTENT)
+
+            async with httpx.AsyncClient(
+                transport=httpx.MockTransport(respond)
+            ) as client:
+                self.assertFalse(
+                    await MIRROR.download_file(
+                        client, url, destination, None, progress, errors
+                    )
+                )
+            self.assertEqual(destination.read_bytes(), CONTENT)
+            self.assertEqual(requests, [])
+            self.assertEqual(
+                errors, [(url, f"No valid prefix found for {url}. Skipping.")]
+            )
+            self.assertEqual(progress.completed, 1)
 
 
 class PythonMirrorDownloadsTest(unittest.IsolatedAsyncioTestCase):
