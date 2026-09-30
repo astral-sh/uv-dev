@@ -39,6 +39,11 @@ The generated manifests cover both absent and advertised source sidecars.
 metadata or complete archives concurrently after each package index. It verifies
 every response and reports the bound for that retrieval strategy. Use the same
 graph with explicit version pins to measure the cost of deferring useful prefetches.
+`make_wheel_prefetch_fixtures.py --directory DIR` first discovers that a registry
+lacks range support, then introduces an unused wheel whose metadata follows a
+large payload. The `uv-bench-wheel-root==1.0` case discards that wheel; root versions
+`2.0` and `3.0` select the small and large choices, respectively. Its other manifest
+advertises wheel sidecars, and its `range` profile restores range support.
 
 Compare optimized binaries built from an exact parent and candidate commit:
 

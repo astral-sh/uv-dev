@@ -8,6 +8,7 @@ import csv
 import hashlib
 import io
 import json
+import random
 import zipfile
 from pathlib import Path
 
@@ -19,6 +20,7 @@ def wheel(
     requires: str | list[str] | None,
     *,
     build_tag: int | None = None,
+    payload_bytes: int = 0,
 ) -> dict:
     stem = name.replace("-", "_")
     dist_info = f"{stem}-{version}.0.dist-info"
@@ -37,6 +39,9 @@ def wheel(
             + (f"Build: {build_tag}\n".encode() if build_tag is not None else b"")
         ),
     }
+    payload_path = f"{stem}/payload.bin"
+    if payload_bytes:
+        contents[payload_path] = random.Random(version).randbytes(payload_bytes)
     record = io.StringIO(newline="")
     writer = csv.writer(record, lineterminator="\n")
     for path, data in sorted(contents.items()):
@@ -47,7 +52,9 @@ def wheel(
     build = f"-{build_tag}" if build_tag is not None else ""
     path = directory / f"{stem}-{version}.0{build}-py3-none-any.whl"
     with zipfile.ZipFile(path, "w") as archive:
-        for member_name, data in sorted(contents.items()):
+        for member_name, data in sorted(
+            contents.items(), key=lambda item: (item[0] != payload_path, item[0])
+        ):
             info = zipfile.ZipInfo(member_name, date_time=(1980, 1, 1, 0, 0, 0))
             info.create_system = 3
             info.external_attr = 0o100644 << 16

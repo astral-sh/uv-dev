@@ -1,4 +1,4 @@
-"""Fetch a known selected graph through sidecars or verified source archives."""
+"""Fetch a known selected graph through sidecars or verified distribution archives."""
 
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ def main() -> None:
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
-        "scope": "Known selected versions with unlimited concurrency. Read each index, then its advertised metadata or complete source archive, verifying all response bytes. This is a realizable retrieval strategy; the full-archive byte count is not a universal lower bound for metadata discovery. The floor excludes headers, TCP/TLS, extraction, resolution, and CPU work.",
+        "scope": "Known selected versions with unlimited concurrency. Read each index, then its advertised metadata or complete distribution archive, verifying all response bytes. This is a realizable retrieval strategy; the full-archive byte count is not a universal lower bound for metadata discovery. The floor excludes headers, TCP/TLS, extraction, resolution, and CPU work.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
