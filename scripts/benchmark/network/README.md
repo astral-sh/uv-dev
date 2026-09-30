@@ -3,7 +3,8 @@
 `bench.py` serves hash-pinned public distributions over loopback. It can impose a shared
 response-body bandwidth cap, response latency, deterministic per-request jitter,
 transient HTTP failures, truncated downloads, missing PEP 658 metadata, and missing
-range support. Each trial gets a fresh cache and working directory. `--cache-mode
+range support. It can also close a connection before sending response headers.
+Each trial gets a fresh cache and working directory. `--cache-mode
 warm` primes that cache before timing; `refresh` additionally forces revalidation.
 
 Prepare the immutable artifacts once, outside the measured interval:
@@ -154,6 +155,11 @@ restarts interrupted transfers. Matching dates permit ranges, while a changed
 validator returns the complete representation.
 `path_failures` maps exact request paths to `status` and `count` values, overriding
 the profile-wide transient failure settings for those paths.
+Use `{"disconnect": true, "count": 1}` instead of a status to close the first
+matching connection before response headers. The trace records status `0`, zero
+response bytes, and `injected_disconnect: "before-headers"`. Use direct HTTP/1.1
+replay for this fault; a reverse proxy can translate a backend disconnect into an
+HTTP error response.
 Traces identify origin connections, including reuse across requests. Set
 `connection_latency_ms` to add a one-time delay after each origin connection is
 accepted; this isolates connection setup costs in application replay. Use kernel
@@ -258,6 +264,10 @@ missing, and invalid retry advice. `retry_oracle.py` fetches a known distributio
 index and sidecar with the same retry budget and maximum delay. Its bound includes
 fixed numeric delays on the serial request path. Pass the reported wait with
 `run --required-wait-ms` only when it cannot overlap another required transfer.
+`first-transport-retry-profiles.json` adds single and repeated connection closures
+at either metadata request, plus HTTP status controls. The retry oracle follows
+these transport failures immediately and includes their request latency in the
+recorded serial path.
 `make_publish_fixtures.py --directory DIR` creates a batch of distinct wheel builds
 for repeated `publish --dry-run --check-url` checks. `publish_check_oracle.py` reads
 one current index per known package and verifies every selected local file against
