@@ -540,8 +540,10 @@ impl From<&IndexLocations> for uv_auth::Indexes {
 bitflags::bitflags! {
     #[derive(Debug, Copy, Clone)]
     struct Flags: u8 {
-        /// Whether the index supports range requests.
+        /// Whether an artifact from the index rejected range requests.
         const NO_RANGE_REQUESTS = 1;
+        /// Whether an artifact from the index was read successfully with range requests.
+        const RANGE_REQUESTS    = 1 << 3;
         /// Whether the index returned a `401 Unauthorized` status code.
         const UNAUTHORIZED      = 1 << 2;
         /// Whether the index returned a `403 Forbidden` status code.
@@ -551,14 +553,13 @@ bitflags::bitflags! {
 
 /// A map of [`IndexUrl`]s to their capabilities.
 ///
-/// We only store indexes that lack capabilities (i.e., don't support range requests, aren't
-/// authorized). The benefit is that the map is almost always empty, so validating capabilities is
-/// extremely cheap.
+/// Required metadata requests optimistically try range requests until an index rejects them.
+/// Speculative requests can instead require an observed successful range request.
 #[derive(Debug, Default, Clone)]
 pub struct IndexCapabilities(Arc<RwLock<FxHashMap<IndexUrl, Flags>>>);
 
 impl IndexCapabilities {
-    /// Returns `true` if the given [`IndexUrl`] supports range requests.
+    /// Returns `true` unless the given [`IndexUrl`] has rejected range requests.
     pub fn supports_range_requests(&self, index_url: &IndexUrl) -> bool {
         !self
             .0
@@ -566,6 +567,23 @@ impl IndexCapabilities {
             .unwrap()
             .get(index_url)
             .is_some_and(|flags| flags.intersects(Flags::NO_RANGE_REQUESTS))
+    }
+
+    /// Returns `true` if range requests have succeeded for the given [`IndexUrl`].
+    pub fn has_known_range_support(&self, index_url: &IndexUrl) -> bool {
+        self.0.read().unwrap().get(index_url).is_some_and(|flags| {
+            flags.contains(Flags::RANGE_REQUESTS) && !flags.contains(Flags::NO_RANGE_REQUESTS)
+        })
+    }
+
+    /// Mark an [`IndexUrl`] as having served a successful range request.
+    pub fn set_range_requests_supported(&self, index_url: IndexUrl) {
+        self.0
+            .write()
+            .unwrap()
+            .entry(index_url)
+            .or_insert(Flags::empty())
+            .insert(Flags::RANGE_REQUESTS);
     }
 
     /// Mark an [`IndexUrl`] as not supporting range requests.

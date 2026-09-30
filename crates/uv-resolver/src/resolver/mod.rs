@@ -2278,11 +2278,13 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     }
                 }
 
-                // A wheel without a metadata sidecar or working range requests can require
-                // streaming the whole archive. Fetch it only if the solver selects that version.
+                // A speculative wheel without a metadata sidecar or confirmed range support can
+                // require streaming the whole archive. An exact version is already required by
+                // the current constraints, so fetching it can overlap other metadata requests.
                 if let Some(wheel) = dist.wheel()
                     && wheel.file.dist_info_metadata.is_none()
-                    && !self.capabilities.supports_range_requests(&wheel.index)
+                    && !(range.is_singleton_constraint() && range.iter().nth(1).is_none())
+                    && !self.capabilities.has_known_range_support(&wheel.index)
                 {
                     debug!("Skipping wheel archive prefetch for: {package_name}");
                     return Ok(None);

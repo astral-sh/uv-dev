@@ -1243,6 +1243,9 @@ impl RegistryClient {
                     .map_err(|err| ErrorKind::AsyncHttpRangeReader(url.clone(), err))?;
                     trace!("Getting metadata for {filename} by range request");
                     let text = wheel_metadata_from_remote_zip(filename, url, &mut reader).await?;
+                    if let Some(index) = index {
+                        capabilities.set_range_requests_supported(index.clone());
+                    }
                     ResolutionMetadata::parse_metadata(text.as_bytes()).map_err(|err| {
                         Error::from(ErrorKind::MetadataParseError(
                             filename.clone(),
