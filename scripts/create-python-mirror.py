@@ -208,43 +208,81 @@ async def download_file(
     return True
 
 
+def plan_downloads(
+    urls: set[tuple[str, str | None]],
+) -> tuple[list[tuple[Path, list[tuple[str, str | None]]]], list[tuple[str, str]]]:
+    """Group source URLs by destination before creating any mirror files."""
+    destinations: dict[Path, list[tuple[str, str | None]]] = {}
+    errors = []
+    for url, sha256 in sorted(urls, key=lambda entry: entry[0]):
+        try:
+            path = sanitize_url(url)
+        except ValueError as error:
+            errors.append((url, str(error)))
+        else:
+            destinations.setdefault(path, []).append((url, sha256))
+
+    downloads = []
+    for path, entries in sorted(destinations.items()):
+        sha256 = entries[0][1]
+        if len(entries) > 1 and (
+            not isinstance(sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+            or any(checksum != sha256 for _, checksum in entries)
+        ):
+            error = f"Conflicting mirror archive entries for {path}"
+            errors.extend((url, error) for url, _ in entries)
+        else:
+            downloads.append((path, entries))
+    return downloads, errors
+
+
 async def download_files(
     urls: set[tuple[str, str | None]], target: Path, max_concurrent: int
 ):
     """Download files with a limit on concurrent downloads using httpx."""
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        progress_bar = tqdm(total=len(urls), desc="Downloading", unit="file")
-        sem = asyncio.Semaphore(max_concurrent)
-        errors: list[tuple[str, str]] = []  # To collect errors
-        success_count = 0  # Track number of successful downloads
+    downloads, errors = plan_downloads(urls)
+    progress_bar = tqdm(total=len(urls), desc="Downloading", unit="file")
+    for _, error in errors:
+        logger.warning(error)
+    progress_bar.update(len(errors))
+    success_count = 0
 
-        async def sem_download(url, sha256):
-            nonlocal success_count
-            async with sem:
-                try:
-                    dest = target / sanitize_url(url)
-                except ValueError as error:
-                    error_msg = str(error)
-                    logger.warning(error_msg)
-                    errors.append((url, error_msg))
-                    progress_bar.update(1)
-                    return
-                success = await download_file(
-                    client,
-                    url,
-                    dest,
-                    sha256,
-                    progress_bar,
-                    errors,
-                )
-                if success:
-                    success_count += 1
+    try:
+        if not downloads:
+            return success_count, errors
 
-        tasks = [sem_download(url, sha256) for url, sha256 in urls]
-        await asyncio.gather(*tasks)
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            sem = asyncio.Semaphore(max_concurrent)
+
+            async def sem_download(path, entries):
+                nonlocal success_count
+                async with sem:
+                    url, sha256 = entries[0]
+                    download_errors = []
+                    success = await download_file(
+                        client,
+                        url,
+                        target / path,
+                        sha256,
+                        progress_bar,
+                        download_errors,
+                    )
+                    # Progress and results count source URLs, including aliases
+                    # satisfied by the same verified archive.
+                    progress_bar.update(len(entries) - 1)
+                    if success:
+                        success_count += len(entries)
+                    else:
+                        for _, error in download_errors:
+                            errors.extend((alias, error) for alias, _ in entries)
+
+            tasks = [sem_download(path, entries) for path, entries in downloads]
+            await asyncio.gather(*tasks)
+    finally:
         progress_bar.close()
 
-        return success_count, errors
+    return success_count, errors
 
 
 def parse_arguments():
