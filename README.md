@@ -12,13 +12,12 @@ targeted reproduction, the one locked dependency has known vulnerabilities accor
 OSV service, but a mock service that receives one query and returns `{"results": []}` makes uv
 report that the package has no known vulnerabilities and exit 0.
 
-The current source confirms the behavior. `QueryBatchResponse.results` is an unconstrained vector,
-and `query_identifiers` pairs it with `pending_batch` using `zip`. Rust's `zip` ends with the shorter
-iterator, so no error is produced for missing response entries. The resulting finding set can be
-empty, after which the text renderer reports success for the original package count. OSV's API
-documentation states that batch-response ordering is guaranteed to match the input, making a
-query/result cardinality mismatch an invalid service response rather than evidence that the omitted
-packages have no vulnerabilities.
+The prior implementation deserialized `QueryBatchResponse.results` as an unconstrained vector and
+paired it with `pending_batch` using `zip`. Rust's `zip` ends with the shorter iterator, so no error
+was produced for missing response entries. The resulting finding set could be empty, after which
+the text renderer reported success for the original package count. The fix now verifies the
+response cardinality before pairing results with queries and returns a service error for any
+mismatch.
 
 No existing issue or pull request tracks this exact false-success case. The closest history is the
 batch-query implementation and its later chunking refactor, together with earlier work that
@@ -58,35 +57,51 @@ OSV service reported 18 known vulnerabilities for `python-multipart 0.0.6` and e
 number of current OSV records is time-dependent, but it confirms that this fixture was vulnerable
 at reproduction time and that the short response changed the outcome to a false clean result.
 
-Existing tests do not cover unequal query/result cardinality. In
-`crates/uv/tests/build/audit.rs`, `audit_no_vulnerabilities` verifies a valid one-query/one-empty-result
-response and exit 0, while `audit_vulnerability_found` verifies a valid one-query/one-result
-response and exit 1. In `crates/uv-audit/src/service/osv.rs`, `test_query_identifiers` checks
-positional mapping with two queries and two results, `test_query_identifiers_batch_limit` checks
-chunking with one generated result per query, and `test_query_batch_pagination` checks equal-length
-initial and paginated responses. None returns fewer results than queries or expects such a response
-to fail.
+Before the parent regression was added, existing tests did not cover unequal query/result
+cardinality. In `crates/uv/tests/build/audit.rs`, `audit_no_vulnerabilities` verifies a valid
+one-query/one-empty-result response and exit 0, while `audit_vulnerability_found` verifies a valid
+one-query/one-result response and exit 1. In `crates/uv-audit/src/service/osv.rs`,
+`test_query_identifiers` checks positional mapping with two queries and two results,
+`test_query_identifiers_batch_limit` checks chunking with one generated result per query, and
+`test_query_batch_pagination` checks equal-length initial and paginated responses. The parent
+`audit_missing_batch_result` integration test now covers the missing-result response and requires
+exit 2.
+
+## Fix
+
+Outcome: **fixed**. `query_identifiers` now compares the number of decoded OSV results with the
+number of queries in each submitted batch before using positional pairing. A mismatch returns a
+dedicated `InvalidBatchResponse` error containing both counts, so the command reports the invalid
+service response and exits 2 instead of presenting an incomplete audit as clean. This applies to
+initial, chunked, and paginated batch requests at the common response-consumer boundary.
+
+The parent integration test `audit_missing_batch_result` was updated from the reproduced exit-0
+snapshot to require the new exit-2 error. No separate command-level tests were added because project,
+script, and tool audits all reuse this same OSV consumer, and no distinct producer/consumer path or
+additional manifestation was found. Focused validation passed for the parent regression, valid
+empty and vulnerable end-to-end audit responses, all seven OSV service tests (including mapping,
+batch limits, pagination, and malware filtering), and Rust formatting.
 
 ## Draft response
 
-Confirmed by a targeted reproduction: this is a bug. The current batch-response path accepts any
-`results` length and zips it with the pending queries, so a short response drops unmatched packages
-and can incorrectly render a clean audit with exit 0. OSV documents that response ordering matches the input, and
-astral-sh/uv#19515 likewise establishes that malformed OSV data should be surfaced rather than
+Confirmed by a targeted reproduction and fixed: this was a bug. The batch-response path now rejects
+unequal query and result counts before positional pairing, so a short response produces a service
+error with exit 2 instead of a clean audit. OSV documents that response ordering matches the input,
+and astral-sh/uv#19515 likewise establishes that malformed OSV data should be surfaced rather than
 skipped.
 
-I don't see an existing issue tracking this cardinality mismatch. The concrete next step is to
-reject unequal query/result counts as a service error and add regression coverage for short
-responses, including paginated and chunked batches.
+I don't see another issue tracking this cardinality mismatch. The implementation now rejects
+unequal query/result counts at the shared batch-response boundary, including paginated and chunked
+requests, and the parent regression covers the reported short-response failure.
 
 ## Classification
 
 This is a `bug`, not an enhancement or question. The targeted reproduction observes the
 correctness failure: a structurally decodable but incomplete OSV response removes a dependency from
 the vulnerability lookup while `uv audit` presents a successful result for the full package count.
-The source's truncating `zip` is consistent with that observation. This is especially misleading
-for a command used as a CI gate. The trigger may be an invalid response from OSV or an intermediary,
-but uv should not interpret missing audit results as negative results.
+The prior source's unchecked, truncating `zip` was consistent with that observation. This is
+especially misleading for a command used as a CI gate. The trigger may be an invalid response from
+OSV or an intermediary, but uv should not interpret missing audit results as negative results.
 
 It is not a duplicate. Searches found no open issue or pull request tracking this response-length
 mismatch, and the related closed work covers different service failures or the implementation
@@ -127,12 +142,15 @@ does not cover incomplete service responses.
 
 ## Supporting evidence
 
-- `crates/uv-audit/src/service/osv.rs` deserializes `results` without a length constraint and pairs
-  `pending_batch.iter()` with `batch_response.results.iter()` using `zip`.
-- The same file's current tests cover correct mappings, pagination, and batches over the OSV limit,
-  but every mock returns one result per query; there is no short-response regression case.
+- `crates/uv-audit/src/service/osv.rs` now checks `batch_response.results.len()` against the current
+  `pending_batch.len()` before pairing entries with `zip` and returns `InvalidBatchResponse` when
+  they differ.
+- `crates/uv/tests/build/audit.rs::audit_missing_batch_result` sends one query to a mock returning
+  zero results and verifies the command reports the mismatched counts and exits 2.
 - `crates/uv/src/commands/project/audit.rs` renders success when the collected findings contain no
   vulnerability, while its reported package count comes from the full auditable dependency set.
 - OSV's `/v1/querybatch` documentation guarantees response ordering matching the input.
 - astral-sh/uv#19515 records the existing maintainer decision to surface malformed OSV responses
   because they indicate a service/data problem.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/2216

@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Reject OSV batch responses whose result count differs from the submitted query count, preventing incomplete audits from reporting false success. The updated regression test now requires an error and exit code 2 for a missing result.",
+  "validation": [
+    "Parent missing-result integration regression",
+    "Valid empty and vulnerable audit integration tests",
+    "OSV mapping, batching, pagination, and filtering tests",
+    "Rust formatting check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2216"
+}
