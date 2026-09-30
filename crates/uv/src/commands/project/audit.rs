@@ -214,6 +214,11 @@ pub(crate) async fn audit(
     });
 
     let osv_client = CachedClient::new(client_builder.clone().build()?);
+    let osv_service = match service {
+        VulnerabilityServiceFormat::Osv => {
+            osv::Osv::new(osv_client, service_url, concurrency.clone(), cache.clone())
+        }
+    };
     let registry_client = RegistryClientBuilder::new(client_builder, cache.clone())
         .index_locations(settings.index_locations.clone())
         .keyring(settings.keyring_provider)
@@ -225,12 +230,13 @@ pub(crate) async fn audit(
         &groups,
         &settings,
         &registry_client,
-        osv_client,
+        async |dependencies| {
+            osv_service
+                .query_batch(dependencies, osv::Filter::All)
+                .await
+        },
         concurrency,
-        &cache,
         printer,
-        service,
-        service_url,
         &ignore,
         &ignore_until_fixed,
     )
@@ -280,12 +286,9 @@ pub(crate) async fn audit_lock(
     groups: &DependencyGroupsWithDefaults,
     settings: &ResolverSettings,
     registry_client: &RegistryClient,
-    osv_client: CachedClient,
+    query_vulnerabilities: impl AsyncFnOnce(&[Dependency]) -> Result<Vec<Finding>, osv::Error>,
     concurrency: Concurrency,
-    cache: &Cache,
     printer: Printer,
-    service: VulnerabilityServiceFormat,
-    service_url: Option<DisplaySafeUrl>,
     ignore: &[VulnerabilityID],
     ignore_until_fixed: &[VulnerabilityID],
 ) -> Result<AuditOutcome> {
@@ -309,13 +312,8 @@ pub(crate) async fn audit_lock(
     let status_audit = ProjectStatusAudit::new(registry_client, &capabilities, concurrency.clone());
 
     let osv_future = async {
-        match service {
-            VulnerabilityServiceFormat::Osv => {
-                let service = osv::Osv::new(osv_client, service_url, concurrency, cache.clone());
-                trace!("Auditing {n} dependencies against OSV", n = auditable.len());
-                service.query_batch(&dependencies, osv::Filter::All).await
-            }
-        }
+        trace!("Auditing {n} dependencies against OSV", n = auditable.len());
+        query_vulnerabilities(&dependencies).await
     };
     let status_future = async {
         trace!(
