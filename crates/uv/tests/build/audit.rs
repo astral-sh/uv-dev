@@ -811,6 +811,9 @@ async fn audit_dependency_groups() {
         requires-python = ">=3.12"
         dependencies = ["iniconfig==2.0.0"]
 
+        [tool.uv]
+        default-groups = ["dev"]
+
         [dependency-groups]
         dev = ["typing-extensions==4.10.0"]
         lint = ["sniffio==1.3.1"]
@@ -835,6 +838,21 @@ async fn audit_dependency_groups() {
         .audit()
         .arg("--preview-features")
         .arg("audit")
+        .arg("--service-url")
+        .arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Found no known vulnerabilities and no adverse project statuses in 3 packages
+    ");
+
+    // This is undesirable: `--no-default-groups` still audits `dev`; see astral-sh/uv#22089.
+    uv_snapshot!(context.filters(), context
+        .audit()
+        .arg("--preview-features")
+        .arg("audit")
+        .arg("--locked")
+        .arg("--no-default-groups")
         .arg("--service-url")
         .arg(server.uri()), @"
     exit_code: 0 (success)
