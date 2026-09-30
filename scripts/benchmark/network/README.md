@@ -199,7 +199,8 @@ It reports both a known-package minimum and an all-index transfer reference.
 for repeated-location studies. Give the oracle each unique location once, and
 retain single-location and distinct-location controls.
 Its `--route versions` mode stops after reading the index pages, as an outdated
-version lookup does. `make_outdated_fixtures.py --directory DIR` creates two wheel
+version lookup does. Pass `--concurrency` to limit simultaneous index requests and
+include that limit in the latency bound. `make_outdated_fixtures.py --directory DIR` creates two wheel
 releases, setup commands that install the older release, and a nine-index latency
 profile for `pip list --outdated`.
 `latest_version_oracle.py` measures concurrent version discovery across specified
