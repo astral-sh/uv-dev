@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
@@ -238,34 +239,37 @@ fn extra_basic() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Checked in [TIME]
+    Would make no changes
     ");
-    // Another install, but with one of the extras enabled.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra=extra1"), @"
+    // Another plan, but with one of the extras enabled.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra=extra1"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + sortedcontainers==2.3.0
     ");
-    // Another install, but with the other extra enabled.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra=extra2"), @"
+    // Another plan, but with the other extra enabled.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra=extra2"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - sortedcontainers==2.3.0
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + sortedcontainers==2.4.0
     ");
-    // And finally, installing both extras should error.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--all-extras"), @"
+    // And finally, requesting both extras should error.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--all-extras"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Extras `extra1` and `extra2` are incompatible with the declared conflicts: {`project[extra1]`, `project[extra2]`}
     ");
     // As should exporting them.
@@ -1067,9 +1071,10 @@ fn extra_unconditional() -> Result<()> {
     ");
 
     // This should error since we're enabling two conflicting extras.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Found conflicting extras `proxy1[extra1]` and `proxy1[extra2]` enabled simultaneously
     ");
 
@@ -1097,14 +1102,15 @@ fn extra_unconditional() -> Result<()> {
     ");
     // This is fine because we are only enabling one
     // extra, and thus, there is no conflict.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.1.0
      + idna==3.6
-     + proxy1==0.1.0 (from file://[TEMP_DIR]/proxy1)
+     + proxy1 @ file://[TEMP_DIR]/proxy1
      + sniffio==1.3.1
     ");
 
@@ -1133,14 +1139,16 @@ fn extra_unconditional() -> Result<()> {
     ");
     // This is fine because we are only enabling one
     // extra, and thus, there is no conflict.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - anyio==4.1.0
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.2.0
+     + idna==3.6
+     + proxy1 @ file://[TEMP_DIR]/proxy1
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -1207,14 +1215,15 @@ fn extra_unconditional_non_conflicting() -> Result<()> {
     // `uv sync` wasn't correctly propagating extras in a way
     // that would satisfy the conflict markers that got added
     // to the `proxy1[extra1]` dependency.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.1.0
      + idna==3.6
-     + proxy1==0.1.0 (from file://[TEMP_DIR]/proxy1)
+     + proxy1 @ file://[TEMP_DIR]/proxy1
      + sniffio==1.3.1
     ");
 
@@ -1278,40 +1287,44 @@ fn extra_unconditional_in_optional() -> Result<()> {
     ");
 
     // This shouldn't install anything.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Checked in [TIME]
+    Would make no changes
     ");
 
     // This should install `sortedcontainers==2.3.0`.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra=x1"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra=x1"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + proxy1==0.1.0 (from file://[TEMP_DIR]/proxy1)
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + proxy1 @ file://[TEMP_DIR]/proxy1
      + sortedcontainers==2.3.0
     ");
 
     // This should install `sortedcontainers==2.4.0`.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra=x2"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra=x2"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - sortedcontainers==2.3.0
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + proxy1 @ file://[TEMP_DIR]/proxy1
      + sortedcontainers==2.4.0
     ");
 
     // This should error!
     uv_snapshot!(
         context.filters(),
-        context.sync().arg("--frozen").arg("--extra=x1").arg("--extra=x2"),
+        context.sync().arg("--dry-run").arg("--frozen").arg("--extra=x1").arg("--extra=x2"),
         @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Found conflicting extras `proxy1[nested-x1]` and `proxy1[nested-x2]` enabled simultaneously
     ");
 
@@ -1813,28 +1826,32 @@ fn extra_depends_on_conflicting_extra_transitive() -> Result<()> {
     });
 
     // Install from the lockfile
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + example==0.1.0 (from file://[TEMP_DIR]/)
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + example @ file://[TEMP_DIR]/
     ");
 
     // Install with `foo`
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra").arg("foo"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Found conflicting extras `example[bar]` and `example[foo]` enabled simultaneously
     ");
 
     // Install the child package
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("indirection"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--package").arg("indirection"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + indirection==0.1.0 (from file://[TEMP_DIR]/indirection)
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + example @ file://[TEMP_DIR]/
+     + indirection @ file://[TEMP_DIR]/indirection
      + sortedcontainers==2.4.0
     ");
 
@@ -1968,34 +1985,37 @@ fn group_basic() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Checked in [TIME]
+    Would make no changes
     ");
-    // Another install, but with one of the groups enabled.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=group1"), @"
+    // Another plan, but with one of the groups enabled.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=group1"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + sortedcontainers==2.3.0
     ");
-    // Another install, but with the other group enabled.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=group2"), @"
+    // Another plan, but with the other group enabled.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=group2"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - sortedcontainers==2.3.0
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + sortedcontainers==2.4.0
     ");
-    // And finally, installing both groups should error.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=group1").arg("--group=group2"), @"
+    // And finally, requesting both groups should error.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=group1").arg("--group=group2"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Groups `group1` and `group2` are incompatible with the conflicts: {`project:group1`, `project:group2`}
     ");
 
@@ -2107,53 +2127,59 @@ fn group_default() -> Result<()> {
     ");
 
     // Install from the lockfile, which should include the `extra1` group by default.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + sortedcontainers==2.3.0
     ");
 
-    // Another install, but with one of the groups enabled.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=group1"), @"
+    // Another plan, but with one of the groups enabled.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=group1"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + sortedcontainers==2.3.0
     ");
 
-    // Another install, but with the other group enabled. This should error, since `group1` is
+    // Another plan, but with the other group enabled. This should error, since `group1` is
     // enabled by default.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=group2"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=group2"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Groups `group1` (enabled by default) and `group2` are incompatible with the conflicts: {`project:group1`, `project:group2`}
     ");
 
     // If the group is explicitly requested, we should still fail, but shouldn't mark it as
     // "enabled by default".
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=group1").arg("--group=group2"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=group1").arg("--group=group2"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Groups `group1` and `group2` are incompatible with the conflicts: {`project:group1`, `project:group2`}
     ");
 
     // If we install via `--all-groups`, we should also avoid marking the group as "enabled by
     // default".
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--all-groups"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--all-groups"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Groups `group1` and `group2` are incompatible with the conflicts: {`project:group1`, `project:group2`}
     ");
 
     // Disabling the default group should succeed.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-group=group1").arg("--group=group2"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--no-group=group1").arg("--group=group2"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - sortedcontainers==2.3.0
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + sortedcontainers==2.4.0
     ");
 
@@ -2638,34 +2664,37 @@ fn mixed() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Checked in [TIME]
+    Would make no changes
     ");
-    // Another install, but with the group enabled.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=group1"), @"
+    // Another plan, but with the group enabled.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=group1"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + sortedcontainers==2.3.0
     ");
-    // Another install, but with the extra enabled.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra=extra1"), @"
+    // Another plan, but with the extra enabled.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra=extra1"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - sortedcontainers==2.3.0
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
      + sortedcontainers==2.4.0
     ");
-    // And finally, installing both the group and the extra should fail.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--group=group1").arg("--extra=extra1"), @"
+    // And finally, requesting both the group and the extra should fail.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--group=group1").arg("--extra=extra1"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     error: Extra `extra1` and group `group1` are incompatible with the declared conflicts: {`project[extra1]`, `project:group1`}
     ");
 
@@ -2817,21 +2846,27 @@ fn group_activates_self_extra() -> Result<()> {
 
     // Activating the `dev` group (the default) should install `idna==3.5` via `anyio`'s
     // conflict-gated edge, because the group itself enables the `dev` self-extra.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.5
      + sniffio==1.3.1
     ");
 
     // Enabling the extra explicitly should produce the same environment.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra=dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra=dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
+     + idna==3.5
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -2888,22 +2923,29 @@ fn group_activates_self_extra_non_project_workspace() -> Result<()> {
 
     // Activating the `dev` group (the default) installs `idna==3.5` via `anyio`'s
     // conflict-gated edge, because the group references `pkg1[dev]`.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.5
-     + pkg1==0.1.0 (from file://[TEMP_DIR]/pkg1)
+     + pkg1 @ file://[TEMP_DIR]/pkg1
      + sniffio==1.3.1
     ");
 
     // Enabling the extra explicitly produces the same environment.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra=dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").arg("--extra=dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==4.3.0
+     + idna==3.5
+     + pkg1 @ file://[TEMP_DIR]/pkg1
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -3562,12 +3604,14 @@ fn non_optional_dependency_extra() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 4 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would create lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + sniffio==1.3.1
     ");
 
@@ -3606,12 +3650,14 @@ fn non_optional_dependency_group() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 4 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would create lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + sniffio==1.3.1
     ");
 
@@ -3653,12 +3699,14 @@ fn non_optional_dependency_mixed() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 4 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would create lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + sniffio==1.3.1
     ");
 
@@ -3709,13 +3757,17 @@ fn shared_optional_dependency_extra1() -> Result<()> {
         "#,
     )?;
 
+    context.lock().assert().success();
+
     // This shouldn't install two versions of `idna`, only one, `idna==3.5`.
-    uv_snapshot!(context.filters(), context.sync().arg("--extra=baz").arg("--extra=foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra=baz").arg("--extra=foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.5
      + sniffio==1.3.1
@@ -3846,13 +3898,17 @@ fn shared_optional_dependency_group1() -> Result<()> {
         "#,
     )?;
 
+    context.lock().assert().success();
+
     // This shouldn't install two versions of `idna`, only one, `idna==3.5`.
-    uv_snapshot!(context.filters(), context.sync().arg("--group=baz").arg("--group=foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group=baz").arg("--group=foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.5
      + sniffio==1.3.1
@@ -3984,13 +4040,17 @@ fn shared_optional_dependency_mixed1() -> Result<()> {
         "#,
     )?;
 
+    context.lock().assert().success();
+
     // This shouldn't install two versions of `idna`, only one, `idna==3.5`.
-    uv_snapshot!(context.filters(), context.sync().arg("--group=baz").arg("--extra=foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group=baz").arg("--extra=foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.5
      + sniffio==1.3.1
@@ -4126,13 +4186,17 @@ fn shared_optional_dependency_extra2() -> Result<()> {
         "#,
     )?;
 
+    context.lock().assert().success();
+
     // This shouldn't install two versions of `idna`, only one, `idna==3.6`.
-    uv_snapshot!(context.filters(), context.sync().arg("--extra=bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra=bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -4264,13 +4328,17 @@ fn shared_optional_dependency_group2() -> Result<()> {
         "#,
     )?;
 
+    context.lock().assert().success();
+
     // This shouldn't install two versions of `idna`, only one, `idna==3.6`.
-    uv_snapshot!(context.filters(), context.sync().arg("--group=bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group=bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -4407,13 +4475,17 @@ fn shared_optional_dependency_mixed2() -> Result<()> {
         "#,
     )?;
 
+    context.lock().assert().success();
+
     // This shouldn't install two versions of `idna`, only one, `idna==3.6`.
-    uv_snapshot!(context.filters(), context.sync().arg("--group=bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group=bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -4549,12 +4621,16 @@ fn shared_dependency_extra() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -4647,32 +4723,43 @@ fn shared_dependency_extra() -> Result<()> {
 
     // This shouldn't install two versions of `idna`, only one, `idna==3.5`.
     // So this should remove `idna==3.6` installed above.
-    uv_snapshot!(context.filters(), context.sync().arg("--extra=foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra=foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
      + idna==3.5
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--extra=bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra=bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.5
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
      + idna==3.6
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Checked 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -4712,12 +4799,16 @@ fn shared_dependency_group() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -4809,32 +4900,43 @@ fn shared_dependency_group() -> Result<()> {
 
     // This shouldn't install two versions of `idna`, only one, `idna==3.5`.
     // So this should remove `idna==3.6` installed above.
-    uv_snapshot!(context.filters(), context.sync().arg("--group=foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group=foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
      + idna==3.5
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group=bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group=bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.5
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
      + idna==3.6
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Checked 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -4876,12 +4978,16 @@ fn shared_dependency_mixed() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -4978,32 +5084,43 @@ fn shared_dependency_mixed() -> Result<()> {
 
     // This shouldn't install two versions of `idna`, only one, `idna==3.5`.
     // So this should remove `idna==3.6` installed above.
-    uv_snapshot!(context.filters(), context.sync().arg("--extra=foo"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra=foo"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
      + idna==3.5
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group=bar"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--group=bar"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.5
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
      + idna==3.6
+     + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 5 packages in [TIME]
-    Checked 3 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -5070,23 +5187,29 @@ conflicts = [
         "#,
     )?;
 
+    context.lock().assert().success();
+
     // Error out, as x2 extra is only on the child.
-    uv_snapshot!(context.filters(), context.sync().arg("--extra=x2"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--extra=x2"), @"
     exit_code: 2 (failure)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
     error: Extra `x2` is not defined in the `optional-dependencies` table for `project`
     ");
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 7 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Found up-to-date lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
      + anyio==4.3.0
      + idna==3.6
-     + proxy1==0.1.0 (from file://[TEMP_DIR]/proxy1)
+     + proxy1 @ file://[TEMP_DIR]/proxy1
      + sniffio==1.3.1
     ");
 
@@ -5688,11 +5811,12 @@ fn collision_extra() -> Result<()> {
         );
     });
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -5705,12 +5829,16 @@ fn collision_extra() -> Result<()> {
     // installed.
     uv_snapshot!(
         context.filters(),
-        context.sync().arg("--frozen").arg("--extra=extra-3-pkg-foo"),
+        context.sync().arg("--dry-run").arg("--frozen").arg("--extra=extra-3-pkg-foo"),
         @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + sniffio==1.3.1
      + sortedcontainers==2.4.0
     "
     );
@@ -5718,16 +5846,16 @@ fn collision_extra() -> Result<()> {
     // Verify that activating `foo` does result in `idna==3.5`.
     uv_snapshot!(
         context.filters(),
-        context.sync().arg("--frozen").arg("--extra=foo"),
+        context.sync().arg("--dry-run").arg("--frozen").arg("--extra=foo"),
         @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 1 package in [TIME]
-    Uninstalled 2 packages in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==4.3.0
      + idna==3.5
-     - sortedcontainers==2.4.0
+     + sniffio==1.3.1
     "
     );
 
@@ -5735,11 +5863,16 @@ fn collision_extra() -> Result<()> {
     // and `sortedcontainers`.
     uv_snapshot!(
         context.filters(),
-        context.sync().arg("--frozen").arg("--extra=extra-3-pkg-foo").arg("--extra=foo"),
+        context.sync().arg("--dry-run").arg("--frozen").arg("--extra=extra-3-pkg-foo").arg("--extra=foo"),
         @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==4.3.0
+     + idna==3.5
+     + sniffio==1.3.1
      + sortedcontainers==2.4.0
     "
     );
@@ -8110,34 +8243,35 @@ fn incorrect_extra_simplification_leads_to_multiple_torch_packages() -> Result<(
     });
 
     // The `chgnet` extra must select only `torch==2.5.1`.
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--frozen")
         .arg("--extra")
         .arg("chgnet"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
      + chgnet==1.0.0
      + core==1.0.0
      + torch==2.5.1
      + torchmetrics==1.0.0
     ");
 
-    // Switching to `m3gnet` must replace `torch==2.5.1` with `torch==2.2.1`.
-    uv_snapshot!(context.filters(), context.sync()
+    // The `m3gnet` extra must select only `torch==2.2.1`.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--frozen")
         .arg("--extra")
         .arg("m3gnet"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 2 packages in [TIME]
-    Uninstalled 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     - chgnet==1.0.0
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
+     + core==1.0.0
      + matgl==1.0.0
-     - torch==2.5.1
      + torch==2.2.1
+     + torchmetrics==1.0.0
     ");
 
     Ok(())
@@ -8410,14 +8544,15 @@ fn duplicate_torch_and_sympy_because_of_wrong_inferences() -> Result<()> {
     });
 
     // The `all` extra must select `torch==2.5.1` and `sympy==1.13.1`.
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--frozen")
         .arg("--extra")
         .arg("all"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 6 packages
+    Would install 6 packages
      + chgnet==1.0.0
      + core==1.0.0
      + e3nn==1.0.0
@@ -8427,7 +8562,7 @@ fn duplicate_torch_and_sympy_because_of_wrong_inferences() -> Result<()> {
     ");
 
     // `sevennet` and `m3gnet` can coexist and must select the other version of each package.
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--frozen")
         .arg("--extra")
         .arg("sevennet")
@@ -8435,14 +8570,14 @@ fn duplicate_torch_and_sympy_because_of_wrong_inferences() -> Result<()> {
         .arg("m3gnet"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Uninstalled 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     - chgnet==1.0.0
+    Would use project environment at: .venv
+    Would download 6 packages
+    Would install 6 packages
+     + core==1.0.0
+     + e3nn==1.0.0
      + matgl==1.0.0
-     - sympy==1.13.1
+     + sevenn==1.0.0
      + sympy==1.13.3
-     - torch==2.5.1
      + torch==2.2.1
     ");
 

@@ -164,31 +164,28 @@ fn add_git() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.6
      + sniffio==1.3.1
     ");
 
     // Adding with an ambiguous Git reference should treat it as a revision.
-    uv_snapshot!(context.filters(), context.add().arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0.0.1"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0.0.1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
     ");
 
-    uv_snapshot!(context.filters(), context.add().arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage").arg("--tag=0.0.1"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage").arg("--tag=0.0.1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Checked 4 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -281,11 +278,17 @@ fn add_git() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==3.7.0
+     + idna==3.6
+     + sniffio==1.3.1
+     + uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979
     ");
 
     Ok(())
@@ -603,13 +606,10 @@ fn add_git_branch() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage").arg("--branch").arg("test-branch"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage").arg("--branch").arg("test-branch"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
     ");
 
     Ok(())
@@ -869,24 +869,22 @@ fn add_git_raw() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.6
      + sniffio==1.3.1
     ");
 
     // Use an ambiguous tag reference, which would otherwise not resolve.
-    uv_snapshot!(context.filters(), context.add().arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0.0.1").arg("--raw-sources"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0.0.1").arg("--raw-sources"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -976,11 +974,17 @@ fn add_git_raw() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==3.7.0
+     + idna==3.6
+     + sniffio==1.3.1
+     + uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979
     ");
 
     Ok(())
@@ -1007,24 +1011,22 @@ fn add_git_implicit() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.6
      + sniffio==1.3.1
     ");
 
     // Omit the `git+` prefix.
-    uv_snapshot!(context.filters(), context.add().arg("uv-public-pypackage @ https://github.com/astral-test/uv-public-pypackage.git"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage @ https://github.com/astral-test/uv-public-pypackage.git"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage.git@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389)
     ");
 
     Ok(())
@@ -1145,13 +1147,10 @@ fn add_unnamed() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("git+https://github.com/astral-test/uv-public-pypackage").arg("--tag=0.0.1"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("git+https://github.com/astral-test/uv-public-pypackage").arg("--tag=0.0.1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -1208,11 +1207,14 @@ fn add_unnamed() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979
     ");
 
     Ok(())
@@ -1232,15 +1234,10 @@ fn add_remove_dev() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -1264,7 +1261,7 @@ fn add_remove_dev() -> Result<()> {
         );
     });
 
-    // `uv add` implies a full lock and sync, including development dependencies.
+    // `uv add` updates the lockfile, including development dependencies.
     let lock = context.read("uv.lock");
 
     insta::with_settings!({
@@ -1328,15 +1325,20 @@ fn add_remove_dev() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + anyio==3.7.0
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
     // This should fail without --dev.
-    uv_snapshot!(context.filters(), context.remove().arg("anyio"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("anyio"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: The dependency `anyio` could not be found in `project.dependencies`
@@ -1345,14 +1347,10 @@ fn add_remove_dev() -> Result<()> {
     ");
 
     // Remove the dependency.
-    uv_snapshot!(context.filters(), context.remove().arg("anyio").arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("anyio").arg("--dev"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Uninstalled 3 packages in [TIME]
-     - anyio==3.7.0
-     - idna==3.6
-     - sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -1401,11 +1399,13 @@ fn add_remove_dev() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Checked in [TIME]
+    Would make no changes
     ");
 
     Ok(())
@@ -1425,15 +1425,10 @@ fn add_remove_optional() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--optional=io"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("anyio==3.7.0").arg("--optional=io"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -1457,7 +1452,7 @@ fn add_remove_optional() -> Result<()> {
         );
     });
 
-    // `uv add` implies a full lock and sync, including development dependencies.
+    // `uv add` updates the lockfile, including development dependencies.
     let lock = context.read("uv.lock");
 
     insta::with_settings!({
@@ -1520,19 +1515,17 @@ fn add_remove_optional() -> Result<()> {
         );
     });
 
-    // Install from the lockfile. At present, this will _uninstall_ the packages since `sync` does
-    // not include extras by default.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // The base installation plan excludes optional dependencies.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Uninstalled 3 packages in [TIME]
-     - anyio==3.7.0
-     - idna==3.6
-     - sniffio==1.3.1
+    Would use project environment at: .venv
+    Checked in [TIME]
+    Would make no changes
     ");
 
     // This should fail without --optional.
-    uv_snapshot!(context.filters(), context.remove().arg("anyio"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("anyio"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: The dependency `anyio` could not be found in `project.dependencies`
@@ -1541,11 +1534,10 @@ fn add_remove_optional() -> Result<()> {
     ");
 
     // Remove the dependency.
-    uv_snapshot!(context.filters(), context.remove().arg("anyio").arg("--optional=io"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("anyio").arg("--optional=io"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Checked in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -1592,11 +1584,13 @@ fn add_remove_optional() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Checked in [TIME]
+    Would make no changes
     ");
 
     Ok(())
@@ -1727,6 +1721,8 @@ fn add_remove_workspace() -> Result<()> {
 
     // Adding a workspace package with a mismatched source should error.
     let mut add_cmd = context.add();
+
+    add_cmd.arg("--no-sync");
     add_cmd
         .arg("child2 @ git+https://github.com/astral-test/uv-public-pypackage")
         .arg("--package")
@@ -1741,16 +1737,13 @@ fn add_remove_workspace() -> Result<()> {
     // Workspace packages should be detected automatically.
     let child1 = context.temp_dir.join("child1");
     let mut add_cmd = context.add();
+    add_cmd.arg("--no-sync");
     add_cmd.arg("child2").arg("--package").arg("child1");
 
     uv_snapshot!(context.filters(), add_cmd, @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + child1==0.1.0 (from file://[TEMP_DIR]/child1)
-     + child2==0.1.0 (from file://[TEMP_DIR]/child2)
     ");
 
     let pyproject_toml = fs_err::read_to_string(child1.join("pyproject.toml"))?;
@@ -1778,7 +1771,7 @@ fn add_remove_workspace() -> Result<()> {
         );
     });
 
-    // `uv add` implies a full lock and sync, including development dependencies.
+    // `uv add` updates the lockfile, including development dependencies.
     let lock = context.read("uv.lock");
 
     insta::with_settings!({
@@ -1818,23 +1811,22 @@ fn add_remove_workspace() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").current_dir(&child1), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").current_dir(&child1), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 2 packages in [TIME]
+    Would use project environment at: [VENV]/
+    Would download 2 packages
+    Would install 2 packages
+     + child1 @ file://[TEMP_DIR]/child1
+     + child2 @ file://[TEMP_DIR]/child2
     ");
 
     // Remove the dependency.
-    uv_snapshot!(context.filters(), context.remove().arg("child2").current_dir(&child1), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("child2").current_dir(&child1), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 2 packages in [TIME]
-    Installed 1 package in [TIME]
-     ~ child1==0.1.0 (from file://[TEMP_DIR]/child1)
-     - child2==0.1.0 (from file://[TEMP_DIR]/child2)
     ");
 
     let pyproject_toml = fs_err::read_to_string(child1.join("pyproject.toml"))?;
@@ -1890,11 +1882,14 @@ fn add_remove_workspace() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").current_dir(&child1), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").current_dir(&child1), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: [VENV]/
+    Would download 1 package
+    Would install 1 package
+     + child1 @ file://[TEMP_DIR]/child1
     ");
 
     Ok(())
@@ -2304,6 +2299,8 @@ fn add_workspace_editable() -> Result<()> {
 
     // `--no-editable` should add `editable = false`.
     let mut add_cmd = context.add();
+
+    add_cmd.arg("--no-sync");
     add_cmd
         .arg("child2")
         .arg("--no-editable")
@@ -2313,10 +2310,6 @@ fn add_workspace_editable() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + child1==0.1.0 (from file://[TEMP_DIR]/child1)
-     + child2==0.1.0 (from file://[TEMP_DIR]/child2)
     ");
 
     let pyproject_toml = fs_err::read_to_string(child1.join("pyproject.toml"))?;
@@ -2346,17 +2339,14 @@ fn add_workspace_editable() -> Result<()> {
 
     // `--editable` should not.
     let mut add_cmd = context.add();
+
+    add_cmd.arg("--no-sync");
     add_cmd.arg("child2").arg("--editable").current_dir(&child1);
 
     uv_snapshot!(context.filters(), add_cmd, @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Uninstalled 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     ~ child1==0.1.0 (from file://[TEMP_DIR]/child1)
-     ~ child2==0.1.0 (from file://[TEMP_DIR]/child2)
     ");
 
     let pyproject_toml = fs_err::read_to_string(child1.join("pyproject.toml"))?;
@@ -2384,7 +2374,7 @@ fn add_workspace_editable() -> Result<()> {
         );
     });
 
-    // `uv add` implies a full lock and sync, including development dependencies.
+    // `uv add` updates the lockfile, including development dependencies.
     let lock = context.read("uv.lock");
 
     insta::with_settings!({
@@ -2430,11 +2420,15 @@ fn add_workspace_editable() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").current_dir(&child1), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").current_dir(&child1), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 2 packages in [TIME]
+    Would use project environment at: [VENV]/
+    Would download 2 packages
+    Would install 2 packages
+     + child1 @ file://[TEMP_DIR]/child1
+     + child2 @ file://[TEMP_DIR]/child2
     ");
 
     Ok(())
@@ -2477,13 +2471,10 @@ fn add_workspace_path() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    uv_snapshot!(context.filters(), context.add().arg("./child"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("./child"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -2510,7 +2501,7 @@ fn add_workspace_path() -> Result<()> {
         );
     });
 
-    // `uv add` implies a full lock and sync, including development dependencies.
+    // `uv add` updates the lockfile, including development dependencies.
     let lock = context.read("uv.lock");
 
     insta::with_settings!({
@@ -2550,11 +2541,14 @@ fn add_workspace_path() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + child @ file://[TEMP_DIR]/child
     ");
 
     Ok(())
@@ -2594,16 +2588,12 @@ fn add_path_implicit_workspace() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    uv_snapshot!(context.filters(), context.add().arg(Path::new("packages").join("child")).current_dir(workspace.path()), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg(Path::new("packages").join("child")).current_dir(workspace.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
     Added `packages/child` to workspace members
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/workspace/packages/child)
     ");
 
     let pyproject_toml = fs_err::read_to_string(workspace.join("pyproject.toml"))?;
@@ -2632,7 +2622,7 @@ fn add_path_implicit_workspace() -> Result<()> {
         );
     });
 
-    // `uv add` implies a full lock and sync, including development dependencies.
+    // `uv add` updates the lockfile, including development dependencies.
     let lock = fs_err::read_to_string(workspace.join("uv.lock"))?;
 
     insta::with_settings!({
@@ -2672,11 +2662,15 @@ fn add_path_implicit_workspace() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").current_dir(workspace.path()), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").current_dir(workspace.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Would create project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + child @ file://[TEMP_DIR]/workspace/packages/child
     ");
 
     Ok(())
@@ -2716,15 +2710,11 @@ fn add_path_no_workspace() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    uv_snapshot!(context.filters(), context.add().arg(Path::new("packages").join("child")).current_dir(workspace.path()).arg("--no-workspace"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg(Path::new("packages").join("child")).current_dir(workspace.path()).arg("--no-workspace"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + child==0.1.0 (from file://[TEMP_DIR]/workspace/packages/child)
     ");
 
     let pyproject_toml = fs_err::read_to_string(workspace.join("pyproject.toml"))?;
@@ -2748,7 +2738,7 @@ fn add_path_no_workspace() -> Result<()> {
         );
     });
 
-    // `uv add` implies a full lock and sync, including development dependencies.
+    // `uv add` updates the lockfile, including development dependencies.
     let lock = fs_err::read_to_string(workspace.join("uv.lock"))?;
 
     insta::with_settings!({
@@ -2782,11 +2772,15 @@ fn add_path_no_workspace() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").current_dir(workspace.path()), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen").current_dir(workspace.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Would create project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + child @ file://[TEMP_DIR]/workspace/packages/child
     ");
 
     Ok(())
@@ -3201,11 +3195,12 @@ fn update() -> Result<()> {
     Resolved 6 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 5 packages
+    Would install 5 packages
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
      + idna==3.6
@@ -3214,11 +3209,10 @@ fn update() -> Result<()> {
     ");
 
     // Enable an extra (note the version specifier should be preserved).
-    uv_snapshot!(context.filters(), context.add().arg("requests[security]"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests[security]"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    Checked 5 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -3240,14 +3234,10 @@ fn update() -> Result<()> {
     });
 
     // Enable extras using the CLI flag and add a marker.
-    uv_snapshot!(context.filters(), context.add().arg("requests; python_version > '3.7'").args(["--extra=use_chardet_on_py3", "--extra=socks"]), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests; python_version > '3.7'").args(["--extra=use_chardet_on_py3", "--extra=socks"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + chardet==5.2.0
-     + pysocks==1.7.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -3271,15 +3261,10 @@ fn update() -> Result<()> {
 
     // Change the source by specifying a version (note the extras, markers, and version should be
     // preserved).
-    uv_snapshot!(context.filters(), context.add().arg("requests @ git+https://github.com/psf/requests").arg("--tag=v2.32.3"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests @ git+https://github.com/psf/requests").arg("--tag=v2.32.3"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - requests==2.31.0
-     + requests==2.32.3 (from git+https://github.com/psf/requests@0e322af87745eff34caffe4df68456ebc20d9068)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -3423,11 +3408,20 @@ fn update() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 7 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 7 packages
+    Would install 7 packages
+     + certifi==2024.2.2
+     + chardet==5.2.0
+     + charset-normalizer==3.3.2
+     + idna==3.6
+     + pysocks==1.7.1
+     + requests @ git+https://github.com/psf/requests@0e322af87745eff34caffe4df68456ebc20d9068
+     + urllib3==2.2.1
     ");
 
     Ok(())
@@ -3452,11 +3446,12 @@ fn add_update_marker() -> Result<()> {
     Resolved 6 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 5 packages
+    Would install 5 packages
      + certifi==2024.2.2
      + charset-normalizer==3.3.2
      + idna==3.6
@@ -3465,11 +3460,10 @@ fn add_update_marker() -> Result<()> {
     ");
 
     // Restrict the `requests` version for Python <3.11
-    uv_snapshot!(context.filters(), context.add().arg("requests>=2.0,<2.29; python_version < '3.11'"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests>=2.0,<2.29; python_version < '3.11'"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
-    Checked 5 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -3493,11 +3487,10 @@ fn add_update_marker() -> Result<()> {
     });
 
     // Change the restricted `requests` version for Python <3.11
-    uv_snapshot!(context.filters(), context.add().arg("requests>=2.0,<2.20; python_version < '3.11'"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests>=2.0,<2.20; python_version < '3.11'"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 10 packages in [TIME]
-    Checked 5 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -3521,11 +3514,10 @@ fn add_update_marker() -> Result<()> {
     });
 
     // Restrict the `requests` version on Windows and Python >3.11
-    uv_snapshot!(context.filters(), context.add().arg("requests>=2.31 ; sys_platform == 'win32' and python_version > '3.11'"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests>=2.31 ; sys_platform == 'win32' and python_version > '3.11'"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 10 packages in [TIME]
-    Checked 5 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -3550,11 +3542,10 @@ fn add_update_marker() -> Result<()> {
     });
 
     // Restrict the `requests` version on Windows
-    uv_snapshot!(context.filters(), context.add().arg("requests>=2.10 ; sys_platform == 'win32'"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("requests>=2.10 ; sys_platform == 'win32'"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 10 packages in [TIME]
-    Checked 5 packages in [TIME]
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -3581,16 +3572,10 @@ fn add_update_marker() -> Result<()> {
     });
 
     // Remove `requests`
-    uv_snapshot!(context.filters(), context.remove().arg("requests"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("requests"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Uninstalled 5 packages in [TIME]
-     - certifi==2024.2.2
-     - charset-normalizer==3.3.2
-     - idna==3.6
-     - requests==2.31.0
-     - urllib3==2.2.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -3755,45 +3740,28 @@ fn add_update_git_reference_project() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("https://github.com/astral-test/uv-public-pypackage.git"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("https://github.com/astral-test/uv-public-pypackage.git"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage.git@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389)
     ");
 
-    uv_snapshot!(context.filters(), context.add().arg("uv-public-pypackage").arg("--tag=0.0.1"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage").arg("--tag=0.0.1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage.git@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389)
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage.git@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
     ");
 
-    uv_snapshot!(context.filters(), context.add().arg("uv-public-pypackage").arg("--branch=main"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage").arg("--branch=main"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage.git@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage.git@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389)
     ");
 
-    uv_snapshot!(context.filters(), context.add().arg("uv-public-pypackage").arg("--rev=2005223fcad0e2c06daf2e14b93b790604868e1e"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage").arg("--rev=2005223fcad0e2c06daf2e14b93b790604868e1e"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage.git@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389)
-     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage.git@2005223fcad0e2c06daf2e14b93b790604868e1e)
     ");
 
     Ok(())
@@ -4071,24 +4039,21 @@ fn remove_registry() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
      + anyio==3.7.0
      + idna==3.6
      + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.remove().arg("anyio"), @"
+    uv_snapshot!(context.filters(), context.remove().arg("--no-sync").arg("anyio"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Uninstalled 3 packages in [TIME]
-     - anyio==3.7.0
-     - idna==3.6
-     - sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -4129,11 +4094,13 @@ fn remove_registry() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Checked in [TIME]
+    Would make no changes
     ");
 
     Ok(())
@@ -5543,22 +5510,10 @@ fn add_requirements_file() -> Result<()> {
     requirements_txt
         .write_str("Flask==2.3.2\nanyio @ git+https://github.com/agronholm/anyio.git@4.4.0")?;
 
-    uv_snapshot!(context.filters(), context.add().arg("-r").arg("requirements.txt"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("-r").arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + anyio==4.4.0 (from git+https://github.com/agronholm/anyio.git@053e8f0a0f7b0f4a47a012eb5c6b1d9d84344e6a)
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==2.3.2
-     + idna==3.6
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + sniffio==1.3.1
-     + werkzeug==3.0.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -5584,28 +5539,27 @@ fn add_requirements_file() -> Result<()> {
     });
 
     // Passing stdin should succeed
-    uv_snapshot!(context.filters(), context.add().arg("-r").arg("-").stdin(std::fs::File::open(requirements_txt)?), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("-r").arg("-").stdin(std::fs::File::open(requirements_txt)?), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Checked [N] packages in [TIME]
     ");
 
     // Passing a `setup.py` should fail.
-    uv_snapshot!(context.filters(), context.add().arg("-r").arg("setup.py"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("-r").arg("setup.py"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Adding requirements from a `setup.py` is not supported in `uv add`
     ");
 
     // Passing nothing should fail.
-    uv_snapshot!(context.filters(), context.add(), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: the following required arguments were not provided:
       <PACKAGES|--requirements <REQUIREMENTS>>
 
-    Usage: uv add --cache-dir [CACHE_DIR] --exclude-newer <EXCLUDE_NEWER> <PACKAGES|--requirements <REQUIREMENTS>>
+    Usage: uv add --cache-dir [CACHE_DIR] --no-sync --exclude-newer <EXCLUDE_NEWER> <PACKAGES|--requirements <REQUIREMENTS>>
 
     For more information, try '--help'.
     ");
@@ -5946,21 +5900,10 @@ fn add_requirements_file_constraints() -> Result<()> {
         "})?;
 
     // Pass the input requirements as constraints.
-    uv_snapshot!(context.filters(), context.add().arg("-r").arg("requirements.in").arg("-c").arg("requirements.txt"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("-r").arg("requirements.in").arg("-c").arg("requirements.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + anyio==3.7.1
-     + click==6.7
-     + flask==1.1.4
-     + idna==3.6
-     + itsdangerous==1.1.0
-     + jinja2==2.11.3
-     + markupsafe==2.1.5
-     + sniffio==1.3.1
-     + werkzeug==1.0.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9063,18 +9006,10 @@ fn naive_sorted_dependencies() -> Result<()> {
     ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().args(["pytest-randomly"]), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").args(["pytest-randomly"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + pytest-mock==3.14.0
-     + pytest-randomly==3.15.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9167,19 +9102,10 @@ fn case_sensitive_naive_sorted_dependencies() -> Result<()> {
     ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().args(["pytest-randomly"]), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").args(["pytest-randomly"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + pytest-mock==3.14.0
-     + pytest-randomly==3.15.0
-     + typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9300,19 +9226,10 @@ fn sorted_dependencies_with_include_group() -> Result<()> {
     ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().args(["--dev", "pytest-randomly"]), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").args(["--dev", "pytest-randomly"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + coverage==7.4.4
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + pytest-mock==3.14.0
-     + pytest-randomly==3.15.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9363,17 +9280,10 @@ fn sorted_dependencies_new_dependency_after_include_group() -> Result<()> {
     ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().args(["--dev", "pytest"]), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").args(["--dev", "pytest"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + coverage==7.4.4
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -9423,18 +9333,10 @@ fn sorted_dependencies_include_group_kept_at_bottom() -> Result<()> {
     ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().args(["--dev", "pytest-randomly"]), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").args(["--dev", "pytest-randomly"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + coverage==7.4.4
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
-     + pytest-randomly==3.15.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -11238,14 +11140,11 @@ async fn add_index_empty_directory() -> Result<()> {
     let packages = context.temp_dir.child("test-index");
     packages.create_dir_all()?;
 
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--index").arg("./test-index"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("iniconfig").arg("--index").arg("./test-index"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: Index directory `file://[TEMP_DIR]/test-index` is empty, skipping
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     Ok(())
@@ -11306,14 +11205,10 @@ fn add_group_comment() -> Result<()> {
         ]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("--group").arg("dev").arg("sniffio"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("--group").arg("dev").arg("sniffio"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + sniffio==1.3.1
-     + typing-extensions==4.10.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -11409,11 +11304,15 @@ fn add_group_comment() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 2 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + sniffio==1.3.1
+     + typing-extensions==4.10.0
     ");
 
     Ok(())
@@ -11762,16 +11661,10 @@ fn add_direct_url_subdirectory() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -11866,11 +11759,17 @@ fn add_direct_url_subdirectory() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -11889,16 +11788,10 @@ fn add_direct_url_subdirectory_raw() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root").arg("--raw-sources"), @"
+    uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root").arg("--raw-sources"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
-     + sniffio==1.3.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -11990,11 +11883,17 @@ fn add_direct_url_subdirectory_raw() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 4 packages in [TIME]
+    Would use project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==4.3.0
+     + idna==3.6
+     + root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root
+     + sniffio==1.3.1
     ");
 
     Ok(())
@@ -12548,7 +12447,7 @@ fn multiple_index_cli() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context
-        .add()
+        .add().arg("--no-sync")
         .arg("requests")
         .arg("--index")
         .arg("https://test.pypi.org/simple")
@@ -12557,9 +12456,6 @@ fn multiple_index_cli() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + requests==2.5.4.1
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12623,11 +12519,14 @@ fn multiple_index_cli() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + requests==2.5.4.1
     ");
 
     Ok(())
@@ -12654,7 +12553,7 @@ fn repeated_index_cli_environment_variable() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context
-        .add()
+        .add().arg("--no-sync")
         .arg("iniconfig")
         // Without a trailing slash.
         .arg("--index")
@@ -12664,9 +12563,6 @@ fn repeated_index_cli_environment_variable() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12728,11 +12624,14 @@ fn repeated_index_cli_environment_variable() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + iniconfig==2.0.0
     ");
 
     Ok(())
@@ -12759,15 +12658,12 @@ fn repeated_index_cli_environment_variable_newline() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context
-        .add()
+        .add().arg("--no-sync")
         .env(EnvVars::UV_INDEX, "https://test.pypi.org/simple\nhttps://test.pypi.org/simple/")
         .arg("iniconfig"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12828,11 +12724,14 @@ fn repeated_index_cli_environment_variable_newline() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + iniconfig==2.0.0
     ");
 
     Ok(())
@@ -12858,7 +12757,7 @@ fn repeated_index_cli() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context
-        .add()
+        .add().arg("--no-sync")
         .arg("iniconfig")
         // Without a trailing slash.
         .arg("--index")
@@ -12869,9 +12768,6 @@ fn repeated_index_cli() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -12932,11 +12828,14 @@ fn repeated_index_cli() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + iniconfig==2.0.0
     ");
 
     Ok(())
@@ -12962,7 +12861,7 @@ fn repeated_index_cli_reversed() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context
-        .add()
+        .add().arg("--no-sync")
         .arg("iniconfig")
         // With a trailing slash.
         .arg("--index")
@@ -12973,9 +12872,6 @@ fn repeated_index_cli_reversed() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -13036,11 +12932,14 @@ fn repeated_index_cli_reversed() -> Result<()> {
         );
     });
 
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    // Check the installation plan from the lockfile.
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 1 package in [TIME]
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + iniconfig==2.0.0
     ");
 
     Ok(())
