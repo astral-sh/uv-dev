@@ -1,7 +1,10 @@
 """Regression tests for archived-study manifest recognition."""
 
+import copy
 import importlib.util
 import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +18,131 @@ spec.loader.exec_module(verify)
 
 
 class StudyManifestTest(unittest.TestCase):
+    def test_nonqualifying_studies_retain_all_other_evidence_checks(self):
+        with tempfile.TemporaryDirectory(dir=Path.home() / "code" / "tmp") as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            evidence = root / "evidence"
+            repository.mkdir()
+            evidence.mkdir()
+
+            def git(*arguments):
+                return subprocess.check_output(
+                    [
+                        "git",
+                        "-c",
+                        "user.name=Network benchmark test",
+                        "-c",
+                        "user.email=network-test@example.com",
+                        "-c",
+                        "commit.gpgsign=false",
+                        "-c",
+                        f"core.hooksPath={root / 'no-hooks'}",
+                        *arguments,
+                    ],
+                    cwd=repository,
+                )
+
+            git("init", "-q")
+            (repository / "source").write_text("parent\n")
+            git("add", "source")
+            git("commit", "-qm", "parent")
+            parent = git("rev-parse", "HEAD").decode().strip()
+            (repository / "source").write_text("head\n")
+            git("commit", "-qam", "head")
+            head = git("rev-parse", "HEAD").decode().strip()
+            (evidence / "change.patch").write_bytes(
+                git(
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-color",
+                    "--abbrev=7",
+                    parent,
+                    head,
+                    "--",
+                )
+            )
+            (evidence / "source.txt").write_text(head + "\n")
+            hashes = {"parent": "a" * 64, "head": "b" * 64}
+            (evidence / "binaries.sha256").write_text(
+                "".join(f"{value}  {side}\n" for side, value in hashes.items())
+            )
+            shutil.copyfile(Path(__file__).with_name("bench.py"), evidence / "bench.py")
+            harness_spec = importlib.util.spec_from_file_location(
+                "qualification_test_bench", evidence / "bench.py"
+            )
+            assert harness_spec is not None and harness_spec.loader is not None
+            harness = importlib.util.module_from_spec(harness_spec)
+            harness_spec.loader.exec_module(harness)
+            pairs = [
+                {
+                    side: {
+                        "seconds": seconds,
+                        "stdout_sha256": "c" * 64,
+                        "stderr_sha256": "d" * 64,
+                        "verified_tree": {"sha256": "e" * 64, "entries": 1},
+                        "verified_files": {},
+                        "bytes": 0,
+                        "requests": 0,
+                        "events": [],
+                    }
+                    for side, seconds in (("parent", 1.0), ("head", 1.1))
+                }
+                for _ in range(20)
+            ]
+            result = {
+                "parent_sha": parent,
+                "head_sha": head,
+                "binaries": {
+                    side: {"sha256": hashes[side], "version": revision[:9]}
+                    for side, revision in (("parent", parent), ("head", head))
+                },
+                "pairs": pairs,
+                "summary": harness.summary(pairs),
+                "compare_stderr": True,
+                "profile": {},
+                "lower_bound": {"required_bytes": 0, "required_waves": 0, "seconds": 0},
+            }
+            study = {
+                "parent": parent,
+                "head": head,
+                "binary_sha256": hashes,
+                "scope": "test",
+                "result_globs": ["case-*.json"],
+                "cases": [
+                    {
+                        "file": "case-slow.json",
+                        "pairs": 20,
+                        "role": "primary",
+                        "qualifying": True,
+                        "requires_tree": True,
+                    },
+                    {"file": "case-fast.json", "pairs": 20, "role": "fast"},
+                ],
+            }
+            for case in study["cases"]:
+                (evidence / case["file"]).write_text(json.dumps(result))
+            with self.assertRaisesRegex(ValueError, "improvement below 5%"):
+                verify.verify(evidence, repository, study)
+            retained = verify.verify(
+                evidence, repository, study, require_qualification=False
+            )
+            self.assertEqual(retained["verified_pairs"], 40)
+            self.assertEqual(
+                retained["qualification"],
+                {
+                    "passed": False,
+                    "required_cases": ["case-slow.json"],
+                    "failed_cases": ["case-slow.json"],
+                },
+            )
+
+            invalid = copy.deepcopy(result)
+            invalid["pairs"][0]["head"]["stdout_sha256"] = "f" * 64
+            (evidence / "case-fast.json").write_text(json.dumps(invalid))
+            with self.assertRaisesRegex(ValueError, "stdout_sha256 differs"):
+                verify.verify(evidence, repository, study, require_qualification=False)
+
     def test_prebuild_template_only_fills_unknown_hashes(self):
         study = {
             "parent": "a" * 40,

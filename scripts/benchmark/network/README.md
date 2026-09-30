@@ -385,4 +385,7 @@ primary qualifying case with `qualifying: true`; use `requires_tree` or
 `required_files` for commands that produce installation trees or output files.
 Use `requires_stderr: true` for studies that must compare diagnostic output.
 The verifier recomputes confidence intervals and traffic totals and rejects
-omitted cases. Review the workload and oracle assumptions separately.
+omitted cases. Use `--retain-nonqualifying` to verify a completed study whose
+predeclared primary misses the performance threshold. Its result records the
+failed gate and retains every other evidence check. Review the workload and
+oracle assumptions separately.

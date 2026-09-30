@@ -58,7 +58,9 @@ def case_harness(evidence: Path, case: dict, data: dict) -> Path:
     return path
 
 
-def verify(evidence: Path, repository: Path, study: dict) -> dict:
+def verify(
+    evidence: Path, repository: Path, study: dict, *, require_qualification: bool = True
+) -> dict:
     parent, head = study["parent"], study["head"]
     for revision in (parent, head):
         resolved = subprocess.check_output(
@@ -121,6 +123,7 @@ def verify(evidence: Path, repository: Path, study: dict) -> dict:
     )
 
     results = {}
+    failed_qualification_cases = []
     for case in study["cases"]:
         path = evidence / case["file"]
         data = json.loads(path.read_text())
@@ -200,10 +203,12 @@ def verify(evidence: Path, repository: Path, study: dict) -> dict:
             require(
                 case["role"] == "primary", f"{label}: qualifying case must be primary"
             )
-            require(
-                data["summary"]["ratio_95ci"][1] <= 0.95,
-                f"{label}: improvement below 5%",
-            )
+            if data["summary"]["ratio_95ci"][1] > 0.95:
+                failed_qualification_cases.append(label)
+                require(
+                    not require_qualification,
+                    f"{label}: improvement below 5%",
+                )
         lower_bound = data["lower_bound"]
         old_netem = os.environ.get("UV_BENCH_NETEM")
         os.environ["UV_BENCH_NETEM"] = json.dumps(data.get("netem", {}))
@@ -246,7 +251,7 @@ def verify(evidence: Path, repository: Path, study: dict) -> dict:
         }
         if "harness_file" in case or "harness_sha256" in data:
             results[label]["harness_sha256"] = sha256(harness)
-    return {
+    result = {
         "parent": parent,
         "head": head,
         "scope": study["scope"],
@@ -257,6 +262,15 @@ def verify(evidence: Path, repository: Path, study: dict) -> dict:
         "results": results,
         "limitation": "This checks source, recorded binaries, paired statistics, result completeness, output equivalence, traffic totals, and bound arithmetic. The workload and oracle assumptions still require review.",
     }
+    if not require_qualification:
+        result["qualification"] = {
+            "passed": not failed_qualification_cases,
+            "required_cases": [
+                case["file"] for case in study["cases"] if case.get("qualifying")
+            ],
+            "failed_cases": failed_qualification_cases,
+        }
+    return result
 
 
 def main() -> None:
@@ -266,8 +280,18 @@ def main() -> None:
     parser.add_argument("--spec", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--archive", type=Path)
+    parser.add_argument(
+        "--retain-nonqualifying",
+        action="store_true",
+        help="Verify every evidence check and report a failed performance gate",
+    )
     args = parser.parse_args()
-    result = verify(args.evidence, args.repository, json.loads(args.spec.read_text()))
+    result = verify(
+        args.evidence,
+        args.repository,
+        json.loads(args.spec.read_text()),
+        require_qualification=not args.retain_nonqualifying,
+    )
     if args.archive:
         result["evidence_sha256"] = sha256(args.archive)
     args.output.parent.mkdir(parents=True, exist_ok=True)
