@@ -487,16 +487,20 @@ impl RegistryClient {
         package_name: &PackageName,
         download_concurrency: &Semaphore,
     ) -> Result<Vec<FlatIndexEntry>, Error> {
-        Ok(futures::stream::iter(self.indexes.flat_indexes())
-            .map(async |index| {
+        let mut entries = futures::stream::iter(self.indexes.flat_indexes().enumerate())
+            .map(async |(position, index)| {
                 self.flat_single_index(package_name, index.url(), download_concurrency)
                     .await
+                    .map(|entries| (position, entries))
             })
-            .buffered(8)
+            .buffer_unordered(8)
             .try_collect::<Vec<_>>()
-            .await?
+            .await?;
+        // Retain find-links priority while allowing completed requests to free fetch slots.
+        entries.sort_unstable_by_key(|(position, _)| *position);
+        Ok(entries
             .into_iter()
-            .flatten()
+            .flat_map(|(_, entries)| entries)
             .collect::<Vec<_>>())
     }
 
@@ -2032,6 +2036,127 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type Error = Box<dyn std::error::Error>;
+
+    #[tokio::test]
+    async fn find_links_entries_refill_slots_in_priority_order() -> Result<(), Error> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let last_started = Arc::new(Notify::new());
+        let server = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let last_started = Arc::clone(&last_started);
+                tokio::spawn(async move {
+                    let service =
+                        service_fn(move |request: hyper::Request<hyper::body::Incoming>| {
+                            let last_started = Arc::clone(&last_started);
+                            async move {
+                                match request.uri().path() {
+                                    "/0" => last_started.notified().await,
+                                    "/8" => last_started.notify_one(),
+                                    _ => {}
+                                }
+                                Ok::<_, Infallible>(hyper::Response::new(Full::new(
+                                    Bytes::from_static(
+                                        b"<a href='example-1.0-py3-none-any.whl'>example</a>",
+                                    ),
+                                )))
+                            }
+                        });
+                    hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await
+                });
+            }
+        });
+        let indexes = (0..9)
+            .map(|position| {
+                Ok(Index::from_find_links(IndexUrl::from_str(&format!(
+                    "http://{address}/{position}"
+                ))?))
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let expected = indexes
+            .iter()
+            .map(|index| index.url.clone())
+            .collect::<Vec<_>>();
+        let client = RegistryClientBuilder::new(
+            BaseClientBuilder::default().retries(0),
+            Cache::temp()?.init().await?,
+        )
+        .index_locations(IndexLocations::new(Vec::new(), indexes, true))
+        .build()?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.find_links_entries(&PackageName::from_str("example")?, &Semaphore::new(8)),
+        )
+        .await;
+        server.abort();
+        assert_eq!(
+            result??
+                .into_iter()
+                .map(|entry| entry.into_parts().2)
+                .collect::<Vec<_>>(),
+            expected,
+        );
+        Ok(())
+    }
+
+    async fn start_test_server(username: &'static str, password: &'static str) -> MockServer {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(basic_auth(username, password))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        server
+    }
+
+    fn no_index_client(flat_indexes: Vec<Index>) -> Result<RegistryClient, Error> {
+        Ok(
+            RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
+                .index_locations(IndexLocations::new(vec![], flat_indexes, true))
+                .build()?,
+        )
+    }
+
+    async fn assert_no_index(
+        client: &RegistryClient,
+        package: &str,
+        index: Option<IndexMetadataRef<'_>>,
+    ) -> Result<(), Error> {
+        let error = client
+            .simple_detail(
+                &PackageName::from_str(package)?,
+                index,
+                &IndexCapabilities::default(),
+                &Semaphore::new(1),
+            )
+            .await
+            .expect_err("index lookup should be disabled");
+
+        assert_matches!(
+            error.kind(),
+            crate::ErrorKind::NoIndex(error_package) if error_package == package
+        );
+        Ok(())
+    }
+
+    async fn assert_no_requests(server: &MockServer) {
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("request recording should be enabled")
+                .is_empty()
+        );
+    }
 
     #[tokio::test]
     async fn concurrent_indexes_refill_slots_in_priority_order() -> Result<(), Error> {
