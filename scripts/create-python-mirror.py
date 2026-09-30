@@ -29,7 +29,7 @@ from tempfile import TemporaryDirectory
 from urllib.parse import unquote
 
 import httpx
-from git import GitCommandError, Repo
+from git import GitError, Repo
 from tqdm import tqdm
 
 SELF_DIR = Path(__file__).parent
@@ -70,27 +70,25 @@ def sha256_checksum(file_path: Path) -> str:
 def collect_metadata_from_git_history() -> list[dict]:
     """Collect all metadata entries from the history of the VERSIONS_FILE."""
     metadata = []
-    try:
-        repo = Repo(REPO_ROOT, search_parent_directories=True)
+    repo = Repo(REPO_ROOT, search_parent_directories=True)
 
-        for commit in repo.iter_commits(paths=VERSIONS_FILE):
-            try:
-                # Ensure the file exists in the commit tree
-                blob = commit.tree / str(VERSIONS_FILE.relative_to(REPO_ROOT))
-                content = blob.data_stream.read().decode()
-                data = json.loads(content)
-                metadata.extend(data.values())
-            except KeyError:
-                logger.warning(
-                    f"File {VERSIONS_FILE} not found in commit {commit.hexsha}. Skipping."
-                )
-            except json.JSONDecodeError as e:
-                logger.error(f"Error decoding JSON in commit {commit.hexsha}: {e}")
+    for commit in repo.iter_commits(paths=VERSIONS_FILE):
+        try:
+            blob = commit.tree / str(VERSIONS_FILE.relative_to(REPO_ROOT))
+        except KeyError:
+            logger.warning(
+                f"File {VERSIONS_FILE} not found in commit {commit.hexsha}. Skipping."
+            )
+            continue
 
-    except GitCommandError as e:
-        logger.error(f"Git command error: {e}")
-    except Exception:
-        logger.exception("Unexpected error while collecting metadata")
+        content = blob.data_stream.read().decode()
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Error decoding JSON in commit {commit.hexsha}: {e}"
+            ) from e
+        metadata.extend(data.values())
 
     return metadata
 
@@ -268,11 +266,15 @@ def main() -> int:
     """Main function to run the CLI."""
     args = parse_arguments()
 
-    if args.from_all_history:
-        metadata = collect_metadata_from_git_history()
-    else:
-        with open(VERSIONS_FILE) as f:
-            metadata = list(json.load(f).values())
+    try:
+        if args.from_all_history:
+            metadata = collect_metadata_from_git_history()
+        else:
+            with open(VERSIONS_FILE) as f:
+                metadata = list(json.load(f).values())
+    except (GitError, OSError, ValueError) as e:
+        logger.error(f"Error collecting Python download metadata: {e}")
+        return 1
 
     version = re.compile(args.version) if args.version else None
     filtered_metadata = filter_metadata(
