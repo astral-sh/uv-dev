@@ -6,6 +6,7 @@ import argparse
 import concurrent.futures
 import email.parser
 import hashlib
+import html
 import http.client
 import io
 import json
@@ -174,6 +175,25 @@ class Fixtures:
             ).encode()
             for name, files in self.packages.items()
         }
+        links = []
+        for files in self.packages.values():
+            for file in files:
+                attributes = {
+                    "href": f"{file['url']}#sha256={file['hashes']['sha256']}",
+                    "data-requires-python": file["requires-python"],
+                    "data-core-metadata": (
+                        f"sha256={file['core-metadata']['sha256']}"
+                        if file["core-metadata"]
+                        else None
+                    ),
+                }
+                attributes = " ".join(
+                    f'{name}="{html.escape(value, quote=True)}"'
+                    for name, value in attributes.items()
+                    if value is not None
+                )
+                links.append(f"<a {attributes}>{html.escape(file['filename'])}</a>")
+        self.flat = ("<!doctype html>\n" + "\n".join(links) + "\n").encode()
 
 
 class Limiter:
@@ -284,7 +304,10 @@ class Handler(BaseHTTPRequestHandler):
         profile = self.server.profile
         seed = f"{profile.get('seed', 1)}:{self.command}:{path}:{event['attempt']}"
         jitter = random.Random(seed).uniform(-1, 1) * profile.get("jitter_ms", 0)
-        time.sleep(max(0, profile.get("latency_ms", 0) + jitter) / 1000)
+        latency = profile.get("path_latency_ms", {}).get(
+            path, profile.get("latency_ms", 0)
+        )
+        time.sleep(max(0, latency + jitter) / 1000)
         try:
             parts = path.strip("/").split("/")
             body: bytes | Path = b"Not found"
@@ -296,6 +319,9 @@ class Handler(BaseHTTPRequestHandler):
                 ) is not None:
                     body, status = value, 200
                     content_type = "application/vnd.pypi.simple.v1+json"
+            elif len(parts) == 2 and parts[0] == "flat":
+                body, status = self.server.fixtures.flat, 200
+                content_type = "text/html"
             elif len(parts) == 2 and parts[0] == "files":
                 if (
                     value := self.server.fixtures.metadata.get(parts[1])
@@ -718,6 +744,18 @@ class Http2Proxy:
         return dict(protocols)
 
 
+def expand(value: str, context: dict) -> str:
+    for key, replacement in context.items():
+        value = value.replace("{" + key + "}", str(replacement))
+    return value
+
+
+def normalize_output(value: bytes, context: dict) -> bytes:
+    return value.replace(str(context["base"]).encode(), b"[INDEX]").replace(
+        str(context["work"]).encode(), b"[WORK]"
+    )
+
+
 def run_one(
     binary: Path, fixtures: Fixtures, profile: dict, args: argparse.Namespace
 ) -> dict:
@@ -738,11 +776,22 @@ def run_one(
                     work, args.http2_proxy, args.tls_certificate, args.tls_key
                 )
                 server.public_url = proxy.url
-            command = [str(binary), "--no-config", "--no-progress", "--color", "never"]
-            command.extend(
-                arg.format(index=server.url + "/simple", work=work, python=args.python)
-                for arg in args.command
+            context = {
+                "base": server.url,
+                "index": server.url + "/simple",
+                "work": work,
+                "python": args.python,
+                "fixtures": args.directory.resolve(),
+            }
+            for name, contents in args.templates.items():
+                (work / name).write_text(expand(contents, context))
+            configuration = (
+                ["--config-file", str(work / "uv.toml")]
+                if "uv.toml" in args.templates
+                else ["--no-config"]
             )
+            prefix = [str(binary), *configuration, "--no-progress", "--color", "never"]
+            command = prefix + [expand(arg, context) for arg in args.command]
             env = {
                 key: value
                 for key, value in os.environ.items()
@@ -754,11 +803,24 @@ def run_one(
                 NO_PROXY="127.0.0.1,localhost",
                 no_proxy="127.0.0.1,localhost",
             )
+            env.update({key: expand(value, context) for key, value in args.env.items()})
             if proxy:
                 env["SSL_CERT_FILE"] = str(args.tls_certificate)
+            for setup in args.setup_commands:
+                subprocess.run(
+                    prefix + [expand(arg, context) for arg in setup],
+                    cwd=work,
+                    env=env,
+                    capture_output=True,
+                    timeout=args.timeout,
+                    check=True,
+                )
+            if args.setup_commands:
+                server.reset()
             if args.cache_mode != "cold":
                 subprocess.run(
                     command,
+                    cwd=work,
                     env=env,
                     capture_output=True,
                     timeout=args.timeout,
@@ -769,7 +831,12 @@ def run_one(
                 command.append("--refresh")
             start = time.perf_counter()
             result = subprocess.run(
-                command, env=env, capture_output=True, timeout=args.timeout, check=False
+                command,
+                cwd=work,
+                env=env,
+                capture_output=True,
+                timeout=args.timeout,
+                check=False,
             )
             seconds = time.perf_counter() - start
         finally:
@@ -778,9 +845,7 @@ def run_one(
             server.shutdown()
             server.server_close()
             thread.join()
-        output = result.stdout.replace(server.url.encode(), b"[INDEX]").replace(
-            str(work).encode(), b"[WORK]"
-        )
+        output = normalize_output(result.stdout, context)
         if result.returncode:
             raise RuntimeError(
                 f"Command failed ({result.returncode}): {command}\n{result.stderr.decode(errors='replace')}"
@@ -800,6 +865,12 @@ def run_one(
                 if args.verify_tree
                 else None
             ),
+            "verified_files": {
+                name: hashlib.sha256(
+                    normalize_output(Path(expand(name, context)).read_bytes(), context)
+                ).hexdigest()
+                for name in args.verify_file
+            },
         }
 
 
@@ -833,6 +904,13 @@ def main() -> None:
     run.add_argument("--python", default="3.12")
     run.add_argument("--requirement", action="append", default=[])
     run.add_argument("--verify-tree", help="Directory to compare after each command")
+    run.add_argument("--verify-file", action="append", default=[])
+    run.add_argument("--config-template", type=Path)
+    run.add_argument("--project-template", type=Path)
+    run.add_argument(
+        "--setup-commands", type=Path, help="JSON array of uv argument arrays"
+    )
+    run.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
     run.add_argument("--http2-proxy", type=Path, help="Path to the Caddy binary")
     run.add_argument("--tls-certificate", type=Path)
     run.add_argument("--tls-key", type=Path)
@@ -871,6 +949,38 @@ def main() -> None:
         args.command.pop(0)
     if not args.command or args.pairs < 2:
         parser.error("provide a command and at least two pairs")
+    args.templates = {
+        name: path.read_text()
+        for name, path in (
+            ("uv.toml", args.config_template),
+            ("pyproject.toml", args.project_template),
+        )
+        if path is not None
+    }
+    args.setup_commands = (
+        json.loads(args.setup_commands.read_text()) if args.setup_commands else []
+    )
+    if not isinstance(args.setup_commands, list) or any(
+        not isinstance(command, list)
+        or not command
+        or any(not isinstance(arg, str) for arg in command)
+        for command in args.setup_commands
+    ):
+        parser.error(
+            "--setup-commands must contain an array of nonempty argument arrays"
+        )
+    if any("=" not in item or not item.partition("=")[0] for item in args.env):
+        parser.error("--env requires KEY=VALUE")
+    args.env = dict(item.split("=", 1) for item in args.env)
+    reserved_environment = {
+        "UV_CACHE_DIR",
+        "UV_BENCH_NETEM",
+        "NO_PROXY",
+        "no_proxy",
+        "SSL_CERT_FILE",
+    }
+    if reserved_environment.intersection(args.env):
+        parser.error("--env cannot override benchmark isolation settings")
     if args.http2_proxy:
         if not args.tls_certificate or not args.tls_key:
             parser.error("--http2-proxy requires --tls-certificate and --tls-key")
@@ -900,7 +1010,11 @@ def main() -> None:
         "netem": netem_profile(),
         "command": args.command,
         "requirements": args.requirement,
+        "templates": args.templates,
+        "setup_commands": args.setup_commands,
+        "environment_overrides": args.env,
         "verify_tree": args.verify_tree,
+        "verify_file": args.verify_file,
         "http2_proxy": (
             {
                 "binary": str(args.http2_proxy),
@@ -932,6 +1046,8 @@ def main() -> None:
             raise ValueError("Parent and head command outputs differ")
         if pair["parent"]["verified_tree"] != pair["head"]["verified_tree"]:
             raise ValueError("Parent and head installed file contents differ")
+        if pair["parent"]["verified_files"] != pair["head"]["verified_files"]:
+            raise ValueError("Parent and head result files differ")
         if index >= args.warmups:
             data["pairs"].append(pair)
             args.output.write_text(json.dumps(data, indent=2) + "\n")

@@ -43,6 +43,7 @@ class ReplayTests(unittest.TestCase):
             files={self.path.name: self.path},
             metadata={},
             simple={},
+            flat=b"<!doctype html><a href='/files/example.whl'>example</a>",
             hashes={self.path.name: hashlib.sha256(self.body).hexdigest()},
         )
         self.servers = []
@@ -100,6 +101,14 @@ class ReplayTests(unittest.TestCase):
         fixtures = bench.Fixtures(manifest, directory, pep658=False)
         self.assertEqual(fixtures.metadata[source.name + ".metadata"], metadata)
         self.assertEqual(fixtures.packages["example"][0]["core-metadata"], False)
+        self.assertIn(b"/files/example-1.0.tar.gz#sha256=", fixtures.flat)
+        self.assertNotIn(b"data-core-metadata", fixtures.flat)
+
+    def test_flat_indexes(self) -> None:
+        server = self.server({})
+        with urllib.request.urlopen(server.url + "/flat/one") as response:
+            self.assertEqual(response.headers["Content-Type"], "text/html")
+            self.assertEqual(response.read(), self.fixtures.flat)
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix sockets unavailable")
     def test_unix_origin(self) -> None:
@@ -169,6 +178,7 @@ class ReplayTests(unittest.TestCase):
     def test_refresh_follows_subcommand(self) -> None:
         args = SimpleNamespace(
             work_dir=Path(self.directory.name),
+            directory=Path(self.directory.name),
             requirement=["example==1"],
             python="3.12",
             command=["pip", "compile", "{work}/requirements.in"],
@@ -176,6 +186,10 @@ class ReplayTests(unittest.TestCase):
             timeout=10,
             verify_tree=None,
             http2_proxy=None,
+            templates={},
+            setup_commands=[],
+            env={},
+            verify_file=[],
         )
         completed = subprocess.CompletedProcess([], 0, b"example==1\n", b"")
         commands = []
@@ -189,6 +203,46 @@ class ReplayTests(unittest.TestCase):
         warm_command, timed_command = commands
         self.assertNotIn("--refresh", warm_command)
         self.assertEqual(timed_command, [*warm_command, "--refresh"])
+
+    def test_setup_and_result_file_verification(self) -> None:
+        args = SimpleNamespace(
+            work_dir=Path(self.directory.name),
+            directory=Path(self.directory.name),
+            requirement=[],
+            python="3.12",
+            command=["lock", "--index", "{index}"],
+            cache_mode="cold",
+            timeout=10,
+            verify_tree=None,
+            http2_proxy=None,
+            templates={
+                "uv.toml": 'sources = { example = { index = "fixture" } }\n',
+                "pyproject.toml": '[project]\nname = "fixture"\n',
+            },
+            setup_commands=[["venv", "{work}/env"]],
+            env={"UV_CONCURRENT_DOWNLOADS": "2"},
+            verify_file=["{work}/uv.lock"],
+        )
+        commands = []
+
+        def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            commands.append(command.copy())
+            work = kwargs["cwd"]
+            self.assertEqual((work / "uv.toml").read_text(), args.templates["uv.toml"])
+            self.assertEqual(kwargs["env"]["UV_CONCURRENT_DOWNLOADS"], "2")
+            if "lock" in command:
+                (work / "uv.lock").write_text(command[-1])
+            return subprocess.CompletedProcess([], 0, b"", b"")
+
+        with patch.object(bench.subprocess, "run", side_effect=run):
+            result = bench.run_one(Path("/uv"), self.fixtures, {}, args)
+        self.assertIn("venv", commands[0])
+        self.assertIn("lock", commands[1])
+        self.assertEqual(commands[0][1], "--config-file")
+        self.assertEqual(
+            result["verified_files"],
+            {"{work}/uv.lock": hashlib.sha256(b"[INDEX]/simple").hexdigest()},
+        )
 
     def test_tree_digest_detects_content_changes(self) -> None:
         root = Path(self.directory.name) / "installed"

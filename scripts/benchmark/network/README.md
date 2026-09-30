@@ -43,6 +43,18 @@ match within each pair. Installation workloads should pass `--verify-tree
 '{work}/site'` (and install into that directory) to compare every installed file,
 executable bit, directory, and symlink after the timed command.
 
+For commands that require an installed environment or project files, pass
+`--setup-commands PATH` with a JSON array of uv argument arrays. Those commands
+run before timing with the same binary and isolated cache. `--config-template`
+and `--project-template` copy text templates to the trial's `uv.toml` and
+`pyproject.toml`; the former is selected with `--config-file`. Templates and
+arguments support `{base}`, `{index}`, `{work}`, `{python}`, and `{fixtures}`.
+Use `--env KEY=VALUE` for settings such as `UV_CONCURRENT_DOWNLOADS`, and repeat
+`--verify-file '{work}/uv.lock'` to compare generated files after normalizing the
+temporary origin and work directory. Inputs and environment overrides are saved
+in the result. Each `/flat/NAME` endpoint serves a PEP 503 page for the manifest;
+profiles may set exact-path response delays in `path_latency_ms`.
+
 `--required-bytes` and `--required-waves` record independently established lower
 bounds for a workload. The optimistic time floor is the maximum of required bytes
 divided by bottleneck bandwidth and dependent response waves multiplied by minimum
