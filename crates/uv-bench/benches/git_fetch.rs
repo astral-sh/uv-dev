@@ -111,7 +111,8 @@ fn git_fetch(c: &mut Criterion<WallTime>) {
             .collect();
         let settings = GitFetchSettings::default()
             .with_offline(true)
-            .with_partial_fetches(true);
+            .with_partial_fetches(true)
+            .with_worktrees(true);
         for count in [1, 4, 10] {
             let Some(revisions) = revisions.get(..count) else {
                 continue;
@@ -126,7 +127,7 @@ fn git_fetch(c: &mut Criterion<WallTime>) {
                                 let fetched =
                                     fetch_with_settings(&runtime, git, cache.path(), settings);
                                 assert_eq!(fetched.git().precise(), git.precise());
-                                assert!(fetched.path().join(".git").is_dir());
+                                assert!(fetched.path().join(".git").is_file());
                                 black_box(fetched);
                             }
                             black_box(cache)

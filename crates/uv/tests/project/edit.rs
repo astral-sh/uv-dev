@@ -295,7 +295,10 @@ fn add_git() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn add_git_private_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_env(
+        EnvVars::UV_PREVIEW_FEATURES,
+        "git-partial-fetches,git-worktrees",
+    );
     let token = decode_token(READ_ONLY_GITHUB_TOKEN);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -385,7 +388,10 @@ fn add_git_private_source() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn add_git_private_raw() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_env(
+        EnvVars::UV_PREVIEW_FEATURES,
+        "git-partial-fetches,git-worktrees",
+    );
     let token = decode_token(READ_ONLY_GITHUB_TOKEN);
     let context = context.with_filter((&token, "***"));
 

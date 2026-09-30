@@ -1830,6 +1830,7 @@
             "artifact-hash-filtering",
             "content-addressed-cache",
             "git-partial-fetches",
+            "git-worktrees",
             "missing-exclude-newer-package-lock"
           ]
         },

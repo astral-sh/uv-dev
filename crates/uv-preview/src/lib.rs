@@ -337,6 +337,8 @@ pub enum PreviewFeature {
     ContentAddressedCache,
     /// Fetches Git trees and blobs lazily when checking out source repositories.
     GitPartialFetches,
+    /// Shares Git objects across source checkouts using worktrees with Git 2.48 or later.
+    GitWorktrees,
     /// Exclude `exclude-newer-package` entries from the lockfile when not included in the
     /// project's resolved dependencies.
     MissingExcludeNewerPackageLock,

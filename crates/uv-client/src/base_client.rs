@@ -821,6 +821,7 @@ impl BaseClient {
             .with_disabled_ssl(self.disable_ssl(url))
             .with_offline(self.connectivity().is_offline())
             .with_partial_fetches(self.preview.is_enabled(PreviewFeature::GitPartialFetches))
+            .with_worktrees(self.preview.is_enabled(PreviewFeature::GitWorktrees))
     }
 
     /// The configured client read timeout.
