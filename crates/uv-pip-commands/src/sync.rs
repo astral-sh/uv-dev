@@ -46,7 +46,7 @@ use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
 use crate::install_report::write_install_report;
-use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
+use crate::pylock::{read_pylock_toml, requires_source_build, resolve_pylock_toml};
 use crate::reporters::report_target_environment;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_install_operations::Changelog;
@@ -338,8 +338,54 @@ pub async fn pip_sync(
     // Combine the `--no-binary` and `--no-build` flags from the requirements files.
     let build_options = build_options.combine(no_binary, no_build);
 
-    // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;
+    let pylock_resolution = if let Some(pylock) = pylock {
+        let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
+
+        // Convert the extras and groups specifications into a concrete form.
+        let extras = extras.with_defaults(DefaultExtras::default());
+        let extras = extras
+            .extra_names(lock.extras.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let groups =
+            pylock_groups.with_defaults(DefaultGroups::from_groups(lock.default_groups.clone()));
+        let groups = groups
+            .group_names(lock.dependency_groups.iter())
+            // PEP 751 allows synthetic default groups that aren't publicly selectable.
+            .chain(
+                lock.default_groups
+                    .iter()
+                    .filter(|group| groups.contains_because_default(group)),
+            )
+            .unique()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        Some(resolve_pylock_toml(
+            lock,
+            &install_path,
+            interpreter,
+            python_version.as_ref(),
+            python_platform.as_ref(),
+            &extras,
+            &groups,
+            &build_options,
+            hash_checking,
+        )?)
+    } else {
+        None
+    };
+
+    // A wheel-only lock fixes every runtime distribution and cannot resolve build dependencies.
+    let flat_index = if pylock_resolution
+        .as_ref()
+        .is_some_and(|(resolution, _)| !requires_source_build(resolution))
+    {
+        FlatIndex::default()
+    } else {
+        FlatIndex::load(&client, &cache, &index_locations).await?
+    };
 
     // Determine whether to enable build isolation.
     let types_build_isolation = match build_isolation {
@@ -398,41 +444,8 @@ pub async fn pip_sync(
     // Determine the set of installed packages.
     let site_packages = SitePackages::from_environment(&environment)?;
 
-    let (resolution, hasher) = if let Some(pylock) = pylock {
-        let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
-
-        // Convert the extras and groups specifications into a concrete form.
-        let extras = extras.with_defaults(DefaultExtras::default());
-        let extras = extras
-            .extra_names(lock.extras.iter())
-            .cloned()
-            .collect::<Vec<_>>();
-
-        let groups =
-            pylock_groups.with_defaults(DefaultGroups::from_groups(lock.default_groups.clone()));
-        let groups = groups
-            .group_names(lock.dependency_groups.iter())
-            // PEP 751 allows synthetic default groups that aren't publicly selectable.
-            .chain(
-                lock.default_groups
-                    .iter()
-                    .filter(|group| groups.contains_because_default(group)),
-            )
-            .unique()
-            .cloned()
-            .collect::<Vec<_>>();
-
-        resolve_pylock_toml(
-            lock,
-            &install_path,
-            interpreter,
-            python_version.as_ref(),
-            python_platform.as_ref(),
-            &extras,
-            &groups,
-            &build_options,
-            hash_checking,
-        )?
+    let (resolution, hasher) = if let Some(resolution) = pylock_resolution {
+        resolution
     } else {
         // When resolving, don't take any external preferences into account.
         let preferences = Vec::default();
