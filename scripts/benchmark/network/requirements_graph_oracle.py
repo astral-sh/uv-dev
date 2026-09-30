@@ -40,7 +40,7 @@ def graph_bounds(
     root: str,
     graph: dict[str, list[str]],
     package_paths: set[str],
-    metadata_paths: tuple[str, str],
+    metadata_paths: tuple[str, ...],
     profile: dict,
     concurrency: int,
     rtt_ms: float,
@@ -104,6 +104,9 @@ def main() -> None:
     parser.add_argument("--profiles", type=Path, default=bench.HERE / "profiles.json")
     parser.add_argument("--profile", default="fast")
     parser.add_argument("--root", default="/requirements/prefetch-root.txt")
+    parser.add_argument(
+        "--route", choices=["metadata", "requirements"], default="metadata"
+    )
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -114,7 +117,11 @@ def main() -> None:
         parser.error("the oracle requires PEP 658")
     fixtures = bench.Fixtures(args.manifest, args.directory, True)
     filename = "iniconfig-2.1.0-py3-none-any.whl"
-    metadata_paths = ("/simple/iniconfig/", f"/files/{filename}.metadata")
+    metadata_paths = (
+        ("/simple/iniconfig/", f"/files/{filename}.metadata")
+        if args.route == "metadata"
+        else ()
+    )
     graph = {}
     bodies = {}
     package_paths = set()
@@ -132,8 +139,9 @@ def main() -> None:
         unseen.extend(children)
     if not package_paths:
         raise ValueError("Requirements graph has no pinned package")
-    bodies[metadata_paths[0]] = fixtures.simple["iniconfig"]
-    bodies[metadata_paths[1]] = fixtures.metadata[filename + ".metadata"]
+    if metadata_paths:
+        bodies[metadata_paths[0]] = fixtures.simple["iniconfig"]
+        bodies[metadata_paths[1]] = fixtures.metadata[filename + ".metadata"]
     bounds = graph_bounds(
         args.root,
         graph,
@@ -204,6 +212,7 @@ def main() -> None:
         "netem": bench.netem_profile(),
         "manifest_sha256": bench.digest(args.manifest),
         "root": args.root,
+        "route": args.route,
         "concurrency": args.concurrency,
         "seconds": seconds,
         "required_bytes": required_bytes,
@@ -218,8 +227,8 @@ def main() -> None:
         "requests": len(server.events),
         "events": server.events,
         "retry_scope": "Transient HTTP responses are retried up to three times per URL without oracle backoff. The optimistic floor excludes retries.",
-        "bound_scope": "All unique include bodies and the known selected package's index and metadata are required. The bound combines shortest discovery paths, the download limit, and body serialization. It permits metadata lookup to overlap remaining includes and excludes connection startup, headers, parsing, and CPU work.",
-        "scope": "Discover and fetch remote includes at the recorded concurrency, reusing one HTTP/1.1 connection per worker. After every include is read, fetch the known package's index and metadata. This is a realizable retrieval strategy; resolution is excluded.",
+        "bound_scope": "All unique include bodies and the selected route's metadata are required. The bound combines shortest discovery paths, the download limit, and body serialization. It permits metadata lookup to overlap remaining includes and excludes connection startup, headers, parsing, and CPU work.",
+        "scope": "Discover and fetch remote includes at the recorded concurrency, reusing one HTTP/1.1 connection per worker. The metadata route then fetches the known package's index and metadata; the requirements route assumes those responses are already cached. This is a realizable retrieval strategy; resolution is excluded.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(data, indent=2) + "\n")
