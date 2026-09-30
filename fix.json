@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Audit now distinguishes its implicit all-groups selection from explicit group selection, excluding configured default groups while retaining non-default groups. The updated regression verifies the corrected audited package count.",
+  "validation": [
+    "Audit dependency-group regression test",
+    "Explicit group-precedence integration test",
+    "Default-groups-all integration test",
+    "Focused Clippy checks",
+    "Rust formatting and diff checks"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2181"
+}
