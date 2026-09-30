@@ -1,6 +1,5 @@
 use std::io;
 
-use bytes::Bytes;
 use futures::stream::{self, BoxStream};
 use futures::{StreamExt, TryStreamExt};
 use http_content_range::ContentRange;
@@ -9,6 +8,7 @@ use reqwest::header::{
     HeaderValue, IF_RANGE, RANGE,
 };
 use reqwest::{Response, StatusCode};
+use tokio_util::bytes::Bytes;
 use tracing::debug;
 use url::Url;
 

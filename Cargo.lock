@@ -6243,7 +6243,6 @@ dependencies = [
  "astral_async_zip",
  "async-trait",
  "bytecheck",
- "bytes",
  "fs-err",
  "futures",
  "h2",
