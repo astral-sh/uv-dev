@@ -224,11 +224,16 @@ def monitor(output: Path, stop: Path) -> int:
     return 0
 
 
-def instrument_dockerfile(source: Path, scripts: Path, uv_digest: str) -> int:
+def instrument_dockerfile(
+    source: Path, scripts: Path, uv_digest: str, build_id: str | None = None
+) -> int:
     if re.fullmatch(r"[0-9a-f]{64}", uv_digest) is None:
         raise ValueError("Expected the recorded uv image SHA-256 digest")
     copied = source / ".ci-2124"
     copied.mkdir()
+    if build_id is not None:
+        # Distinct inputs prevent BuildKit from caching or deduplicating the compilation.
+        (copied / "build-id").write_text(build_id + "\n")
     for name in ("arm64-rustc-diagnostics.py", "arm64-rustc-wrapper.sh"):
         shutil.copy2(scripts / name, copied / name)
     (copied / "arm64-rustc-wrapper.sh").chmod(0o755)
@@ -283,6 +288,7 @@ def main() -> int:
     dockerfile.add_argument("source", type=Path)
     dockerfile.add_argument("scripts", type=Path)
     dockerfile.add_argument("--uv-digest", required=True)
+    dockerfile.add_argument("--build-id")
     args = parser.parse_args()
     match args.command:
         case "rustc":
@@ -301,7 +307,9 @@ def main() -> int:
         case "report":
             print(json.dumps(compiler_report(args.root), sort_keys=True))
         case "dockerfile":
-            return instrument_dockerfile(args.source, args.scripts, args.uv_digest)
+            return instrument_dockerfile(
+                args.source, args.scripts, args.uv_digest, args.build_id
+            )
     return 0
 
 

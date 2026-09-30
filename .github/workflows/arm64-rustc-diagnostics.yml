@@ -1,15 +1,23 @@
 name: ARM64 rustc diagnostics
 
 on:
-  push:
-    branches: [zb/arm64-rustc-diagnostics-20260930]
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Diagnostic workload
+        type: choice
+        default: baseline
+        options:
+          - baseline
+          - gnu-repeat
+          - docker-repeat
+          - docker-overlap
 
 permissions:
   contents: read
 
 concurrency:
-  group: arm64-rustc-diagnostics-${{ github.ref }}
+  group: arm64-rustc-diagnostics-${{ github.ref }}-${{ startsWith(inputs.suite, 'docker-') && 'docker' || inputs.suite }}
   cancel-in-progress: false
 
 env:
@@ -23,17 +31,15 @@ env:
 
 jobs:
   gnu-pgo:
-    name: GNU PGO / ${{ matrix.source.name }} / ${{ matrix.machine.name }}
+    if: ${{ inputs.suite == 'baseline' || inputs.suite == 'gnu-repeat' }}
+    name: GNU PGO / ${{ matrix.source.name }} / ${{ matrix.machine.name }} / ${{ matrix.sample }}
     runs-on: ${{ matrix.machine.runner }}
     timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
-        source:
-          - name: parent
-            sha: 06fdf0cdb591adae479feb5b769b0213eabb229c
-          - name: serc
-            sha: b32d002194218e5dbd6a855790f0e7b825318384
+        source: ${{ fromJSON(inputs.suite == 'gnu-repeat' && '[{"name":"serc","sha":"b32d002194218e5dbd6a855790f0e7b825318384"}]' || '[{"name":"parent","sha":"06fdf0cdb591adae479feb5b769b0213eabb229c"},{"name":"serc","sha":"b32d002194218e5dbd6a855790f0e7b825318384"}]') }}
+        sample: ${{ fromJSON(inputs.suite == 'gnu-repeat' && '[1,2,3,4,5]' || '[1]') }}
         machine:
           - name: 32gb
             runner: depot-ubuntu-24.04-arm-8
@@ -147,31 +153,25 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ci-2124-gnu-${{ matrix.source.name }}-${{ matrix.machine.name }}
+          name: ci-2124-gnu-${{ matrix.source.name }}-${{ matrix.machine.name }}-${{ matrix.sample }}
           path: results/
           retention-days: 30
           if-no-files-found: error
 
   docker:
-    name: Docker / ${{ matrix.source.name }}
+    if: ${{ inputs.suite == 'baseline' || startsWith(inputs.suite, 'docker-') }}
+    name: Docker / ${{ matrix.source.name }} / ${{ matrix.sample }}
     runs-on: github-ubuntu-24.04-x86_64-4
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: ${{ inputs.suite == 'docker-overlap' && 4 || 1 }}
       matrix:
-        source:
-          - name: original
-            repository: astral-sh/uv
-            sha: 7f29beb52565079609f44e82facf9b351252fed1
-            uv-digest: 04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424
-          - name: marker
-            repository: astral-sh/uv-dev
-            sha: 021c6c422b48ec4b7c49a5dd8d4299a244e0229d
-            uv-digest: a7aed3216253ee804de3e2d8afa5073baa1a177335345d43845cd4165e43b711
+        source: ${{ fromJSON(inputs.suite == 'baseline' && '[{"name":"original","repository":"astral-sh/uv","sha":"7f29beb52565079609f44e82facf9b351252fed1","uv-digest":"04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424"},{"name":"marker","repository":"astral-sh/uv-dev","sha":"021c6c422b48ec4b7c49a5dd8d4299a244e0229d","uv-digest":"a7aed3216253ee804de3e2d8afa5073baa1a177335345d43845cd4165e43b711"}]' || '[{"name":"original","repository":"astral-sh/uv","sha":"7f29beb52565079609f44e82facf9b351252fed1","uv-digest":"04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424"}]') }}
+        sample: ${{ fromJSON(inputs.suite == 'docker-overlap' && '[1,2,3,4]' || inputs.suite == 'docker-repeat' && '[1,2,3]' || '[1]') }}
     steps:
       - name: Check out diagnostics
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -201,12 +201,14 @@ jobs:
         env:
           EXPECTED_SOURCE: ${{ matrix.source.sha }}
           BOOTSTRAP_DIGEST: ${{ matrix.source.uv-digest }}
+          BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.source.name }}-${{ matrix.sample }}
         run: |
           test "$(git -C source rev-parse HEAD)" = "$EXPECTED_SOURCE"
           mkdir -p results
           { git -C source rev-parse HEAD; git -C source rev-parse 'HEAD^{tree}'; } > results/source.txt
-          uv run --no-config --no-project --python "$PYTHON_VERSION" diagnostics/scripts/ci/arm64-rustc-diagnostics.py dockerfile source diagnostics/scripts/ci --uv-digest "$BOOTSTRAP_DIGEST"
+          uv run --no-config --no-project --python "$PYTHON_VERSION" diagnostics/scripts/ci/arm64-rustc-diagnostics.py dockerfile source diagnostics/scripts/ci --uv-digest "$BOOTSTRAP_DIGEST" --build-id "$BUILD_ID"
           cp source/Dockerfile results/Dockerfile
+          cp source/.ci-2124/build-id results/build-id
 
       - uses: depot/setup-action@91bc8495a33ebfc504ffc89e5674379ccf23c29c # v1.7.2
 
@@ -226,7 +228,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ci-2124-docker-${{ matrix.source.name }}
+          name: ci-2124-docker-${{ matrix.source.name }}-${{ matrix.sample }}
           path: results/
           retention-days: 30
           if-no-files-found: error

@@ -90,6 +90,47 @@ class CompilerDiagnosticsTest(unittest.TestCase):
         self.assertTrue((self.root / "test-memory.jsonl").read_text())
         self.assertIn("COMPILER_REPORT", result.stdout)
 
+    def test_docker_attempts_have_distinct_build_inputs(self):
+        original = """FROM ubuntu:24.04 AS build
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+RUN case "${TARGETPLATFORM}" in \\
+  "linux/arm64") export JEMALLOC_SYS_WITH_LG_PAGE=16;; \\
+  esac && \\
+  cargo auditable zigbuild --bin uv --bin uvx --target $(cat rust_target.txt) --release
+"""
+        rewritten = []
+        digest = "a" * 64
+        for build_id in ("run-1", "run-2"):
+            source = self.root / build_id
+            source.mkdir()
+            (source / "Dockerfile").write_text(original)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "dockerfile",
+                    str(source),
+                    str(SCRIPT.parent),
+                    "--uv-digest",
+                    digest,
+                    "--build-id",
+                    build_id,
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                (source / ".ci-2124/build-id").read_text(), build_id + "\n"
+            )
+            contents = (source / "Dockerfile").read_text()
+            self.assertIn("COPY .ci-2124 /root/.ci-2124\n", contents)
+            self.assertIn(f"ghcr.io/astral-sh/uv@sha256:{digest}", contents)
+            self.assertEqual(contents.count("cargo auditable zigbuild"), 1)
+            rewritten.append(contents)
+        self.assertEqual(rewritten[0], rewritten[1])
+
     def test_preserves_inherited_jobserver_descriptors(self):
         read_fd, write_fd = os.pipe()
         self.addCleanup(os.close, read_fd)
