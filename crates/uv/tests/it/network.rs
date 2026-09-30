@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::future::ready;
 use std::io;
@@ -248,6 +249,79 @@ where
         });
     });
     (server, shutdown_tx)
+}
+
+/// Explicit requirements files share the configured download limit and retain their input order.
+#[test_case::test_case(1)]
+#[test_case::test_case(2)]
+#[test_case::test_case(12)]
+#[test]
+fn requirements_input_downloads_are_bounded(concurrency: usize) -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let response_gate = gate.clone();
+    let (started, requests) = std::sync::mpsc::channel();
+    let (server, _guard) = streaming_server(move |request| {
+        let _ = started.send(request.uri().path().to_owned());
+        let gate = response_gate.clone();
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        tokio::spawn(async move {
+            let Ok(permit) = gate.acquire().await else {
+                return;
+            };
+            permit.forget();
+            let _ = sender
+                .send(Ok(Frame::data(Bytes::from_static(b"build-tag==1.0.0\n"))))
+                .await;
+        });
+        hyper::Response::builder()
+            .header("Content-Type", "text/plain")
+            .body(StreamBody::new(ReceiverStream::new(receiver)).boxed())
+    });
+    let mut command = context.pip_compile();
+    command
+        .args(["--no-index", "--no-header", "--no-annotate", "--find-links"])
+        .arg(context.workspace_root.join("test/links"))
+        .env(EnvVars::UV_CONCURRENT_DOWNLOADS, concurrency.to_string());
+    for index in 0..12 {
+        command.arg(format!("{server}/{index}.txt"));
+    }
+    let process = std::thread::spawn(move || command.output());
+    let mut seen = BTreeSet::new();
+    for _ in 0..concurrency {
+        assert!(seen.insert(requests.recv_timeout(Duration::from_secs(10))?));
+    }
+    assert_eq!(
+        seen,
+        (0..concurrency)
+            .map(|index| format!("/{index}.txt"))
+            .collect::<BTreeSet<_>>()
+    );
+    assert!(matches!(
+        requests.recv_timeout(Duration::from_millis(100)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
+    gate.add_permits(concurrency);
+    if concurrency < 12 {
+        for _ in 0..concurrency.min(12 - concurrency) {
+            assert!(seen.insert(requests.recv_timeout(Duration::from_secs(10))?));
+        }
+        assert!(matches!(
+            requests.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        gate.add_permits(12 - concurrency);
+    }
+    let output = process
+        .join()
+        .map_err(|_| anyhow::anyhow!("requirements command panicked"))??;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_snapshot!(String::from_utf8(output.stdout)?, @"build-tag==1.0.0");
+    Ok(())
 }
 
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
