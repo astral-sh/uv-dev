@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import concurrent.futures
+import csv
 import hashlib
 import http.client
 import importlib.util
@@ -925,6 +927,56 @@ class ReplayTests(unittest.TestCase):
                 {"work": roots[1], "base": "http://127.0.0.1"},
             ),
         )
+
+    def test_tree_normalization_updates_and_checks_recorded_hashes(self) -> None:
+        roots = [Path(self.directory.name) / variant for variant in ("parent", "head")]
+
+        def install(root: Path, port: int, *, extra: str = "") -> None:
+            metadata = root / "package-1.0.dist-info"
+            metadata.mkdir(exist_ok=True, parents=True)
+            contents = f'{{"url":"http://127.0.0.1:{port}/wheel{extra}"}}'.encode()
+            (metadata / "direct_url.json").write_bytes(contents)
+            (root / "module.py").write_text("answer = 42\n")
+            encoded = base64.urlsafe_b64encode(hashlib.sha256(contents).digest())
+            with (metadata / "RECORD").open("w", newline="") as record:
+                csv.writer(record, lineterminator="\n").writerows(
+                    [
+                        [
+                            "package-1.0.dist-info/direct_url.json",
+                            f"sha256={encoded.rstrip(b'=').decode()}",
+                            str(len(contents)),
+                        ],
+                        ["package-1.0.dist-info/RECORD", "", ""],
+                    ]
+                )
+
+        def normalized(root: Path, port: int) -> dict:
+            return bench.tree_digest(
+                root,
+                ["**/direct_url.json"],
+                {"work": root, "base": f"http://127.0.0.1:{port}"},
+            )
+
+        install(roots[0], 1234)
+        install(roots[1], 56789)
+        self.assertNotEqual(bench.tree_digest(roots[0]), bench.tree_digest(roots[1]))
+        self.assertEqual(normalized(roots[0], 1234), normalized(roots[1], 56789))
+        (roots[1] / "module.py").write_text("answer = 43\n")
+        self.assertNotEqual(normalized(roots[0], 1234), normalized(roots[1], 56789))
+        install(roots[1], 56789, extra="-changed")
+        self.assertNotEqual(normalized(roots[0], 1234), normalized(roots[1], 56789))
+        metadata = roots[1] / "package-1.0.dist-info"
+        (metadata / "direct_url.json").write_text("tampered")
+        with self.assertRaisesRegex(ValueError, "RECORD hash does not match"):
+            normalized(roots[1], 56789)
+        install(roots[1], 56789)
+        record = metadata / "RECORD"
+        rows = list(csv.reader(io.StringIO(record.read_text())))
+        rows[0][2] = str(int(rows[0][2]) + 1)
+        with record.open("w", newline="") as file:
+            csv.writer(file, lineterminator="\n").writerows(rows)
+        with self.assertRaisesRegex(ValueError, "RECORD size does not match"):
+            normalized(roots[1], 56789)
 
     def test_tree_symlink_normalization_is_limited_to_selected_trial_targets(
         self,

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import copy
+import csv
 import email.parser
 import email.utils
 import hashlib
@@ -170,6 +172,55 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(file, "sha256").hexdigest()
 
 
+def normalize_record(
+    path: Path, root: Path, normalized_files: tuple[str, ...] | list[str], context: dict
+) -> bytes:
+    """Normalize recorded hashes only after validating their installed contents."""
+    contents = path.read_bytes()
+    rows = list(csv.reader(io.StringIO(contents.decode(), newline="")))
+    changed = False
+    for row in rows:
+        if len(row) != 3:
+            raise ValueError(f"Invalid installed RECORD row in {path}: {row!r}")
+        target = Path(os.path.abspath(path.parent.parent / row[0]))
+        try:
+            name = target.relative_to(root.absolute()).as_posix()
+        except ValueError:
+            continue
+        if target.is_symlink() or not any(
+            Path(name).match(pattern) for pattern in normalized_files
+        ):
+            continue
+        raw = target.read_bytes()
+        normalized = normalize_output(raw, context)
+        before = row.copy()
+        if row[1]:
+            algorithm, separator, recorded = row[1].partition("=")
+            if not separator:
+                raise ValueError(f"Invalid installed RECORD hash for {target}")
+
+            def encoded_hash(data: bytes, algorithm: str = algorithm) -> str:
+                return (
+                    base64.urlsafe_b64encode(hashlib.new(algorithm, data).digest())
+                    .rstrip(b"=")
+                    .decode()
+                )
+
+            if encoded_hash(raw) != recorded:
+                raise ValueError(f"Installed RECORD hash does not match {target}")
+            row[1] = f"{algorithm}={encoded_hash(normalized)}"
+        if row[2]:
+            if int(row[2]) != len(raw):
+                raise ValueError(f"Installed RECORD size does not match {target}")
+            row[2] = str(len(normalized))
+        changed |= row != before
+    if not changed:
+        return contents
+    output = io.StringIO(newline="")
+    csv.writer(output, lineterminator="\n").writerows(rows)
+    return output.getvalue().encode()
+
+
 def tree_digest(
     root: Path,
     normalized_files: tuple[str, ...] | list[str] = (),
@@ -200,6 +251,15 @@ def tree_digest(
                 if context is None:
                     raise ValueError("Tree normalization requires a trial context")
                 contents = normalize_output(path.read_bytes(), context)
+                file_digest = hashlib.sha256(contents).hexdigest()
+            elif (
+                normalized_files
+                and path.name == "RECORD"
+                and path.parent.name.endswith(".dist-info")
+            ):
+                if context is None:
+                    raise ValueError("Tree normalization requires a trial context")
+                contents = normalize_record(path, root, normalized_files, context)
                 file_digest = hashlib.sha256(contents).hexdigest()
             else:
                 file_digest = digest(path)

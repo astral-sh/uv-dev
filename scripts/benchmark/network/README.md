@@ -123,6 +123,9 @@ Use `--compare-stderr` when the command's diagnostic output is deterministic; it
 compares normalized standard error in addition to standard output.
 For installation files that embed their destination, `--normalize-tree-file GLOB`
 replaces the trial URL and directory before hashing only matching relative paths.
+For matching installed files, their `RECORD` hashes and sizes are checked against
+the original contents and then updated for the normalized comparison. Unselected
+files and their recorded entries remain exact comparisons.
 Managed Python workloads use this for `**/_sysconfigdata_*.py`.
 `--normalize-tree-symlink GLOB` similarly normalizes selected absolute symlink
 targets beneath the trial directory. Targets outside that directory, relative
