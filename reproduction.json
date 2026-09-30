@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with Python 3.11.16, both uv 0.12.3 and 0.12.13 reproduced astral-sh/uv#22111 when run from the child directory: `cd shared/ccaas-data-tables && uv sync`. With the reported `[tools.uv]` spelling, uv warned that entry points were skipped, then built and installed `ccaas-data-tables`; `../../.venv/bin/my_script` existed and printed `entry point installed`. Changing only the table to `[tool.uv]`, or running `uv sync` from the workspace root, suppressed the warning. Existing tests `crates/uv/tests/sync/sync.rs::sync_scripts_workspace_member_not_packaged` and `sync_scripts_workspace_member_not_packaged_not_synced` do not cover a selected child that is also a root dependency."
+}

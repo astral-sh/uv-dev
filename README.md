@@ -6,90 +6,108 @@ Classification: bug
 
 ## Summary
 
-The reporter's root project depends on a child workspace member through a
-`workspace = true` source. The member declares `project.scripts`, and `uv sync`
-installs the script into `.venv/bin`, but also warns that entry points are being
-skipped because the member is not packaged.
+The reported warning is reproducible when `uv sync` is run from the child
+workspace member using the configuration exactly as posted. In a fresh
+environment, uv warns that the member's entry points are being skipped, then
+builds and installs that member, creates `.venv/bin/my_script`, and the script
+runs successfully.
 
-The exact child configuration shown uses `[tools.uv]`, while the supported table
-is `[tool.uv]`. Consequently, the shown `package = true` is not read. Correcting
-that spelling should suppress the warning. However, this is still a real
-false-positive for the configuration as posted: uv records a member referenced
-by a workspace source as a required member and treats it as installable even
-without an explicit package setting or build system. The warning path instead
-calls `is_package(true)` unconditionally, so it classifies the same member as
-non-packaged and claims its entry points were skipped.
-
-The warning was extended to workspace members by astral-sh/uv#18389, which
-resolved astral-sh/uv#18388. That test covers a non-required member selected via
-`--all-packages`, where the warning is correct, but not a member required by the
-root project. astral-sh/uv#14891 independently confirms that making a workspace
-member a root dependency is what causes that member's entry points to be
-installed.
-
-## Draft response
-
-Thanks for the report. One detail in the child snippet is that the table is
-written as `[tools.uv]`; the supported table is `[tool.uv]`. If the plural form
-is present in the actual file, `package = true` is not being applied, and
-correcting the table name should remove this warning.
-
-There is still a warning bug in the exact setup shown. Because the root project
-depends on `ccaas-data-tables` through a workspace source, uv treats that member
-as required and installs it, which is why the script appears in `.venv/bin`.
-The warning check does not account for that required-member behavior and can
-incorrectly say the entry points were skipped. We should align the warning with
-the installation decision and cover this case with a regression test.
-
-If `[tools.uv]` was only a typo in the issue and the actual file already uses
-`[tool.uv]`, could you confirm that? That would indicate a different path,
-since an explicit `tool.uv.package = true` should make the current warning check
-false.
+The child configuration shown in the report uses `[tools.uv]` (plural), while
+the supported table is `[tool.uv]`. Changing only that spelling suppresses the
+warning. Running `uv sync` from the workspace root also does not warn, even with
+the plural spelling, so the working directory or selected package is an
+important part of the reproduction.
 
 ## Classification
 
-This is a bug because the user-facing warning contradicts the operation uv
-actually performs. The mechanism is source-confirmed: workspace source entries
-populate `required_members`; installation evaluates such a member with
-`is_package(false)`, while the warning introduced for workspace members always
-evaluates it with `is_package(true)`. With no recognized explicit package
-setting, those calls return different results.
+This is a bug for the posted configuration and child-member invocation because
+the warning says that entry points are skipped while the same sync installs the
+entry point. The misspelled `[tools.uv]` table explains why the explicit
+`package = true` setting is ignored, but it does not make the warning's claim
+about the observed installation accurate.
 
-The plural `[tools.uv]` table explains why the explicit setting shown is ignored,
-but it does not make the warning accurate: the root dependency still makes the
-member installable and its entry point is not skipped. This is not a duplicate.
-The closest prior issue and pull request cover the opposite missing-warning case,
-not this false positive, and no open issue or pull request was found that already
-tracks the mismatch.
+If `[tools.uv]` is only a transcription error and the reporter's actual file
+uses `[tool.uv]`, the behavior is not reproduced by the supplied fixture and
+the actual child `pyproject.toml`, invocation directory, and complete command
+would be needed.
+
+## Reproduction
+
+Reproduced on Linux x86_64 with both the reported uv 0.12.3 release and the
+installed uv 0.12.13, using managed CPython 3.11.16. The reporter used macOS
+15.7.9 x86_64 and Python 3.11.13, so the behavior is not platform-specific in
+this fixture.
+
+The minimal workspace uses the root metadata from the report:
+
+```toml
+[project]
+name = "my-project"
+version = "0.1.0"
+requires-python = "~=3.11.0"
+dependencies = ["ccaas-data-tables"]
+
+[tool.uv.workspace]
+members = ["shared/*"]
+
+[tool.uv.sources]
+ccaas-data-tables = { workspace = true }
+```
+
+The child uses the reported plural table spelling:
+
+```toml
+[project]
+name = "ccaas-data-tables"
+version = "0.1.0"
+dependencies = ["click~=8.5.0"]
+
+[tools.uv]
+package = true
+
+[project.scripts]
+my_script = "my_script:cli"
+```
+
+With `my_script.py` defining a `cli` function, run from the child directory:
+
+```console
+$ cd shared/ccaas-data-tables
+$ uv sync
+warning: Skipping installation of entry points (`project.scripts`) for package `ccaas-data-tables` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
+...
+Installed 2 packages in 2ms
+ + ccaas-data-tables==0.1.0 (from file:///.../shared/ccaas-data-tables)
+ + click==8.5.0
+$ ../../.venv/bin/my_script
+entry point installed
+```
+
+The same fresh run with `[tool.uv]` instead of `[tools.uv]` installs and runs
+the script without the warning. Running `uv sync` at the workspace root also
+installs and runs the script without warning for either spelling.
+
+Existing coverage in `crates/uv/tests/sync/sync.rs` does not exercise this
+combination:
+
+- `sync_scripts_workspace_member_not_packaged` selects a non-required member
+  with `--all-packages`, expects the warning, and observes no member package
+  installation.
+- `sync_scripts_workspace_member_not_packaged_not_synced` syncs the root when
+  the member is neither selected nor a root dependency and expects no warning.
+
+Neither test selects from the child directory a member that is also required by
+the workspace root, then verifies whether its entry point was installed.
 
 ## Related
 
 - astral-sh/uv#18388 (closed), "No warning printed about entrypoint installation
-  being skipped for workspace members" — the direct historical counterpart. It
-  established that non-root members should emit this warning when scripts are
-  genuinely skipped because the member is not packaged.
+  being skipped for workspace members" — the historical counterpart for a
+  workspace member whose scripts genuinely are skipped.
 - astral-sh/uv#18389 (merged), "Warn when workspace member scripts are skipped
-  due to missing build system" — resolved astral-sh/uv#18388 and introduced the
-  current loop over selected workspace members. Its warning predicate uses
-  `is_package(true)` and its new test does not make the member a dependency of
-  the root, so it does not cover required-member installation.
-- astral-sh/uv#14891 (closed), "Install entry points for workspace members" — an
-  adjacent report whose resolution was to add the member as a dependency of the
-  workspace root. It confirms the important distinction that required members'
-  entry points are installed, but it did not report the contradictory warning.
-
-## Search and supporting evidence
-
-Searches covered the full warning text and reduced fragments (`project.scripts`,
-`not packaged`, and `Skipping installation of entry points`), the exact
-`tool.uv.package`/`tools.uv` identifiers, `uv sync`, workspace child/member and
-root-dependency terminology, required/virtual package behavior, and historical
-fixes across open and closed issues plus open, closed, and merged pull requests.
-The strongest chain was astral-sh/uv#18388 to astral-sh/uv#18389, followed by
-astral-sh/uv#14891 for required-member behavior.
-
-astral-sh/uv#7428 was inspected because the warning implementation links to it,
-but it requests richer parsing and more selective warning content rather than
-tracking this false-positive predicate. astral-sh/uv#11583 was also inspected
-and ruled out: it concerns an unreproduced import failure from a built wheel,
-not a warning emitted while entry points are successfully installed.
+  due to missing build system" — added the workspace-member warning and the
+  `sync_scripts_workspace_member_not_packaged` test, but does not cover the
+  contradictory installed-entry-point case reproduced here.
+- astral-sh/uv#14891 (closed), "Install entry points for workspace members" —
+  establishes the related behavior that making a member a dependency of the
+  workspace root causes that member to be installed.
