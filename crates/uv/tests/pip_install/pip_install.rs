@@ -888,7 +888,6 @@ async fn cache_uv_toml_credentials() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     "
@@ -7292,7 +7291,7 @@ async fn install_package_basic_auth_from_url() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
@@ -7338,7 +7337,7 @@ async fn install_package_basic_auth_from_netrc_default() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
@@ -7371,7 +7370,7 @@ async fn install_package_basic_auth_from_netrc() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
@@ -7410,7 +7409,7 @@ async fn install_package_basic_auth_from_netrc_index_in_requirements() -> Result
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
@@ -7437,7 +7436,7 @@ async fn install_index_with_relative_links() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
@@ -7481,7 +7480,7 @@ async fn install_package_basic_auth_from_keyring() {
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
     Keyring request for public@[LOCALHOST]
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
@@ -7589,7 +7588,7 @@ async fn install_index_with_relative_links_authenticated() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6

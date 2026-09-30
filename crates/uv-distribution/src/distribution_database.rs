@@ -653,8 +653,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         }
 
         // Without a metadata sidecar, reading a sufficiently small wheel transfers the entire
-        // archive. Cache that wheel so installation can reuse the bytes fetched during resolution.
-        if hash_policy == ArchiveHashPolicy::None
+        // archive. Cache it during an ordinary resolution so installation can reuse those bytes.
+        // Lockfile resolution collects hashes and should retain its metadata-only cache behavior.
+        if hashes.collection == HashCollection::None
+            && hash_policy == ArchiveHashPolicy::None
             && let BuiltDist::Registry(registry) = dist
             && registry.best_wheel().file.dist_info_metadata.is_none()
             && self
@@ -662,11 +664,28 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 .unmanaged
                 .prefer_streaming_wheel_metadata(registry.best_wheel().file.size)
         {
-            let wheel = self.get_wheel(dist, hash_policy).await?;
-            return Ok(ArchiveMetadata {
-                metadata: Metadata::from_metadata23(wheel.metadata()?),
-                hashes: wheel.hashes,
-            });
+            let wheel = registry.best_wheel();
+            let metadata_entry = self.build_context.cache().entry(
+                CacheBucket::Wheels,
+                WheelCache::Index(&wheel.index).wheel_dir(wheel.name().as_ref()),
+                format!("{}.msgpack", wheel.filename.cache_key()),
+            );
+            // Existing metadata has its own HTTP freshness and revalidation policy.
+            if !metadata_entry.path().try_exists().unwrap_or(true) {
+                match self.get_wheel(dist, hash_policy).await {
+                    Ok(wheel) => {
+                        return Ok(ArchiveMetadata {
+                            metadata: Metadata::from_metadata23(wheel.metadata()?),
+                            hashes: wheel.hashes,
+                        });
+                    }
+                    Err(err) => {
+                        // Archive validation is stricter than metadata extraction. Let the normal
+                        // metadata path classify failures before the resolver selects this wheel.
+                        debug!("Failed to cache {dist} while reading metadata: {err}");
+                    }
+                }
+            }
         }
 
         let result = self
