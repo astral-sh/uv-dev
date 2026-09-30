@@ -9,7 +9,7 @@ use http::StatusCode;
 use itertools::Either;
 use rustc_hash::{FxHashMap, FxHashSet};
 use thiserror::Error;
-use url::{ParseError, Url};
+use url::{Origin, ParseError, Url};
 use uv_auth::RealmRef;
 use uv_cache_key::CanonicalUrl;
 use uv_pep508::{Scheme, VerbatimUrl, VerbatimUrlError, split_scheme};
@@ -540,8 +540,6 @@ impl From<&IndexLocations> for uv_auth::Indexes {
 bitflags::bitflags! {
     #[derive(Debug, Copy, Clone)]
     struct Flags: u8 {
-        /// Whether the index supports range requests.
-        const NO_RANGE_REQUESTS = 1;
         /// Whether the index returned a `401 Unauthorized` status code.
         const UNAUTHORIZED      = 1 << 2;
         /// Whether the index returned a `403 Forbidden` status code.
@@ -549,38 +547,34 @@ bitflags::bitflags! {
     }
 }
 
-/// A map of [`IndexUrl`]s to their capabilities.
+/// Capabilities observed for indexes and artifact origins.
 ///
-/// We only store indexes that lack capabilities (i.e., don't support range requests, aren't
-/// authorized). The benefit is that the map is almost always empty, so validating capabilities is
-/// extremely cheap.
+/// Only missing capabilities are stored, so both maps are usually empty. An index can link to
+/// several artifact origins with different range-request support.
 #[derive(Debug, Default, Clone)]
-pub struct IndexCapabilities(Arc<RwLock<FxHashMap<IndexUrl, Flags>>>);
+pub struct IndexCapabilities {
+    indexes: Arc<RwLock<FxHashMap<IndexUrl, Flags>>>,
+    no_range_requests: Arc<RwLock<FxHashSet<Origin>>>,
+}
 
 impl IndexCapabilities {
-    /// Returns `true` if the given [`IndexUrl`] supports range requests.
-    pub fn supports_range_requests(&self, index_url: &IndexUrl) -> bool {
+    /// Returns `true` if the artifact's origin is expected to support range requests.
+    pub fn supports_range_requests(&self, url: &DisplaySafeUrl) -> bool {
         !self
-            .0
+            .no_range_requests
             .read()
             .unwrap()
-            .get(index_url)
-            .is_some_and(|flags| flags.intersects(Flags::NO_RANGE_REQUESTS))
+            .contains(&url.origin())
     }
 
-    /// Mark an [`IndexUrl`] as not supporting range requests.
-    pub fn set_no_range_requests(&self, index_url: IndexUrl) {
-        self.0
-            .write()
-            .unwrap()
-            .entry(index_url)
-            .or_insert(Flags::empty())
-            .insert(Flags::NO_RANGE_REQUESTS);
+    /// Mark an artifact origin as not supporting range requests.
+    pub fn set_no_range_requests(&self, url: &DisplaySafeUrl) {
+        self.no_range_requests.write().unwrap().insert(url.origin());
     }
 
     /// Returns `true` if the given [`IndexUrl`] returns a `401 Unauthorized` status code.
     pub fn unauthorized(&self, index_url: &IndexUrl) -> bool {
-        self.0
+        self.indexes
             .read()
             .unwrap()
             .get(index_url)
@@ -589,7 +583,7 @@ impl IndexCapabilities {
 
     /// Mark an [`IndexUrl`] as returning a `401 Unauthorized` status code.
     pub(crate) fn set_unauthorized(&self, index_url: IndexUrl) {
-        self.0
+        self.indexes
             .write()
             .unwrap()
             .entry(index_url)
@@ -599,7 +593,7 @@ impl IndexCapabilities {
 
     /// Returns `true` if the given [`IndexUrl`] returns a `403 Forbidden` status code.
     pub fn forbidden(&self, index_url: &IndexUrl) -> bool {
-        self.0
+        self.indexes
             .read()
             .unwrap()
             .get(index_url)
@@ -608,7 +602,7 @@ impl IndexCapabilities {
 
     /// Mark an [`IndexUrl`] as returning a `403 Forbidden` status code.
     pub(crate) fn set_forbidden(&self, index_url: IndexUrl) {
-        self.0
+        self.indexes
             .write()
             .unwrap()
             .entry(index_url)
@@ -624,6 +618,22 @@ mod tests {
     use super::*;
     use crate::{IndexCacheControl, IndexFormat, IndexName};
     use http::HeaderValue;
+
+    #[test]
+    fn range_capabilities_are_scoped_to_artifact_origins() {
+        let capabilities = IndexCapabilities::default();
+        let first = DisplaySafeUrl::parse("https://files.example.com/a.whl").unwrap();
+        let same_origin = DisplaySafeUrl::parse("https://files.example.com/b.whl").unwrap();
+        let other_host = DisplaySafeUrl::parse("https://cdn.example.com/a.whl").unwrap();
+        let other_port = DisplaySafeUrl::parse("https://files.example.com:8443/a.whl").unwrap();
+        let other_scheme = DisplaySafeUrl::parse("http://files.example.com/a.whl").unwrap();
+        capabilities.set_no_range_requests(&first);
+        assert!(!capabilities.supports_range_requests(&first));
+        assert!(!capabilities.supports_range_requests(&same_origin));
+        assert!(capabilities.supports_range_requests(&other_host));
+        assert!(capabilities.supports_range_requests(&other_port));
+        assert!(capabilities.supports_range_requests(&other_scheme));
+    }
 
     fn index_urls<'a>(indexes: impl IntoIterator<Item = &'a Index>) -> Vec<&'a str> {
         indexes
