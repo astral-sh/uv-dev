@@ -1,0 +1,12 @@
+{
+  "fast": {"latency_ms": 0, "bytes_per_second": 0, "pep658": true},
+  "slow": {"latency_ms": 150, "bytes_per_second": 1250000, "pep658": true},
+  "high-latency": {"latency_ms": 500, "bytes_per_second": 12500000, "pep658": true},
+  "constrained": {"latency_ms": 250, "bytes_per_second": 125000, "pep658": true},
+  "jitter": {"latency_ms": 150, "jitter_ms": 100, "bytes_per_second": 1250000, "seed": 42, "pep658": true},
+  "range-slow": {"latency_ms": 150, "bytes_per_second": 1250000, "pep658": false},
+  "range-fast": {"latency_ms": 0, "bytes_per_second": 0, "pep658": false},
+  "no-ranges": {"latency_ms": 150, "bytes_per_second": 1250000, "pep658": false, "ranges": false},
+  "transient-503": {"latency_ms": 100, "bytes_per_second": 1250000, "fail_status": 503, "fail_count": 1, "pep658": true},
+  "interrupted": {"latency_ms": 150, "bytes_per_second": 1250000, "cut_after_bytes": 65536, "cut_count": 1, "pep658": true}
+}
