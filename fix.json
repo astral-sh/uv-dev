@@ -1,0 +1,14 @@
+{
+  "outcome": "fixed",
+  "summary": "BSD-style wheel platform suffixes are now normalized to lowercase when parsed, matching compatible tags generated from interpreter release data. The NetBSD integration regression now requires the uppercase-tagged wheel to install successfully, while parser coverage verifies canonicalization.",
+  "validation": [
+    "cargo test --package uv-platform-tags platform_tag::tests::release_arch -- --exact",
+    "cargo test --package uv-platform-tags tags::tests::test_platform_tags_bsd -- --exact",
+    "cargo test --package uv --test pip_install pip_install::build_backend_netbsd_uppercase_release -- --exact",
+    "cargo test --package uv --test pip_install pip_install::build_backend_wrong_wheel_platform -- --exact",
+    "cargo +stable clippy --package uv-platform-tags --all-targets -- -D warnings",
+    "cargo +stable fmt --all -- --check",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2231"
+}

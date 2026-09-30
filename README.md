@@ -39,17 +39,25 @@ Changing only `STABLE` to `stable` made uv 0.12.21 prepare and install `casewhee
 
 The observed release boundary matches the implementation. astral-sh/uv#21853 changed `crates/uv-platform-tags/src/tags.rs` so a detected NetBSD release such as `11.0_STABLE` generates the compatible tag `netbsd_11_0_stable_amd64`. `PlatformTag::from_str` in `crates/uv-platform-tags/src/platform_tag.rs` retains the `ReleaseArch` suffix's original case when parsing a wheel filename, so the uppercase built-wheel tag and lowercase compatible tag compare unequal.
 
-Existing tests do not cover this regression. `crates/uv-platform-tags/src/tags.rs`, test `test_platform_tags_bsd`, asserts that `11.0_STABLE` generates `netbsd_11_0_stable_amd64`, but does not compare that tag with an uppercase parsed wheel tag. `crates/uv/tests/pip_install/pip_install.rs`, test `build_backend_wrong_wheel_platform`, verifies rejection of genuinely incompatible built-wheel Python tags and the associated error path, but does not exercise NetBSD or case normalization. No NetBSD integration coverage was found under `crates/uv/tests/` or `crates/uv-client/tests/it/`.
+Before the parent regression pull request, existing tests did not cover this case. `crates/uv-platform-tags/src/tags.rs`, test `test_platform_tags_bsd`, asserted that `11.0_STABLE` generates `netbsd_11_0_stable_amd64`, but did not compare that tag with an uppercase parsed wheel tag. `crates/uv/tests/pip_install/pip_install.rs`, test `build_backend_wrong_wheel_platform`, verified rejection of genuinely incompatible built-wheel Python tags and the associated error path, but did not exercise NetBSD or case normalization. The parent pull request added `build_backend_netbsd_uppercase_release` to cover the missing end-to-end case.
 
 ## Classification
 
 This is a reproducible regression and a bug. A wheel built for the active NetBSD interpreter is rejected solely because its valid platform tag retains uppercase characters from the release name. The same uppercase fixture installs with uv 0.12.17, and the equivalent lowercase fixture installs with uv 0.12.21.
+
+## Fix
+
+Outcome: **fixed**.
+
+`ReleaseArch::from_str` now canonicalizes valid ASCII release-and-architecture suffixes to lowercase. This applies the same normalization to parsed BSD-style wheel tags that compatible-tag generation already applies to detected releases, so `netbsd_11_0_STABLE_amd64` compares equal to the active interpreter's `netbsd_11_0_stable_amd64` tag. Invalid characters remain rejected as before.
+
+The parent integration test in `crates/uv/tests/pip_install/pip_install.rs`, `build_backend_netbsd_uppercase_release`, was updated from snapshotting the rejection to requiring a successful build and installation. The existing `ReleaseArch` unit test now verifies uppercase-to-lowercase canonicalization. No separate command or configuration manifestation was added: inspected install, expanded-tag, and lock consumers all use the same `PlatformTag` parser, while the nearby FreeBSD lock fixture exercises Python-version coverage rather than host-platform compatibility.
+
+Focused debug-profile validation passed for `platform_tag::tests::release_arch`, `tags::tests::test_platform_tags_bsd`, `pip_install::build_backend_netbsd_uppercase_release`, and the neighboring `pip_install::build_backend_wrong_wheel_platform`. A focused `cargo +stable clippy --package uv-platform-tags --all-targets -- -D warnings` check and repository-wide Rust formatting also passed.
 
 ## Related
 
 - astral-sh/uv#21846 — Closed issue reporting the original casing mismatch on NetBSD 11 and Python 3.14. It involved a lowercase wheel tag compared with uv's then-uppercase generated compatible tag.
 - astral-sh/uv#21853 — Merged pull request that fixed astral-sh/uv#21846 by lowercasing generated NetBSD and other BSD-like platform tags. It shipped in uv 0.12.18 and introduced the demonstrated inverse mismatch for uppercase wheel tags.
 
-## Maintainer notes
-
-The minimal regression test should compare or install a wheel tagged `netbsd_11_0_STABLE_amd64` against compatible tags generated from NetBSD release `11.0_STABLE`. It should retain the existing lowercase-generation assertion and add coverage that parsed wheel tags follow the same normalization rule.
+Pull request: https://github.com/astral-sh/uv-dev/pull/2231
