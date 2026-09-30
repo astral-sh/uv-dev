@@ -66,6 +66,7 @@ def main() -> None:
             if any(not re.fullmatch("[0-9a-f]{40}", item) for item in skipped):
                 raise ValueError(f"Invalid fsck skip list for {name}")
             skip_list = directory / "info/bench-fsck-skip-list"
+            skip_list.parent.mkdir(exist_ok=True)
             skip_list.write_text("\n".join(skipped) + "\n")
             fsck_options = [
                 "-c",

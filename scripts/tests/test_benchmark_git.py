@@ -1,8 +1,10 @@
 """Prepared Git fixtures support filtered fetches and missing-object recovery."""
 
 import importlib.util
+import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,6 +19,64 @@ SPEC.loader.exec_module(git_fixtures)
 
 
 class GitFixtures(unittest.TestCase):
+    def test_custom_manifest_prepares_fresh_repository(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            upstream = root / "upstream"
+            upstream.mkdir()
+            git_fixtures.git(upstream, "-c", "init.templateDir=", "init", "--quiet")
+            (upstream / "data.txt").write_text("fixture\n")
+            git_fixtures.git(upstream, "add", "data.txt")
+            git_fixtures.git(
+                upstream,
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "Fixture",
+            )
+            commit = git_fixtures.git(upstream, "rev-parse", "HEAD")
+            manifest = root / "fixtures.json"
+            manifest.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "fixture",
+                            "repository": upstream.as_uri(),
+                            "commit": commit,
+                            "reference": "refs/heads/captured",
+                            "fsck-skip": [commit],
+                        }
+                    ]
+                )
+            )
+            destination = root / "prepared"
+            subprocess.run(
+                [
+                    sys.executable,
+                    git_fixtures.__file__,
+                    "--manifest",
+                    str(manifest),
+                    "--directory",
+                    str(destination),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            repository = destination / "fixture.git"
+            self.assertEqual(
+                git_fixtures.git(repository, "rev-parse", "refs/heads/captured"),
+                commit,
+            )
+            self.assertEqual(
+                (repository / "info/bench-fsck-skip-list").read_text(), commit + "\n"
+            )
+
     def test_filtered_fetch_retains_history_and_recovers_objects(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
