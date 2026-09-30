@@ -32,6 +32,17 @@ def main() -> None:
             "bytes_per_second": 1250000,
             "path_latency_ms": {"/flat/00": 1500, "/flat/08": 1500},
         },
+        "both-sources": {"latency_ms": 300, "bytes_per_second": 1250000},
+        "slow-simple": {
+            "latency_ms": 150,
+            "bytes_per_second": 1250000,
+            "path_latency_ms": {"/simple/uv-bench-outdated/": 1500},
+        },
+        "slow-flat": {
+            "latency_ms": 150,
+            "bytes_per_second": 1250000,
+            "path_latency_ms": {"/flat/releases": 1500},
+        },
     }
     setup = [
         ["venv", "--python", "{python}", "{work}/env"],

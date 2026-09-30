@@ -160,6 +160,8 @@ Its `--route versions` mode stops after reading the index pages, as an outdated
 version lookup does. `make_outdated_fixtures.py --directory DIR` creates two wheel
 releases, setup commands that install the older release, and a nine-index latency
 profile for `pip list --outdated`.
+`latest_version_oracle.py` measures concurrent version discovery across specified
+Simple API and find-links paths without fetching distribution metadata.
 `zip_metadata_oracle.py` reads a known wheel metadata entry by its ZIP offset,
 verifies the received archive bytes, and reports its compressed-byte lower bound.
 With ranges disabled, it reads the necessary archive prefix instead.
