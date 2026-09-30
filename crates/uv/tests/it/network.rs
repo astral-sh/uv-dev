@@ -250,6 +250,139 @@ where
     (server, shutdown_tx)
 }
 
+/// Emit a response body only after the gate opens.
+fn gated_body(
+    bytes: Bytes,
+    mut gate: tokio::sync::watch::Receiver<bool>,
+) -> BoxBody<Bytes, Infallible> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        while !*gate.borrow_and_update() {
+            if gate.changed().await.is_err() {
+                return;
+            }
+        }
+        let _ = tx.send(Ok(Frame::data(bytes))).await;
+    });
+    StreamBody::new(ReceiverStream::new(rx)).boxed()
+}
+
+/// A completed resolution does not wait for unused batch-prefetch response bodies.
+#[test]
+fn resolver_stops_unused_prefetch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (started_tx, started_rx) = tokio::sync::watch::channel(false);
+    let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+    let observed_started = started_rx.clone();
+    let (server, _guard) = streaming_server(move |request| {
+        let path = request.uri().path();
+        let (data, content_type, gate) = if let Some(name) = path
+            .strip_prefix("/simple/")
+            .and_then(|path| path.strip_suffix('/'))
+        {
+            let maximum = if name == "choice" { 30 } else { 1 };
+            let files = (1..=maximum)
+                .map(|version| {
+                    json!({
+                        "filename": format!("{name}-{version}.0-py3-none-any.whl"),
+                        "url": format!("/files/{name}-{version}.0-py3-none-any.whl"),
+                        "hashes": {},
+                        "core-metadata": true,
+                        "upload-time": "2024-01-01T00:00:00Z",
+                    })
+                })
+                .collect::<Vec<_>>();
+            (
+                json!({"name": name, "files": files}).to_string(),
+                "application/vnd.pypi.simple.v1+json",
+                None,
+            )
+        } else if let Some(filename) = path
+            .strip_prefix("/files/")
+            .and_then(|path| path.strip_suffix("-py3-none-any.whl.metadata"))
+        {
+            let (name, version) = filename.split_once('-').expect("fixture filename");
+            let number = version
+                .strip_suffix(".0")
+                .expect("fixture version")
+                .parse::<u32>()
+                .expect("numeric fixture version");
+            let mut metadata = format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n");
+            let gate = if name == "choice" {
+                let pin = if number > 15 { 2 } else { 1 };
+                metadata.push_str(&format!("Requires-Dist: pin=={pin}.0\n"));
+                if number < 15 {
+                    started_tx.send_replace(true);
+                    Some(release_rx.clone())
+                } else if number == 15 {
+                    // Make the usable version wait until an unused prefetch is in flight.
+                    Some(started_rx.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            (metadata, "text/plain", gate)
+        } else {
+            return hyper::Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(http_body_util::Full::new(Bytes::new()).boxed());
+        };
+        let length = data.len();
+        let body = if let Some(gate) = gate {
+            gated_body(Bytes::from(data), gate)
+        } else {
+            http_body_util::Full::new(Bytes::from(data)).boxed()
+        };
+        hyper::Response::builder()
+            .header("Content-Type", content_type)
+            .header(CONTENT_LENGTH, length)
+            .body(body)
+    });
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("choice\npin==1.0\n")?;
+    let mut child = context
+        .pip_compile()
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .arg("--default-index")
+        .arg(format!("{server}/simple"))
+        .arg("requirements.in")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let completed = loop {
+        if child.try_wait()?.is_some() {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    release_tx.send_replace(true);
+    if !completed {
+        child.kill()?;
+    }
+    let output = child.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(*observed_started.borrow(), "no unused prefetch started");
+    assert!(completed, "resolution waited for unused prefetches");
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        "choice==15.0\npin==1.0\n"
+    );
+    Ok(())
+}
+
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
 #[tokio::test]
 async fn invalid_ssl_cert_file_warns_default_roots_are_disabled() {
