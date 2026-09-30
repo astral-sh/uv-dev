@@ -40,6 +40,78 @@ def netem_profile() -> dict:
     return json.loads(os.environ.get("UV_BENCH_NETEM", "{}"))
 
 
+def tcp_counters(contents: str) -> dict[str, int]:
+    """Read cumulative TCP counters from a Linux SNMP-format table."""
+    lines = [line.split() for line in contents.splitlines()]
+    if len(lines) % 2:
+        raise ValueError("Incomplete kernel counter table")
+    counters = {}
+    gauges = {"RtoAlgorithm", "RtoMin", "RtoMax", "MaxConn", "CurrEstab"}
+    for headers, values in zip(lines[::2], lines[1::2], strict=True):
+        if len(headers) != len(values) or headers[0] != values[0]:
+            raise ValueError("Kernel counter columns differ")
+        group = headers[0].removesuffix(":")
+        if group not in {"Tcp", "TcpExt"}:
+            continue
+        for name, value in zip(headers[1:], values[1:], strict=True):
+            if group != "Tcp" or name not in gauges:
+                counters[f"{group}{name}"] = int(value)
+    return counters
+
+
+def kernel_network_snapshot() -> dict:
+    """Read the isolated loopback qdisc and namespace-wide TCP counters."""
+    if not netem_profile():
+        raise ValueError("Kernel counters require the netem.sh wrapper")
+    qdisc = json.loads(
+        subprocess.check_output(
+            ["tc", "-j", "-s", "qdisc", "show", "dev", "lo"], text=True
+        )
+    )
+    if len(qdisc) != 1 or qdisc[0].get("kind") != "netem":
+        raise ValueError(f"Expected one loopback netem qdisc: {qdisc}")
+    return {
+        "monotonic_seconds": time.monotonic(),
+        "kernel": os.uname().release,
+        "network_namespace": os.readlink("/proc/self/ns/net"),
+        "placement": "loopback egress",
+        "device": "lo",
+        "qdisc": qdisc[0],
+        "tcp": tcp_counters(Path("/proc/net/snmp").read_text())
+        | tcp_counters(Path("/proc/net/netstat").read_text()),
+    }
+
+
+def kernel_network_delta(before: dict, after: dict) -> dict:
+    for key in ("kernel", "network_namespace", "placement", "device"):
+        if before[key] != after[key]:
+            raise ValueError(f"Kernel network {key} changed during the command")
+    for key in ("kind", "handle", "parent", "root", "options"):
+        if before["qdisc"].get(key) != after["qdisc"].get(key):
+            raise ValueError(f"Kernel qdisc {key} changed during the command")
+
+    def delta(start: dict, end: dict) -> dict:
+        if start.keys() != end.keys():
+            raise ValueError("Kernel counter names changed during the command")
+        result = {key: end[key] - value for key, value in start.items()}
+        if any(value < 0 for value in result.values()):
+            raise ValueError("Kernel counters decreased during the command")
+        return result
+
+    qdisc_keys = ("bytes", "packets", "drops", "overlimits", "requeues")
+    return {
+        "before": before,
+        "after": after,
+        "delta": {
+            "qdisc": delta(
+                {key: before["qdisc"][key] for key in qdisc_keys},
+                {key: after["qdisc"][key] for key in qdisc_keys},
+            ),
+            "tcp": delta(before["tcp"], after["tcp"]),
+        },
+    }
+
+
 def network_floor(
     profile: dict,
     required_bytes: int,
@@ -1355,6 +1427,11 @@ def run_one(
                 replay.reset()
             if args.cache_mode == "refresh" and args.refresh_mode == "flag":
                 command.append("--refresh")
+            network_before = (
+                kernel_network_snapshot()
+                if getattr(args, "kernel_counters", False)
+                else None
+            )
             start = time.perf_counter()
             result = subprocess.run(
                 command,
@@ -1365,6 +1442,11 @@ def run_one(
                 check=False,
             )
             seconds = time.perf_counter() - start
+            network_counters = (
+                kernel_network_delta(network_before, kernel_network_snapshot())
+                if network_before is not None
+                else None
+            )
         finally:
             if proxy:
                 proxy.stop()
@@ -1391,6 +1473,7 @@ def run_one(
             ),
             "max_active": maximum_active(events),
             "frontend_protocols": proxy.protocols() if proxy else None,
+            "kernel_counters": network_counters,
             "verified_tree": (
                 tree_digest(
                     Path(args.verify_tree.format(work=work)),
@@ -1468,6 +1551,11 @@ def main() -> None:
     run.add_argument("--http2-proxy", type=Path, help="Path to the Caddy binary")
     run.add_argument("--tls-certificate", type=Path)
     run.add_argument("--tls-key", type=Path)
+    run.add_argument(
+        "--kernel-counters",
+        action="store_true",
+        help="Record loopback qdisc and TCP counter deltas outside the timed interval",
+    )
     run.add_argument("--pairs", type=int, default=20)
     run.add_argument("--warmups", type=int, default=2)
     run.add_argument(
@@ -1618,6 +1706,7 @@ def main() -> None:
             if args.http2_proxy
             else None
         ),
+        "kernel_counters": args.kernel_counters,
         "warmups": args.warmups,
         "timeout_seconds": args.timeout,
         "cache_mode": args.cache_mode,

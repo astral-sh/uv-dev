@@ -184,6 +184,8 @@ def command(
         result.extend(("--verify-tree", pilot["verify_tree"]))
     if pilot.get("compare_stderr"):
         result.append("--compare-stderr")
+    if pilot.get("kernel_counters"):
+        result.append("--kernel-counters")
     for key, value in pilot.get("environment_overrides", {}).items():
         result.extend(("--env", f"{key}={value}"))
     for name, flag in (
@@ -227,6 +229,7 @@ def check_repeat(pilot: dict, repeated: dict) -> None:
         "normalize_tree_symlink": [],
         "verify_file": [],
         "refresh_mode": "flag",
+        "kernel_counters": False,
     }
     for key in (
         "parent_sha",
@@ -247,6 +250,7 @@ def check_repeat(pilot: dict, repeated: dict) -> None:
         "normalize_tree_symlink",
         "verify_file",
         "http2_proxy",
+        "kernel_counters",
         "cache_mode",
         "refresh_mode",
         "git_repositories",

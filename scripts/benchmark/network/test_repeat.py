@@ -129,6 +129,7 @@ class RepeatTests(unittest.TestCase):
             normalize_tree_symlink=["cpython-3.12-linux-x86_64-gnu"],
             verify_file=["{work}/uv.lock"],
             compare_stderr=True,
+            kernel_counters=True,
             refresh_mode="implicit",
         )
         with patch.object(repeat.shutil, "which", return_value="/path/to/uv"):
@@ -150,6 +151,7 @@ class RepeatTests(unittest.TestCase):
         )
         self.assertEqual(value("--verify-file"), "{work}/uv.lock")
         self.assertIn("--compare-stderr", command)
+        self.assertIn("--kernel-counters", command)
         self.assertEqual(
             json.loads(Path(value("--profiles")).read_text()),
             {"repeat": self.pilot["profile"]},

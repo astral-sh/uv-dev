@@ -204,6 +204,13 @@ rate and RTT with a direct transfer before interpreting results. The wrapper nev
 changes a host interface, route, or qdisc. On hosts that disable user namespaces,
 invoke the wrapper with `sudo -n --preserve-env=HOME`; it drops back to the invoking
 user with `setpriv` before running the measured command.
+Pass `--kernel-counters` to `run` to retain each command's qdisc configuration,
+queue drops, and TCP retransmission counters. The snapshots run immediately before
+and after the timed interval, within the private namespace. They include the
+loopback egress placement and queue limit, which matter when interpreting a
+high-bandwidth, high-latency test. Loopback shaping remains a transport simulation;
+its optimistic byte/RTT floor does not establish the maximum throughput of a real
+TCP path.
 
 For TLS/HTTP2 measurements, generate a local test certificate for `127.0.0.1` and
 pass `--http2-proxy /absolute/path/to/caddy --tls-certificate CERT.pem --tls-key

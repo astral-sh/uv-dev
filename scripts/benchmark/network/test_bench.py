@@ -45,6 +45,64 @@ class NetworkFloorTests(unittest.TestCase):
             self.assertEqual(bench.network_floor({}, 0, waves, latency), 0.2)
 
 
+class KernelCounterTests(unittest.TestCase):
+    def test_tcp_table_omits_gauges(self) -> None:
+        self.assertEqual(
+            bench.tcp_counters(
+                "Ip: InReceives\nIp: 100\n"
+                "Tcp: RtoAlgorithm MaxConn CurrEstab InSegs RetransSegs\n"
+                "Tcp: 1 -1 2 10 3\n"
+                "TcpExt: TCPSynRetrans TCPTimeouts\nTcpExt: 1 4\n"
+            ),
+            {
+                "TcpInSegs": 10,
+                "TcpRetransSegs": 3,
+                "TcpExtTCPSynRetrans": 1,
+                "TcpExtTCPTimeouts": 4,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "Incomplete"):
+            bench.tcp_counters("Tcp: InSegs\n")
+        with self.assertRaisesRegex(ValueError, "columns differ"):
+            bench.tcp_counters("Tcp: InSegs RetransSegs\nTcp: 1\n")
+
+    def test_delta_rejects_network_changes(self) -> None:
+        before = {
+            "kernel": "test",
+            "network_namespace": "net:[1]",
+            "placement": "loopback egress",
+            "device": "lo",
+            "qdisc": {
+                "kind": "netem",
+                "handle": "1:",
+                "root": True,
+                "options": {"limit": 1000},
+                "bytes": 100,
+                "packets": 2,
+                "drops": 0,
+                "overlimits": 0,
+                "requeues": 0,
+                "qlen": 1,
+            },
+            "tcp": {"TcpInSegs": 2, "TcpRetransSegs": 1},
+        }
+        after = json.loads(json.dumps(before))
+        after["qdisc"].update(bytes=250, packets=5, drops=1, qlen=0)
+        after["tcp"].update(TcpInSegs=5, TcpRetransSegs=2)
+        result = bench.kernel_network_delta(before, after)
+        self.assertEqual(result["delta"]["qdisc"]["bytes"], 150)
+        self.assertEqual(result["delta"]["qdisc"]["drops"], 1)
+        self.assertNotIn("qlen", result["delta"]["qdisc"])
+        self.assertEqual(result["delta"]["tcp"]["TcpRetransSegs"], 1)
+        after["qdisc"]["options"]["limit"] = 2000
+        with self.assertRaisesRegex(ValueError, "qdisc options changed"):
+            bench.kernel_network_delta(before, after)
+        after["qdisc"]["options"]["limit"] = 1000
+        after["tcp"]["TcpRetransSegs"] = 0
+        with self.assertRaisesRegex(ValueError, "counters decreased"):
+            bench.kernel_network_delta(before, after)
+
+
 class ReplayTests(unittest.TestCase):
     def setUp(self) -> None:
         scratch = Path.home() / "code" / "tmp"
