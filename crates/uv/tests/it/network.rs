@@ -1196,17 +1196,16 @@ struct DownloadRequests {
     resumed: AtomicUsize,
 }
 
-/// Serve metadata normally, then truncate full responses until streaming retries are exhausted.
+/// Serve metadata normally, then truncate the initial streaming response.
 /// Interrupt the first download-to-file response with a timeout.
 /// Subsequent requests exercise the configured continuation or full-download fallback.
 fn wheel_response(
     request: &hyper::Request<hyper::body::Incoming>,
     wheel: &Bytes,
     range_response: RangeResponse,
-    retries: usize,
     requests: &DownloadRequests,
 ) -> Result<StreamingResponse, http::Error> {
-    let streaming_attempts = 1 + retries;
+    let streaming_attempts = 1;
     let resuming = requests.full.load(Ordering::Relaxed) > streaming_attempts;
     let size = wheel.len();
     let mut response = hyper::Response::builder();
@@ -1314,7 +1313,6 @@ fn wheel_response(
 fn wheel_server(
     context: &TestContext,
     range_response: RangeResponse,
-    retries: usize,
 ) -> (String, impl Drop, Arc<DownloadRequests>, String) {
     let fixtures = context.workspace_root.join("test/links");
     let wheel =
@@ -1323,7 +1321,7 @@ fn wheel_server(
     let requests = Arc::new(DownloadRequests::default());
     let server_requests = requests.clone();
     let (server, guard) = streaming_server(move |request| {
-        wheel_response(&request, &wheel, range_response, retries, &server_requests)
+        wheel_response(&request, &wheel, range_response, &server_requests)
     });
     (server, guard, requests, hash)
 }
@@ -1335,7 +1333,7 @@ fn assert_wheel_download(
     resumed_requests: usize,
 ) -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (server, _guard, requests, hash) = wheel_server(&context, range_response, retries);
+    let (server, _guard, requests, hash) = wheel_server(&context, range_response);
     write_wheel_lockfile(&context, &server, 932, &hash)?;
     allow_duplicates! {
         uv_snapshot!(context.filters(), context
@@ -1388,7 +1386,7 @@ fn assert_wheel_download_timeout(
     resumed_requests: usize,
 ) {
     let context = uv_test::test_context!("3.12");
-    let (server, _guard, requests, _) = wheel_server(&context, range_response, retries);
+    let (server, _guard, requests, _) = wheel_server(&context, range_response);
 
     let wheel_url = format!("{server}/build_tag-1.0.0-1-py2.py3-none-any.whl");
     allow_duplicates! {
@@ -1430,7 +1428,7 @@ fn write_wheel_lockfile(context: &TestContext, server: &str, size: u64, hash: &s
 #[test]
 fn direct_url_content_length_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (server, _guard, requests, hash) = wheel_server(&context, RangeResponse::NotAdvertised, 1);
+    let (server, _guard, requests, hash) = wheel_server(&context, RangeResponse::NotAdvertised);
     write_wheel_lockfile(&context, &server, 1, &hash)?;
 
     uv_snapshot!(context.filters(), context
@@ -1448,18 +1446,18 @@ fn direct_url_content_length_mismatch() -> Result<()> {
       cause: Content-Length mismatch for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`: expected 1 bytes, but the server advertised 932 bytes
     ");
     // The first fallback response fails on its headers without consuming a full-download retry.
-    assert_eq!(requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(requests.full.load(Ordering::Relaxed), 2);
     Ok(())
 }
 
 #[test]
 fn direct_url_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::Supported, 1, 3, 1)
+    assert_wheel_download(RangeResponse::Supported, 1, 2, 1)
 }
 
 #[test]
 fn direct_url_partial_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::Limited { known_length: true }, 1, 3, 2)
+    assert_wheel_download(RangeResponse::Limited { known_length: true }, 1, 2, 2)
 }
 
 #[test]
@@ -1469,29 +1467,29 @@ fn direct_url_partial_range_resume_unknown_length() -> Result<()> {
             known_length: false,
         },
         1,
-        3,
+        2,
         2,
     )
 }
 
 #[test]
 fn direct_url_ignored_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::Ignored, 1, 3, 1)
+    assert_wheel_download(RangeResponse::Ignored, 1, 2, 1)
 }
 
 #[test]
 fn direct_url_no_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::NotAdvertised, 1, 4, 0)
+    assert_wheel_download(RangeResponse::NotAdvertised, 1, 3, 0)
 }
 
 #[test]
 fn direct_url_unsatisfiable_range_retries_in_full() -> Result<()> {
-    assert_wheel_download(RangeResponse::Unsatisfiable, 2, 5, 1)
+    assert_wheel_download(RangeResponse::Unsatisfiable, 2, 3, 1)
 }
 
 #[test]
 fn direct_url_unsatisfiable_range_does_not_bypass_retry() {
-    assert_wheel_download_timeout(RangeResponse::Unsatisfiable, 1, 3, 1);
+    assert_wheel_download_timeout(RangeResponse::Unsatisfiable, 1, 2, 1);
 }
 
 /// An invalid continuation response does not bypass regular retry handling.
@@ -1499,8 +1497,7 @@ fn direct_url_unsatisfiable_range_does_not_bypass_retry() {
 fn direct_url_invalid_range_does_not_bypass_retry() {
     let context = uv_test::test_context!("3.12");
 
-    let (server, _guard, requests, _) =
-        wheel_server(&context, RangeResponse::InvalidContentRange, 1);
+    let (server, _guard, requests, _) = wheel_server(&context, RangeResponse::InvalidContentRange);
 
     let wheel_url = format!("{server}/build_tag-1.0.0-1-py2.py3-none-any.whl");
     uv_snapshot!(context.filters(), context
@@ -1519,7 +1516,7 @@ fn direct_url_invalid_range_does_not_bypass_retry() {
       cause: Failed to write to the distribution cache
       cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
     ");
-    assert_eq!(requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(requests.full.load(Ordering::Relaxed), 2);
     assert_eq!(requests.resumed.load(Ordering::Relaxed), 1);
 }
 
@@ -1527,7 +1524,7 @@ fn direct_url_invalid_range_does_not_bypass_retry() {
 #[test]
 fn direct_url_range_size_mismatch() {
     let context = uv_test::test_context!("3.12");
-    let (server, _guard, requests, _) = wheel_server(&context, RangeResponse::ShortBody, 1);
+    let (server, _guard, requests, _) = wheel_server(&context, RangeResponse::ShortBody);
 
     let wheel_url = format!("{server}/build_tag-1.0.0-1-py2.py3-none-any.whl");
     uv_snapshot!(context.filters(), context
@@ -1544,8 +1541,8 @@ fn direct_url_range_size_mismatch() {
     error: Failed to download `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`
       cause: Range response size mismatch for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`: expected 466 bytes from Content-Range, but received 465 bytes
     ");
-    // Two streaming attempts precede the download fallback; the range mismatch ends the attempt.
-    assert_eq!(requests.full.load(Ordering::Relaxed), 3);
+    // The streaming attempt precedes the download fallback; the range mismatch ends the attempt.
+    assert_eq!(requests.full.load(Ordering::Relaxed), 2);
 }
 
 #[test]
@@ -1555,10 +1552,10 @@ fn direct_url_range_resume_disabled() {
 
 #[test]
 fn direct_url_range_resume_retry_limit() {
-    assert_wheel_download_timeout(RangeResponse::Interrupted, 2, 4, 2);
+    assert_wheel_download_timeout(RangeResponse::Interrupted, 2, 2, 2);
 }
 
 #[test]
 fn direct_url_range_resume_success_does_not_reset_retries() {
-    assert_wheel_download_timeout(RangeResponse::LimitedThenInterrupted, 1, 3, 2);
+    assert_wheel_download_timeout(RangeResponse::LimitedThenInterrupted, 1, 2, 2);
 }
