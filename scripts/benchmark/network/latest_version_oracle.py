@@ -9,6 +9,7 @@ import json
 import math
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -53,9 +54,16 @@ def main() -> None:
     def read(item: tuple[str, bytes]) -> None:
         path, expected = item
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(server.url + path, timeout=60) as response:
-            if response.read() != expected:
-                raise ValueError(f"Oracle response differs: {path}")
+        for attempt in range(4):
+            try:
+                with opener.open(server.url + path, timeout=60) as response:
+                    if response.read() != expected:
+                        raise ValueError(f"Oracle response differs: {path}")
+                return
+            except urllib.error.HTTPError as error:
+                if attempt == 3 or error.code not in {408, 429, 500, 502, 503, 504}:
+                    raise
+                error.read()
 
     started = time.perf_counter()
     try:
@@ -95,6 +103,7 @@ def main() -> None:
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
+        "retry_scope": "Transient HTTP responses are retried up to three times per URL with zero oracle backoff. The optimistic floor excludes retries.",
         "scope": "Known package and configured sources. Fetch and verify every required version listing at the recorded concurrency. The latency bound is the larger of the slowest response and total response latency divided by concurrency. It excludes TCP setup, response headers, parsing, and CPU work.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
