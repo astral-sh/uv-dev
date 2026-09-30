@@ -46,6 +46,7 @@ MIRROR = load_mirror(Path(__file__).with_name("create-python-mirror.py"))
 URL = "https://github.com/astral-sh/python-build-standalone/releases/download/20220502/python.tar.gz"
 CONTENT = b"complete archive"
 CHECKSUM = hashlib.sha256(CONTENT).hexdigest()
+ALIAS_URL = "https://downloads.python.org/pypy/20220502/python.tar.gz"
 
 
 class Progress:
@@ -163,6 +164,121 @@ class PythonMirrorPathsTest(unittest.IsolatedAsyncioTestCase):
                 errors, [(url, f"No valid prefix found for {url}. Skipping.")]
             )
             self.assertEqual(progress.completed, 1)
+
+
+class PythonMirrorDestinationsTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.directory = TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.target = self.root / "mirror"
+        self.destination = self.target / MIRROR.sanitize_url(URL)
+
+    async def download(
+        self,
+        urls: set[tuple[str, str | None]],
+        *,
+        contents: dict[str, bytes] | None = None,
+        status: int = 200,
+        max_concurrent: int = 2,
+        target: Path | None = None,
+    ):
+        self.requests = []
+        self.progress = Progress()
+        original_client = httpx.AsyncClient
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            self.requests.append(url)
+            return httpx.Response(status, content=(contents or {}).get(url, CONTENT))
+
+        def client(*args, **kwargs):
+            return original_client(
+                *args, transport=httpx.MockTransport(respond), **kwargs
+            )
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(MIRROR.httpx, "AsyncClient", client))
+            stack.enter_context(
+                patch.object(MIRROR, "tqdm", return_value=self.progress)
+            )
+            return await MIRROR.download_files(
+                urls, target or self.target, max_concurrent
+            )
+
+    def conflict_errors(self):
+        message = f"Conflicting mirror archive entries for {MIRROR.sanitize_url(URL)}"
+        return [(url, message) for url in sorted((URL, ALIAS_URL))]
+
+    async def test_conflicting_archive_destinations_are_rejected(self):
+        other_content = b"different complete archive"
+        other_checksum = hashlib.sha256(other_content).hexdigest()
+        self.destination.parent.mkdir(parents=True)
+        for max_concurrent in (1, 2):
+            with self.subTest(max_concurrent=max_concurrent):
+                self.destination.write_bytes(b"previous archive")
+                successful, errors = await self.download(
+                    {(URL, CHECKSUM), (ALIAS_URL, other_checksum)},
+                    contents={ALIAS_URL: other_content},
+                    max_concurrent=max_concurrent,
+                )
+                self.assertEqual(successful, 0)
+                self.assertEqual(errors, self.conflict_errors())
+                self.assertEqual(self.requests, [])
+                self.assertEqual(self.progress.completed, 2)
+                self.assertEqual(self.destination.read_bytes(), b"previous archive")
+
+    async def test_matching_archive_destinations_are_downloaded_once(self):
+        successful, errors = await self.download(
+            {(URL, CHECKSUM), (ALIAS_URL, CHECKSUM)}
+        )
+        self.assertEqual(successful, 2)
+        self.assertEqual(errors, [])
+        self.assertEqual(self.requests, [min(URL, ALIAS_URL)])
+        self.assertEqual(self.progress.completed, 2)
+        self.assertEqual(self.destination.read_bytes(), CONTENT)
+
+    async def test_unverified_archive_destinations_are_rejected(self):
+        for index, checksums in enumerate(
+            ((CHECKSUM, None), (None, None), ("", ""), ("invalid", "invalid"))
+        ):
+            with self.subTest(checksums=checksums):
+                target = self.root / f"mirror-{index}"
+                successful, errors = await self.download(
+                    {(URL, checksums[0]), (ALIAS_URL, checksums[1])}, target=target
+                )
+                self.assertEqual(successful, 0)
+                self.assertEqual(errors, self.conflict_errors())
+                self.assertEqual(self.requests, [])
+                self.assertEqual(self.progress.completed, 2)
+                self.assertFalse(target.exists())
+
+    async def test_conflict_does_not_block_an_independent_destination(self):
+        other_url = URL.replace("python.tar.gz", "other-python.tar.gz")
+        self.destination.parent.mkdir(parents=True)
+        self.destination.write_bytes(b"previous archive")
+        successful, errors = await self.download(
+            {(URL, CHECKSUM), (ALIAS_URL, None), (other_url, CHECKSUM)}
+        )
+        self.assertEqual(successful, 1)
+        self.assertEqual(errors, self.conflict_errors())
+        self.assertEqual(self.requests, [other_url])
+        self.assertEqual(self.progress.completed, 3)
+        self.assertEqual(self.destination.read_bytes(), b"previous archive")
+        self.assertEqual(
+            (self.target / MIRROR.sanitize_url(other_url)).read_bytes(), CONTENT
+        )
+
+    async def test_failed_shared_download_marks_every_url_failed(self):
+        successful, errors = await self.download(
+            {(URL, CHECKSUM), (ALIAS_URL, CHECKSUM)}, status=503
+        )
+        self.assertEqual(successful, 0)
+        self.assertEqual([url for url, _ in errors], sorted((URL, ALIAS_URL)))
+        self.assertEqual(errors[0][1], errors[1][1])
+        self.assertEqual(self.requests, [min(URL, ALIAS_URL)])
+        self.assertEqual(self.progress.completed, 2)
+        self.assertFalse(self.destination.exists())
 
 
 class PythonMirrorDownloadsTest(unittest.IsolatedAsyncioTestCase):
@@ -512,6 +628,14 @@ class PythonMirrorCliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(self.requests, [])
         self.assertEqual(output, "")
+
+    def test_conflicting_destinations_exit_nonzero_before_downloads(self):
+        code, output = self.run_cli({URL: 200, ALIAS_URL: 200})
+        self.assertEqual(code, 1)
+        self.assertEqual(self.requests, [])
+        self.assertIn("Successfully downloaded: 0 files.", output)
+        self.assertIn("Failed downloads:", output)
+        self.assertFalse(self.target.exists())
 
 
 if __name__ == "__main__":
