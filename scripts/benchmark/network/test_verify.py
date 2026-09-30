@@ -170,6 +170,44 @@ class StudyManifestTest(unittest.TestCase):
             result.write_text(json.dumps(study))
             self.assertFalse(verify.is_study_spec(result, study))
 
+    def test_retained_original_template_keeps_the_measurement_plan(self):
+        original_name = "example-original-verification-template.json"
+        study = {
+            "parent": "a" * 40,
+            "head": "b" * 40,
+            "binary_sha256": {"parent": "c" * 64, "head": "d" * 64},
+            "cases": [{"file": "example-slow.json", "pairs": 30}],
+            "result_globs": ["example-*.json"],
+            "support_files": [original_name, "resume.sh"],
+            "logs": ["original.log", "resume.log"],
+            "validation_profile": "dev",
+        }
+        template = copy.deepcopy(study)
+        template["binary_sha256"]["head"] = None
+        template["support_files"] = []
+        template["logs"] = ["original.log"]
+        template.pop("validation_profile")
+        with tempfile.TemporaryDirectory(dir=Path.home() / "code" / "tmp") as directory:
+            path = Path(directory) / original_name
+            path.write_text(json.dumps(template))
+            self.assertTrue(verify.is_study_spec(path, study))
+
+            unlisted = copy.deepcopy(study)
+            unlisted["support_files"].remove(original_name)
+            self.assertFalse(verify.is_study_spec(path, unlisted))
+
+            for key, value in (
+                ("head", "e" * 40),
+                ("binary_sha256", {"parent": "f" * 64, "head": None}),
+                ("cases", [{"file": "example-slow.json", "pairs": 20}]),
+                ("result_globs", ["example-slow.json"]),
+            ):
+                with self.subTest(key=key):
+                    changed = copy.deepcopy(template)
+                    changed[key] = value
+                    path.write_text(json.dumps(changed))
+                    self.assertFalse(verify.is_study_spec(path, study))
+
     def test_case_harness_identity(self):
         with tempfile.TemporaryDirectory(dir=Path.home() / "code" / "tmp") as directory:
             root = Path(directory)

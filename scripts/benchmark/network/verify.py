@@ -24,7 +24,7 @@ def sha256(path: Path) -> str:
 
 
 def is_study_spec(path: Path, study: dict) -> bool:
-    """Recognize the exact study manifest or its pre-build hash template."""
+    """Recognize a study manifest or its retained pre-build hash templates."""
     if path.name == "verification-spec.json" or path.name.endswith(
         "-verification-spec.json"
     ):
@@ -34,7 +34,18 @@ def is_study_spec(path: Path, study: dict) -> bool:
         for side, value in template.get("binary_sha256", {}).items():
             if value is None:
                 template["binary_sha256"][side] = study["binary_sha256"].get(side)
-        return template == study
+        if template == study:
+            return True
+        if path.name.endswith(
+            "-original-verification-template.json"
+        ) and path.name in study.get("support_files", []):
+            # A repaired build can retain its original validation wrapper. Its
+            # source revisions, binary identities, and measurement plan must match.
+            provenance = {"logs", "support_files", "validation_profile"}
+            return {
+                key: value for key, value in template.items() if key not in provenance
+            } == {key: value for key, value in study.items() if key not in provenance}
+        return False
     return False
 
 
