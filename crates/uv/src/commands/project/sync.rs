@@ -441,7 +441,9 @@ pub(crate) async fn sync(
         for (name, member) in project.workspace().packages() {
             if roots.contains(name)
                 && member.pyproject_toml().has_scripts()
-                && !member.pyproject_toml().is_package(true)
+                && !member
+                    .pyproject_toml()
+                    .is_package(!project.workspace().required_members().contains_key(name))
             {
                 warn_user!(
                     "Skipping installation of entry points (`project.scripts`) for package `{}` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`",
