@@ -1619,6 +1619,7 @@ mod tests {
 
     #[cfg(unix)]
     use rustc_hash::FxHashMap;
+    use uv_fs::supports_fine_grained_accounting;
     use uv_normalize::PackageName;
     #[cfg(unix)]
     use uv_pypi_types::ResolutionMetadata;
@@ -1898,7 +1899,10 @@ mod tests {
         assert!(progress.is_empty());
         assert_eq!(summary.num_files, 0);
         assert_eq!(summary.num_dirs, 0);
-        assert_eq!(summary.fine_bytes, Some(0));
+        assert_eq!(
+            summary.fine_bytes,
+            supports_fine_grained_accounting().then_some(0)
+        );
     }
 
     #[test]
