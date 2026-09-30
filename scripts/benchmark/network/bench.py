@@ -190,7 +190,7 @@ class Fixtures:
                     "requires-python": headers.get("Requires-Python"),
                     "core-metadata": (
                         {"sha256": hashlib.sha256(metadata).hexdigest()}
-                        if pep658
+                        if pep658 and item.get("pep658", True)
                         else False
                     ),
                 }

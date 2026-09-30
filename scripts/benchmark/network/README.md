@@ -17,6 +17,8 @@ Use `--manifest scripts/benchmark/network/source-fixtures.json` before the
 subcommand to prepare or replay source distributions. These fixtures include
 static `PKG-INFO` metadata, so a `pip compile --no-binary :all:` workload
 can exercise archive transfer and extraction without requiring a build backend.
+An individual manifest entry can set `"pep658": false` to omit its advertised
+metadata while other distributions still offer sidecars.
 `python-fixtures.json` contains a pinned managed CPython archive. Manifest entries
 with `"kind": "raw"` are served as files without parsing package metadata.
 An entry's optional `paths` array adds exact aliases for clients that construct
@@ -30,6 +32,13 @@ to expose speculative requests that outlive the solution. Report this workload
 as synthetic; it measures request scheduling rather than a representative package
 installation. Replay waits for outstanding fixture handlers after timing ends,
 so cancelled responses are recorded and cannot overlap the next trial.
+`make_source_prefetch_fixtures.py --directory DIR` creates a source-only package
+with a large newer release and a wheel that constrains it to a small older release.
+The generated manifests cover both absent and advertised source sidecars.
+`source_graph_oracle.py` accepts selected filenames and retrieves their advertised
+metadata or complete archives concurrently after each package index. It verifies
+every response and reports the bound for that retrieval strategy. Use the same
+graph with explicit version pins to measure the cost of deferring useful prefetches.
 
 Compare optimized binaries built from an exact parent and candidate commit:
 

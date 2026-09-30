@@ -219,6 +219,20 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(fixtures.packages["example"][0]["core-metadata"], False)
         self.assertIn(b"/files/example-1.0.tar.gz#sha256=", fixtures.flat)
         self.assertNotIn(b"data-core-metadata", fixtures.flat)
+        manifest.write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": source.name,
+                        "sha256": bench.digest(source),
+                        "pep658": False,
+                    }
+                ]
+            )
+        )
+        fixtures = bench.Fixtures(manifest, directory, pep658=True)
+        self.assertEqual(fixtures.packages["example"][0]["core-metadata"], False)
+        self.assertNotIn(b"data-core-metadata", fixtures.flat)
 
     def test_flat_indexes(self) -> None:
         server = self.server({})
