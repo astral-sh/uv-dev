@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 4893,
+        "title": "Tracking issue: Stabilize `uv.lock` format",
+        "url": "https://github.com/astral-sh/uv/issues/4893",
+        "state": "closed",
+        "reason": "Closest historical analogue: it coordinated breaking uv.lock schema and content changes before version 1 was declared ready. It is completed version 1 work, not a duplicate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5861,
+        "title": "Rename `distribution` to `packages` in lockfile",
+        "url": "https://github.com/astral-sh/uv/pull/5861",
+        "state": "merged",
+        "reason": "A breaking schema change tracked by astral-sh/uv#4893. It explicitly invalidated existing lockfiles, providing migration precedent for a new major version."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22010,
+        "title": "Record workspace member default groups in lockfiles",
+        "url": "https://github.com/astral-sh/uv/pull/22010",
+        "state": "merged",
+        "reason": "This recent change established version 1 revision 5 as the current baseline and illustrates that compatible additions use revisions rather than a major-version transition."
+      }
+    ],
+    "search_scope": "Literal searches covered the exact title, “Lockfile v2,” uv.lock version 2, major-version bumps, and version/revision fields across open and closed issues and open, closed, and merged pull requests. Conceptual searches covered format/schema stabilization, incompatible changes, backwards compatibility, migration, and upgrades. No prior version 2 tracker or implementation was found. astral-sh/uv#15220 was inspected but ruled out because it concerns rewriting to a newer backwards-compatible version 1 revision."
+  },
+  "type": "enhancement",
+  "type_reason": "astral-sh/uv#22106 tracks planned format evolution from uv.lock major version 1 to 2. Source documentation defines major versions as incompatible and revisions as backwards-compatible. No incorrect current behavior is reported, and the completed version 1 tracker does not cover version 2.",
+  "summary": "No existing Lockfile v2 tracker or implementation was found. The closest precedent is astral-sh/uv#4893 and its breaking-schema change astral-sh/uv#5861; astral-sh/uv#22010 establishes version 1 revision 5 as the current baseline.",
+  "draft_response": "We’ll use astral-sh/uv#22106 as the canonical tracker for the breaking schema and migration work required for uv.lock version 2. The current implementation writes version 1, revision 5; revisions cover backwards-compatible additions, while a major version denotes incompatible format changes. astral-sh/uv#4893 is the completed tracker for stabilizing version 1, so it is useful precedent rather than a duplicate. As the scope is defined, please add the individual schema, compatibility and migration, and rollout tasks here."
+}
