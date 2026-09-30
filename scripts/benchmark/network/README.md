@@ -123,6 +123,16 @@ in the result. Each `/flat/NAME` endpoint serves a PEP 503 page for the manifest
 profiles may set exact-path response delays in `path_latency_ms`. A profile's
 `path_aliases` mapping can expose the same Simple API response through several
 index URLs while retaining each requested path in the trace.
+
+`concurrency_sweep.py` compares download limits with one pinned source and binary.
+Give it a manifest containing one wheel per selected package, a concrete Python
+executable, and either the `resolve` or `install` workload. Each setting is paired
+with a fresh reference run, and setting order is shuffled from a recorded seed.
+The results retain byte counts, request traces, output or installed-tree
+equivalence, and an optimistic network bound for the selected protocol strategy.
+These are exploratory configuration comparisons; selecting a promising limit
+requires fresh confirmation and does not qualify a source optimization.
+
 Set `head_ranges` to `false` to model a server that supports ranged `GET` but
 does not advertise that support in `HEAD` responses.
 Set `artifact_etag` to `false` or `"weak"` to omit strong artifact entity tags.
