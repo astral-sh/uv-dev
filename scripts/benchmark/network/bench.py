@@ -273,19 +273,24 @@ class Server(ThreadingHTTPServer):
             self.active -= 1
             self.events.append(event)
 
-    def reset(self) -> None:
+    def wait_idle(self) -> None:
+        """Finish recording responses after a timed client has disconnected."""
         deadline = time.monotonic() + 30
         while True:
             with self.lock:
                 if not self.active:
-                    self.attempts.clear()
-                    self.events.clear()
-                    self.limiter = Limiter(self.profile.get("bytes_per_second", 0))
-                    self.epoch = time.perf_counter()
                     return
             if time.monotonic() >= deadline:
                 raise TimeoutError("Fixture responses did not finish")
             time.sleep(0.01)
+
+    def reset(self) -> None:
+        self.wait_idle()
+        with self.lock:
+            self.attempts.clear()
+            self.events.clear()
+            self.limiter = Limiter(self.profile.get("bytes_per_second", 0))
+            self.epoch = time.perf_counter()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -299,6 +304,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         pass
+
+    def handle(self) -> None:
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            # A measured client may cancel speculative requests or close an idle connection.
+            pass
 
     def do_HEAD(self) -> None:
         self.respond(head=True)
@@ -871,6 +883,7 @@ def run_one(
             if proxy:
                 proxy.stop()
             server.shutdown()
+            server.wait_idle()
             server.server_close()
             thread.join()
         output = normalize_output(result.stdout, context)

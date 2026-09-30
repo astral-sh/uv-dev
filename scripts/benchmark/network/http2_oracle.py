@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -11,15 +12,19 @@ import threading
 import time
 from pathlib import Path
 
-from bench import (
-    HERE,
-    Fixtures,
-    Http2Proxy,
-    Server,
-    digest,
-    netem_profile,
-    network_floor,
+spec = importlib.util.spec_from_file_location(
+    "network_bench", Path(__file__).with_name("bench.py")
 )
+assert spec is not None and spec.loader is not None
+bench = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bench)
+HERE = bench.HERE
+Fixtures = bench.Fixtures
+Http2Proxy = bench.Http2Proxy
+Server = bench.Server
+digest = bench.digest
+netem_profile = bench.netem_profile
+network_floor = bench.network_floor
 
 
 def main() -> None:
@@ -101,6 +106,7 @@ def main() -> None:
             if proxy:
                 proxy.stop()
             server.shutdown()
+            server.wait_idle()
             server.server_close()
             thread.join()
         required_bytes = (

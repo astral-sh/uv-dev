@@ -129,6 +129,21 @@ class ReplayTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_cancelled_request_is_recorded_before_next_trial(self) -> None:
+        server = self.server({"latency_ms": 150})
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        connection.request("GET", "/files/example.whl")
+        deadline = time.monotonic() + 2
+        while not server.active:
+            if time.monotonic() >= deadline:
+                self.fail("Fixture request did not start")
+            time.sleep(0.005)
+        connection.close()
+        server.wait_idle()
+        self.assertEqual(server.active, 0)
+        self.assertEqual(len(server.events), 1)
+        self.assertEqual(server.events[0]["path"], "/files/example.whl")
+
     def test_interruption_then_resume(self) -> None:
         server = self.server({"cut_after_bytes": 16384, "cut_count": 1})
         with self.assertRaises(http.client.IncompleteRead) as raised:
