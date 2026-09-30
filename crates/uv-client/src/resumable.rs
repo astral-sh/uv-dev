@@ -16,7 +16,7 @@ use uv_redacted::DisplaySafeUrl;
 
 use crate::{RedirectClientWithMiddleware, RetryState};
 
-/// Read a complete response, resuming an interrupted body when the server supplies a strong ETag.
+/// Read a complete response, resuming an interrupted body when the server supplies a strong `ETag`.
 ///
 /// The initial request must use identity encoding and have its middleware retries recorded in
 /// `retry_state`. Continuations consume the same retry budget. A resumed response must describe the
@@ -170,7 +170,7 @@ impl Representation {
 
     fn range_end(&self, response: &Response, offset: u64) -> Option<u64> {
         if response.status() != StatusCode::PARTIAL_CONTENT
-            || response.headers().get(ETAG)? != &self.etag
+            || response.headers().get(ETAG)? != self.etag
             || !identity_encoded(response)
         {
             return None;
