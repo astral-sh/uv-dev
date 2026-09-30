@@ -288,21 +288,27 @@ impl Osv {
 
         loop {
             let mut next_pending = Vec::new();
-            let mut responses =
-                futures::stream::iter(pending.chunks(OSV_QUERY_BATCH_SIZE).enumerate())
-                    .map(async |(index, pending_batch)| {
-                        let response = self.query_page(&url, pending_batch).await?;
-                        Ok::<_, Error>((index, pending_batch, response))
-                    })
-                    .buffer_unordered(self.concurrency.downloads)
-                    .try_collect::<Vec<_>>()
-                    .await?;
+            let batches = (0..pending.len())
+                .step_by(OSV_QUERY_BATCH_SIZE)
+                .map(|start| start..(start + OSV_QUERY_BATCH_SIZE).min(pending.len()));
+            let mut responses = futures::stream::iter(batches)
+                .map(|range| {
+                    let pending = &pending;
+                    let url = &url;
+                    async move {
+                        let response = self.query_page(url, &pending[range.clone()]).await?;
+                        Ok::<_, Error>((range, response))
+                    }
+                })
+                .buffer_unordered(self.concurrency.downloads)
+                .try_collect::<Vec<_>>()
+                .await?;
             // A slow response must not hold an available request slot. Apply the completed
             // batches in input order so findings and the next pagination round are deterministic.
-            responses.sort_unstable_by_key(|(index, _, _)| *index);
-            for (_, pending_batch, batch_response) in responses {
+            responses.sort_unstable_by_key(|(range, _)| range.start);
+            for (range, batch_response) in responses {
                 for ((dep, _), batch_result) in
-                    pending_batch.iter().zip(batch_response.results.iter())
+                    pending[range].iter().zip(batch_response.results.iter())
                 {
                     let ids = result_map.entry(dep).or_default();
                     ids.extend(
