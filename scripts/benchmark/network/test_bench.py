@@ -41,6 +41,7 @@ class ReplayTests(unittest.TestCase):
         self.path.write_bytes(self.body)
         self.fixtures = SimpleNamespace(
             files={self.path.name: self.path},
+            routes={"/releases/example.tar.gz": self.path},
             metadata={},
             simple={},
             flat=b"<!doctype html><a href='/files/example.whl'>example</a>",
@@ -85,6 +86,23 @@ class ReplayTests(unittest.TestCase):
             with self.subTest(header=header):
                 self.assertEqual(self.get(server, header), (206, expected))
         self.assertEqual(self.get(server, "bytes=999999-"), (416, b""))
+
+    def test_artifact_alias_supports_resumption(self) -> None:
+        server = self.server({})
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        try:
+            connection.request(
+                "GET", "/releases/example.tar.gz", headers={"Range": "bytes=42-99"}
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 206)
+            self.assertEqual(response.read(), self.body[42:100])
+            self.assertEqual(
+                response.getheader("ETag"),
+                f'"{hashlib.sha256(self.body).hexdigest()}"',
+            )
+        finally:
+            connection.close()
 
     def test_conditional_requests_precede_ranges(self) -> None:
         server = self.server({})

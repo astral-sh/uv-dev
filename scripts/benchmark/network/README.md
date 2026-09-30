@@ -19,6 +19,9 @@ static `PKG-INFO` metadata, so a `pip compile --no-binary :all:` workload
 can exercise archive transfer and extraction without requiring a build backend.
 `python-fixtures.json` contains a pinned managed CPython archive. Manifest entries
 with `"kind": "raw"` are served as files without parsing package metadata.
+An entry's optional `paths` array adds exact aliases for clients that construct
+release URLs. `tool-fixtures.json` uses this to replay a pinned Ruff release
+through `UV_ASTRAL_MIRROR_URL`.
 `make_scheduling_fixtures.py --directory DIR --manifest MANIFEST --profiles PROFILES`
 creates deterministic wheels for a small synthetic backtracking graph. Requiring
 `uv-bench-choice` and `uv-bench-pin==1.0` rejects releases 30 through 16 and selects

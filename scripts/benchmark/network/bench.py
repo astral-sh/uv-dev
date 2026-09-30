@@ -149,6 +149,7 @@ def distribution_metadata(path: Path) -> bytes:
 class Fixtures:
     def __init__(self, manifest: Path, directory: Path, pep658: bool) -> None:
         self.files: dict[str, Path] = {}
+        self.routes: dict[str, Path] = {}
         self.metadata: dict[str, bytes] = {}
         self.hashes: dict[str, str] = {}
         self.packages: dict[str, list[dict]] = {}
@@ -158,6 +159,10 @@ class Fixtures:
                 raise ValueError(f"Fixture hash mismatch: {path}")
             self.files[path.name] = path
             self.hashes[path.name] = item["sha256"]
+            for route in item.get("paths", []):
+                if not route.startswith("/") or route in self.routes:
+                    raise ValueError(f"Invalid or duplicate fixture path: {route}")
+                self.routes[route] = path
             if item.get("kind") == "raw":
                 continue
             metadata = distribution_metadata(path)
@@ -352,6 +357,9 @@ class Handler(BaseHTTPRequestHandler):
                     value := self.server.fixtures.files.get(parts[1])
                 ) is not None:
                     body, status = value, 200
+                content_type = "application/octet-stream"
+            elif (value := self.server.fixtures.routes.get(path)) is not None:
+                body, status = value, 200
                 content_type = "application/octet-stream"
             is_artifact = isinstance(body, Path)
             if profile.get("fail_status") and event["attempt"] <= profile.get(
