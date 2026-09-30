@@ -2119,63 +2119,6 @@ mod tests {
         Ok(())
     }
 
-    async fn start_test_server(username: &'static str, password: &'static str) -> MockServer {
-        let server = MockServer::start().await;
-
-        Mock::given(method("GET"))
-            .and(basic_auth(username, password))
-            .respond_with(ResponseTemplate::new(200))
-            .mount(&server)
-            .await;
-
-        Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(401))
-            .mount(&server)
-            .await;
-
-        server
-    }
-
-    fn no_index_client(flat_indexes: Vec<Index>) -> Result<RegistryClient, Error> {
-        Ok(
-            RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
-                .index_locations(IndexLocations::new(vec![], flat_indexes, true))
-                .build()?,
-        )
-    }
-
-    async fn assert_no_index(
-        client: &RegistryClient,
-        package: &str,
-        index: Option<IndexMetadataRef<'_>>,
-    ) -> Result<(), Error> {
-        let error = client
-            .simple_detail(
-                &PackageName::from_str(package)?,
-                index,
-                &IndexCapabilities::default(),
-                &Semaphore::new(1),
-            )
-            .await
-            .expect_err("index lookup should be disabled");
-
-        assert_matches!(
-            error.kind(),
-            crate::ErrorKind::NoIndex(error_package) if error_package == package
-        );
-        Ok(())
-    }
-
-    async fn assert_no_requests(server: &MockServer) {
-        assert!(
-            server
-                .received_requests()
-                .await
-                .expect("request recording should be enabled")
-                .is_empty()
-        );
-    }
-
     #[tokio::test]
     async fn concurrent_indexes_refill_slots_in_priority_order() -> Result<(), Error> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
