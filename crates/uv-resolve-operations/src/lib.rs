@@ -16,6 +16,7 @@ use uv_configuration::{
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
+use uv_distribution_filename::DistExtension;
 use uv_distribution_types::{
     Diagnostic, NameRequirementSpecification, Requirement, RequirementScope, RequirementSource,
     ResolutionDiagnostic, ResolutionRecorder, UnresolvedRequirement,
@@ -26,7 +27,7 @@ use uv_installer::SitePackages;
 use uv_normalize::PackageName;
 use uv_pep508::{MarkerEnvironment, RequirementOrigin};
 use uv_platform_tags::Tags;
-use uv_pypi_types::Conflicts;
+use uv_pypi_types::{Conflicts, ParsedUrl};
 use uv_requirements::{
     GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
     RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
@@ -49,6 +50,27 @@ pub mod reporters;
 
 pub use error::{Error, ExtrasWithoutSourceError};
 pub use markers::{resolution_markers, resolution_tags};
+
+/// Whether a requirement names a wheel whose location is already known.
+pub fn is_direct_wheel(requirement: &UnresolvedRequirement) -> bool {
+    match requirement {
+        UnresolvedRequirement::Named(requirement) => matches!(
+            requirement.source,
+            RequirementSource::Url {
+                ext: DistExtension::Wheel,
+                ..
+            } | RequirementSource::Path {
+                ext: DistExtension::Wheel,
+                ..
+            }
+        ),
+        UnresolvedRequirement::Unnamed(requirement) => match &requirement.url.parsed_url {
+            ParsedUrl::Archive(archive) => archive.ext == DistExtension::Wheel,
+            ParsedUrl::Path(path) => path.ext == DistExtension::Wheel,
+            ParsedUrl::Directory(_) | ParsedUrl::GitDirectory(_) | ParsedUrl::GitPath(_) => false,
+        },
+    }
+}
 
 /// Consolidate the requirements for an installation.
 pub async fn read_requirements(
