@@ -1,5 +1,6 @@
 mod cached_client;
 mod connection_pool;
+mod core_metadata_cache;
 mod http_util;
 mod proxy;
 mod remote_metadata;
