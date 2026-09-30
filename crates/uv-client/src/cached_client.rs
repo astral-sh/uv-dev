@@ -208,6 +208,7 @@ impl From<Freshness> for CacheControl {
 pub struct CachedClient {
     client: BaseClient,
     complete_partial_payloads: bool,
+    use_redirect_handler: bool,
 }
 
 impl CachedClient {
@@ -215,6 +216,7 @@ impl CachedClient {
         Self {
             client,
             complete_partial_payloads: false,
+            use_redirect_handler: true,
         }
     }
 
@@ -225,8 +227,31 @@ impl CachedClient {
     /// not for caching an arbitrary fragment of an HTTP response.
     pub(crate) fn with_complete_partial_payloads(&self) -> Self {
         Self {
-            client: self.client.clone(),
             complete_partial_payloads: true,
+            ..self.clone()
+        }
+    }
+
+    /// Skip uv's manual redirect handling.
+    ///
+    /// The underlying client must also disable reqwest's built-in redirect handling when the
+    /// caller requires the original response.
+    pub(crate) fn without_redirect_handling(&self) -> Self {
+        Self {
+            use_redirect_handler: false,
+            ..self.clone()
+        }
+    }
+
+    async fn execute(&self, req: Request) -> reqwest_middleware::Result<Response> {
+        if self.use_redirect_handler {
+            self.client.execute(req).await
+        } else {
+            self.client
+                .for_host(&DisplaySafeUrl::from_url(req.url().clone()))
+                .raw_client()
+                .execute(req)
+                .await
         }
     }
 
@@ -614,7 +639,6 @@ impl CachedClient {
         debug!("Sending revalidation request for: {url}");
         let start = Instant::now();
         let mut response = self
-            .client
             .execute(req)
             .instrument(info_span!("revalidation_request", url = %url))
             .await
@@ -688,7 +712,7 @@ impl CachedClient {
         debug!("Sending fresh {} request for: {}", req.method(), url);
         let cache_policy_builder = CachePolicyBuilder::new(&req);
         let start = Instant::now();
-        let mut response = self.client.execute(req).await.map_err(|err| {
+        let mut response = self.execute(req).await.map_err(|err| {
             Error::from_reqwest_middleware(url.clone(), err, start, self.certificate_source())
         })?;
         trace!(

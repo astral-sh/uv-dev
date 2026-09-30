@@ -1307,7 +1307,12 @@ impl RegistryClient {
                 };
 
                 let cached_client = if initial_range.is_some() {
-                    self.cached_client().with_complete_partial_payloads()
+                    // The registry client disables reqwest's built-in redirects. As with the
+                    // range reader's later requests, a redirect here must fall back to streaming
+                    // from the original URL: signed redirect targets may forbid Range headers.
+                    self.cached_client()
+                        .with_complete_partial_payloads()
+                        .without_redirect_handling()
                 } else {
                     self.cached_client().clone()
                 };

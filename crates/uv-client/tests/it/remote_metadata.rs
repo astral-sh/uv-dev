@@ -696,16 +696,29 @@ async fn remote_metadata_rejects_overflowing_zip64_size() -> Result<()> {
 /// header.
 #[tokio::test]
 async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
+    remote_metadata_redirect_range_forbidden_with_size(false).await?;
+    remote_metadata_redirect_range_forbidden_with_size(true).await
+}
+
+async fn remote_metadata_redirect_range_forbidden_with_size(known_size: bool) -> Result<()> {
     let source_server = MockServer::start().await;
     let target_server = MockServer::start().await;
-    let wheel = wheel()?;
+    let mut wheel = wheel()?;
+    // A ZIP comment makes the archive large enough to select the known-size range path while
+    // keeping the same valid wheel entries.
+    assert_eq!(&wheel[wheel.len() - 22..wheel.len() - 18], b"PK\x05\x06");
+    let end = wheel.len();
+    wheel[end - 2..].copy_from_slice(&16_384_u16.to_le_bytes());
+    wheel.resize(end + 16_384, 0);
+    let size = known_size.then_some(wheel.len() as u64);
+    let head_requests = u64::from(!known_size);
     let target = format!("{}/wheel", target_server.uri());
     // The initial metadata probe should authenticate to the source and receive a redirect.
     Mock::given(method("HEAD"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
         .respond_with(ResponseTemplate::new(303).insert_header(LOCATION, target.clone()))
-        .expect(1)
+        .expect(head_requests)
         .mount(&source_server)
         .await;
     // The range reader should retry the source with an authenticated range request.
@@ -738,7 +751,7 @@ async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
                 .insert_header(ACCEPT_RANGES, "bytes")
                 .insert_header(CONTENT_LENGTH, wheel.len().to_string()),
         )
-        .expect(1)
+        .expect(head_requests)
         .mount(&target_server)
         .await;
     // The range request should not be sent to the redirect target.
@@ -762,7 +775,7 @@ async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
         .mount(&target_server)
         .await;
 
-    assert_wheel_metadata_readable(&source_server).await
+    assert_wheel_metadata_readable_with_size(&source_server, size).await
 }
 
 #[derive(Debug)]
@@ -788,6 +801,13 @@ fn wheel() -> Result<Vec<u8>> {
 
 /// Reads wheel metadata through the authenticated source URL shared by each redirect scenario.
 async fn assert_wheel_metadata_readable(source_server: &MockServer) -> Result<()> {
+    assert_wheel_metadata_readable_with_size(source_server, None).await
+}
+
+async fn assert_wheel_metadata_readable_with_size(
+    source_server: &MockServer,
+    size: Option<u64>,
+) -> Result<()> {
     let cache = Cache::temp()?.init().await?;
     let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
     let url = authenticated_url(
@@ -800,7 +820,7 @@ async fn assert_wheel_metadata_readable(source_server: &MockServer) -> Result<()
         filename: WheelFilename::from_str("ok-1.0.0-py3-none-any.whl")?,
         location: Box::new(DisplaySafeUrl::parse(&url)?),
         url: VerbatimUrl::from_str(&url)?,
-        size: None,
+        size,
     });
     let metadata = client
         .wheel_metadata(
