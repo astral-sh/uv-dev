@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 18388,
+        "title": "No warning printed about entrypoint installation being skipped for workspace members",
+        "url": "https://github.com/astral-sh/uv/issues/18388",
+        "state": "closed",
+        "reason": "astral-sh/uv#18388 is the direct historical counterpart: it established that non-root members should warn when their scripts are genuinely skipped."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18389,
+        "title": "Warn when workspace member scripts are skipped due to missing build system",
+        "url": "https://github.com/astral-sh/uv/pull/18389",
+        "state": "merged",
+        "reason": "astral-sh/uv#18389 introduced the current warning, but its predicate always requires explicit package mode or a build system, while installation treats a required workspace member as a package."
+      },
+      {
+        "kind": "issue",
+        "number": 14891,
+        "title": "Install entry points for workspace members",
+        "url": "https://github.com/astral-sh/uv/issues/14891",
+        "state": "closed",
+        "reason": "astral-sh/uv#14891 confirms the adjacent behavior that making a workspace member a root dependency causes its entry points to be installed; it did not cover the contradictory warning."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using the complete warning, reduced fragments such as `project.scripts`, `not packaged`, and `Skipping installation of entry points`, exact `tool.uv.package` and `tools.uv` identifiers, and conceptual workspace-member, root-dependency, required-member, virtual-package, and entry-point terminology. Inspected candidate comments, references, and the chain from astral-sh/uv#18388 to astral-sh/uv#18389, plus astral-sh/uv#14891. astral-sh/uv#7428 was ruled out because it requests richer script parsing and warning content rather than tracking this false-positive predicate. astral-sh/uv#11583 concerns an unreproduced wheel import failure, not a warning emitted while scripts are successfully installed."
+  },
+  "type": "bug",
+  "type_reason": "The warning contradicts the completed installation. Source inspection confirms that workspace sources mark the child as a required member and installation evaluates it with `is_package(false)`, while the warning evaluates the same member with `is_package(true)`. With the posted plural `[tools.uv]` table ignored, those checks disagree. Correctly spelling `[tool.uv]` should suppress the warning, but the warning remains false for the exact posted configuration. No existing open issue or pull request tracks this mismatch.",
+  "summary": "The false positive originates from the workspace-member warning added by astral-sh/uv#18389 for astral-sh/uv#18388 interacting with required-member installation behavior illustrated by astral-sh/uv#14891. The historical reports do not already track this bug.",
+  "draft_response": "Thanks for the report. One detail in the child snippet is that the table is written as `[tools.uv]`; the supported table is `[tool.uv]`. If the plural form is present in the actual file, `package = true` is not being applied, and correcting the table name should remove this warning.\n\nThere is still a warning bug in the exact setup shown. Because the root project depends on `ccaas-data-tables` through a workspace source, uv treats that member as required and installs it, which is why the script appears in `.venv/bin`. The warning check does not account for that required-member behavior and can incorrectly say the entry points were skipped. We should align the warning with the installation decision and cover this case with a regression test.\n\nIf `[tools.uv]` was only a typo in the issue and the actual file already uses `[tool.uv]`, could you confirm that? That would indicate a different path, since an explicit `tool.uv.package = true` should make the current warning check false."
+}
