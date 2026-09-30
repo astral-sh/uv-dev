@@ -18,7 +18,7 @@ use reqwest_retry::policies::ExponentialBackoff;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufWriter, ReadBuf};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
 use tracing::{debug, instrument};
@@ -1280,60 +1280,49 @@ impl ManagedPythonDownload {
             };
             let target_cache_file = python_builds_dir.join(format!("{hash_prefix}-{filename}"));
 
-            // Download the archive to the cache, or return a reader if we have it in cache.
-            // TODO(konsti): We should "tee" the write so we can do the download-to-cache and unpacking
-            // in one step.
-            let (reader, size): (Box<dyn AsyncRead + Unpin + '_>, Option<u64>) =
-                match fs_err::tokio::File::open(&target_cache_file).await {
-                    Ok(file) => {
-                        debug!(
-                            "Extracting existing `{}`",
-                            target_cache_file.simplified_display()
-                        );
-                        let size = file.metadata().await?.len();
-                        let reader = Box::new(tokio::io::BufReader::new(file));
-                        (reader, Some(size))
+            match fs_err::tokio::File::open(&target_cache_file).await {
+                Ok(file) => {
+                    debug!(
+                        "Extracting existing `{}`",
+                        target_cache_file.simplified_display()
+                    );
+                    let size = file.metadata().await?.len();
+                    self.extract_reader(
+                        tokio::io::BufReader::new(file),
+                        temp_dir,
+                        &filename,
+                        ext,
+                        Some(size),
+                        reporter,
+                        Direction::Extract,
+                    )
+                    .await?
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    // Point the user to which file is missing where and where to download it
+                    if client.connectivity().is_offline() {
+                        return Err(Error::OfflinePythonMissing {
+                            file: Box::new(self.key().clone()),
+                            url: Box::new(url.clone()),
+                            python_builds_dir,
+                        });
                     }
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                        // Point the user to which file is missing where and where to download it
-                        if client.connectivity().is_offline() {
-                            return Err(Error::OfflinePythonMissing {
-                                file: Box::new(self.key().clone()),
-                                url: Box::new(url.clone()),
-                                python_builds_dir,
-                            });
-                        }
 
-                        self.download_archive(
-                            &url,
-                            client,
-                            retry_state,
-                            reporter,
-                            &python_builds_dir,
-                            &target_cache_file,
-                        )
-                        .await?;
-
-                        debug!("Extracting `{}`", target_cache_file.simplified_display());
-                        let file = fs_err::tokio::File::open(&target_cache_file).await?;
-                        let size = file.metadata().await?.len();
-                        let reader = Box::new(tokio::io::BufReader::new(file));
-                        (reader, Some(size))
-                    }
-                    Err(err) => return Err(err.into()),
-                };
-
-            // Extract the downloaded archive into a temporary directory.
-            self.extract_reader(
-                reader,
-                temp_dir,
-                &filename,
-                ext,
-                size,
-                reporter,
-                Direction::Extract,
-            )
-            .await?
+                    self.download_and_extract_archive(
+                        &url,
+                        client,
+                        retry_state,
+                        reporter,
+                        &python_builds_dir,
+                        &target_cache_file,
+                        temp_dir,
+                        &filename,
+                        ext,
+                    )
+                    .await?
+                }
+                Err(err) => return Err(err.into()),
+            }
         } else {
             // Avoid overlong log lines
             debug!("Downloading {url}");
@@ -1423,8 +1412,8 @@ impl ManagedPythonDownload {
         Ok(DownloadResult::Fetched(path))
     }
 
-    /// Download the managed Python archive into the cache directory.
-    async fn download_archive(
+    /// Download a managed Python archive into the cache while extracting it.
+    async fn download_and_extract_archive(
         &self,
         url: &DisplaySafeUrl,
         client: &BaseClient,
@@ -1432,7 +1421,10 @@ impl ManagedPythonDownload {
         reporter: Option<&dyn Reporter>,
         python_builds_dir: &Path,
         target_cache_file: &Path,
-    ) -> Result<(), Error> {
+        target: TempDir,
+        filename: &String,
+        ext: SourceDistExtension,
+    ) -> Result<TempDir, Error> {
         debug!(
             "Downloading {} to `{}`",
             url,
@@ -1442,33 +1434,43 @@ impl ManagedPythonDownload {
         let (mut reader, size) = read_url(url, client, retry_state).await?;
         let temp_dir = tempfile::tempdir_in(python_builds_dir)?;
         let temp_file = temp_dir.path().join("download");
+        let mut archive_writer = BufWriter::new(fs_err::tokio::File::create(&temp_file).await?);
+        let (extract_reader, mut extract_writer) = tokio::io::duplex(64 * 1024);
 
-        // Download to a temporary file. We verify the hash when unpacking the file.
-        {
-            let mut archive_writer = BufWriter::new(fs_err::tokio::File::create(&temp_file).await?);
-
-            // Download with or without progress bar.
-            if let Some(reporter) = reporter {
-                let key = reporter.on_request_start(Direction::Download, &self.key, size);
-                tokio::io::copy(
-                    &mut ProgressReader::new(reader, key, reporter),
-                    &mut archive_writer,
-                )
-                .await?;
-                reporter.on_request_complete(Direction::Download, key);
-            } else {
-                tokio::io::copy(&mut reader, &mut archive_writer).await?;
+        // The bounded pipe overlaps extraction with the download without retaining the archive in
+        // memory. Its writer must close at EOF so the extractor can finish hashing the full body.
+        let download = async move {
+            let mut buffer = vec![0; 64 * 1024];
+            loop {
+                let len = reader.read(&mut buffer).await?;
+                if len == 0 {
+                    break;
+                }
+                archive_writer.write_all(&buffer[..len]).await?;
+                extract_writer.write_all(&buffer[..len]).await?;
             }
-
             archive_writer.flush().await?;
-        }
-        // Move the completed file into place, invalidating the `File` instance.
+            extract_writer.shutdown().await?;
+            Ok::<(), Error>(())
+        };
+        let extract = self.extract_reader(
+            extract_reader,
+            target,
+            filename,
+            ext,
+            size,
+            reporter,
+            Direction::Download,
+        );
+        let ((), target) = tokio::try_join!(download, extract)?;
+
+        // Only publish the complete archive after extraction verifies its hash.
         match rename_with_retry(&temp_file, target_cache_file).await {
             Ok(()) => {}
             Err(_) if target_cache_file.is_file() => {}
             Err(err) => return Err(err.into()),
         }
-        Ok(())
+        Ok(target)
     }
 
     /// Extract a Python interpreter archive into a (temporary) directory, either from a file or
@@ -1939,6 +1941,151 @@ mod tests {
             Err(Error::NetworkErrorWithRetries { retries: 1, .. })
         );
         assert_eq!(requests.len(), 2);
+        Ok(())
+    }
+
+    const TEST_PYTHON_ARCHIVE: &[u8] =
+        include_bytes!("../../../test/links/basic_package-0.1.0.tar.gz");
+
+    fn archive_digest(bytes: &[u8]) -> Digest<32> {
+        let mut hasher = Hasher::from(HashAlgorithm::Sha256);
+        hasher.update(bytes);
+        let HashDigest::Sha256(digest) = HashDigest::from(hasher) else {
+            unreachable!()
+        };
+        digest
+    }
+
+    async fn cache_test_python_archive(
+        bytes: Vec<u8>,
+        expected: Digest<32>,
+        target: TempDir,
+        cache_dir: &Path,
+        truncated: bool,
+        wait_for_extraction: bool,
+    ) -> anyhow::Result<Result<TempDir, Error>> {
+        let _preview = uv_preview::test::with_features(&[]);
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url =
+            DisplaySafeUrl::parse(&format!("http://{}/archive.tar.gz", listener.local_addr()?))?;
+        let cache_file = cache_dir.join("archive.tar.gz");
+        let server_cache_file = cache_file.clone();
+        let extracted_file = target.path().join("basic_package-0.1.0/PKG-INFO");
+        let server = async move {
+            let (mut stream, _) = listener.accept().await?;
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(stream.read_u8().await?);
+                anyhow::ensure!(request.len() < 16384, "Request headers too large");
+            }
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                bytes.len() + usize::from(truncated)
+            );
+            stream.write_all(headers.as_bytes()).await?;
+            if wait_for_extraction {
+                stream
+                    .write_all(&bytes[..TEST_PYTHON_ARCHIVE.len()])
+                    .await?;
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while !extracted_file.is_file() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await?;
+                anyhow::ensure!(
+                    !server_cache_file.exists(),
+                    "Incomplete cache was published"
+                );
+                stream
+                    .write_all(&bytes[TEST_PYTHON_ARCHIVE.len()..])
+                    .await?;
+            } else {
+                stream.write_all(&bytes).await?;
+            }
+            stream.shutdown().await?;
+            Ok::<(), anyhow::Error>(())
+        };
+        let mut download = cpython_download_for_url("https://example.org/archive.tar.gz");
+        download.sha256 = Some(expected);
+        let client = BaseClientBuilder::default().retries(0).build()?;
+        let mut retry_state = RetryState::start(client.retry_policy(), url.clone());
+        let filename = "archive.tar.gz".to_owned();
+        let extract = download.download_and_extract_archive(
+            &url,
+            &client,
+            &mut retry_state,
+            None,
+            cache_dir,
+            &cache_file,
+            target,
+            &filename,
+            SourceDistExtension::TarGz,
+        );
+        let (result, server) = tokio::join!(extract, server);
+        server?;
+        Ok(result)
+    }
+
+    #[tokio::test]
+    async fn python_cache_extracts_before_download_completes() -> anyhow::Result<()> {
+        let cache = tempfile::tempdir()?;
+        let mut bytes = TEST_PYTHON_ARCHIVE.to_vec();
+        bytes.extend_from_slice(&[0; 256 * 1024]);
+        let target = cache_test_python_archive(
+            bytes.clone(),
+            archive_digest(&bytes),
+            tempfile::tempdir()?,
+            cache.path(),
+            false,
+            true,
+        )
+        .await??;
+        assert!(target.path().join("basic_package-0.1.0/PKG-INFO").is_file());
+        assert_eq!(fs_err::read(cache.path().join("archive.tar.gz"))?, bytes);
+        assert_eq!(fs_err::read_dir(cache.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn python_cache_rejects_hash_mismatch_in_archive_tail() -> anyhow::Result<()> {
+        let cache = tempfile::tempdir()?;
+        let target = tempfile::tempdir()?;
+        let target_path = target.path().to_owned();
+        let mut bytes = TEST_PYTHON_ARCHIVE.to_vec();
+        bytes.extend_from_slice(&[0; 256 * 1024]);
+        let result = cache_test_python_archive(
+            bytes,
+            archive_digest(TEST_PYTHON_ARCHIVE),
+            target,
+            cache.path(),
+            false,
+            false,
+        )
+        .await?;
+        assert_matches!(result, Err(Error::HashMismatch { .. }));
+        assert_eq!(fs_err::read_dir(cache.path())?.count(), 0);
+        assert!(!target_path.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn python_cache_discards_incomplete_download() -> anyhow::Result<()> {
+        let cache = tempfile::tempdir()?;
+        let target = tempfile::tempdir()?;
+        let target_path = target.path().to_owned();
+        let result = cache_test_python_archive(
+            TEST_PYTHON_ARCHIVE.to_vec(),
+            archive_digest(TEST_PYTHON_ARCHIVE),
+            target,
+            cache.path(),
+            true,
+            false,
+        )
+        .await?;
+        assert!(result.is_err());
+        assert_eq!(fs_err::read_dir(cache.path())?.count(), 0);
+        assert!(!target_path.exists());
         Ok(())
     }
 
@@ -2489,7 +2636,7 @@ mod tests {
     }
 
     /// A network IO error (e.g. connection reset mid-download) surfaces as `Error::Io` from
-    /// `download_archive`. It should trigger a fallback because a different mirror may succeed.
+    /// `download_and_extract_archive`. It should trigger a fallback because a different mirror may succeed.
     #[test]
     fn test_should_try_next_url_io_error_network() {
         let err = Error::Io(io::Error::new(io::ErrorKind::ConnectionReset, ""));
