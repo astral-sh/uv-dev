@@ -15,9 +15,13 @@ use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, MetadataRangeRequest, RegistryClientBuilder};
 use uv_distribution_filename::WheelFilename;
-use uv_distribution_types::{BuiltDist, DirectUrlBuiltDist, IndexCapabilities};
+use uv_distribution_types::{
+    BuiltDist, DirectUrlBuiltDist, File, FileLocation, IndexCapabilities, IndexUrl,
+    RegistryBuiltDist, RegistryBuiltWheel,
+};
 use uv_git::GitResolver;
 use uv_pep508::VerbatimUrl;
+use uv_pypi_types::HashDigests;
 use uv_redacted::DisplaySafeUrl;
 
 #[tokio::test]
@@ -244,6 +248,96 @@ async fn remote_metadata_ignored_initial_range() -> Result<()> {
             }
         }
         server.verify().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_metadata_range_support_follows_artifact_origin() -> Result<()> {
+    let unsupported = MockServer::start().await;
+    let supported = MockServer::start().await;
+    let first_wheel = wheel()?;
+    Mock::given(method("HEAD"))
+        .and(path("/artifact"))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header(CONTENT_LENGTH, first_wheel.len().to_string()),
+        )
+        .expect(1)
+        .mount(&unsupported)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/artifact"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(first_wheel, "application/octet-stream"),
+        )
+        .expect(1)
+        .mount(&unsupported)
+        .await;
+
+    let mut writer = ZipFileWriter::new(Vec::new());
+    writer
+        .write_entry_whole(
+            ZipEntryBuilder::new("ok-2.0.0.dist-info/METADATA".into(), Compression::Stored),
+            b"Metadata-Version: 2.1\nName: ok\nVersion: 2.0.0\n",
+        )
+        .await?;
+    let second_wheel = writer.close().await?;
+    Mock::given(method("HEAD"))
+        .and(path("/artifact"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header(ACCEPT_RANGES, "bytes")
+                .insert_header(CONTENT_LENGTH, second_wheel.len().to_string()),
+        )
+        .expect(1)
+        .mount(&supported)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/artifact"))
+        .and(header_exists(RANGE.as_str()))
+        .respond_with(move |request: &Request| wheel_range_response(request, &second_wheel))
+        .expect(1)
+        .mount(&supported)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/artifact"))
+        .and(header_missing(RANGE))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .named("unnecessary streaming fallback on the other artifact host")
+        .mount(&supported)
+        .await;
+
+    let cache = Cache::temp()?.init().await?;
+    let client =
+        RegistryClientBuilder::new(BaseClientBuilder::default().retries(0), cache).build()?;
+    let capabilities = IndexCapabilities::default();
+    let index = IndexUrl::parse("https://example.com/simple", None)?;
+    for (server, version) in [(&unsupported, "1.0.0"), (&supported, "2.0.0")] {
+        let filename = format!("ok-{version}-py3-none-any.whl");
+        let dist = BuiltDist::Registry(RegistryBuiltDist {
+            wheels: vec![RegistryBuiltWheel {
+                filename: WheelFilename::from_str(&filename)?,
+                file: Box::new(File {
+                    dist_info_metadata: None,
+                    filename: filename.into(),
+                    hashes: HashDigests::empty(),
+                    requires_python: None,
+                    size: None,
+                    upload_time_utc_ms: None,
+                    url: FileLocation::new(format!("{}/artifact", server.uri()).into(), &"".into()),
+                    yanked: None,
+                }),
+                index: index.clone(),
+                size_is_authoritative: false,
+            }],
+            best_wheel_index: 0,
+            sdist: None,
+        });
+        let metadata = client
+            .wheel_metadata(&dist, &GitResolver::default(), &capabilities, None)
+            .await?;
+        assert_eq!(metadata.version.to_string(), version);
     }
     Ok(())
 }
