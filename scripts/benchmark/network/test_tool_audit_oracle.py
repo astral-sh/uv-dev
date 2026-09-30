@@ -13,6 +13,86 @@ HERE = Path(__file__).parent
 
 
 class ToolAuditOracleTests(unittest.TestCase):
+    def test_shared_projects(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path.home() / "code" / "tmp") as temporary:
+            prefix = [
+                "uv",
+                "run",
+                "--no-project",
+                "--offline",
+                "--python",
+                sys.executable,
+                "python",
+                "-S",
+            ]
+            for groups, tools, cached, requests, registry in [
+                (2, 3, False, 8, 7),
+                (2, 1, False, 4, 3),
+                (2, 3, True, 1, 0),
+                (1, 3, False, 6, 5),
+            ]:
+                with self.subTest(groups=groups, tools=tools, cached=cached):
+                    root = Path(temporary) / f"groups-{groups}"
+                    subprocess.run(
+                        [
+                            *prefix,
+                            str(HERE / "make_tool_audit_fixtures.py"),
+                            "--directory",
+                            str(root),
+                            "--packages",
+                            "3",
+                            "--source",
+                            "registry",
+                            "--shared-dependencies",
+                            "2",
+                            "--index-groups",
+                            str(groups),
+                        ],
+                        capture_output=True,
+                        check=True,
+                    )
+                    output = root / "result.json"
+                    subprocess.run(
+                        [
+                            *prefix,
+                            str(HERE / "tool_audit_oracle.py"),
+                            "--manifest",
+                            str(root / "tool-audit-plain-fixtures.json"),
+                            "--directory",
+                            str(root),
+                            "--profiles",
+                            str(root / "tool-audit-profiles.json"),
+                            "--profile",
+                            "fast",
+                            "--packages",
+                            str(tools),
+                            "--concurrency",
+                            "2",
+                            "--output",
+                            str(output),
+                            *(["--cached-registry"] if cached else []),
+                        ],
+                        capture_output=True,
+                        check=True,
+                    )
+                    result = json.loads(output.read_text())
+                    self.assertEqual(result["requests"], requests)
+                    self.assertEqual(
+                        sum(event["method"] == "GET" for event in result["events"]),
+                        registry,
+                    )
+                    self.assertEqual(
+                        [
+                            event["query_count"]
+                            for event in result["events"]
+                            if event["method"] == "POST"
+                        ],
+                        [tools + 2],
+                    )
+                    self.assertLessEqual(
+                        result["required_bytes"], result["actual_bytes"]
+                    )
+
     def test_registry_and_osv_requests(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path.home() / "code" / "tmp") as temporary:
             root = Path(temporary)

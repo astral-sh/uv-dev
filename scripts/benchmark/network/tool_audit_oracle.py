@@ -23,13 +23,37 @@ bench = osv.bench
 
 
 def prepare(fixtures: object, profile: dict, count: int, cached: bool) -> list[dict]:
+    configuration = fixtures.osv
+    if "tool_dependencies" in configuration:
+        tools = sorted(configuration["tool_dependencies"])[:count]
+        if len(tools) != count:
+            raise ValueError("Requested more tools than the fixture contains")
+        names = {
+            name for tool in tools for name in configuration["tool_dependencies"][tool]
+        }
+        selected = {
+            "dependencies": {
+                name: configuration["dependencies"][name] for name in sorted(names)
+            }
+        }
+        projects = sorted(
+            {
+                (project["index"], project["name"])
+                for tool in tools
+                for project in configuration["tool_registry_projects"][tool]
+            }
+        )
+    else:
+        selected = configuration
+        names = sorted(configuration["dependencies"])[:count]
+        projects = [(number % 2, name) for number, name in enumerate(names)]
     tasks = [
         dict(task, group="osv", method="POST", path="/v1/querybatch")
-        for task in osv.requests(fixtures.osv, count)
+        for task in osv.requests(selected, len(names))
     ]
     if not cached:
-        for number, name in enumerate(sorted(fixtures.osv["dependencies"])[:count]):
-            path = f"/audit-index-{number % 2}/{name}/"
+        for index, name in projects:
+            path = f"/audit-index-{index}/{name}/"
             if profile["path_aliases"][path] != f"/simple/{name}/":
                 raise ValueError("Registry audit fixture alias differs")
             tasks.append(

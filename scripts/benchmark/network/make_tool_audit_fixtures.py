@@ -20,14 +20,25 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--packages", type=int, default=12)
+    parser.add_argument("--shared-dependencies", type=int, default=0)
+    parser.add_argument("--index-groups", type=int, default=2)
     parser.add_argument("--source", choices=("local", "registry"), default="local")
     args = parser.parse_args()
     if not 1 <= args.packages <= 1000:
         parser.error("--packages must be between 1 and 1000")
+    if not 0 <= args.shared_dependencies <= 100:
+        parser.error("--shared-dependencies must be between 0 and 100")
+    if not 1 <= args.index_groups <= 1000:
+        parser.error("--index-groups must be between 1 and 1000")
     args.directory.mkdir(parents=True, exist_ok=True)
     names = [f"uv-bench-audit-tool-{number:03d}" for number in range(args.packages)]
+    shared = [
+        f"uv-bench-audit-shared-{number:03d}"
+        for number in range(args.shared_dependencies)
+    ]
+    requirements = [f"{name}==1.0" for name in shared]
     wheels = [
-        scheduling.wheel(args.directory, name, 1, None, console_script=True)
+        scheduling.wheel(args.directory, name, 1, requirements, console_script=True)
         for name in names
     ]
     setup = [
@@ -37,6 +48,7 @@ def main() -> None:
             "--preview-features",
             "tool-install-locks",
             "--no-index",
+            *(["--find-links", "{fixtures}"] if shared else []),
             "--python",
             "{python}",
             "{fixtures}/" + wheel["filename"],
@@ -44,9 +56,16 @@ def main() -> None:
         for wheel in wheels
     ]
     aliases = {
-        f"/audit-index-{number % 2}/{name}/": f"/simple/{name}/"
+        f"/audit-index-{number % args.index_groups}/{name}/": f"/simple/{name}/"
         for number, name in enumerate(names)
     }
+    aliases.update(
+        {
+            f"/audit-index-{group}/{name}/": f"/simple/{name}/"
+            for group in range(args.index_groups)
+            for name in shared
+        }
+    )
     if args.source == "registry":
         setup = [
             [
@@ -55,16 +74,30 @@ def main() -> None:
                 "--preview-features",
                 "tool-install-locks",
                 "--default-index",
-                "{base}/audit-index-" + str(number % 2),
+                "{base}/audit-index-" + str(number % args.index_groups),
                 "--python",
                 "{python}",
                 name + "==1.0",
             ]
             for number, name in enumerate(names)
         ]
+    wheels.extend(scheduling.wheel(args.directory, name, 1, None) for name in shared)
+    dependencies = sorted([*names, *shared])
     for route, pages in (("plain", 1), ("paginated", 2)):
         configuration = {
-            "dependencies": {name: {"version": "1.0", "pages": pages} for name in names}
+            "dependencies": {
+                name: {"version": "1.0", "pages": pages} for name in dependencies
+            },
+            "tool_dependencies": {name: [name, *shared] for name in names},
+            "tool_registry_projects": {
+                name: [
+                    {"name": project, "index": number % args.index_groups}
+                    for project in [name, *shared]
+                ]
+                if args.source == "registry"
+                else []
+                for number, name in enumerate(names)
+            },
         }
         path = args.directory / f"tool-audit-{route}.json"
         path.write_text(json.dumps(configuration, indent=2) + "\n")
@@ -88,7 +121,7 @@ def main() -> None:
         "flaky": {
             "latency_ms": 150,
             "bytes_per_second": 1250000,
-            "osv_failures": {f"{names[0]}:0": {"status": 503, "count": 1}},
+            "osv_failures": {f"{dependencies[0]}:0": {"status": 503, "count": 1}},
         },
     }
     if args.source == "registry":
@@ -112,6 +145,8 @@ def main() -> None:
             {
                 "tools": args.packages,
                 "source": args.source,
+                "shared_dependencies": args.shared_dependencies,
+                "index_groups": args.index_groups,
                 "directory": str(args.directory),
             }
         )
