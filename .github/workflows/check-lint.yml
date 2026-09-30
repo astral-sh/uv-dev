@@ -62,6 +62,8 @@ jobs:
             printf 'Checking %s\n' "$script" >&2
             uv check --script "$script" --locked
           done
+      - name: "Test Python mirror downloads"
+        run: uv run --locked scripts/test_create_python_mirror.py
 
   shellcheck:
     timeout-minutes: 10

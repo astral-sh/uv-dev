@@ -25,6 +25,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import unquote
 
 import httpx
@@ -170,20 +171,25 @@ async def download_file(
     logger.debug(f"Downloading {url} to {dest}")
 
     try:
-        async with client.stream("GET", url) as response:
-            response.raise_for_status()
-            # ruff: ignore[ASYNC230]
-            with open(dest, "wb") as f:
-                async for chunk in response.aiter_bytes():
-                    f.write(chunk)
+        # Only complete, verified archives may occupy the final mirror path.
+        # A sibling staging directory keeps replacement on the same filesystem.
+        with TemporaryDirectory(prefix=".uv-python-mirror-", dir=dest.parent) as temp:
+            staged = Path(temp) / dest.name
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+                # ruff: ignore[ASYNC230]
+                with open(staged, "wb") as f:
+                    async for chunk in response.aiter_bytes():
+                        f.write(chunk)
 
-        if expected_sha256 and sha256_checksum(dest) != expected_sha256:
-            error_msg = f"SHA-256 mismatch for {dest}. Deleting corrupted file."
-            logger.error(error_msg)
-            dest.unlink()
-            errors.append((url, "Checksum mismatch"))
-            progress_bar.update(1)
-            return False
+            if expected_sha256 and sha256_checksum(staged) != expected_sha256:
+                error_msg = f"SHA-256 mismatch for {dest}. Discarding download."
+                logger.error(error_msg)
+                errors.append((url, "Checksum mismatch"))
+                progress_bar.update(1)
+                return False
+
+            staged.replace(dest)
 
     except (httpx.HTTPError, OSError, ValueError) as e:
         error_msg = f"Failed to download {url}: {e!s}"
