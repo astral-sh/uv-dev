@@ -1300,10 +1300,12 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             // Recovering from a failed body consumes the same budget as a full restart.
             // A successfully completed range needs no retry, even if more bytes remain.
             if interrupted {
-                let Some(backoff) = retry_state.should_retry(&err, 0) else {
+                let Some(backoff) = retry_state.should_resume(&err, 0) else {
                     return Err(err);
                 };
-                retry_state.sleep_backoff(backoff).await;
+                if !backoff.is_zero() {
+                    retry_state.sleep_backoff(backoff).await;
+                }
             }
 
             // Finally our resumption, which is a range request.

@@ -1,9 +1,12 @@
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use std::{assert_matches, io};
 
 use anyhow::Result;
 use reqwest::Response;
+use reqwest_retry::Jitter;
+use reqwest_retry::policies::ExponentialBackoff;
 use wiremock::matchers::{any, header, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -183,6 +186,75 @@ async fn send_counts_middleware_retries() -> Result<()> {
         assert!(retry_state.should_retry(&error, 0).is_none());
         server.verify().await;
     }
+    Ok(())
+}
+
+#[test]
+fn response_continuations_share_the_retry_budget() -> Result<()> {
+    let policy = ExponentialBackoff::builder()
+        .jitter(Jitter::None)
+        .retry_bounds(Duration::from_secs(60), Duration::from_secs(60))
+        .build_with_max_retries(2);
+    let url = "https://example.org/archive.whl".parse::<url::Url>()?;
+    let error = io::Error::new(io::ErrorKind::UnexpectedEof, "interrupted response");
+
+    let mut state = RetryState::start(policy, url.clone());
+    assert_eq!(state.should_resume(&error, 0), Some(Duration::ZERO));
+    assert!(
+        state
+            .should_resume(&error, 0)
+            .is_some_and(|delay| delay >= Duration::from_secs(59))
+    );
+    assert_eq!(state.should_resume(&error, 0), None);
+
+    let mut state = RetryState::start(policy, url.clone());
+    assert!(
+        state
+            .should_resume(&error, 1)
+            .is_some_and(|delay| delay >= Duration::from_secs(59))
+    );
+    assert_eq!(state.should_resume(&error, 0), None);
+
+    let mut state = RetryState::start(policy, url);
+    assert_eq!(state.should_resume(&error, 2), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn middleware_failure_delays_response_continuation() -> Result<()> {
+    let server = MockServer::start().await;
+    let requests = AtomicUsize::new(0);
+    Mock::given(any())
+        .respond_with(move |_: &Request| {
+            if requests.fetch_add(1, Ordering::Relaxed) == 0 {
+                ResponseTemplate::new(503)
+            } else {
+                ResponseTemplate::new(200)
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let client = BaseClientBuilder::default()
+        .retries(2)
+        .no_retry_delay(true)
+        .build()?;
+    let policy = ExponentialBackoff::builder()
+        .jitter(Jitter::None)
+        .retry_bounds(Duration::from_secs(60), Duration::from_secs(60))
+        .build_with_max_retries(2);
+    let url = server.uri().parse::<uv_redacted::DisplaySafeUrl>()?;
+    let mut state = RetryState::start(policy, url.clone());
+    state.send(client.for_host(&url).get(server.uri())).await?;
+
+    let error = io::Error::new(io::ErrorKind::UnexpectedEof, "interrupted response");
+    assert!(
+        state
+            .should_resume(&error, 0)
+            .is_some_and(|delay| delay >= Duration::from_secs(59))
+    );
+    assert_eq!(state.should_resume(&error, 0), None);
+    server.verify().await;
     Ok(())
 }
 
