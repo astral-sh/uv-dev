@@ -26,7 +26,7 @@ use uv_audit::{
 };
 use uv_cache::Cache;
 use uv_cli::AuditOutputFormat;
-use uv_client::{BaseClientBuilder, CachedClient, RegistryClient, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, CachedClient, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
     ExtrasSpecification, ExtrasSpecificationWithDefaults, TargetTriple,
@@ -223,19 +223,20 @@ pub(crate) async fn audit(
         .index_locations(settings.index_locations.clone())
         .keyring(settings.keyring_provider)
         .build()?;
+    let capabilities = IndexCapabilities::default();
+    let status_audit = ProjectStatusAudit::new(&registry_client, &capabilities, concurrency);
     let outcome = audit_lock(
         &lock,
         target.install_path(),
         &extras,
         &groups,
         &settings,
-        &registry_client,
+        &status_audit,
         async |dependencies| {
             osv_service
                 .query_batch(dependencies, osv::Filter::All)
                 .await
         },
-        concurrency,
         printer,
         &ignore,
         &ignore_until_fixed,
@@ -285,9 +286,8 @@ pub(crate) async fn audit_lock(
     extras: &ExtrasSpecificationWithDefaults,
     groups: &DependencyGroupsWithDefaults,
     settings: &ResolverSettings,
-    registry_client: &RegistryClient,
+    status_audit: &ProjectStatusAudit<'_>,
     query_vulnerabilities: impl AsyncFnOnce(&[Dependency]) -> Result<Vec<Finding>, osv::Error>,
-    concurrency: Concurrency,
     printer: Printer,
     ignore: &[VulnerabilityID],
     ignore_until_fixed: &[VulnerabilityID],
@@ -308,9 +308,6 @@ pub(crate) async fn audit_lock(
         .packages()
         .map(|(name, version)| Dependency::new(name.clone(), version.clone()))
         .collect();
-    let capabilities = IndexCapabilities::default();
-    let status_audit = ProjectStatusAudit::new(registry_client, &capabilities, concurrency.clone());
-
     let osv_future = async {
         trace!("Auditing {n} dependencies against OSV", n = auditable.len());
         query_vulnerabilities(&dependencies).await

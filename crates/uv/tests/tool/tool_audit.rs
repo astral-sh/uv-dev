@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -721,6 +722,152 @@ fn tool_audit_reuses_registry_connections() -> Result<()> {
         );
         assert_ne!(osv_requests[0].connection, registry_requests[0].connection);
     }
+    Ok(())
+}
+
+#[test]
+fn tool_audit_reuses_project_statuses() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let mut responses = BTreeMap::new();
+    let mut files: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for (name, version, shared_version) in [
+        ("audit-shared", "1.0", None),
+        ("audit-shared", "2.0", None),
+        ("audit-tool-a", "1.0", Some("1.0")),
+        ("audit-tool-b", "1.0", Some("2.0")),
+        ("audit-tool-c", "1.0", Some("1.0")),
+    ] {
+        let requirements = shared_version
+            .map(|version| format!("audit-shared=={version}").parse())
+            .transpose()?
+            .into_iter()
+            .collect::<Vec<_>>();
+        let (filename, wheel) = generate_wheel(
+            &name.parse()?,
+            &version.parse()?,
+            &requirements,
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[name.to_owned()],
+        );
+        let mut metadata = format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n");
+        if let Some(version) = shared_version {
+            writeln!(metadata, "Requires-Dist: audit-shared=={version}")?;
+        }
+        let metadata = metadata.into_bytes();
+        files.entry(name.to_owned()).or_default().push(json!({
+            "filename": filename,
+            "url": format!("/files/{filename}"),
+            "hashes": { "sha256": hex::encode(Sha256::digest(&wheel)) },
+            "core-metadata": { "sha256": hex::encode(Sha256::digest(&metadata)) },
+            "upload-time": "2024-03-24T00:00:00Z"
+        }));
+        responses.insert(
+            format!("/files/{filename}.metadata"),
+            ("text/plain", metadata),
+        );
+        responses.insert(
+            format!("/files/{filename}"),
+            ("application/octet-stream", wheel),
+        );
+    }
+    for index in ["first", "second"] {
+        for (name, files) in &files {
+            let status = match (index, name.as_str()) {
+                ("first", "audit-shared") => "archived",
+                ("second", "audit-shared") => "deprecated",
+                _ => "active",
+            };
+            responses.insert(
+                format!("/{index}/{name}/"),
+                (
+                    "application/vnd.pypi.simple.v1+json",
+                    json!({
+                        "meta": { "api-version": "1.1" }, "name": name,
+                        "project-status": { "status": status }, "files": files,
+                    })
+                    .to_string()
+                    .into_bytes(),
+                ),
+            );
+        }
+    }
+    let server = AuditServer::start(responses)?;
+    for (index, name) in [
+        ("first", "audit-tool-a"),
+        ("first", "audit-tool-b"),
+        ("second", "audit-tool-c"),
+    ] {
+        context
+            .tool_install()
+            .arg(name)
+            .arg("--default-index")
+            .arg(format!("http://{}/{index}/", server.address))
+            .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+            .assert()
+            .success();
+    }
+    for limit in [1, 2] {
+        server
+            .requests
+            .lock()
+            .expect("request record mutex")
+            .clear();
+        let output = context
+            .tool_audit()
+            .arg("--all")
+            .arg("--output-format")
+            .arg("json")
+            .arg("--service-url")
+            .arg(format!("http://{}", server.address))
+            .env(
+                EnvVars::UV_PREVIEW_FEATURES,
+                "audit,tool-install-locks,json-output",
+            )
+            .env(EnvVars::UV_CONCURRENT_DOWNLOADS, limit.to_string())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let report: Value = serde_json::from_slice(&output)?;
+        for (number, name, status) in [
+            (0, "audit-tool-a", "archived"),
+            (1, "audit-tool-b", "archived"),
+            (2, "audit-tool-c", "deprecated"),
+        ] {
+            let tool = &report["tools"][number];
+            assert_eq!(tool["name"], name);
+            assert_eq!(tool["summary"]["audited_packages"], 2);
+            assert_eq!(
+                tool["adverse_statuses"],
+                json!([{ "name": "audit-shared", "status": status, "reason": null }])
+            );
+        }
+        let requests = server.requests.lock().expect("request record mutex");
+        let paths = requests
+            .iter()
+            .filter(|request| request.path != "/v1/querybatch")
+            .map(|request| request.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 5);
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|path| **path == "/first/audit-shared/")
+                .count(),
+            1
+        );
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|path| **path == "/second/audit-shared/")
+                .count(),
+            1
+        );
+    }
+    server.stop();
     Ok(())
 }
 
