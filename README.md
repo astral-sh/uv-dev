@@ -99,6 +99,32 @@ combination:
 Neither test selects from the child directory a member that is also required by
 the workspace root, then verifies whether its entry point was installed.
 
+## Fix
+
+Fixed by making the entry-point warning use the same required-member package
+decision as workspace requirement lowering. A workspace member required by
+another member is installable without a build system unless it explicitly sets
+`tool.uv.package = false`, so the warning now calls `is_package(false)` for
+required members and retains the build-system requirement for other members.
+
+The parent regression test
+`sync_scripts_workspace_member_not_packaged_root_dependency` now expects the
+required child to be installed without the contradictory warning and still
+executes its generated entry point. The neighboring warning tests continue to
+verify that genuinely virtual projects and workspace members warn, while an
+unselected member does not. No distinct failure was found in another
+integration-test module: `uv run` reuses the same sync implementation, and the
+workspace lock and requirement-lowering coverage already records required
+members as installable rather than virtual.
+
+Focused validation succeeded with:
+
+```console
+cargo test --package uv --test sync sync_scripts_
+cargo +stable fmt --all -- --check
+cargo +stable clippy --package uv --test sync -- -D warnings
+```
+
 ## Related
 
 - astral-sh/uv#18388 (closed), "No warning printed about entrypoint installation
@@ -111,3 +137,5 @@ the workspace root, then verifies whether its entry point was installed.
 - astral-sh/uv#14891 (closed), "Install entry points for workspace members" —
   establishes the related behavior that making a member a dependency of the
   workspace root causes that member to be installed.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/2232

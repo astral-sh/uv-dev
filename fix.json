@@ -1,0 +1,10 @@
+{
+  "outcome": "fixed",
+  "summary": "The entry-point warning now uses the same package decision as workspace requirement lowering, so required workspace members installed without a build system no longer produce a contradictory skipped-entry-point warning. The regression test now expects no warning while retaining its successful entry-point execution check.",
+  "validation": [
+    "cargo test --package uv --test sync sync_scripts_",
+    "cargo +stable fmt --all -- --check",
+    "cargo +stable clippy --package uv --test sync -- -D warnings"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2232"
+}
