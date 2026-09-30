@@ -2614,9 +2614,14 @@ pub(crate) async fn resolve_names(
         Some(&interpreter.to_resolver_marker_environment()),
         HashCheckingMode::Verify,
     )?;
-    let flat_index = FlatIndex::load(&client, cache, index_locations)
-        .await
-        .map_err(Box::new)?;
+    let flat_index = FlatIndex::load(
+        &client,
+        cache,
+        index_locations,
+        &concurrency.downloads_semaphore,
+    )
+    .await
+    .map_err(Box::new)?;
 
     // Lower the extra build dependencies, if any.
     let extra_build_requires =
@@ -2886,7 +2891,13 @@ pub(crate) async fn resolve_environment(
     };
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    let flat_index = FlatIndex::load(
+        &client,
+        cache,
+        index_locations,
+        &concurrency.downloads_semaphore,
+    )
+    .await?;
 
     // Lower the extra build dependencies, if any.
     let extra_build_requires =
@@ -3027,7 +3038,13 @@ pub(crate) async fn sync_environment(
     let workspace_cache = WorkspaceCache::default();
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    let flat_index = FlatIndex::load(
+        &client,
+        cache,
+        index_locations,
+        &concurrency.downloads_semaphore,
+    )
+    .await?;
 
     // Lower the extra build dependencies, if any.
     let extra_build_requires =
@@ -3289,7 +3306,13 @@ pub(crate) async fn update_environment(
     let python_requirement = PythonRequirement::from_interpreter(interpreter);
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    let flat_index = FlatIndex::load(
+        &client,
+        cache,
+        index_locations,
+        &concurrency.downloads_semaphore,
+    )
+    .await?;
 
     // Create a build dispatch.
     let build_dispatch = BuildDispatch::new(

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use rustc_hash::FxHashMap;
+use tokio::sync::Semaphore;
 use tracing::instrument;
 
 use uv_cache::Cache;
@@ -36,10 +37,14 @@ impl FlatIndex {
         client: &RegistryClient,
         cache: &Cache,
         index_locations: &IndexLocations,
+        download_concurrency: &Semaphore,
     ) -> Result<Self, FlatIndexError> {
         let client = FlatIndexClient::new(client.cached_client(), client.connectivity(), cache);
         let entries = client
-            .fetch_all(index_locations.flat_indexes().map(Index::url))
+            .fetch_all(
+                index_locations.flat_indexes().map(Index::url),
+                download_concurrency,
+            )
             .await?;
         Ok(Self::from_entries(entries))
     }

@@ -950,7 +950,13 @@ pub(crate) async fn do_sync<'a>(
         .with_constraint_hashes(&build_hasher)?;
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    let flat_index = FlatIndex::load(
+        &client,
+        cache,
+        index_locations,
+        &concurrency.downloads_semaphore,
+    )
+    .await?;
 
     // Create a build dispatch.
     let build_dispatch = BuildDispatch::new(
