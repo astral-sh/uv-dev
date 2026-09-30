@@ -23,6 +23,45 @@ use uv_types::{BuildContext, HashStrategy};
 
 use crate::Error;
 
+/// Infer an unnamed requirement's package name from its wheel or source archive filename.
+pub fn infer_name_from_filename(
+    requirement: &UnnamedRequirement<VerbatimParsedUrl>,
+) -> Result<Option<PackageName>, Error> {
+    if Path::new(requirement.url.verbatim.path())
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("whl"))
+    {
+        let filename = WheelFilename::from_str(&requirement.url.verbatim.filename()?)?;
+        return Ok(Some(filename.name));
+    }
+
+    if let Some(filename) = requirement
+        .url
+        .verbatim
+        .filename()
+        .ok()
+        .and_then(|filename| SourceDistFilename::parsed_normalized_filename(&filename).ok())
+    {
+        // GitHub's generated archive names describe references, not Python distributions.
+        if requirement.url.verbatim.host() == Some(Host::Domain("github.com"))
+            && requirement
+                .url
+                .verbatim
+                .path_segments()
+                .is_some_and(|mut path_segments| path_segments.any(|segment| segment == "archive"))
+        {
+            debug!(
+                "Rejecting inferred name from GitHub archive: {}",
+                requirement.url.verbatim
+            );
+        } else {
+            return Ok(Some(filename.name));
+        }
+    }
+
+    Ok(None)
+}
+
 /// Like [`RequirementsSpecification`](crate::RequirementsSpecification), but with concrete names
 /// for all requirements.
 pub struct NamedRequirementsResolver<'a, Context: BuildContext> {
@@ -85,60 +124,14 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
         index: &InMemoryIndex,
         database: &DistributionDatabase<'a, Context>,
     ) -> Result<uv_pep508::Requirement<VerbatimParsedUrl>, Error> {
-        // If the requirement is a wheel, extract the package name from the wheel filename.
-        //
-        // Ex) `anyio-4.3.0-py3-none-any.whl`
-        if Path::new(requirement.url.verbatim.path())
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("whl"))
-        {
-            let filename = WheelFilename::from_str(&requirement.url.verbatim.filename()?)?;
+        if let Some(name) = infer_name_from_filename(&requirement)? {
             return Ok(uv_pep508::Requirement {
-                name: filename.name,
+                name,
                 extras: requirement.extras,
                 version_or_url: Some(VersionOrUrl::Url(requirement.url)),
                 marker: requirement.marker,
                 origin: requirement.origin,
             });
-        }
-
-        // If the requirement is a source archive, try to extract the package name from the archive
-        // filename. This isn't guaranteed to work.
-        //
-        // Ex) `anyio-4.3.0.tar.gz`
-        if let Some(filename) = requirement
-            .url
-            .verbatim
-            .filename()
-            .ok()
-            .and_then(|filename| SourceDistFilename::parsed_normalized_filename(&filename).ok())
-        {
-            // But ignore GitHub archives, like:
-            //   https://github.com/python/mypy/archive/refs/heads/release-1.11.zip
-            //
-            // These have auto-generated filenames that will almost never match the package name.
-            if requirement.url.verbatim.host() == Some(Host::Domain("github.com"))
-                && requirement
-                    .url
-                    .verbatim
-                    .path_segments()
-                    .is_some_and(|mut path_segments| {
-                        path_segments.any(|segment| segment == "archive")
-                    })
-            {
-                debug!(
-                    "Rejecting inferred name from GitHub archive: {}",
-                    requirement.url.verbatim
-                );
-            } else {
-                return Ok(uv_pep508::Requirement {
-                    name: filename.name,
-                    extras: requirement.extras,
-                    version_or_url: Some(VersionOrUrl::Url(requirement.url)),
-                    marker: requirement.marker,
-                    origin: requirement.origin,
-                });
-            }
         }
 
         let source = match &requirement.url.parsed_url {
@@ -331,5 +324,39 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
             marker: requirement.marker,
             origin: requirement.origin,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infer_archive_name() {
+        for (url, expected) in [
+            (
+                "https://example.com/packages/anyio-4.3.0-py3-none-any.whl",
+                Some("anyio"),
+            ),
+            (
+                "https://example.com/packages/anyio-4.3.0.tar.gz",
+                Some("anyio"),
+            ),
+            (
+                "https://github.com/python/mypy/archive/refs/heads/release-1.11.zip",
+                None,
+            ),
+            ("https://example.com/packages/archive.zip", None),
+        ] {
+            let requirement = url.parse().unwrap();
+            assert_eq!(
+                infer_name_from_filename(&requirement).unwrap(),
+                expected.map(|name| PackageName::from_str(name).unwrap()),
+                "{url}",
+            );
+        }
+
+        let requirement = "https://example.com/packages/invalid.whl".parse().unwrap();
+        assert!(infer_name_from_filename(&requirement).is_err());
     }
 }
