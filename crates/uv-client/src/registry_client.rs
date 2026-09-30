@@ -34,7 +34,7 @@ use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
-use uv_pypi_types::{Digest, HashDigest, HashDigests, ProjectStatus, Yanked};
+use uv_pypi_types::{Digest, HashAlgorithm, HashDigest, HashDigests, ProjectStatus, Yanked};
 use uv_pypi_types::{PypiSimpleDetail, PypiSimpleIndex, ResolutionMetadata};
 use uv_redacted::DisplaySafeUrl;
 use uv_small_str::SmallString;
@@ -1062,6 +1062,37 @@ impl RegistryClient {
         .map_err(|err| ErrorKind::Io(err.into()))?
     }
 
+    /// Determine whether a cached metadata sidecar needs HTTP revalidation.
+    fn core_metadata_cache_control(
+        &self,
+        cache_entry: &CacheEntry,
+        name: &PackageName,
+        index: &IndexUrl,
+        hashes: &HashDigests,
+    ) -> Result<CacheControl, Error> {
+        if self.connectivity == Connectivity::Offline {
+            return Ok(CacheControl::AllowStale);
+        }
+        if let Some(header) = self.indexes.artifact_cache_control_for(index) {
+            return Ok(CacheControl::Override(header));
+        }
+        let freshness = self
+            .cache
+            .freshness(cache_entry, Some(name), None)
+            .map_err(ErrorKind::Io)?;
+        // The cache key includes every advertised digest, and the response callback verifies
+        // those digests before writing. A strong hash therefore identifies immutable metadata.
+        if freshness.is_fresh()
+            && hashes
+                .iter()
+                .any(|hash| hash.algorithm() != HashAlgorithm::Md5)
+        {
+            Ok(CacheControl::AllowStale)
+        } else {
+            Ok(CacheControl::from(freshness))
+        }
+    }
+
     /// Fetch static source metadata advertised through the Simple API.
     ///
     /// An absent, unavailable, or dynamic sidecar leaves source extraction to the caller. Declared
@@ -1090,19 +1121,8 @@ impl RegistryClient {
                 .join(dist.version.to_string()),
             format!("core-metadata-{cache_key}.msgpack"),
         );
-        let cache_control = match self.connectivity {
-            Connectivity::Online
-                if let Some(header) = self.indexes.artifact_cache_control_for(&dist.index) =>
-            {
-                CacheControl::Override(header)
-            }
-            Connectivity::Online => CacheControl::from(
-                self.cache
-                    .freshness(&cache_entry, Some(&dist.name), None)
-                    .map_err(ErrorKind::Io)?,
-            ),
-            Connectivity::Offline => CacheControl::AllowStale,
-        };
+        let cache_control =
+            self.core_metadata_cache_control(&cache_entry, &dist.name, &dist.index, hashes)?;
         let response_callback = async |response: Response, _: &mut RetryState| {
             let bytes = response.bytes().await.map_err(|err| {
                 ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
@@ -1179,24 +1199,22 @@ impl RegistryClient {
             let path = format!("{}.metadata", url.path());
             url.set_path(&path);
 
+            let cache_filename = if hashes.is_empty() {
+                format!("{}.msgpack", filename.cache_key())
+            } else {
+                let cache_key = cache_digest(&(
+                    url.to_string(),
+                    hashes.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                ));
+                format!("{}-core-metadata-{cache_key}.msgpack", filename.cache_key())
+            };
             let cache_entry = self.cache.entry(
                 CacheBucket::Wheels,
                 WheelCache::Index(index).wheel_dir(filename.name.as_ref()),
-                format!("{}.msgpack", filename.cache_key()),
+                cache_filename,
             );
-            let cache_control = match self.connectivity {
-                Connectivity::Online
-                    if let Some(header) = self.indexes.artifact_cache_control_for(index) =>
-                {
-                    CacheControl::Override(header)
-                }
-                Connectivity::Online => CacheControl::from(
-                    self.cache
-                        .freshness(&cache_entry, Some(&filename.name), None)
-                        .map_err(ErrorKind::Io)?,
-                ),
-                Connectivity::Offline => CacheControl::AllowStale,
-            };
+            let cache_control =
+                self.core_metadata_cache_control(&cache_entry, &filename.name, index, hashes)?;
 
             // Acquire an advisory lock, to guard against concurrent writes.
             #[cfg(windows)]
