@@ -7,6 +7,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::osv::mock_clean_batch;
 use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
@@ -743,11 +744,10 @@ async fn audit_no_dev() {
 
     let server = MockServer::start().await;
 
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
+    mock_clean_batch(&[("iniconfig", "2.0.0")])
+        .mount(&server)
+        .await;
+    mock_clean_batch(&[("iniconfig", "2.0.0"), ("typing-extensions", "4.10.0")])
         .mount(&server)
         .await;
 
@@ -802,11 +802,10 @@ async fn audit_extras() {
 
     let server = MockServer::start().await;
 
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
+    mock_clean_batch(&[("iniconfig", "2.0.0"), ("typing-extensions", "4.10.0")])
+        .mount(&server)
+        .await;
+    mock_clean_batch(&[("iniconfig", "2.0.0")])
         .mount(&server)
         .await;
 
@@ -864,11 +863,20 @@ async fn audit_dependency_groups() {
 
     let server = MockServer::start().await;
 
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
+    mock_clean_batch(&[
+        ("iniconfig", "2.0.0"),
+        ("sniffio", "1.3.1"),
+        ("typing-extensions", "4.10.0"),
+    ])
+    .mount(&server)
+    .await;
+    mock_clean_batch(&[("iniconfig", "2.0.0"), ("sniffio", "1.3.1")])
+        .mount(&server)
+        .await;
+    mock_clean_batch(&[("iniconfig", "2.0.0"), ("typing-extensions", "4.10.0")])
+        .mount(&server)
+        .await;
+    mock_clean_batch(&[("sniffio", "1.3.1")])
         .mount(&server)
         .await;
 
@@ -957,11 +965,14 @@ async fn audit_no_default_groups() {
 
     let server = MockServer::start().await;
 
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
+    mock_clean_batch(&[
+        ("iniconfig", "2.0.0"),
+        ("sniffio", "1.3.1"),
+        ("typing-extensions", "4.10.0"),
+    ])
+    .mount(&server)
+    .await;
+    mock_clean_batch(&[("iniconfig", "2.0.0")])
         .mount(&server)
         .await;
 
