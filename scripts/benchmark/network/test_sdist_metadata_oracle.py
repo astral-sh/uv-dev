@@ -16,6 +16,16 @@ spec.loader.exec_module(oracle)
 
 
 class SourcePrefixTests(unittest.TestCase):
+    def test_dynamic_or_older_metadata_is_not_a_static_reference(self):
+        for metadata in (
+            b"Metadata-Version: 2.1\nName: example\nVersion: 1.0\n\n",
+            b"Metadata-Version: 2.4.1\nName: example\nVersion: 1.0\n\n",
+            b"Metadata-Version: 2.4\nName: example\nVersion: 1.0\nDynamic: Requires-Dist\n\n",
+            b"Metadata-Version: 2.4\nName: example\nVersion: 1.0\nDynamic: Version\n\n",
+        ):
+            with self.subTest(metadata=metadata), self.assertRaises(ValueError):
+                oracle.validate_static_metadata(metadata)
+
     def test_prefix_reaches_metadata_without_reading_the_trailing_payload(self):
         metadata = b"Metadata-Version: 2.4\nName: example\nVersion: 1.0\n\n"
         randomizer = random.Random(42)

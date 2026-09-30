@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.request
 import zlib
+from email.parser import BytesParser
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location(
@@ -19,6 +20,22 @@ spec = importlib.util.spec_from_file_location(
 assert spec is not None and spec.loader is not None
 bench = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench)
+
+
+def validate_static_metadata(metadata: bytes) -> None:
+    headers = BytesParser().parsebytes(metadata, headersonly=True)
+    version = tuple(
+        int(part) for part in headers.get("Metadata-Version", "0.0").split(".")
+    )
+    if len(version) != 2 or not (2, 2) <= version < (3, 0):
+        raise ValueError("Source metadata must use version 2.2 or later")
+    if not headers.get("Name") or not headers.get("Version"):
+        raise ValueError("Source metadata must name its distribution and version")
+    dynamic = {field.strip().casefold() for field in headers.get_all("Dynamic", [])}
+    if dynamic.intersection(
+        {"name", "version", "requires-python", "requires-dist", "provides-extra"}
+    ):
+        raise ValueError("Source metadata has dynamic resolution fields")
 
 
 def metadata_prefix(path: Path) -> tuple[bytes, int, bytes]:
@@ -36,6 +53,7 @@ def metadata_prefix(path: Path) -> tuple[bytes, int, bytes]:
         entry = entries[0]
         with archive.extractfile(entry) as source:
             metadata = source.read()
+    validate_static_metadata(metadata)
     target = entry.offset_data + entry.size
     compressed = path.read_bytes()
     decoder = zlib.decompressobj(wbits=31)
