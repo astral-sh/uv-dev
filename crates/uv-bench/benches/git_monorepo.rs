@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::fmt::Write;
 use std::path::Path;
 use std::process::Command;
 
@@ -48,6 +49,11 @@ fn command(cache: &Path, requirements: &Path, partial: bool, worktrees: bool) ->
     command
 }
 
+fn compile(command: &mut Command, cache: &Path, worktrees: bool) {
+    run_command(command);
+    assert_eq!(cache.join("git-v0/worktrees/checkouts").is_dir(), worktrees);
+}
+
 fn git_monorepo(criterion: &mut Criterion<WallTime>) {
     if is_codspeed_simulation() {
         return;
@@ -67,19 +73,16 @@ fn git_monorepo(criterion: &mut Criterion<WallTime>) {
             .expect("Missing Airflow provider packages");
         let project = tempfile::tempdir().expect("Failed to create requirements directory");
         let requirements = project.path().join("requirements.in");
-        fs_err::write(
-            &requirements,
-            packages
-                .iter()
-                .map(|package| {
-                    format!(
-                        "{} @ git+{url}@{}#subdirectory={}\n",
-                        package.name, fixture.commit, package.subdirectory
-                    )
-                })
-                .collect::<String>(),
-        )
-        .expect("Failed to write monorepo requirements");
+        let mut contents = String::new();
+        for package in packages {
+            writeln!(
+                contents,
+                "{} @ git+{url}@{}#subdirectory={}",
+                package.name, fixture.commit, package.subdirectory
+            )
+            .expect("Failed to format monorepo requirement");
+        }
+        fs_err::write(&requirements, contents).expect("Failed to write monorepo requirements");
         for &(mode, partial, worktrees) in GIT_FETCH_MODES {
             group.bench_function(
                 BenchmarkId::new("cold", format!("airflow/{mode}/{count}")),
@@ -87,12 +90,11 @@ fn git_monorepo(criterion: &mut Criterion<WallTime>) {
                     bencher.iter_batched(
                         || tempfile::tempdir().expect("Failed to create source cache"),
                         |cache| {
-                            run_command(&mut command(
+                            compile(
+                                &mut command(cache.path(), &requirements, partial, worktrees),
                                 cache.path(),
-                                &requirements,
-                                partial,
                                 worktrees,
-                            ));
+                            );
                             cache
                         },
                         BatchSize::PerIteration,
@@ -104,8 +106,8 @@ fn git_monorepo(criterion: &mut Criterion<WallTime>) {
                 |bencher| {
                     let cache = tempfile::tempdir().expect("Failed to create source cache");
                     let mut command = command(cache.path(), &requirements, partial, worktrees);
-                    run_command(&mut command);
-                    bencher.iter(|| run_command(&mut command));
+                    compile(&mut command, cache.path(), worktrees);
+                    bencher.iter(|| compile(&mut command, cache.path(), worktrees));
                 },
             );
         }
