@@ -60,18 +60,23 @@ async fn remote_metadata_with_and_without_cache() -> Result<()> {
 #[tokio::test]
 async fn remote_metadata_small_wheel_request_strategy() -> Result<()> {
     let wheel = wheel()?;
-    for (size, policy, use_ranges) in [
+    for (size, policy, head_requests, range_requests, stream_requests) in [
         (
             Some(wheel.len() as u64),
             MetadataRangeRequest::Fallback,
-            false,
+            0,
+            0,
+            1,
         ),
-        (None, MetadataRangeRequest::Fallback, true),
-        (Some(16_385), MetadataRangeRequest::Fallback, true),
+        (None, MetadataRangeRequest::Fallback, 1, 1, 0),
+        (Some(16_385), MetadataRangeRequest::Fallback, 0, 2, 0),
+        (Some(u64::MAX), MetadataRangeRequest::Fallback, 1, 2, 0),
         (
             Some(wheel.len() as u64),
             MetadataRangeRequest::Require,
-            true,
+            0,
+            1,
+            0,
         ),
     ] {
         let server = MockServer::start().await;
@@ -82,7 +87,7 @@ async fn remote_metadata_small_wheel_request_strategy() -> Result<()> {
                     .insert_header(ACCEPT_RANGES, "bytes")
                     .insert_header(CONTENT_LENGTH, wheel.len().to_string()),
             )
-            .expect(u64::from(use_ranges))
+            .expect(head_requests)
             .mount(&server)
             .await;
         let ranged_wheel = wheel.clone();
@@ -90,7 +95,7 @@ async fn remote_metadata_small_wheel_request_strategy() -> Result<()> {
             .and(path("/ok-1.0.0-py3-none-any.whl"))
             .and(header_exists(RANGE.as_str()))
             .respond_with(move |request: &Request| wheel_range_response(request, &ranged_wheel))
-            .expect(u64::from(use_ranges))
+            .expect(range_requests)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -101,7 +106,7 @@ async fn remote_metadata_small_wheel_request_strategy() -> Result<()> {
                     .set_body_raw(wheel.clone(), "application/octet-stream")
                     .insert_header("Cache-Control", "public, max-age=3600"),
             )
-            .expect(u64::from(!use_ranges))
+            .expect(stream_requests)
             .mount(&server)
             .await;
         let cache = Cache::temp()?.init().await?;
@@ -126,6 +131,118 @@ async fn remote_metadata_small_wheel_request_strategy() -> Result<()> {
             )
             .await?;
         assert_eq!(metadata.version.to_string(), "1.0.0");
+        server.verify().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_metadata_partial_response_cache() -> Result<()> {
+    for (cache_control, requests, revalidate) in [
+        ("public, max-age=3600", 1, false),
+        ("public, max-age=0", 2, true),
+        ("no-store", 2, false),
+    ] {
+        let server = MockServer::start().await;
+        let wheel = wheel()?;
+        let size = wheel.len() as u64;
+        Mock::given(method("GET"))
+            .and(path("/ok-1.0.0-py3-none-any.whl"))
+            .and(header_exists(RANGE.as_str()))
+            .respond_with(move |request: &Request| {
+                let response = if request.headers.contains_key("if-none-match") {
+                    assert!(revalidate);
+                    assert_eq!(request.headers["if-none-match"], "\"wheel\"");
+                    ResponseTemplate::new(304)
+                } else {
+                    wheel_range_response(request, &wheel)
+                };
+                response
+                    .insert_header("Cache-Control", cache_control)
+                    .insert_header("ETag", "\"wheel\"")
+            })
+            .expect(requests)
+            .mount(&server)
+            .await;
+        let cache = Cache::temp()?.init().await?;
+        let client = RegistryClientBuilder::new(
+            BaseClientBuilder::default().metadata_range_request(MetadataRangeRequest::Require),
+            cache,
+        )
+        .build()?;
+        let url = format!("{}/ok-1.0.0-py3-none-any.whl", server.uri());
+        let dist = BuiltDist::DirectUrl(DirectUrlBuiltDist {
+            filename: WheelFilename::from_str("ok-1.0.0-py3-none-any.whl")?,
+            location: Box::new(DisplaySafeUrl::parse(&url)?),
+            url: VerbatimUrl::from_str(&url)?,
+            size: Some(size),
+        });
+        for _ in 0..2 {
+            let metadata = client
+                .wheel_metadata(
+                    &dist,
+                    &GitResolver::default(),
+                    &IndexCapabilities::default(),
+                    None,
+                )
+                .await?;
+            assert_eq!(metadata.version.to_string(), "1.0.0");
+        }
+        server.verify().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_metadata_ignored_initial_range() -> Result<()> {
+    for policy in [
+        MetadataRangeRequest::Fallback,
+        MetadataRangeRequest::Require,
+    ] {
+        let server = MockServer::start().await;
+        let wheel = wheel()?;
+        Mock::given(method("GET"))
+            .and(path("/ok-1.0.0-py3-none-any.whl"))
+            .and(header_exists(RANGE.as_str()))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(wheel, "application/octet-stream")
+                    .insert_header("Cache-Control", "public, max-age=3600"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = RegistryClientBuilder::new(
+            BaseClientBuilder::default().metadata_range_request(policy),
+            Cache::temp()?.init().await?,
+        )
+        .build()?;
+        let url = format!("{}/ok-1.0.0-py3-none-any.whl", server.uri());
+        let dist = BuiltDist::DirectUrl(DirectUrlBuiltDist {
+            filename: WheelFilename::from_str("ok-1.0.0-py3-none-any.whl")?,
+            location: Box::new(DisplaySafeUrl::parse(&url)?),
+            url: VerbatimUrl::from_str(&url)?,
+            size: Some(32_768),
+        });
+        let metadata = client
+            .wheel_metadata(
+                &dist,
+                &GitResolver::default(),
+                &IndexCapabilities::default(),
+                None,
+            )
+            .await;
+        match policy {
+            MetadataRangeRequest::Fallback => {
+                assert_eq!(metadata?.version.to_string(), "1.0.0");
+            }
+            MetadataRangeRequest::Require => {
+                assert!(matches!(
+                    metadata.unwrap_err().kind(),
+                    uv_client::ErrorKind::MetadataRangeRequestsRequired(..)
+                ));
+            }
+        }
         server.verify().await;
     }
     Ok(())
@@ -579,16 +696,29 @@ async fn remote_metadata_rejects_overflowing_zip64_size() -> Result<()> {
 /// header.
 #[tokio::test]
 async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
+    remote_metadata_redirect_range_forbidden_with_size(false).await?;
+    remote_metadata_redirect_range_forbidden_with_size(true).await
+}
+
+async fn remote_metadata_redirect_range_forbidden_with_size(known_size: bool) -> Result<()> {
     let source_server = MockServer::start().await;
     let target_server = MockServer::start().await;
-    let wheel = wheel()?;
+    let mut wheel = wheel()?;
+    // A ZIP comment makes the archive large enough to select the known-size range path while
+    // keeping the same valid wheel entries.
+    assert_eq!(&wheel[wheel.len() - 22..wheel.len() - 18], b"PK\x05\x06");
+    let end = wheel.len();
+    wheel[end - 2..].copy_from_slice(&16_384_u16.to_le_bytes());
+    wheel.resize(end + 16_384, 0);
+    let size = known_size.then_some(wheel.len() as u64);
+    let head_requests = u64::from(!known_size);
     let target = format!("{}/wheel", target_server.uri());
     // The initial metadata probe should authenticate to the source and receive a redirect.
     Mock::given(method("HEAD"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
         .respond_with(ResponseTemplate::new(303).insert_header(LOCATION, target.clone()))
-        .expect(1)
+        .expect(head_requests)
         .mount(&source_server)
         .await;
     // The range reader should retry the source with an authenticated range request.
@@ -621,7 +751,7 @@ async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
                 .insert_header(ACCEPT_RANGES, "bytes")
                 .insert_header(CONTENT_LENGTH, wheel.len().to_string()),
         )
-        .expect(1)
+        .expect(head_requests)
         .mount(&target_server)
         .await;
     // The range request should not be sent to the redirect target.
@@ -645,7 +775,7 @@ async fn remote_metadata_redirect_range_forbidden() -> Result<()> {
         .mount(&target_server)
         .await;
 
-    assert_wheel_metadata_readable(&source_server).await
+    assert_wheel_metadata_readable_with_size(&source_server, size).await
 }
 
 #[derive(Debug)]
@@ -671,6 +801,13 @@ fn wheel() -> Result<Vec<u8>> {
 
 /// Reads wheel metadata through the authenticated source URL shared by each redirect scenario.
 async fn assert_wheel_metadata_readable(source_server: &MockServer) -> Result<()> {
+    assert_wheel_metadata_readable_with_size(source_server, None).await
+}
+
+async fn assert_wheel_metadata_readable_with_size(
+    source_server: &MockServer,
+    size: Option<u64>,
+) -> Result<()> {
     let cache = Cache::temp()?.init().await?;
     let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
     let url = authenticated_url(
@@ -683,7 +820,7 @@ async fn assert_wheel_metadata_readable(source_server: &MockServer) -> Result<()
         filename: WheelFilename::from_str("ok-1.0.0-py3-none-any.whl")?,
         location: Box::new(DisplaySafeUrl::parse(&url)?),
         url: VerbatimUrl::from_str(&url)?,
-        size: None,
+        size,
     });
     let metadata = client
         .wheel_metadata(

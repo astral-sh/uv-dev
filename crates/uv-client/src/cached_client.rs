@@ -205,20 +205,67 @@ impl From<Freshness> for CacheControl {
 /// Again unlike `http-cache`, the caller gets full control over the cache key with the assumption
 /// that it's a file.
 #[derive(Debug, Clone)]
-pub struct CachedClient(BaseClient);
+pub struct CachedClient {
+    client: BaseClient,
+    complete_partial_payloads: bool,
+    use_redirect_handler: bool,
+}
 
 impl CachedClient {
     pub fn new(client: BaseClient) -> Self {
-        Self(client)
+        Self {
+            client,
+            complete_partial_payloads: false,
+            use_redirect_handler: true,
+        }
+    }
+
+    /// Cache complete derived values whose callbacks may start with a partial response.
+    ///
+    /// The callback must reconstruct the entire value identified by the caller's cache key before
+    /// it returns. This is appropriate for wheel metadata extracted through range requests, but
+    /// not for caching an arbitrary fragment of an HTTP response.
+    pub(crate) fn with_complete_partial_payloads(&self) -> Self {
+        Self {
+            complete_partial_payloads: true,
+            ..self.clone()
+        }
+    }
+
+    /// Skip uv's manual redirect handling.
+    ///
+    /// The underlying client must also disable reqwest's built-in redirect handling when the
+    /// caller requires the original response.
+    pub(crate) fn without_redirect_handling(&self) -> Self {
+        Self {
+            use_redirect_handler: false,
+            ..self.clone()
+        }
+    }
+
+    fn execute(
+        &self,
+        req: Request,
+    ) -> impl std::future::Future<Output = reqwest_middleware::Result<Response>> {
+        if self.use_redirect_handler {
+            futures::future::Either::Left(self.client.execute(req))
+        } else {
+            futures::future::Either::Right(
+                self.client
+                    .for_host(&DisplaySafeUrl::from_url(req.url().clone()))
+                    .raw_client()
+                    .execute(req),
+            )
+        }
     }
 
     /// The underlying [`BaseClient`] without caching.
     pub fn uncached(&self) -> &BaseClient {
-        &self.0
+        &self.client
     }
 
     pub(crate) fn certificate_source(&self) -> CertificateSource {
-        self.0.certificate_source()
+        self.client.certificate_source()
     }
 
     /// Make a cached request with a custom response transformation while using
@@ -341,7 +388,7 @@ impl CachedClient {
                         .await
                         .map_err(ErrorKind::CacheWrite)?;
                     match self
-                        .0
+                        .client
                         .cache_read_runtime()
                         .spawn_blocking(move || Payload::from_aligned_bytes(cached.data))
                         .await
@@ -502,7 +549,7 @@ impl CachedClient {
         let path = cache_entry.path().to_path_buf();
         let span = Span::current();
         let (req, cached) = self
-            .0
+            .client
             .cache_read_runtime()
             .spawn_blocking(move || {
                 span.in_scope(|| {
@@ -569,7 +616,7 @@ impl CachedClient {
         cache_entry: &CacheEntry,
     ) -> (Request, Result<Option<Payload::Target>, Error>) {
         let path = cache_entry.path().to_path_buf();
-        self.0
+        self.client
             .cache_read_runtime()
             .spawn_blocking(move || {
                 let cached = DataWithCachePolicy::from_path_sync(&path).and_then(|cached| {
@@ -596,7 +643,6 @@ impl CachedClient {
         debug!("Sending revalidation request for: {url}");
         let start = Instant::now();
         let mut response = self
-            .0
             .execute(req)
             .instrument(info_span!("revalidation_request", url = %url))
             .await
@@ -644,6 +690,11 @@ impl CachedClient {
             }
             AfterResponse::Modified(new_policy) => {
                 debug!("Found modified response for: {url}");
+                let new_policy = if self.complete_partial_payloads {
+                    new_policy.with_complete_payload()
+                } else {
+                    new_policy
+                };
                 Ok(CachedResponse::ModifiedOrNew {
                     response,
                     cache_policy: new_policy
@@ -665,7 +716,7 @@ impl CachedClient {
         debug!("Sending fresh {} request for: {}", req.method(), url);
         let cache_policy_builder = CachePolicyBuilder::new(&req);
         let start = Instant::now();
-        let mut response = self.0.execute(req).await.map_err(|err| {
+        let mut response = self.execute(req).await.map_err(|err| {
             Error::from_reqwest_middleware(url.clone(), err, start, self.certificate_source())
         })?;
         trace!(
@@ -696,6 +747,11 @@ impl CachedClient {
         }
 
         let cache_policy = cache_policy_builder.build(&response);
+        let cache_policy = if self.complete_partial_payloads {
+            cache_policy.with_complete_payload()
+        } else {
+            cache_policy
+        };
         let cache_policy = if cache_policy.to_archived().is_storable() {
             Some(Box::new(cache_policy))
         } else {
