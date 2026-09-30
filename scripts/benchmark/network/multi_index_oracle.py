@@ -8,6 +8,7 @@ import importlib.util
 import json
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -43,9 +44,16 @@ def main() -> None:
     loopback = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def read(path: str, expected: bytes) -> None:
-        with loopback.open(server.url + path, timeout=60) as response:
-            if response.read() != expected:
-                raise ValueError(f"Oracle response differs: {path}")
+        for attempt in range(4):
+            try:
+                with loopback.open(server.url + path, timeout=60) as response:
+                    if response.read() != expected:
+                        raise ValueError(f"Oracle response differs: {path}")
+                return
+            except urllib.error.HTTPError as error:
+                if attempt == 3 or error.code not in {408, 429, 500, 502, 503, 504}:
+                    raise
+                error.read()
 
     start = time.perf_counter()
     try:
@@ -90,6 +98,7 @@ def main() -> None:
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
+        "retry_scope": "Transient HTTP responses are retried up to three times per URL with zero oracle backoff. The optimistic floor excludes retries.",
         "scope": "Known selected package with unlimited concurrent index requests, followed by its metadata. The reference includes every configured index, as required by unsafe-best-match.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
