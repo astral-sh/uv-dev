@@ -63,6 +63,13 @@ The `calibrate --profile slow --output PATH` subcommand measures one `HEAD` and
 two concurrent, byte-checked range transfers independently of uv. Use the same
 fixture directory and network namespace as the actual benchmark.
 
+The `oracle` subcommand takes one or more `--filename` arguments and fetches the
+known package graph with unlimited concurrency. `--route metadata` uses PEP 658;
+`--route wheel` downloads whole wheels. It reports a realizable reference time,
+actual traffic, and an optimistic metadata-byte/request-wave lower bound. The
+oracle assumes all selected versions and dependencies are already known, so its
+advantage includes dependency-discovery work that a cold resolver may need to do.
+
 Run protocol and bottleneck checks with:
 
 ```sh

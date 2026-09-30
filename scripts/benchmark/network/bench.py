@@ -394,6 +394,81 @@ def calibrate(fixtures: Fixtures, profile: dict, output: Path) -> None:
     )
 
 
+def oracle(
+    fixtures: Fixtures, profile: dict, filenames: list[str], route: str, output: Path
+) -> None:
+    """Fetch a known artifact set with perfect dependency foreknowledge."""
+    if route == "metadata" and not profile.get("pep658", True):
+        raise ValueError("The metadata oracle requires PEP 658 in the selected profile")
+    names = {}
+    for name, files in fixtures.packages.items():
+        for file in files:
+            if file["filename"] in filenames:
+                names[file["filename"]] = name
+    if set(names) != set(filenames):
+        raise ValueError("Every oracle filename must occur in the fixture manifest")
+    server = Server(fixtures, profile)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def read(path: str) -> bytes:
+        with urllib.request.urlopen(server.url + path, timeout=60) as response:
+            return response.read()
+
+    def fetch(filename: str) -> None:
+        index = json.loads(read(f"/simple/{names[filename]}/"))
+        artifact = next(file for file in index["files"] if file["filename"] == filename)
+        suffix = ".metadata" if route == "metadata" else ""
+        body = read(artifact["url"] + suffix)
+        expected = (
+            fixtures.metadata[filename + ".metadata"]
+            if suffix
+            else fixtures.files[filename].read_bytes()
+        )
+        if body != expected:
+            raise ValueError(f"Oracle bytes differ: {filename}")
+
+    start = time.perf_counter()
+    try:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(1, len(filenames))
+        ) as pool:
+            list(pool.map(fetch, filenames))
+        seconds = time.perf_counter() - start
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    required_bytes = sum(
+        len(fixtures.simple[name]) for name in set(names.values())
+    ) + sum(len(fixtures.metadata[filename + ".metadata"]) for filename in filenames)
+    floor = max(
+        required_bytes / profile["bytes_per_second"]
+        if profile.get("bytes_per_second")
+        else 0,
+        2 * max(0, profile.get("latency_ms", 0) - profile.get("jitter_ms", 0)) / 1000,
+    )
+    data = {
+        "profile": profile,
+        "filenames": filenames,
+        "route": route,
+        "seconds": seconds,
+        "required_metadata_and_index_bytes": required_bytes,
+        "optimistic_network_floor_seconds": floor,
+        "actual_bytes": sum(event["bytes"] for event in server.events),
+        "requests": len(server.events),
+        "events": server.events,
+        "scope": "A known dependency graph with unlimited request concurrency. Full-wheel transfer is a realizable strategy, not a minimum-byte claim.",
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(data, indent=2) + "\n")
+    print(
+        json.dumps(
+            {key: value for key, value in data.items() if key != "events"}, indent=2
+        )
+    )
+
+
 def run_one(
     binary: Path, fixtures: Fixtures, profile: dict, args: argparse.Namespace
 ) -> dict:
@@ -468,6 +543,12 @@ def main() -> None:
     calibration.add_argument("--profile", default="slow")
     calibration.add_argument("--profiles", type=Path, default=HERE / "profiles.json")
     calibration.add_argument("--output", type=Path, required=True)
+    reference = subparsers.add_parser("oracle")
+    reference.add_argument("--profile", default="slow")
+    reference.add_argument("--profiles", type=Path, default=HERE / "profiles.json")
+    reference.add_argument("--filename", action="append", required=True)
+    reference.add_argument("--route", choices=["metadata", "wheel"], default="metadata")
+    reference.add_argument("--output", type=Path, required=True)
     run = subparsers.add_parser("run")
     run.add_argument("--parent", type=Path, required=True)
     run.add_argument("--head", type=Path, required=True)
@@ -497,6 +578,16 @@ def main() -> None:
         calibrate(
             Fixtures(args.manifest, args.directory, profile.get("pep658", True)),
             profile,
+            args.output,
+        )
+        return
+    if args.action == "oracle":
+        profile = json.loads(args.profiles.read_text())[args.profile]
+        oracle(
+            Fixtures(args.manifest, args.directory, profile.get("pep658", True)),
+            profile,
+            args.filename,
+            args.route,
             args.output,
         )
         return
