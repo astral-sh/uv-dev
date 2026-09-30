@@ -126,6 +126,26 @@ class ReplayTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_failures_can_be_limited_to_one_path(self) -> None:
+        server = self.server(
+            {"path_failures": {"/flat/extra": {"status": 503, "count": 1}}}
+        )
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        try:
+            for expected in (503, 200):
+                connection.request("GET", "/flat/extra")
+                response = connection.getresponse()
+                self.assertEqual(response.status, expected)
+                response.read()
+            connection.request(
+                "GET", "/files/example.whl", headers={"Range": "bytes=0-3"}
+            )
+            response = connection.getresponse()
+            self.assertEqual(response.status, 206)
+            self.assertEqual(response.read(), self.body[:4])
+        finally:
+            connection.close()
+
     def test_head_can_omit_range_advertisement(self) -> None:
         server = self.server({"head_ranges": False})
         connection = http.client.HTTPConnection("127.0.0.1", server.server_port)

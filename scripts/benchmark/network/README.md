@@ -81,6 +81,8 @@ profiles may set exact-path response delays in `path_latency_ms`. A profile's
 index URLs while retaining each requested path in the trace.
 Set `head_ranges` to `false` to model a server that supports ranged `GET` but
 does not advertise that support in `HEAD` responses.
+`path_failures` maps exact request paths to `status` and `count` values, overriding
+the profile-wide transient failure settings for those paths.
 Traces identify origin connections, including reuse across requests. Set
 `connection_latency_ms` to add a one-time delay after each origin connection is
 accepted; this isolates connection setup costs in application replay. Use kernel
@@ -162,6 +164,9 @@ releases, setup commands that install the older release, and a nine-index latenc
 profile for `pip list --outdated`.
 `latest_version_oracle.py` measures concurrent version discovery across specified
 Simple API and find-links paths without fetching distribution metadata.
+`make_frozen_fixtures.py --directory DIR` creates a wheel-only project and setup
+commands that lock it before timing. Its profiles include a slow or intermittently
+failing find-links source that is introduced only for the frozen installation.
 `zip_metadata_oracle.py` reads a known wheel metadata entry by its ZIP offset,
 verifies the received archive bytes, and reports its compressed-byte lower bound.
 With ranges disabled, it reads the necessary archive prefix instead.

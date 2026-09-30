@@ -514,10 +514,15 @@ class Handler(BaseHTTPRequestHandler):
                 body, status = value, 200
                 content_type = "application/octet-stream"
             is_artifact = isinstance(body, Path)
-            if profile.get("fail_status") and event["attempt"] <= profile.get(
-                "fail_count", 0
-            ):
-                status, body = profile["fail_status"], b"Injected transient failure"
+            failure = profile.get("path_failures", {}).get(
+                path,
+                {
+                    "status": profile.get("fail_status"),
+                    "count": profile.get("fail_count", 0),
+                },
+            )
+            if failure.get("status") and event["attempt"] <= failure.get("count", 0):
+                status, body = failure["status"], b"Injected transient failure"
             size = body.stat().st_size if isinstance(body, Path) else len(body)
             etag = (
                 '"'
