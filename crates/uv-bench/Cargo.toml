@@ -234,6 +234,11 @@ path = "benches/cache_management.rs"
 harness = false
 
 [[bench]]
+name = "file_cache_prune"
+path = "benches/file_cache_prune.rs"
+harness = false
+
+[[bench]]
 name = "virtualenv_creation"
 path = "benches/virtualenv_creation.rs"
 harness = false
