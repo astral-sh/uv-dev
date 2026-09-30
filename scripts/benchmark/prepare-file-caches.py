@@ -20,8 +20,11 @@ AIRFLOW_REQUIREMENTS_SHA256 = (
 
 
 def digest(path: Path) -> str:
+    hasher = hashlib.sha256()
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        while chunk := stream.read(1024 * 1024):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def hardlink_groups(cache: Path) -> list[list[str]]:
