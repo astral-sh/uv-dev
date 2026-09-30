@@ -122,16 +122,30 @@ impl LatestClient<'_> {
             }
         };
 
-        let archives = match self
-            .client
-            .simple_detail(
-                package,
-                index.map(IndexMetadataRef::from),
-                self.capabilities,
-                download_concurrency,
-            )
-            .await
-        {
+        let simple = self.client.simple_detail(
+            package,
+            index.map(IndexMetadataRef::from),
+            self.capabilities,
+            download_concurrency,
+        );
+        let find_links = async {
+            if index.is_none() {
+                self.client
+                    .find_links_entries(package, download_concurrency)
+                    .await
+            } else {
+                Ok(Vec::new())
+            }
+        };
+        tokio::pin!(simple, find_links);
+
+        // Both sources contribute available versions. Poll them together while giving Simple
+        // API failures priority and cancelling outstanding find-links work on those failures.
+        let (archives, find_links_result) = tokio::select! {
+            archives = &mut simple => (archives, None),
+            entries = &mut find_links => (simple.await, Some(entries)),
+        };
+        let archives = match archives {
             Ok(archives) => archives,
             Err(err)
                 if matches!(
@@ -184,17 +198,15 @@ impl LatestClient<'_> {
             }
         }
 
-        if index.is_none() {
-            for entry in self
-                .client
-                .find_links_entries(package, download_concurrency)
-                .await?
-            {
-                let (filename, file, index) = entry.into_parts();
-                let exclude_newer = self.effective_exclude_newer(package, &index);
-                if self.consider_candidate(package, &filename, &file, exclude_newer.as_ref()) {
-                    update_latest(filename);
-                }
+        let find_links_entries = match find_links_result {
+            Some(entries) => entries?,
+            None => find_links.await?,
+        };
+        for entry in find_links_entries {
+            let (filename, file, index) = entry.into_parts();
+            let exclude_newer = self.effective_exclude_newer(package, &index);
+            if self.consider_candidate(package, &filename, &file, exclude_newer.as_ref()) {
+                update_latest(filename);
             }
         }
 
