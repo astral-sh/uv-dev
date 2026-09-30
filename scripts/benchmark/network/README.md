@@ -81,6 +81,12 @@ profiles may set exact-path response delays in `path_latency_ms`. A profile's
 index URLs while retaining each requested path in the trace.
 Set `head_ranges` to `false` to model a server that supports ranged `GET` but
 does not advertise that support in `HEAD` responses.
+Set `artifact_etag` to `false` or `"weak"` to omit strong artifact entity tags.
+`artifact_last_modified` and `response_date` supply HTTP dates for testing
+date-based `If-Range` requests. The resume oracle uses a date only when no entity
+tag is present and the response date is at least one minute later; otherwise it
+restarts interrupted transfers. Matching dates permit ranges, while a changed
+validator returns the complete representation.
 `path_failures` maps exact request paths to `status` and `count` values, overriding
 the profile-wide transient failure settings for those paths.
 Traces identify origin connections, including reuse across requests. Set

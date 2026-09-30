@@ -6,6 +6,7 @@ import argparse
 import concurrent.futures
 import copy
 import email.parser
+import email.utils
 import hashlib
 import html
 import http.client
@@ -436,6 +437,11 @@ class Replay:
 
 
 class Handler(BaseHTTPRequestHandler):
+    def date_time_string(self, timestamp=None):
+        return self.server.profile.get("response_date") or super().date_time_string(
+            timestamp
+        )
+
     protocol_version = "HTTP/1.1"
     server: Server
 
@@ -533,8 +539,14 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 + '"'
             )
+            modified = profile.get("artifact_last_modified") if is_artifact else None
+            if is_artifact and profile.get("artifact_etag") is False:
+                etag = None
+            elif is_artifact and profile.get("artifact_etag") == "weak":
+                etag = "W/" + etag
             if status == 200 and any(
-                tag.strip().removeprefix("W/") in {etag, "*"}
+                tag.strip().removeprefix("W/")
+                in {etag.removeprefix("W/") if etag else None, "*"}
                 for tag in (event["if_none_match"] or "").split(",")
             ):
                 status = 304
@@ -543,7 +555,11 @@ class Handler(BaseHTTPRequestHandler):
                 is_artifact
                 and status == 200
                 and event["range"]
-                and event["if_range"] in (None, etag)
+                and (
+                    event["if_range"] is None
+                    or event["if_range"] == (etag if strong_etag(etag) else None)
+                    or (modified is not None and event["if_range"] == modified)
+                )
                 and profile.get("ranges", True)
             ):
                 match = re.fullmatch(r"bytes=(\d*)-(\d*)", event["range"])
@@ -567,7 +583,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header(
                 "Cache-Control", profile.get("cache_control", "public, max-age=3600")
             )
-            self.send_header("ETag", etag)
+            if etag is not None:
+                self.send_header("ETag", etag)
+            if modified is not None:
+                self.send_header("Last-Modified", modified)
             if (
                 is_artifact
                 and profile.get("ranges", True)
@@ -774,14 +793,43 @@ def calibrate(fixtures: Fixtures, profile: dict, output: Path) -> None:
     )
 
 
+def strong_etag(value: str | None) -> bool:
+    return (
+        value is not None
+        and len(value) >= 2
+        and value.startswith('"')
+        and value.endswith('"')
+    )
+
+
+def response_validator(headers) -> tuple[str, str] | None:
+    """Choose a validator safe for a later If-Range request."""
+    etag = headers.get("ETag")
+    if etag is not None:
+        return ("ETag", etag) if strong_etag(etag) else None
+    modified = headers.get("Last-Modified")
+    date = headers.get("Date")
+    if modified is not None and date is not None:
+        try:
+            age = email.utils.parsedate_to_datetime(
+                date
+            ) - email.utils.parsedate_to_datetime(modified)
+        except (TypeError, ValueError):
+            return None
+        if age.total_seconds() >= 60:
+            return ("Last-Modified", modified)
+    return None
+
+
 def read_resumable(loopback, url: str, size: int) -> bytes:
     """Immediately resume a pinned artifact after up to 32 interrupted responses."""
     body = bytearray()
-    etag = None
+    validator = None
     for _ in range(33):
-        headers = {"Range": f"bytes={len(body)}-"} if body else {}
-        if body and etag:
-            headers["If-Range"] = etag
+        headers = {"Accept-Encoding": "identity"}
+        if body and validator:
+            headers["Range"] = f"bytes={len(body)}-"
+            headers["If-Range"] = validator[1]
         try:
             with loopback.open(
                 urllib.request.Request(url, headers=headers), timeout=60
@@ -802,10 +850,13 @@ def read_resumable(loopback, url: str, size: int) -> bytes:
                         raise ValueError("Oracle received an inconsistent range")
                 else:
                     raise ValueError(f"Unexpected oracle response: {response.status}")
-                new_etag = response.headers.get("ETag")
-                if etag is not None and new_etag != etag:
+                if (
+                    validator is not None
+                    and response.headers.get(validator[0]) != validator[1]
+                ):
                     raise ValueError("Oracle artifact changed while resuming")
-                etag = new_etag
+                if validator is None:
+                    validator = response_validator(response.headers)
                 try:
                     body.extend(response.read())
                 except http.client.IncompleteRead as error:

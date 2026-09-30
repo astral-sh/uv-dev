@@ -343,6 +343,65 @@ class ReplayTests(unittest.TestCase):
             [None, "bytes=65536-", "bytes=131072-", "bytes=196608-"],
         )
 
+    def test_date_validated_ranges(self) -> None:
+        modified = "Wed, 30 Sep 2026 12:00:00 GMT"
+        server = self.server(
+            {
+                "artifact_etag": False,
+                "artifact_last_modified": modified,
+                "response_date": "Wed, 30 Sep 2026 12:01:00 GMT",
+            }
+        )
+        for validator, status, expected in [
+            (modified, 206, self.body[:4]),
+            ("Wed, 30 Sep 2026 11:59:59 GMT", 200, self.body),
+            ('"missing"', 200, self.body),
+        ]:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            try:
+                connection.request(
+                    "GET",
+                    "/files/example.whl",
+                    headers={"Range": "bytes=0-3", "If-Range": validator},
+                )
+                response = connection.getresponse()
+                self.assertIsNone(response.getheader("ETag"))
+                self.assertEqual(response.getheader("Last-Modified"), modified)
+                self.assertEqual((response.status, response.read()), (status, expected))
+            finally:
+                connection.close()
+
+    def test_date_validated_resumable_oracle(self) -> None:
+        modified = "Wed, 30 Sep 2026 12:00:00 GMT"
+        for etag, date, resumes in [
+            (False, "Wed, 30 Sep 2026 12:01:00 GMT", True),
+            (False, "Wed, 30 Sep 2026 12:00:59 GMT", False),
+            ("weak", "Wed, 30 Sep 2026 12:01:00 GMT", False),
+        ]:
+            server = self.server(
+                {
+                    "artifact_etag": etag,
+                    "artifact_last_modified": modified,
+                    "response_date": date,
+                    "cut_after_bytes": 65536,
+                    "cut_count": 3,
+                }
+            )
+            loopback = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            body = bench.read_resumable(
+                loopback, server.url + "/files/example.whl", len(self.body)
+            )
+            self.assertEqual(body, self.body)
+            server.wait_idle()
+            self.assertEqual(
+                [event["if_range"] for event in server.events],
+                [None, modified, modified, modified] if resumes else [None] * 4,
+            )
+            self.assertEqual(
+                sum(event["bytes"] for event in server.events),
+                len(self.body) if resumes else len(self.body) + 3 * 65536,
+            )
+
     def test_raw_fixture_oracle(self) -> None:
         directory = Path(self.directory.name)
         manifest = directory / "raw-fixtures.json"
