@@ -60,7 +60,10 @@ profiles may set exact-path response delays in `path_latency_ms`.
 `--required-bytes` and `--required-waves` record independently established lower
 bounds for a workload. The optimistic time floor is the maximum of required bytes
 divided by bottleneck bandwidth and dependent response waves multiplied by minimum
-response latency. This deliberately permits perfect transfer/compute overlap and
+response latency. For profiles with different delays per path,
+`--required-latency-ms` supplies the minimum total application delay along a known
+critical path; kernel RTT is still charged for each required wave. This deliberately
+permits perfect transfer/compute overlap and
 omits TCP startup, TLS, headers, extraction, and other CPU work. Report both this
 floor and a realizable oracle client when assessing remaining headroom. Do not
 derive the required-byte count from uv's observed traffic: redundant traffic is

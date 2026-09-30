@@ -38,7 +38,12 @@ def netem_profile() -> dict:
     return json.loads(os.environ.get("UV_BENCH_NETEM", "{}"))
 
 
-def network_floor(profile: dict, required_bytes: int, required_waves: int) -> float:
+def network_floor(
+    profile: dict,
+    required_bytes: int,
+    required_waves: int,
+    required_latency_ms: float | None = None,
+) -> float:
     netem = netem_profile()
     rates = [
         rate
@@ -48,12 +53,14 @@ def network_floor(profile: dict, required_bytes: int, required_waves: int) -> fl
         )
         if rate
     ]
-    latency = max(
-        0, profile.get("latency_ms", 0) - profile.get("jitter_ms", 0)
-    ) + netem.get("rtt_ms", 0)
-    return max(
-        required_bytes / min(rates) if rates else 0, required_waves * latency / 1000
+    application_latency = (
+        required_waves
+        * max(0, profile.get("latency_ms", 0) - profile.get("jitter_ms", 0))
+        if required_latency_ms is None
+        else required_latency_ms
     )
+    latency = application_latency + required_waves * netem.get("rtt_ms", 0)
+    return max(required_bytes / min(rates) if rates else 0, latency / 1000)
 
 
 def normalize(name: str) -> str:
@@ -945,6 +952,7 @@ def main() -> None:
     run.add_argument("--timeout", type=float, default=300)
     run.add_argument("--required-bytes", type=int, default=0)
     run.add_argument("--required-waves", type=int, default=0)
+    run.add_argument("--required-latency-ms", type=float)
     run.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.action == "prepare":
@@ -972,6 +980,8 @@ def main() -> None:
         args.command.pop(0)
     if not args.command or args.pairs < 2:
         parser.error("provide a command and at least two pairs")
+    if args.required_latency_ms is not None and args.required_latency_ms < 0:
+        parser.error("--required-latency-ms cannot be negative")
     args.templates = {
         name: path.read_text()
         for name, path in (
@@ -1056,7 +1066,13 @@ def main() -> None:
         "lower_bound": {
             "required_bytes": args.required_bytes,
             "required_waves": args.required_waves,
-            "seconds": network_floor(profile, args.required_bytes, args.required_waves),
+            "required_latency_ms": args.required_latency_ms,
+            "seconds": network_floor(
+                profile,
+                args.required_bytes,
+                args.required_waves,
+                args.required_latency_ms,
+            ),
             "model": "Optimistic maximum of required-body serialization and serial response-latency waves; excludes TCP/TLS and CPU costs.",
         },
     }

@@ -202,6 +202,7 @@ class ReplayTests(unittest.TestCase):
         with patch.dict(os.environ, {"UV_BENCH_NETEM": '{"rtt_ms":200,"rate_mbit":1}'}):
             self.assertEqual(bench.network_floor({}, 125000, 2), 1)
             self.assertEqual(bench.network_floor({"latency_ms": 100}, 1, 2), 0.6)
+            self.assertEqual(bench.network_floor({}, 1, 2, 1650), 2.05)
 
     def test_refresh_follows_subcommand(self) -> None:
         args = SimpleNamespace(
