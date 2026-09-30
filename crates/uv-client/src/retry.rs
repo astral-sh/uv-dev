@@ -158,21 +158,30 @@ impl RetryableStrategy for RetryAdviceStrategy {
     }
 }
 
-/// Status errors returned by middleware still require the normal server-error backoff.
-fn has_status_error(err: &reqwest_middleware::Error) -> bool {
-    match err {
-        reqwest_middleware::Error::Reqwest(err) => err.status().is_some(),
-        reqwest_middleware::Error::Middleware(err) => err.chain().any(|err| {
-            err.downcast_ref::<reqwest::Error>()
+/// Status errors still require the normal server-error backoff.
+fn has_status_error(err: &(dyn Error + 'static)) -> bool {
+    iter::successors(Some(err), |&err| {
+        if let Some(err) = err.downcast_ref::<io::Error>()
+            && let Some(inner) = err.get_ref()
+        {
+            Some(inner as &(dyn Error + 'static))
+        } else {
+            err.source()
+        }
+    })
+    .any(|err| {
+        err.downcast_ref::<reqwest::Error>()
+            .is_some_and(|err| err.status().is_some())
+            || err
+                .downcast_ref::<WrappedReqwestError>()
                 .is_some_and(|err| err.status().is_some())
-                || err
-                    .downcast_ref::<WrappedReqwestError>()
-                    .is_some_and(|err| err.status().is_some())
-                || err
-                    .downcast_ref::<reqwest_middleware::Error>()
-                    .is_some_and(has_status_error)
-        }),
-    }
+            || err
+                .downcast_ref::<reqwest_middleware::Error>()
+                .is_some_and(|err| match err {
+                    reqwest_middleware::Error::Reqwest(err) => err.status().is_some(),
+                    reqwest_middleware::Error::Middleware(err) => err.chain().any(has_status_error),
+                })
+    })
 }
 
 /// Parse `Retry-After` without allowing an origin to exceed the client's maximum retry delay.
@@ -303,6 +312,20 @@ impl RetryState {
             }
             Some(Retryable::Fatal) | None => None,
         }
+    }
+
+    /// Retry the first interrupted response body without waiting for backoff.
+    ///
+    /// The callback may have made additional requests, so HTTP status errors and retries already
+    /// performed by either the middleware or callback retain their configured delay.
+    pub(crate) fn should_retry_body(
+        &mut self,
+        err: &(dyn Error + 'static),
+        error_retries: u32,
+    ) -> Option<Duration> {
+        let immediate = self.total_retries == 0 && error_retries == 0 && !has_status_error(err);
+        self.should_retry(err, error_retries)
+            .map(|backoff| if immediate { Duration::ZERO } else { backoff })
     }
 
     /// Wait before retrying the request.
@@ -682,6 +705,40 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn first_body_retry_keeps_backoff_and_budget() -> Result<()> {
+        let policy = ExponentialBackoff::builder()
+            .jitter(reqwest_retry::Jitter::None)
+            .retry_bounds(Duration::from_secs(60), Duration::from_secs(60))
+            .build_with_max_retries(2);
+        let url: Url = "https://example.com/metadata".parse()?;
+        let error = io::Error::new(io::ErrorKind::ConnectionReset, "interrupted response");
+        let mut state = RetryState::start(policy, url.clone());
+        assert_eq!(state.should_retry_body(&error, 0), Some(Duration::ZERO));
+        assert!(
+            state
+                .should_retry_body(&error, 0)
+                .is_some_and(|delay| delay >= Duration::from_secs(60))
+        );
+        assert_eq!(state.should_retry_body(&error, 0), None);
+        assert_eq!(state.total_retries(), 2);
+
+        let mut state = RetryState::start(policy, url.clone());
+        assert!(
+            state
+                .should_retry_body(&error, 1)
+                .is_some_and(|delay| delay >= Duration::from_secs(60))
+        );
+        assert_eq!(state.should_retry_body(&error, 0), None);
+        assert_eq!(state.total_retries(), 2);
+
+        let mut state = RetryState::start(policy, url);
+        let error = io::Error::new(io::ErrorKind::InvalidInput, "invalid metadata");
+        assert_eq!(state.should_retry_body(&error, 0), None);
+        assert_eq!(state.total_retries(), 0);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn status_errors_keep_server_backoff() -> Result<()> {
         let server = MockServer::start().await;
@@ -702,6 +759,18 @@ mod tests {
         };
         let failure = Err(reqwest_middleware::Error::Reqwest(error));
         assert!(has_status_error(failure.as_ref().unwrap_err()));
+        let mut body_retry = RetryState::start(
+            ExponentialBackoff::builder()
+                .jitter(reqwest_retry::Jitter::None)
+                .retry_bounds(Duration::from_secs(60), Duration::from_secs(60))
+                .build_with_max_retries(1),
+            Url::parse(&server.uri())?,
+        );
+        assert!(
+            body_retry
+                .should_retry_body(failure.as_ref().unwrap_err(), 0)
+                .is_some_and(|delay| delay >= Duration::from_secs(60))
+        );
         assert!(matches!(
             strategy.handle(&failure),
             Some(Retryable::Transient)

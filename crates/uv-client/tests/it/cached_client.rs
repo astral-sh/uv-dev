@@ -2,8 +2,10 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{assert_matches, io};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow, ensure};
 use reqwest::Response;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use wiremock::matchers::{any, header, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -93,6 +95,57 @@ async fn middleware_retries_are_counted_before_callback() -> Result<()> {
 async fn middleware_retries_are_not_counted_twice() -> Result<()> {
     // One middleware retry leaves one full restart after the callback fails.
     assert_retry_budget(1, false, &[false, false]).await
+}
+
+#[tokio::test]
+async fn retry_truncated_response_body() -> Result<()> {
+    for skip_cache in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/metadata", listener.local_addr()?).parse()?;
+        let server = tokio::spawn(async move {
+            for body in ["partial", "complete body"] {
+                let (mut stream, _) = listener.accept().await?;
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    ensure!(request.len() < 16 * 1024, "Request headers too large");
+                    request.push(stream.read_u8().await?);
+                }
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\nConnection: close\r\n\r\n",
+                    )
+                    .await?;
+                stream.write_all(body.as_bytes()).await?;
+                stream.shutdown().await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+        let cache = tempfile::tempdir()?;
+        let entry = CacheEntry::new(cache.path(), "response.msgpack");
+        let client = CachedClient::new(
+            BaseClientBuilder::default()
+                .retries(1)
+                .no_retry_delay(true)
+                .build()?,
+        );
+        let request = client.uncached().for_host(&url).get(url.as_str()).build()?;
+        let callback = async |response: Response, _: &mut RetryState| response.text().await;
+        let result = if skip_cache {
+            client
+                .skip_cache_with_retry(request, &entry, CacheControl::None, callback)
+                .await
+        } else {
+            client
+                .get_serde_with_retry(request, &entry, CacheControl::None, callback)
+                .await
+        };
+        assert_eq!(
+            result.map_err(|error| anyhow!("{error:?}"))?,
+            "complete body"
+        );
+        server.await??;
+    }
+    Ok(())
 }
 
 #[tokio::test]

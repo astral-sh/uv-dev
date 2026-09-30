@@ -124,17 +124,10 @@ impl<CallbackError: std::error::Error + 'static> CachedClientError<CallbackError
         }
     }
 
-    fn retries(&self) -> u32 {
+    fn should_retry(&self, retry_state: &mut RetryState) -> Option<Duration> {
         match self {
-            Self::Client(err) => err.retries(),
-            Self::Callback { retries, .. } => *retries,
-        }
-    }
-
-    fn error(&self) -> &(dyn std::error::Error + 'static) {
-        match self {
-            Self::Client(err) => err,
-            Self::Callback { err, .. } => err,
+            Self::Client(err) => retry_state.should_retry(err, err.retries()),
+            Self::Callback { err, retries, .. } => retry_state.should_retry_body(err, *retries),
         }
     }
 }
@@ -767,9 +760,7 @@ impl CachedClient {
 
             match result {
                 Ok(ok) => return Ok(ok),
-                Err(err)
-                    if let Some(backoff) = retry_state.should_retry(err.error(), err.retries()) =>
-                {
+                Err(err) if let Some(backoff) = err.should_retry(&mut retry_state) => {
                     retry_state.sleep_backoff(backoff).await;
                 }
                 Err(err) => return Err(err.with_retries(retry_state.total_retries())),
@@ -811,9 +802,7 @@ impl CachedClient {
 
             match result {
                 Ok(ok) => return Ok(ok),
-                Err(err)
-                    if let Some(backoff) = retry_state.should_retry(err.error(), err.retries()) =>
-                {
+                Err(err) if let Some(backoff) = err.should_retry(&mut retry_state) => {
                     retry_state.sleep_backoff(backoff).await;
                 }
                 Err(err) => return Err(err.with_retries(retry_state.total_retries())),
