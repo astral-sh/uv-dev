@@ -6,10 +6,11 @@ Classification: bug
 
 ## Summary
 
-The report demonstrates that `uv audit` can return a false clean result when an OSV
-`/v1/querybatch` request receives HTTP 200 with fewer `results` than submitted `queries`. The
-unmatched dependencies are not audited, but the command counts them as audited, prints `Found no
-known vulnerabilities ...`, and exits 0.
+The reported behavior is reproducible: `uv audit` returns a false clean result when an OSV
+`/v1/querybatch` request receives HTTP 200 with fewer `results` than submitted `queries`. In the
+targeted reproduction, the one locked dependency has known vulnerabilities according to the real
+OSV service, but a mock service that receives one query and returns `{"results": []}` makes uv
+report that the package has no known vulnerabilities and exit 0.
 
 The current source confirms the behavior. `QueryBatchResponse.results` is an unconstrained vector,
 and `query_identifiers` pairs it with `pending_batch` using `zip`. Rust's `zip` ends with the shorter
@@ -23,11 +24,54 @@ No existing issue or pull request tracks this exact false-success case. The clos
 batch-query implementation and its later chunking refactor, together with earlier work that
 intentionally surfaces malformed OSV data instead of skipping it.
 
+## Reproduction
+
+Outcome: **reproducible** with the installed `uv 0.12.13 (x86_64-unknown-linux-gnu)` on Linux
+x86_64 (`6.17.0-1022-azure`). Python 3.12.3 was used only to run the local HTTP mock. All project,
+cache, managed-Python, and mock-server files were isolated under `$RUNNER_TEMP`.
+
+The minimal project was:
+
+```toml
+[project]
+name = "repro"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["python-multipart==0.0.6"]
+```
+
+After creating `uv.lock` with `uv lock`, a local mock accepted `POST /v1/querybatch`, counted the
+request's `queries`, and returned HTTP 200 with `{"results": []}`. The audit was run with isolated
+configuration and cache directories; reduced to its material arguments, the command was:
+
+```console
+$ uv audit --frozen --preview-features audit-command \
+    --service-url http://127.0.0.1:<PORT>
+Found no known vulnerabilities and no adverse project statuses in 1 package
+$ echo $?
+0
+```
+
+The mock recorded `{"path":"/v1/querybatch","query_count":1}`, confirming that the response had
+zero results for one submitted query. As a control, the same frozen lock audited against the real
+OSV service reported 18 known vulnerabilities for `python-multipart 0.0.6` and exited 1. The exact
+number of current OSV records is time-dependent, but it confirms that this fixture was vulnerable
+at reproduction time and that the short response changed the outcome to a false clean result.
+
+Existing tests do not cover unequal query/result cardinality. In
+`crates/uv/tests/build/audit.rs`, `audit_no_vulnerabilities` verifies a valid one-query/one-empty-result
+response and exit 0, while `audit_vulnerability_found` verifies a valid one-query/one-result
+response and exit 1. In `crates/uv-audit/src/service/osv.rs`, `test_query_identifiers` checks
+positional mapping with two queries and two results, `test_query_identifiers_batch_limit` checks
+chunking with one generated result per query, and `test_query_batch_pagination` checks equal-length
+initial and paginated responses. None returns fewer results than queries or expects such a response
+to fail.
+
 ## Draft response
 
-Confirmed: this is a bug. The current batch-response path accepts any `results` length and zips it
-with the pending queries, so a short response drops unmatched packages and can incorrectly render a
-clean audit with exit 0. OSV documents that response ordering matches the input, and
+Confirmed by a targeted reproduction: this is a bug. The current batch-response path accepts any
+`results` length and zips it with the pending queries, so a short response drops unmatched packages
+and can incorrectly render a clean audit with exit 0. OSV documents that response ordering matches the input, and
 astral-sh/uv#19515 likewise establishes that malformed OSV data should be surfaced rather than
 skipped.
 
@@ -37,12 +81,12 @@ responses, including paginated and chunked batches.
 
 ## Classification
 
-This is a `bug`, not an enhancement or question. The repository source confirms a correctness
-failure: a structurally decodable but incomplete OSV response silently removes dependencies from
+This is a `bug`, not an enhancement or question. The targeted reproduction observes the
+correctness failure: a structurally decodable but incomplete OSV response removes a dependency from
 the vulnerability lookup while `uv audit` presents a successful result for the full package count.
-That is especially misleading for a command used as a CI gate. The trigger may be an invalid
-response from OSV or an intermediary, but uv should not interpret missing audit results as negative
-results.
+The source's truncating `zip` is consistent with that observation. This is especially misleading
+for a command used as a CI gate. The trigger may be an invalid response from OSV or an intermediary,
+but uv should not interpret missing audit results as negative results.
 
 It is not a duplicate. Searches found no open issue or pull request tracking this response-length
 mismatch, and the related closed work covers different service failures or the implementation
