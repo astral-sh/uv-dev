@@ -24,11 +24,18 @@ def sha256(path: Path) -> str:
 
 
 def is_study_spec(path: Path, study: dict) -> bool:
-    """Allow an archived copy of the exact study manifest beside its results."""
-    return (
-        path.name == "verification-spec.json"
-        or path.name.endswith("-verification-spec.json")
-    ) and json.loads(path.read_text()) == study
+    """Recognize the exact study manifest or its pre-build hash template."""
+    if path.name == "verification-spec.json" or path.name.endswith(
+        "-verification-spec.json"
+    ):
+        return json.loads(path.read_text()) == study
+    if path.name.endswith("-verification-template.json"):
+        template = json.loads(path.read_text())
+        for side, value in template.get("binary_sha256", {}).items():
+            if value is None:
+                template["binary_sha256"][side] = study["binary_sha256"].get(side)
+        return template == study
+    return False
 
 
 def verify(evidence: Path, repository: Path, study: dict) -> dict:
