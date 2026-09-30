@@ -717,6 +717,7 @@ class ReplayTests(unittest.TestCase):
             python="3.12",
             command=["pip", "compile", "{work}/requirements.in"],
             cache_mode="refresh",
+            refresh_mode="flag",
             timeout=10,
             verify_tree=None,
             http2_proxy=None,
@@ -738,6 +739,15 @@ class ReplayTests(unittest.TestCase):
         warm_command, timed_command = commands
         self.assertNotIn("--refresh", warm_command)
         self.assertEqual(timed_command, [*warm_command, "--refresh"])
+
+        args.command = ["pip", "list", "--outdated"]
+        args.refresh_mode = "implicit"
+        commands.clear()
+        with patch.object(bench.subprocess, "run", side_effect=run):
+            bench.run_one(Path("uv"), self.fixtures, {}, args)
+        warm_command, timed_command = commands
+        self.assertNotIn("--refresh", warm_command)
+        self.assertEqual(timed_command, warm_command)
 
     def test_setup_and_result_file_verification(self) -> None:
         args = SimpleNamespace(

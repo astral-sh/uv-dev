@@ -6,6 +6,11 @@ transient HTTP failures, truncated downloads, missing PEP 658 metadata, and miss
 range support. It can also close a connection before sending response headers.
 Each trial gets a fresh cache and working directory. `--cache-mode
 warm` primes that cache before timing; `refresh` additionally forces revalidation.
+For commands that always revalidate registry data, such as `pip list --outdated`
+and `tool list --outdated`, pass `--refresh-mode implicit`. Their warm and refresh
+runs both use the command's own revalidation policy, without appending an
+unsupported `--refresh` argument. The selected mode and harness hash are recorded
+with the measurements.
 
 Prepare the immutable artifacts once, outside the measured interval:
 
@@ -90,6 +95,10 @@ change. A successful command is required, and normalized standard output must
 match within each pair. Installation workloads should pass `--verify-tree
 '{work}/site'` (and install into that directory) to compare every installed file,
 executable bit, directory, and symlink after the timed command.
+When repairing a harness after some cases have finished, retain the original
+harness in the evidence archive. A verification case can name its `harness_file`
+and `harness_sha256`; `requires_harness_hash` also requires the result to record
+that hash. The verifier recomputes statistics and bounds with the selected file.
 Use `--compare-stderr` when the command's diagnostic output is deterministic; it
 compares normalized standard error in addition to standard output.
 For installation files that embed their destination, `--normalize-tree-file GLOB`

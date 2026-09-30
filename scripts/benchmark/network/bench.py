@@ -1351,7 +1351,7 @@ def run_one(
                     check=True,
                 )
                 replay.reset()
-            if args.cache_mode == "refresh":
+            if args.cache_mode == "refresh" and args.refresh_mode == "flag":
                 command.append("--refresh")
             start = time.perf_counter()
             result = subprocess.run(
@@ -1470,6 +1470,12 @@ def main() -> None:
     run.add_argument("--warmups", type=int, default=2)
     run.add_argument(
         "--cache-mode", choices=["cold", "warm", "refresh"], default="cold"
+    )
+    run.add_argument(
+        "--refresh-mode",
+        choices=["flag", "implicit"],
+        default="flag",
+        help="Use implicit for commands that always refresh their registry cache",
     )
     run.add_argument("--timeout", type=float, default=300)
     run.add_argument("--required-bytes", type=int, default=0)
@@ -1613,6 +1619,8 @@ def main() -> None:
         "warmups": args.warmups,
         "timeout_seconds": args.timeout,
         "cache_mode": args.cache_mode,
+        "refresh_mode": args.refresh_mode,
+        "harness_sha256": digest(Path(__file__)),
         "pairs": [],
         "lower_bound": {
             "required_bytes": args.required_bytes,

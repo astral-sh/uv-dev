@@ -129,6 +129,7 @@ class RepeatTests(unittest.TestCase):
             normalize_tree_symlink=["cpython-3.12-linux-x86_64-gnu"],
             verify_file=["{work}/uv.lock"],
             compare_stderr=True,
+            refresh_mode="implicit",
         )
         with patch.object(repeat.shutil, "which", return_value="/path/to/uv"):
             command = repeat.command(self.pilot, self.args, self.root, 300)
@@ -139,6 +140,7 @@ class RepeatTests(unittest.TestCase):
             return command[command.index(flag) + 1]
 
         self.assertEqual(value("--cache-mode"), "refresh")
+        self.assertEqual(value("--refresh-mode"), "implicit")
         self.assertEqual(value("--requirement"), "example==1.0")
         self.assertEqual(value("--env"), "UV_CONCURRENT_DOWNLOADS=2")
         self.assertEqual(value("--verify-tree"), "{work}/site")

@@ -22,7 +22,7 @@ class StudyManifestTest(unittest.TestCase):
             "binary_sha256": {"parent": "c" * 64, "head": "d" * 64},
             "cases": [{"file": "example-slow.json", "pairs": 30}],
         }
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir=Path.home() / "code" / "tmp") as directory:
             path = Path(directory) / "example-verification-template.json"
             template = json.loads(json.dumps(study))
             template["binary_sha256"]["head"] = None
@@ -41,6 +41,36 @@ class StudyManifestTest(unittest.TestCase):
             result = Path(directory) / "example-unlisted.json"
             result.write_text(json.dumps(study))
             self.assertFalse(verify.is_study_spec(result, study))
+
+    def test_case_harness_identity(self):
+        with tempfile.TemporaryDirectory(dir=Path.home() / "code" / "tmp") as directory:
+            root = Path(directory)
+            original = root / "bench-original.py"
+            original.write_text("version = 1\n")
+            current = root / "bench.py"
+            current.write_text("version = 2\n")
+            case = {
+                "harness_file": original.name,
+                "harness_sha256": verify.sha256(original),
+            }
+            self.assertEqual(verify.case_harness(root, case, {}), original)
+            self.assertEqual(
+                verify.case_harness(
+                    root, {}, {"harness_sha256": verify.sha256(current)}
+                ),
+                current,
+            )
+            with self.assertRaisesRegex(ValueError, "Recorded harness hash differs"):
+                verify.case_harness(
+                    root, case, {"harness_sha256": verify.sha256(current)}
+                )
+            with self.assertRaisesRegex(ValueError, "Missing recorded harness hash"):
+                verify.case_harness(root, {**case, "requires_harness_hash": True}, {})
+            with self.assertRaisesRegex(ValueError, "Invalid case harness filename"):
+                verify.case_harness(root, {"harness_file": "../bench.py"}, {})
+            original.write_text("version = 3\n")
+            with self.assertRaisesRegex(ValueError, "Case harness hash differs"):
+                verify.case_harness(root, case, {})
 
 
 if __name__ == "__main__":

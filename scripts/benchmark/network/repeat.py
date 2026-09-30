@@ -155,6 +155,8 @@ def command(
         str(args.warmups),
         "--cache-mode",
         pilot["cache_mode"],
+        "--refresh-mode",
+        pilot.get("refresh_mode", "flag"),
         "--timeout",
         str(timeout),
         "--work-dir",
@@ -224,6 +226,7 @@ def check_repeat(pilot: dict, repeated: dict) -> None:
         "normalize_tree_file": [],
         "normalize_tree_symlink": [],
         "verify_file": [],
+        "refresh_mode": "flag",
     }
     for key in (
         "parent_sha",
@@ -245,6 +248,7 @@ def check_repeat(pilot: dict, repeated: dict) -> None:
         "verify_file",
         "http2_proxy",
         "cache_mode",
+        "refresh_mode",
         "git_repositories",
         "git_version",
     ):

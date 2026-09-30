@@ -38,6 +38,26 @@ def is_study_spec(path: Path, study: dict) -> bool:
     return False
 
 
+def case_harness(evidence: Path, case: dict, data: dict) -> Path:
+    """Select the retained harness that produced one case."""
+    filename = case.get("harness_file", "bench.py")
+    require(
+        isinstance(filename, str)
+        and Path(filename).name == filename
+        and filename.endswith(".py"),
+        "Invalid case harness filename",
+    )
+    path = evidence / filename
+    actual = sha256(path)
+    if "harness_sha256" in case:
+        require(actual == case["harness_sha256"], "Case harness hash differs")
+    if "harness_sha256" in data:
+        require(actual == data["harness_sha256"], "Recorded harness hash differs")
+    elif case.get("requires_harness_hash"):
+        require(False, "Missing recorded harness hash")
+    return path
+
+
 def verify(evidence: Path, repository: Path, study: dict) -> dict:
     parent, head = study["parent"], study["head"]
     for revision in (parent, head):
@@ -78,15 +98,7 @@ def verify(evidence: Path, repository: Path, study: dict) -> dict:
         set(binary_hashes.values()) <= recorded_hashes, "Archived binary hashes differ"
     )
 
-    module_spec = importlib.util.spec_from_file_location(
-        "archived_network_bench", evidence / "bench.py"
-    )
-    require(
-        module_spec is not None and module_spec.loader is not None,
-        "Missing archived harness",
-    )
-    bench = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(bench)
+    harnesses = {}
     expected_files = {case["file"] for case in study["cases"]}
     require(len(expected_files) == len(study["cases"]), "Duplicate study cases")
     observed_files = {
@@ -113,6 +125,19 @@ def verify(evidence: Path, repository: Path, study: dict) -> dict:
         path = evidence / case["file"]
         data = json.loads(path.read_text())
         label = path.name
+        harness = case_harness(evidence, case, data)
+        if harness not in harnesses:
+            module_spec = importlib.util.spec_from_file_location(
+                "archived_network_bench", harness
+            )
+            require(
+                module_spec is not None and module_spec.loader is not None,
+                "Missing archived harness",
+            )
+            module = importlib.util.module_from_spec(module_spec)
+            module_spec.loader.exec_module(module)
+            harnesses[harness] = module
+        bench = harnesses[harness]
         require(
             (data["parent_sha"], data["head_sha"]) == (parent, head),
             f"{label}: source IDs",
@@ -219,6 +244,8 @@ def verify(evidence: Path, repository: Path, study: dict) -> dict:
                 for side in ("parent", "head")
             },
         }
+        if "harness_file" in case or "harness_sha256" in data:
+            results[label]["harness_sha256"] = sha256(harness)
     return {
         "parent": parent,
         "head": head,
