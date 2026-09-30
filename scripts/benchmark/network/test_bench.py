@@ -164,6 +164,19 @@ class ReplayTests(unittest.TestCase):
             self.assertEqual(response.headers["Content-Type"], "text/html")
             self.assertEqual(response.read(), self.fixtures.flat)
 
+    def test_simple_index_alias_keeps_original_request_path(self) -> None:
+        self.fixtures.simple["example"] = b'{"name":"example","files":[]}'
+        alias = "/indexes/one/example/"
+        server = self.server({"path_aliases": {alias: "/simple/example/"}})
+        with urllib.request.urlopen(server.url + alias) as response:
+            self.assertEqual(
+                response.headers["Content-Type"],
+                "application/vnd.pypi.simple.v1+json",
+            )
+            self.assertEqual(response.read(), self.fixtures.simple["example"])
+        server.wait_idle()
+        self.assertEqual(server.events[0]["path"], alias)
+
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix sockets unavailable")
     def test_unix_origin(self) -> None:
         socket_path = Path(self.directory.name) / "origin.sock"

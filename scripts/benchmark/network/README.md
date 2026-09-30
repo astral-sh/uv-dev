@@ -75,7 +75,12 @@ Use `--env KEY=VALUE` for settings such as `UV_CONCURRENT_DOWNLOADS`, and repeat
 `--verify-file '{work}/uv.lock'` to compare generated files after normalizing the
 temporary origin and work directory. Inputs and environment overrides are saved
 in the result. Each `/flat/NAME` endpoint serves a PEP 503 page for the manifest;
-profiles may set exact-path response delays in `path_latency_ms`.
+profiles may set exact-path response delays in `path_latency_ms`. A profile's
+`path_aliases` mapping can expose the same Simple API response through several
+index URLs while retaining each requested path in the trace.
+`multi_index_oracle.py` requests those Simple API paths concurrently and then
+reads the selected wheel's metadata. Its bound includes all configured indexes,
+which is appropriate for an `unsafe-best-match` workload.
 
 `--required-bytes` and `--required-waves` record independently established lower
 bounds for a workload. The optimistic time floor is the maximum of required bytes

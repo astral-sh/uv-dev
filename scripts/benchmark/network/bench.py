@@ -348,7 +348,8 @@ class Handler(BaseHTTPRequestHandler):
         )
         time.sleep(max(0, latency + jitter) / 1000)
         try:
-            parts = path.strip("/").split("/")
+            route = profile.get("path_aliases", {}).get(path, path)
+            parts = route.strip("/").split("/")
             body: bytes | Path = b"Not found"
             status = 404
             content_type = "text/plain"
@@ -369,7 +370,7 @@ class Handler(BaseHTTPRequestHandler):
                 ) is not None:
                     body, status = value, 200
                 content_type = "application/octet-stream"
-            elif (value := self.server.fixtures.routes.get(path)) is not None:
+            elif (value := self.server.fixtures.routes.get(route)) is not None:
                 body, status = value, 200
                 content_type = "application/octet-stream"
             is_artifact = isinstance(body, Path)
