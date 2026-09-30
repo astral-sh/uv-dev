@@ -335,6 +335,8 @@ pub enum PreviewFeature {
     ArtifactHashFiltering,
     /// Enables content-addressed wheel archives in the cache.
     ContentAddressedCache,
+    /// Fetches Git trees and blobs lazily when checking out source repositories.
+    GitPartialFetches,
     /// Exclude `exclude-newer-package` entries from the lockfile when not included in the
     /// project's resolved dependencies.
     MissingExcludeNewerPackageLock,

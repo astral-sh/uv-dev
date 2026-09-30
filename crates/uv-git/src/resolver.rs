@@ -59,14 +59,15 @@ impl GitResolverError {
     }
 }
 
-/// HTTP settings for fetching a Git repository.
+/// Settings for fetching a Git repository.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct GitHttpSettings {
-    disable_ssl: bool,
-    offline: bool,
+pub struct GitFetchSettings {
+    pub(crate) disable_ssl: bool,
+    pub(crate) offline: bool,
+    pub(crate) partial_fetches: bool,
 }
 
-impl GitHttpSettings {
+impl GitFetchSettings {
     /// Configure whether certificate verification should be disabled.
     #[must_use]
     pub fn with_disabled_ssl(mut self, disable_ssl: bool) -> Self {
@@ -78,6 +79,13 @@ impl GitHttpSettings {
     #[must_use]
     pub fn with_offline(mut self, offline: bool) -> Self {
         self.offline = offline;
+        self
+    }
+
+    /// Configure whether Git trees and blobs should be fetched lazily.
+    #[must_use]
+    pub fn with_partial_fetches(mut self, partial_fetches: bool) -> Self {
+        self.partial_fetches = partial_fetches;
         self
     }
 }
@@ -204,7 +212,7 @@ impl GitResolver {
     pub async fn fetch(
         &self,
         url: &GitUrl,
-        http_settings: GitHttpSettings,
+        settings: GitFetchSettings,
         cache: PathBuf,
         reporter: Option<Arc<dyn Reporter>>,
     ) -> Result<Fetch, GitResolverError> {
@@ -238,16 +246,9 @@ impl GitResolver {
         .await?;
 
         // Fetch the Git repository.
+        let source = GitSource::new(url.as_ref().clone(), cache, settings);
         let source = if let Some(reporter) = reporter {
-            GitSource::new(url.as_ref().clone(), cache, http_settings.offline)
-                .with_reporter(reporter)
-        } else {
-            GitSource::new(url.as_ref().clone(), cache, http_settings.offline)
-        };
-
-        // If necessary, disable SSL.
-        let source = if http_settings.disable_ssl {
-            source.dangerous()
+            source.with_reporter(reporter)
         } else {
             source
         };
