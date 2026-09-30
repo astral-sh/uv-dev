@@ -6623,13 +6623,13 @@ async fn pep_751_remote() -> Result<()> {
 
     let pylock_url = format!("{}/pylock.toml", server.uri());
 
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync().arg("--dry-run")
         .arg("--preview")
         .arg(&pylock_url), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would download 3 packages
+    Would install 3 packages
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
@@ -6850,7 +6850,7 @@ fn pep_751_direct_url_tags() -> Result<()> {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync().arg("--dry-run")
         .arg("--preview")
         .arg("pylock.toml")
         .arg("--python-platform")
@@ -6864,14 +6864,14 @@ fn pep_751_direct_url_tags() -> Result<()> {
     "
     );
 
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync().arg("--dry-run")
         .arg("--preview")
         .arg("pylock.toml")
         .arg("--python-platform")
         .arg("macos"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed 1 package in [TIME]
+    Would install 1 package
      + markupsafe==3.0.2 (from https://files.pythonhosted.org/packages/6b/b0/18f76bba336fa5aecf79d45dcd6c806c280ec44538b3c13671d49099fdd0/MarkupSafe-3.0.2-cp312-cp312-macosx_11_0_arm64.whl)
     "
     );

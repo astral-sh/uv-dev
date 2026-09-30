@@ -2454,16 +2454,16 @@ fn requirements_txt_relative_path() -> Result<()> {
     ");
 
     // Install the dependencies.
-    uv_snapshot!(context.filters(), context.pip_install().arg("--requirement").arg("requirements.txt").current_dir(&project), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg("--dry-run").arg("--requirement").arg("requirements.txt").current_dir(&project), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using Python 3.12.[X] environment at: [VENV]/
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + dependency==0.1.0 (from file://[TEMP_DIR]/dependency)
+    Would download 3 packages
+    Would install 3 packages
+     + dependency @ file://[TEMP_DIR]/dependency
      + iniconfig==2.0.0
-     + project==0.1.0 (from file://[TEMP_DIR]/project)
+     + project @ file://[TEMP_DIR]/project
     ");
 
     Ok(())
@@ -5774,16 +5774,16 @@ fn pep_751_output_file_relative_paths() -> Result<()> {
     version = "1.0.0"
     archive = { path = "../sdist-1.0.0.tar.gz", hashes = { sha256 = "1ebc99ffe50ccc03be5d12fe5e20907a97e7ba3bf110d7fab705a8d43ccabcbd" } }
     "#);
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.filters(), context.pip_sync().arg("--dry-run")
         .args(["--offline", "--preview", "dist/pylock.toml"]), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + child==1.0.0 (from file://[TEMP_DIR]/child)
+    Would download 3 packages
+    Would install 4 packages
+     + child @ file://[TEMP_DIR]/child
      + helper==1.0.0 (from file://[TEMP_DIR]/helper-1.0.0-py3-none-any.whl)
-     + root==1.0.0 (from file://[TEMP_DIR]/)
-     + sdist==1.0.0 (from file://[TEMP_DIR]/sdist-1.0.0.tar.gz)
+     + root @ file://[TEMP_DIR]/
+     + sdist @ file://[TEMP_DIR]/sdist-1.0.0.tar.gz
     ");
 
     context

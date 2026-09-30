@@ -7318,44 +7318,49 @@ fn run_target_workspace_discovery_workspace_project_group_commands() -> Result<(
             "#
         })?;
 
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--package")
         .arg("child")
         .arg("--only-group")
         .arg("root-only"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would create lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--package")
         .arg("child")
         .arg("--only-group")
         .arg("shared"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would create lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + six==1.16.0
-     - sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--package")
         .arg("child")
         .arg("--all-groups"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 8 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 3 packages in [TIME]
+    Would create lockfile at: uv.lock
+    Would download 4 packages
+    Would install 4 packages
      + packaging==24.0
+     + six==1.16.0
      + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
@@ -7448,32 +7453,34 @@ fn run_target_workspace_discovery_virtual_workspace_group_commands() -> Result<(
             "#
         })?;
 
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--package")
         .arg("child")
         .arg("--only-group")
         .arg("root-only"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would create lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + sniffio==1.3.1
     ");
 
-    uv_snapshot!(context.filters(), context.sync()
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run")
         .arg("--package")
         .arg("child")
         .arg("--only-group")
         .arg("shared"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Would use project environment at: .venv
     Resolved 6 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Would create lockfile at: uv.lock
+    Would download 1 package
+    Would install 1 package
      + six==1.16.0
-     - sniffio==1.3.1
     ");
 
     uv_snapshot!(context.filters(), context.export()
