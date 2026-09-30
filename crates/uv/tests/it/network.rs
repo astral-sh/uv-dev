@@ -279,7 +279,7 @@ async fn check_wheel_archive_prefetch(advertised: bool) -> Result<()> {
             files.push(json!({
                 "filename": filename,
                 "url": format!("/files/{filename}"),
-                "hashes": {"sha256": format!("{:x}", Sha256::digest(&wheel))},
+                "hashes": {"sha256": hex::encode(Sha256::digest(&wheel))},
                 "size": wheel.len(),
                 "core-metadata": sidecar,
                 "upload-time": "2024-01-01T00:00:00Z",
