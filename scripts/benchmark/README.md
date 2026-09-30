@@ -121,6 +121,14 @@ kernel to discard candidate file data with `POSIX_FADV_DONTNEED` before each inv
 not evict directory entries or the executable, and the kernel may retain pages; treat it as an
 advisory file-data-cache workload rather than a guaranteed cold-filesystem measurement.
 
+The real-workspace suite discovers the pinned Flask source and Airflow's complete 127-member
+monorepo, including fresh and cached member discovery with a shared workspace cache. It also runs
+frozen `export`, `tree`, and `workspace metadata` commands against Airflow's original 892-package
+lockfile. These cases retain the actual project manifests, directory layout, and dependency graph
+described in [uv#13796](https://github.com/astral-sh/uv/issues/13796). Airflow's source fixture uses
+a shallow fetch and overrides `export-ignore` while exporting the pinned Git tree, since its
+ordinary release archive omits required development workspace members.
+
 Pass `--git-directory .cache/bench-git` to `serve-fixtures.py` to replay GitHub commit lookups and
 the exact `pyproject.toml` contents stored in these repositories. The private test endpoint
 overrides let source-metadata workloads use the normal GitHub fast path against that loopback

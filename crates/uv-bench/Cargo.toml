@@ -34,6 +34,11 @@ path = "benches/workspace_discovery.rs"
 harness = false
 
 [[bench]]
+name = "real_workspace"
+path = "benches/real_workspace.rs"
+harness = false
+
+[[bench]]
 name = "workspace_scripts"
 path = "benches/workspace_scripts.rs"
 harness = false
