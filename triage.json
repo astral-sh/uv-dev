@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 18394,
+        "title": "Switch to batched OSV queries for `uv audit`",
+        "url": "https://github.com/astral-sh/uv/pull/18394",
+        "state": "merged",
+        "reason": "Introduced the positional query/result `zip` without checking response cardinality. It is the historical origin of the behavior, not an existing tracker for this failure."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20398,
+        "title": "Batch large OSV queries",
+        "url": "https://github.com/astral-sh/uv/pull/20398",
+        "state": "merged",
+        "reason": "Refactored the same path into 1,000-query chunks while retaining the truncating `zip`. Its tests cover equal-length responses, not missing results."
+      },
+      {
+        "kind": "issue",
+        "number": 19492,
+        "title": "uv audit fails with error decoding response body when OSV returns empty range events",
+        "url": "https://github.com/astral-sh/uv/issues/19492",
+        "state": "closed",
+        "reason": "An adjacent malformed-OSV-data case. It produced a hard decoding error rather than a false clean result and was resolved upstream, so it is not a duplicate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19515,
+        "title": "uv audit: specialize malformed OSV error",
+        "url": "https://github.com/astral-sh/uv/pull/19515",
+        "state": "merged",
+        "reason": "The follow-up to astral-sh/uv#19492 explicitly retained hard failure for malformed OSV data because detecting service problems is important, supporting fail-closed behavior for this distinct defect."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests. Literal searches covered `querybatch`, `query_identifiers`, `no known vulnerabilities`, `exit 0`, `results`, `queries`, and `service-url`. Conceptual searches covered false negatives, incomplete or truncated responses, empty results, response cardinality, malformed OSV data, proxies, service errors, and audit exit codes. Fix-oriented review covered OSV client history and the pull requests for batch querying, large-query chunking, malformed-record errors, and nonzero audit exits. No existing tracker or fix for mismatched query/result counts was found. The broad roadmap astral-sh/uv#18506 does not track response completeness; astral-sh/uv#19876 was ruled out because it concerned a pre-response TLS failure and was withdrawn; astral-sh/uv#18512 only covers nonzero exits for actual findings."
+  },
+  "type": "bug",
+  "type_reason": "Current source accepts any `results` length and pairs results with queries using a truncating `zip`. A short HTTP-200 response therefore silently omits dependencies and can produce a clean banner and exit 0 for an incomplete audit. This is source-confirmed incorrect behavior, and no open issue or pull request already tracks it.",
+  "summary": "No duplicate was found. The closest items are the merged pull requests that introduced and later refactored the unchecked positional pairing, plus earlier malformed-OSV work establishing that invalid service data should fail closed.",
+  "draft_response": "Confirmed—this is a bug. The current batch-response path accepts any `results` length and zips it with the pending queries, so a short response drops unmatched packages and can incorrectly render a clean audit with exit 0. A response missing entries cannot establish that those packages are vulnerability-free and should be treated as a service error. This is consistent with astral-sh/uv#19515, where malformed OSV data is intentionally surfaced rather than skipped. The next step is to reject unequal query/result counts and add regression coverage for short responses, including paginated and chunked batches."
+}
