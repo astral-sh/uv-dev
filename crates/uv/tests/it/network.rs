@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::convert::Infallible;
 use std::future::ready;
 use std::io;
@@ -323,7 +324,7 @@ async fn audit_batches_refill_download_slots() -> Result<()> {
             identifiers.keys().copied().collect::<Vec<_>>(),
             dependencies.iter().collect::<Vec<_>>()
         );
-        assert!(identifiers.values().all(|ids| ids.is_empty()));
+        assert!(identifiers.values().all(HashSet::is_empty));
         Ok::<_, anyhow::Error>(())
     });
     let first = tokio::time::timeout(Duration::from_secs(3), requests.recv())
