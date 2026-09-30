@@ -82,6 +82,11 @@ def main() -> None:
             # Capture the real source tree at an immutable point in the upstream ref.
             git(directory, "update-ref", reference, commit)
         git(directory, "update-ref", "--no-deref", "HEAD", commit)
+        for revision in fixture.get("revisions", []):
+            if not re.fullmatch("[0-9a-f]{40}", revision["commit"]):
+                raise ValueError(f"Invalid Git revision: {revision}")
+            # Historical benchmark revisions must be part of the pinned history.
+            git(directory, "merge-base", "--is-ancestor", revision["commit"], commit)
         git(
             directory,
             "-c",

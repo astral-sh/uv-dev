@@ -15,17 +15,24 @@ use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl};
 use uv_redacted::DisplaySafeUrl;
 
 fn fetch(runtime: &tokio::runtime::Runtime, git: &GitUrl, cache: &Path) -> Fetch {
+    fetch_with_settings(
+        runtime,
+        git,
+        cache,
+        GitFetchSettings::default()
+            .with_offline(true)
+            .with_partial_fetches(true),
+    )
+}
+
+fn fetch_with_settings(
+    runtime: &tokio::runtime::Runtime,
+    git: &GitUrl,
+    cache: &Path,
+    settings: GitFetchSettings,
+) -> Fetch {
     runtime
-        .block_on(
-            GitResolver::default().fetch(
-                git,
-                GitFetchSettings::default()
-                    .with_offline(true)
-                    .with_partial_fetches(true),
-                cache.to_path_buf(),
-                None,
-            ),
-        )
+        .block_on(GitResolver::default().fetch(git, settings, cache.to_path_buf(), None))
         .expect("Failed to fetch pinned Git repository")
 }
 
@@ -87,6 +94,46 @@ fn git_fetch(c: &mut Criterion<WallTime>) {
             group.bench_function(BenchmarkId::new(name, &fixture.name), |b| {
                 b.iter(|| black_box(fetch(&runtime, git, cache.path())));
             });
+        }
+
+        // A long-lived CI cache accumulates checkouts as Git dependencies are upgraded.
+        let revisions: Vec<_> = fixture
+            .revisions
+            .iter()
+            .map(|revision| {
+                let commit = revision.commit.parse().expect("Invalid Git commit");
+                precise
+                    .clone()
+                    .with_reference(GitReference::from_rev(revision.commit.clone()))
+                    .with_precise(commit)
+                    .expect("Invalid precise Git URL")
+            })
+            .collect();
+        let settings = GitFetchSettings::default()
+            .with_offline(true)
+            .with_partial_fetches(true);
+        for count in [1, 4, 10] {
+            let Some(revisions) = revisions.get(..count) else {
+                continue;
+            };
+            group.bench_function(
+                BenchmarkId::new("revision_history", format!("{}/{count}", fixture.name)),
+                |b| {
+                    b.iter_batched(
+                        || tempfile::tempdir().expect("Failed to create Git cache"),
+                        |cache| {
+                            for git in revisions {
+                                let fetched =
+                                    fetch_with_settings(&runtime, git, cache.path(), settings);
+                                assert_eq!(fetched.git().precise(), git.precise());
+                                black_box(fetched);
+                            }
+                            black_box(cache)
+                        },
+                        BatchSize::PerIteration,
+                    );
+                },
+            );
         }
     }
     group.finish();

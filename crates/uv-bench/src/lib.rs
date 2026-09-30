@@ -158,6 +158,15 @@ pub struct GitFixture {
     pub repository: String,
     pub commit: String,
     pub reference: String,
+    #[serde(default)]
+    pub revisions: Vec<GitFixtureRevision>,
+}
+
+/// A historical revision of a Git benchmark fixture.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct GitFixtureRevision {
+    pub name: String,
+    pub commit: String,
 }
 
 impl GitFixture {

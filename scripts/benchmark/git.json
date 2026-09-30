@@ -15,7 +15,22 @@
     "name": "django",
     "repository": "https://github.com/django/django",
     "commit": "75c4403f07b8ad25893f7832dbe8fc6814b53b2d",
-    "reference": "refs/tags/5.2.6"
+    "reference": "refs/tags/5.2.6",
+    "revisions": [
+      { "name": "5.2a1", "commit": "759921c8e9ad151932fc913ab429fef0a6112ef8" },
+      { "name": "5.2b1", "commit": "9b7944896d9e96c60fe609308d152c358effdd39" },
+      {
+        "name": "5.2rc1",
+        "commit": "3d3bd04cba71c57298b2b106b5856b1f44a0a7cc"
+      },
+      { "name": "5.2", "commit": "9e7cc2b628fe8fd3895986af9b7fc9525034c1b0" },
+      { "name": "5.2.1", "commit": "bc833e8883db4a333a6485d91637b78c85e2b13b" },
+      { "name": "5.2.2", "commit": "9e2fe65967e3ad4da276d156c466fe1cf682ca7c" },
+      { "name": "5.2.3", "commit": "15883bc669303242742a81f06958175dddbb66de" },
+      { "name": "5.2.4", "commit": "c941d0deec0ea08a30670be0fac879f2372f071b" },
+      { "name": "5.2.5", "commit": "a3b1107a4955bdd994908efb4c6e1d03c281e69f" },
+      { "name": "5.2.6", "commit": "75c4403f07b8ad25893f7832dbe8fc6814b53b2d" }
+    ]
   },
   {
     "name": "pip-test-package",
