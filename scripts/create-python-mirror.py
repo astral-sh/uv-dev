@@ -51,11 +51,19 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def sanitize_url(url: str) -> Path:
-    """Remove the prefix from the URL, decode it, and convert it to a relative path."""
+    """Convert a supported URL to a mirror path without traversal components."""
     for prefix in PREFIXES:
         if url.startswith(prefix):
-            return Path(unquote(url[len(prefix) :]))  # Decode the URL path
-    return Path(unquote(url))  # Fallback to full decoded path if no prefix matched
+            path = unquote(url[len(prefix) :])
+            if (
+                any(part in {"", ".", ".."} for part in path.split("/"))
+                or "\\" in path
+                or ":" in path
+                or "\0" in path
+            ):
+                raise ValueError(f"Invalid mirror archive path in {url}")
+            return Path(path)
+    raise ValueError(f"No valid prefix found for {url}")
 
 
 def sha256_checksum(file_path: Path) -> str:
@@ -145,6 +153,13 @@ async def download_file(
     errors,
 ):
     """Download a file and verify its SHA-256 checksum if provided."""
+    if not any(url.startswith(prefix) for prefix in PREFIXES):
+        error_msg = f"No valid prefix found for {url}. Skipping."
+        logger.warning(error_msg)
+        errors.append((url, error_msg))
+        progress_bar.update(1)
+        return False
+
     if dest.exists() and expected_sha256 and sha256_checksum(dest) == expected_sha256:
         logger.debug(
             f"File {dest} already exists and SHA-256 matches. Skipping download."
@@ -157,13 +172,6 @@ async def download_file(
         )
         progress_bar.update(1)
         return True  # Success, even though skipped
-
-    if not any(url.startswith(prefix) for prefix in PREFIXES):
-        error_msg = f"No valid prefix found for {url}. Skipping."
-        logger.warning(error_msg)
-        errors.append((url, error_msg))
-        progress_bar.update(1)
-        return False
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     logger.debug(f"Downloading {url} to {dest}")
@@ -213,10 +221,18 @@ async def download_files(
         async def sem_download(url, sha256):
             nonlocal success_count
             async with sem:
+                try:
+                    dest = target / sanitize_url(url)
+                except ValueError as error:
+                    error_msg = str(error)
+                    logger.warning(error_msg)
+                    errors.append((url, error_msg))
+                    progress_bar.update(1)
+                    return
                 success = await download_file(
                     client,
                     url,
-                    target / sanitize_url(url),
+                    dest,
                     sha256,
                     progress_bar,
                     errors,
