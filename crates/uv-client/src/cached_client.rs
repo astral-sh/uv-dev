@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::time::{Duration, Instant};
 use std::{borrow::Cow, io::Read, path::Path};
 
@@ -719,7 +718,7 @@ impl CachedClient {
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
         response_callback: Callback,
-    ) -> impl Future<Output = Result<Payload, CachedClientError<CallBackError>>> {
+    ) -> impl std::future::Future<Output = Result<Payload, CachedClientError<CallBackError>>> {
         self.get_serde_with_retry_if(req, cache_entry, cache_control, response_callback, |_| true)
             .instrument(info_span!("get_serde_with_retry"))
     }
@@ -740,7 +739,7 @@ impl CachedClient {
         cache_control: CacheControl,
         response_callback: Callback,
         retry_callback: RetryCallback,
-    ) -> impl Future<Output = Result<Payload, CachedClientError<CallBackError>>> {
+    ) -> impl std::future::Future<Output = Result<Payload, CachedClientError<CallBackError>>> {
         self.get_cacheable_with_retry_if(
             req,
             cache_entry,
@@ -766,7 +765,8 @@ impl CachedClient {
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
         response_callback: Callback,
-    ) -> impl Future<Output = Result<Payload::Target, CachedClientError<CallBackError>>> {
+    ) -> impl std::future::Future<Output = Result<Payload::Target, CachedClientError<CallBackError>>>
+    {
         self.get_cacheable_with_retry_if(req, cache_entry, cache_control, response_callback, |_| {
             true
         })
