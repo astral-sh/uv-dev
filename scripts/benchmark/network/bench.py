@@ -46,8 +46,11 @@ def network_floor(
     required_waves: int,
     required_latency_ms: float | None = None,
     required_wait_ms: float = 0,
+    *,
+    netem: dict | None = None,
 ) -> float:
-    netem = netem_profile()
+    if netem is None:
+        netem = netem_profile()
     rates = [
         rate
         for rate in (

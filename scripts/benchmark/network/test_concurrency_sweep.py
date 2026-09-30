@@ -45,6 +45,7 @@ class ConcurrencySweepTests(unittest.TestCase):
             "stdout_sha256": output,
             "verified_tree": {"sha256": "installed", "entries": 10},
             "verified_files": {},
+            "frontend_protocols": None,
         }
 
     def test_limits_are_paired_with_the_same_binary(self) -> None:
@@ -108,6 +109,35 @@ class ConcurrencySweepTests(unittest.TestCase):
         fixtures.metadata[second.name + ".metadata"] = b"Name: example\nVersion: 2.0\n"
         with self.assertRaisesRegex(ValueError, "More than one wheel"):
             sweep.selections(fixtures)
+
+    def test_verifier_uses_recorded_network_and_rejects_drift(self) -> None:
+        data = self.data([1, 50])
+        data.update(
+            kind="download-concurrency-calibration",
+            revision="a" * 40,
+            binary={"sha256": "b" * 64, "version": "uv test (aaaaaaaaa)"},
+            profile={"latency_ms": 100},
+            netem={"rtt_ms": 200, "rate_mbit": 1},
+            selected=[
+                {"index_bytes": 50, "metadata_bytes": 250, "wheel_bytes": 1000000}
+            ],
+            workload="resolve",
+            http2_proxy=None,
+        )
+        for limit, result in data["results"].items():
+            result["strategy_floor"] = sweep.strategy_floor(
+                data["profile"], data["netem"], data["selected"], "resolve", int(limit)
+            )
+        self.assertEqual(data["results"]["1"]["strategy_floor"]["seconds"], 0.6)
+        with patch.object(sweep.bench, "run_one", return_value=self.observation(1)):
+            sweep.run_pairs(
+                self.binary, None, {}, self.trial, data, self.root / "result.json"
+            )
+        data["complete"] = True
+        sweep.verify_calibration(data)
+        data["results"]["1"]["pairs"][0]["candidate"]["seconds"] = 2
+        with self.assertRaisesRegex(ValueError, "measurements differ"):
+            sweep.verify_calibration(data)
 
 
 if __name__ == "__main__":

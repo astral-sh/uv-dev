@@ -72,6 +72,59 @@ def paired_summary(observations: list[dict]) -> dict:
     }
 
 
+def strategy_floor(profile, netem, selected, workload, limit):
+    required_bytes = sum(
+        item["index_bytes"]
+        + item["metadata_bytes" if workload == "resolve" else "wheel_bytes"]
+        for item in selected
+    )
+    waves = max(2, math.ceil(2 * len(selected) / limit))
+    return {
+        "required_bytes": required_bytes,
+        "required_waves": waves,
+        "seconds": bench.network_floor(profile, required_bytes, waves, netem=netem),
+    }
+
+
+def verify_calibration(data: dict) -> None:
+    if data.get("kind") != "download-concurrency-calibration" or not data.get(
+        "complete"
+    ):
+        raise ValueError("Calibration is incomplete")
+    if (
+        not re.fullmatch(r"[0-9a-f]{40}", data["revision"])
+        or not re.fullmatch(r"[0-9a-f]{64}", data["binary"]["sha256"])
+        or data["revision"][:9] not in data["binary"]["version"]
+        or data["pairs_per_limit"] < 2
+        or len(set(data["limits"])) != len(data["limits"])
+        or min([data["reference_limit"], *data["limits"]]) < 1
+        or set(data["results"]) != {str(limit) for limit in data["limits"]}
+    ):
+        raise ValueError("Calibration identities or limits differ")
+    for limit, result in data["results"].items():
+        if (
+            len(result["pairs"]) != data["pairs_per_limit"]
+            or result["summary"] != paired_summary(result["pairs"])
+            or result["strategy_floor"]
+            != strategy_floor(
+                data["profile"],
+                data["netem"],
+                data["selected"],
+                data["workload"],
+                int(limit),
+            )
+        ):
+            raise ValueError(f"Calibration measurements differ for limit {limit}")
+        for pair in result["pairs"]:
+            for side in ("reference", "candidate"):
+                check_equivalence(data["equivalence"], pair[side])
+                protocols = pair[side]["frontend_protocols"]
+                if data["http2_proxy"] and set(protocols or []) != {"HTTP/2.0"}:
+                    raise ValueError("HTTP/2 calibration used a different protocol")
+                if not data["http2_proxy"] and protocols is not None:
+                    raise ValueError("Unexpected HTTP/2 proxy observations")
+
+
 def run_pairs(binary, fixtures, profile, trial, data, output) -> None:
     order = random.Random(data["order_seed"])
     for round_number in range(data["warmups"] + data["pairs_per_limit"]):
@@ -214,11 +267,6 @@ def main() -> None:
         normalize_tree_symlink=[],
         verify_file=[],
     )
-    required_bytes = sum(
-        item["index_bytes"]
-        + item["metadata_bytes" if args.workload == "resolve" else "wheel_bytes"]
-        for item in selected
-    )
     data = {
         "kind": "download-concurrency-calibration",
         "revision": args.revision,
@@ -246,13 +294,10 @@ def main() -> None:
         "results": {},
     }
     for limit in args.limits:
-        waves = max(2, math.ceil(2 * len(selected) / limit))
         data["results"][str(limit)] = {
-            "strategy_floor": {
-                "required_bytes": required_bytes,
-                "required_waves": waves,
-                "seconds": bench.network_floor(profile, required_bytes, waves),
-            },
+            "strategy_floor": strategy_floor(
+                profile, data["netem"], selected, args.workload, limit
+            ),
             "pairs": [],
         }
     args.work_dir.mkdir(parents=True, exist_ok=True)
@@ -265,6 +310,7 @@ def main() -> None:
     ):
         raise ValueError("A pinned calibration input changed during the run")
     data["complete"] = True
+    verify_calibration(data)
     args.output.write_text(json.dumps(data, indent=2) + "\n")
     print(
         json.dumps(
