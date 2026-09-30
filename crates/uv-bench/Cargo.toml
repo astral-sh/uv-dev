@@ -164,6 +164,11 @@ path = "benches/environment_reinstall.rs"
 harness = false
 
 [[bench]]
+name = "concurrent_environments"
+path = "benches/concurrent_environments.rs"
+harness = false
+
+[[bench]]
 name = "installed_bytecode"
 path = "benches/installed_bytecode.rs"
 harness = false
