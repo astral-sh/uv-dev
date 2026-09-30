@@ -461,9 +461,6 @@ impl GitRemote {
     /// Creates a [`GitDatabase`] of this remote at `db_path`.
     pub(crate) fn db_at(&self, db_path: &Path) -> Result<GitDatabase> {
         let repo = GitRepository::open(db_path)?;
-        // Configure the current remote even for databases created by versions
-        // that fetched complete repositories without recording an origin.
-        repo.configure_promisor_remote(CHECKOUT_REMOTE, &self.url)?;
 
         Ok(GitDatabase {
             remote: self.clone(),
@@ -492,10 +489,6 @@ impl GitDatabase {
             .filter(GitCheckout::is_fresh)
         {
             Some(co) => {
-                // Refresh the checkout's promisor remote in case the URL changed.
-                co.repo
-                    .configure_promisor_remote(CHECKOUT_REMOTE, self.remote.url())?;
-
                 if self.lfs_ready == Some(true) {
                     if co.repo.lfs_fsck_objects(rev.as_str()) {
                         co.with_lfs_ready(Some(true))
@@ -601,12 +594,7 @@ impl GitCheckout {
                 .exec_with_output()?;
         }
 
-        let repo = GitRepository::open(into)?;
-        // Fetch missing objects from the original remote instead of the local
-        // database clone, which may itself be a partial clone.
-        repo.configure_promisor_remote(CHECKOUT_REMOTE, database.remote.url())?;
-
-        let checkout = Self::new(revision, repo);
+        let checkout = Self::new(revision, GitRepository::open(into)?);
         let lfs_ready = checkout.reset(
             database.lfs_ready,
             database.remote.url(),
@@ -663,6 +651,11 @@ impl GitCheckout {
     ) -> Result<Option<bool>> {
         let ok_file = self.repo.path.join(CHECKOUT_READY_LOCK);
         let _ = paths::remove_file(&ok_file);
+
+        // A reset can fetch missing objects. Use the original remote rather than
+        // the local database, which may itself be a partial clone.
+        self.repo
+            .configure_promisor_remote(CHECKOUT_REMOTE, original_remote_url)?;
 
         // We want to skip smudge if lfs was disabled for the repository
         // as smudge filters can trigger on a reset even if lfs artifacts
