@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use fs_err::tokio as fs;
 use futures::{FutureExt, TryStreamExt};
-use reqwest::{Response, StatusCode};
+use reqwest::StatusCode;
+use tokio::io::AsyncRead;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Instrument, debug, info_span, instrument, warn};
 use url::Url;
@@ -26,7 +27,7 @@ use uv_cache::{Cache, CacheBucket, CacheEntry, CacheShard, Removal, WheelCache};
 use uv_cache_info::CacheInfo;
 use uv_client::{
     BaseClientBuilder, CacheControl, CachedClientError, Connectivity, DataWithCachePolicy,
-    RegistryClient, RetryState,
+    RegistryClient, RetryState, resumable_bytes_stream,
 };
 use uv_configuration::{BuildKind, BuildOutput, NoSources};
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
@@ -997,7 +998,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
-        let download = |response, _: &mut RetryState| {
+        let download = async |response, retry_state: &mut RetryState| {
             async {
                 // At this point, we're seeing a new or updated source distribution. Initialize a
                 // new revision, to collect the source and built artifacts.
@@ -1006,8 +1007,16 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 // Download the source distribution.
                 debug!("Downloading source distribution: {source}");
                 let entry = cache_shard.shard(revision.id()).entry(SOURCE);
+                let reader = resumable_bytes_stream(
+                    response,
+                    client.unmanaged.uncached_client(url),
+                    url,
+                    retry_state,
+                )
+                .map_err(std::io::Error::other)
+                .into_async_read();
                 let (hashes, size) = self
-                    .download_archive(response, source, ext, entry.path(), hashes, &[])
+                    .download_archive(reader.compat(), source, ext, entry.path(), hashes, &[])
                     .await?;
 
                 Ok(revision
@@ -1016,6 +1025,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             }
             .boxed_local()
             .instrument(info_span!("download", source_dist = %source))
+            .await
         };
         let req = Self::request(url.clone(), client.unmanaged)?;
         let revision = client
@@ -2791,11 +2801,19 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
-        let download = |response, _: &mut RetryState| {
+        let download = async |response, retry_state: &mut RetryState| {
             async {
+                let reader = resumable_bytes_stream(
+                    response,
+                    client.unmanaged.uncached_client(url),
+                    url,
+                    retry_state,
+                )
+                .map_err(std::io::Error::other)
+                .into_async_read();
                 let (hashes, size) = self
                     .download_archive(
-                        response,
+                        reader.compat(),
                         source,
                         ext,
                         entry.path(),
@@ -2810,6 +2828,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             }
             .boxed_local()
             .instrument(info_span!("download", source_dist = %source))
+            .await
         };
         client
             .managed(async |client| {
@@ -2833,17 +2852,13 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     /// Download, extract, validate, and persist a source distribution into the cache.
     async fn download_archive(
         &self,
-        response: Response,
+        reader: impl AsyncRead + Unpin,
         source: &BuildableSource<'_>,
         ext: SourceDistExtension,
         target: &Path,
         hash_policy: ArchiveHashPolicy<'_>,
         existing_hashes: &[HashDigest],
     ) -> Result<(Vec<HashDigest>, u64), Error> {
-        let reader = response
-            .bytes_stream()
-            .map_err(std::io::Error::other)
-            .into_async_read();
         let expected_size = match source {
             BuildableSource::Dist(SourceDist::Registry(dist)) if dist.size_is_authoritative => {
                 dist.size()
@@ -2853,7 +2868,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         };
 
         let archive = ValidatedSourceArchive::extract(
-            reader.compat(),
+            reader,
             source,
             ext,
             self.build_context.cache(),
