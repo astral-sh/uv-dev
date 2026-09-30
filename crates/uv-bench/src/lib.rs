@@ -1,5 +1,6 @@
-use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::{self, BufRead, BufReader};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 /// Published wheels spanning Python source, application assets, and native extensions.
@@ -234,7 +235,59 @@ pub fn run_command(command: &mut Command) {
 }
 
 /// Copy a relocatable cache while retaining its relative symlink layout.
-pub fn copy_cache(source: &Path, destination: &Path) -> std::io::Result<()> {
+pub fn copy_cache(source: &Path, destination: &Path) -> io::Result<()> {
+    copy_cache_inner(source, destination, source, &BTreeMap::new())
+}
+
+/// Copy a cache without sharing file inodes with the source, retaining its internal hardlinks.
+pub fn copy_cache_with_hardlinks(
+    source: &Path,
+    destination: &Path,
+    groups: &[Vec<PathBuf>],
+) -> io::Result<()> {
+    let mut paths = BTreeSet::new();
+    let mut aliases = BTreeMap::new();
+    for group in groups {
+        let Some((canonical, links)) = group.split_first().filter(|(_, links)| !links.is_empty())
+        else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Hardlink groups must contain at least two paths",
+            ));
+        };
+        for path in group {
+            let relative = !path.as_os_str().is_empty()
+                && path.components().all(|component| match component {
+                    Component::Normal(_) => true,
+                    Component::Prefix(_)
+                    | Component::RootDir
+                    | Component::CurDir
+                    | Component::ParentDir => false,
+                });
+            if !relative || !paths.insert(path.clone()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Hardlink paths must be unique and relative to the cache",
+                ));
+            }
+        }
+        for link in links {
+            aliases.insert(link.clone(), canonical.clone());
+        }
+    }
+    copy_cache_inner(source, destination, source, &aliases)?;
+    for (alias, canonical) in aliases {
+        fs_err::hard_link(destination.join(canonical), destination.join(alias))?;
+    }
+    Ok(())
+}
+
+fn copy_cache_inner(
+    source: &Path,
+    destination: &Path,
+    root: &Path,
+    aliases: &BTreeMap<PathBuf, PathBuf>,
+) -> io::Result<()> {
     fs_err::create_dir_all(destination)?;
     for entry in fs_err::read_dir(source)? {
         let entry = entry?;
@@ -252,8 +305,13 @@ pub fn copy_cache(source: &Path, destination: &Path) -> std::io::Result<()> {
                 fs_err::os::windows::fs::symlink_file(link, target)?;
             }
         } else if file_type.is_dir() {
-            copy_cache(&entry.path(), &target)?;
-        } else {
+            copy_cache_inner(&entry.path(), &target, root, aliases)?;
+        } else if !aliases.contains_key(
+            entry
+                .path()
+                .strip_prefix(root)
+                .expect("Cache entries must be within the source root"),
+        ) {
             fs_err::copy(entry.path(), target)?;
         }
     }

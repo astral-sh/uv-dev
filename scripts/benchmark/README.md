@@ -75,6 +75,16 @@ installed files and cached wheel contents. Shared-cache cleanup requests one, ei
 installed package names, or the environment's complete dependency set. This models clearing one
 project's cached packages while retaining the packages used by other projects.
 
+Run `python3 scripts/benchmark/prepare-file-caches.py` to prepare content-addressed caches for
+Packse's runtime and Apache Airflow 3.0.6 with the Amazon, Google, and Microsoft Azure providers.
+The Airflow requirements use its official Python 3.12 constraints at
+[`b2e77273`](https://github.com/apache/airflow/blob/b2e77273cd65dd02e407997a97fe3584a14f1e96/constraints-3.12.txt)
+and a 2025-08-30 release cutoff. The checked-in requirements pin every artifact hash; only
+`dill==0.3.1.1` is built from source, with pinned build dependencies. Fixture manifests record
+installed versions and internal hardlink groups. Pruning workloads reconstruct independent caches
+and hardlinked environments before timing ordinary pruning and `--ci` pruning, with and without the
+installed environment retained.
+
 Concurrent-environment workloads create one, eight, or 32 independent Prefect runtime environments
 from the same warm wheel cache. They measure the complete batch of frozen `uv sync` commands in
 symlink and hardlink modes, including interpreter discovery and environment creation. Each sample
