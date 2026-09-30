@@ -4,13 +4,11 @@ use serde_json::json;
 use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-/// Expect one batch query for the given PyPI packages and return no vulnerabilities.
+/// Expect one batch query for the given PyPI packages and return one empty result per package.
 ///
-/// The [OSV batch API] identifies queries by result position. Its [response implementation]
-/// emits one result for each query in the request, including queries without vulnerabilities.
+/// The results follow the request order documented by the [OSV batch API].
 ///
 /// [OSV batch API]: https://github.com/google/osv.dev/blob/496c344c3ef1ef52144d2ac48969a8523e34061d/docs/api/post-v1-querybatch.md#L8-L9
-/// [response implementation]: https://github.com/google/osv.dev/blob/496c344c3ef1ef52144d2ac48969a8523e34061d/go/internal/api/query_affected.go#L302-L324
 pub fn mock_clean_batch(packages: &[(&str, &str)]) -> Mock {
     let queries = packages
         .iter()
