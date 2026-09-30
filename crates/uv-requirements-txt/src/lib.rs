@@ -360,7 +360,7 @@ impl RequirementsTxt {
 
     /// Parse a `requirements.txt` file, using the given cache to avoid re-reading files from disk.
     #[instrument(skip_all)]
-    pub async fn parse_with_cache(
+    pub(crate) async fn parse_with_cache(
         requirements_txt: impl Into<RequirementsInput>,
         working_dir: impl AsRef<Path>,
         client_builder: &BaseClientBuilder<'_>,
@@ -397,26 +397,6 @@ impl RequirementsTxt {
             requests,
             &mut visited,
             cache,
-        )
-        .await
-    }
-
-    /// Parse requirements from a string, using the given input for error messages and resolving
-    /// relative inputs.
-    pub async fn parse_str(
-        content: &str,
-        requirements_txt: impl Into<RequirementsInput>,
-        working_dir: impl AsRef<Path>,
-        client_builder: &BaseClientBuilder<'_>,
-        source_contents: &mut SourceCache,
-    ) -> Result<Self, RequirementsTxtFileError> {
-        Self::parse_str_with_requests(
-            content,
-            requirements_txt,
-            working_dir,
-            client_builder,
-            &mut SourceRequests::new(client_builder.concurrent_downloads()),
-            source_contents,
         )
         .await
     }
