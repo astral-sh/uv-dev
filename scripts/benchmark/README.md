@@ -69,6 +69,13 @@ Pass `--project-caches` to also prepare a separate cache for each frozen environ
 maintenance workloads copy these caches and reconstruct their environments before timing, retaining
 the real cache layout and links between installed files and cached wheel contents.
 
+Concurrent-environment workloads create one, eight, or 32 independent Prefect runtime environments
+from the same warm wheel cache. They measure the complete batch of frozen `uv sync` commands in
+symlink and hardlink modes, including interpreter discovery and environment creation. Each sample
+starts with fresh project directories, and cleanup happens outside the measured interval. This
+models the actor startup contention reported in
+[uv#12525](https://github.com/astral-sh/uv/issues/12525).
+
 Run `python3 scripts/benchmark/prepare-tools.py` to prime the package cache for the CLI tools in
 `tools.json`. Each tool has its own hashed dependency constraints, refreshed explicitly with
 `--refresh-locks`. Tool workloads reconstruct isolated installations offline and use one, five, or
