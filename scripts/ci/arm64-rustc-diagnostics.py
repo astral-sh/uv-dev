@@ -77,6 +77,7 @@ def memory_snapshot() -> dict[str, object]:
     }
     return {
         "time": time.time(),
+        "kernel_boot_id": read_text(Path("/proc/sys/kernel/random/boot_id")),
         "meminfo": meminfo,
         "vmstat": vmstat,
         "cgroup_membership": membership,
@@ -117,6 +118,23 @@ def write_json(path: Path, value: object) -> None:
 def rustc(arguments: list[str]) -> int:
     before = memory_snapshot()
     started = time.monotonic()
+    crate = argument_value(arguments, "--crate-name")
+    crate_type = argument_value(arguments, "--crate-type")
+    if crate == "uv" and crate_type == "bin":
+        print(
+            "RUSTC_START_DIAGNOSTIC "
+            + json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "crate": crate,
+                    "crate_type": crate_type,
+                    "before": before,
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
     completed = subprocess.run(
         [os.environ["UV_DIAGNOSTIC_REAL_RUSTC"], *arguments],
         check=False,
@@ -126,8 +144,8 @@ def rustc(arguments: list[str]) -> int:
     usage = resource.getrusage(resource.RUSAGE_CHILDREN)
     record = {
         "pid": os.getpid(),
-        "crate": argument_value(arguments, "--crate-name"),
-        "crate_type": argument_value(arguments, "--crate-type"),
+        "crate": crate,
+        "crate_type": crate_type,
         "target": argument_value(arguments, "--target"),
         "emit": argument_value(arguments, "--emit"),
         "profile_generate": any(
@@ -188,11 +206,28 @@ def observe_build(label: str, command: list[str]) -> int:
     root.mkdir(parents=True, exist_ok=True)
     before = memory_snapshot()
     started = time.monotonic()
+    next_report = started
+    print(
+        "BUILD_START_DIAGNOSTIC "
+        + json.dumps({"label": label, "before": before}, sort_keys=True),
+        flush=True,
+    )
     with (root / f"{label}-memory.jsonl").open("w") as samples:
         process = subprocess.Popen(command, close_fds=False)
         while True:
-            samples.write(json.dumps(memory_snapshot(), sort_keys=True) + "\n")
+            snapshot = memory_snapshot()
+            samples.write(json.dumps(snapshot, sort_keys=True) + "\n")
             samples.flush()
+            if time.monotonic() >= next_report:
+                # BuildKit can disappear before files in a failed layer are exported.
+                print(
+                    "MEMORY_DIAGNOSTIC "
+                    + json.dumps(
+                        {"label": label, "snapshot": snapshot}, sort_keys=True
+                    ),
+                    flush=True,
+                )
+                next_report = time.monotonic() + 15
             try:
                 returncode = process.wait(timeout=2)
                 break

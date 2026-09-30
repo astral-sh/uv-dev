@@ -12,6 +12,10 @@ on:
           - gnu-repeat
           - docker-repeat
           - docker-overlap
+      depot-project-id:
+        description: Dedicated Depot project for the Docker overlap test
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -173,6 +177,18 @@ jobs:
         source: ${{ fromJSON(inputs.suite == 'baseline' && '[{"name":"original","repository":"astral-sh/uv","sha":"7f29beb52565079609f44e82facf9b351252fed1","uv-digest":"04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424"},{"name":"marker","repository":"astral-sh/uv-dev","sha":"021c6c422b48ec4b7c49a5dd8d4299a244e0229d","uv-digest":"a7aed3216253ee804de3e2d8afa5073baa1a177335345d43845cd4165e43b711"}]' || '[{"name":"original","repository":"astral-sh/uv","sha":"7f29beb52565079609f44e82facf9b351252fed1","uv-digest":"04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424"}]') }}
         sample: ${{ fromJSON(inputs.suite == 'docker-overlap' && '[1,2,3,4]' || inputs.suite == 'docker-repeat' && '[1,2,3]' || '[1]') }}
     steps:
+      - name: Require an isolated project for overlapping builds
+        if: ${{ inputs.suite == 'docker-overlap' }}
+        env:
+          PROJECT_ID: ${{ inputs.depot-project-id }}
+        run: |
+          case "$PROJECT_ID" in
+            ""|c3ht4lmvqh|v094vdzkdt|7hd4vdzmw5)
+              echo "The overlap test requires a dedicated Depot project" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Check out diagnostics
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -215,7 +231,7 @@ jobs:
       - name: Build ARM64 image
         uses: depot/build-push-action@98e78adca7817480b8185f474a400b451d74e287 # v1.18.0
         with:
-          project: c3ht4lmvqh # dev/uv-dev
+          project: ${{ inputs.depot-project-id || 'c3ht4lmvqh' }}
           context: source
           file: source/Dockerfile
           platforms: linux/arm64

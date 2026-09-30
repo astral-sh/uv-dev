@@ -88,7 +88,37 @@ class CompilerDiagnosticsTest(unittest.TestCase):
             json.loads((self.root / "test-result.json").read_text())["returncode"], 3
         )
         self.assertTrue((self.root / "test-memory.jsonl").read_text())
+        self.assertIn("BUILD_START_DIAGNOSTIC", result.stdout)
+        self.assertIn("MEMORY_DIAGNOSTIC", result.stdout)
         self.assertIn("COMPILER_REPORT", result.stdout)
+
+    def test_reports_uv_compiler_start_before_exit(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "rustc",
+                "--",
+                "-c",
+                "raise SystemExit(42)",
+                "--crate-name",
+                "uv",
+                "--crate-type",
+                "bin",
+            ],
+            env=self.environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 42)
+        lines = result.stderr.splitlines()
+        self.assertTrue(lines[0].startswith("RUSTC_START_DIAGNOSTIC "))
+        self.assertTrue(lines[1].startswith("RUSTC_DIAGNOSTIC "))
+        started = json.loads(lines[0].split(" ", 1)[1])
+        completed = json.loads(lines[1].split(" ", 1)[1])
+        self.assertEqual(started["pid"], completed["pid"])
+        self.assertLessEqual(started["before"]["time"], completed["after"]["time"])
 
     def test_docker_attempts_have_distinct_build_inputs(self):
         original = """FROM ubuntu:24.04 AS build
