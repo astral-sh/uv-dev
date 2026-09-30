@@ -22,7 +22,7 @@ import json
 import runpy
 import sys
 import unittest
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import ModuleType
@@ -195,6 +195,40 @@ class PythonMirrorDownloadsTest(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertFalse(self.destination.exists())
         self.assert_final_files([])
+
+
+class PythonMirrorArgumentsTest(unittest.TestCase):
+    def parse_arguments(self, *arguments: str):
+        with patch.object(sys, "argv", [str(MIRROR.__file__), *arguments]):
+            return MIRROR.parse_arguments()
+
+    def test_default_download_concurrency(self):
+        self.assertEqual(self.parse_arguments().max_concurrent, 20)
+
+    def test_positive_download_concurrency(self):
+        for value in (1, 20, 100):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    self.parse_arguments("--max-concurrent", str(value)).max_concurrent,
+                    value,
+                )
+
+    def test_nonpositive_download_concurrency(self):
+        for value in (0, -1):
+            with self.subTest(value=value):
+                error = io.StringIO()
+                with redirect_stderr(error), self.assertRaises(SystemExit) as caught:
+                    self.parse_arguments("--max-concurrent", str(value))
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn("--max-concurrent", error.getvalue())
+                self.assertIn("must be greater than zero", error.getvalue())
+
+    def test_noninteger_download_concurrency(self):
+        error = io.StringIO()
+        with redirect_stderr(error), self.assertRaises(SystemExit) as caught:
+            self.parse_arguments("--max-concurrent", "many")
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("invalid int value", error.getvalue())
 
 
 class PythonMirrorCliTest(unittest.TestCase):

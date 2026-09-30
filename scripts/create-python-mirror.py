@@ -258,7 +258,10 @@ def parse_arguments():
         default=SELF_DIR / "mirror",
         help="Directory to store the downloaded files.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.max_concurrent <= 0:
+        parser.error("--max-concurrent must be greater than zero")
+    return args
 
 
 def main() -> int:
