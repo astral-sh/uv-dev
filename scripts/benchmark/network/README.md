@@ -19,6 +19,14 @@ static `PKG-INFO` metadata, so a `pip compile --no-deps --no-binary :all:` workl
 can exercise archive transfer and extraction without requiring a build backend.
 `python-fixtures.json` contains a pinned managed CPython archive. Manifest entries
 with `"kind": "raw"` are served as files without parsing package metadata.
+`make_scheduling_fixtures.py --directory DIR --manifest MANIFEST --profiles PROFILES`
+creates deterministic wheels for a small synthetic backtracking graph. Requiring
+`uv-bench-choice` and `uv-bench-pin==1.0` rejects releases 30 through 16 and selects
+release 15. The `slow-unused` profile delays metadata for older, unused releases
+to expose speculative requests that outlive the solution. Report this workload
+as synthetic; it measures request scheduling rather than a representative package
+installation. Replay waits for outstanding fixture handlers after timing ends,
+so cancelled responses are recorded and cannot overlap the next trial.
 
 Compare optimized binaries built from an exact parent and candidate commit:
 
