@@ -652,6 +652,23 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             return Ok(Metadata::from_dependency_metadata(metadata).into());
         }
 
+        // Without a metadata sidecar, reading a sufficiently small wheel transfers the entire
+        // archive. Cache that wheel so installation can reuse the bytes fetched during resolution.
+        if hash_policy == ArchiveHashPolicy::None
+            && let BuiltDist::Registry(registry) = dist
+            && registry.best_wheel().file.dist_info_metadata.is_none()
+            && self
+                .client
+                .unmanaged
+                .prefer_streaming_wheel_metadata(registry.best_wheel().file.size)
+        {
+            let wheel = self.get_wheel(dist, hash_policy).await?;
+            return Ok(ArchiveMetadata {
+                metadata: Metadata::from_metadata23(wheel.metadata()?),
+                hashes: wheel.hashes,
+            });
+        }
+
         let result = self
             .client
             .managed(|client| {
