@@ -31,7 +31,7 @@ impl FromStr for ReleaseArch {
         if s.bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
         {
-            Ok(Self(SmallString::from(s)))
+            Ok(Self(SmallString::from(s.to_ascii_lowercase())))
         } else {
             Err(ParseReleaseArchError)
         }
@@ -1201,8 +1201,8 @@ mod tests {
     #[test]
     fn release_arch() {
         assert_eq!(
-            ReleaseArch::from_str("13_14_x86_64").map(|release_arch| release_arch.to_string()),
-            Ok("13_14_x86_64".to_string())
+            ReleaseArch::from_str("11_0_STABLE_amd64").map(|release_arch| release_arch.to_string()),
+            Ok("11_0_stable_amd64".to_string())
         );
         assert_eq!(
             ReleaseArch::from_str("13_x86/64"),

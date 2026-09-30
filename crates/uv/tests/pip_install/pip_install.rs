@@ -17618,19 +17618,20 @@ fn build_backend_netbsd_uppercase_release() -> Result<()> {
     "#})?;
     project.child("src/casewheel/__init__.py").touch()?;
 
-    // Uppercase NetBSD releases produce valid wheels that uv rejects; see astral-sh/uv#22110.
+    // Uppercase NetBSD releases produce valid wheels that are compatible with the interpreter.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("./casewheel")
         .arg("--target")
         .arg("target")
         .arg("--python")
         .arg(netbsd_python.path()), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: .venv/bin/python
     Resolved 1 package in [TIME]
-    error: Failed to build `casewheel @ file://[TEMP_DIR]/casewheel`
-      cause: The built wheel `casewheel-1.0.0-cp312-cp312-netbsd_11_0_STABLE_amd64.whl` is not compatible with the current Python 3.12 on NetBSD x86_64
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + casewheel==1.0.0 (from file://[TEMP_DIR]/casewheel)
     ");
 
     Ok(())
