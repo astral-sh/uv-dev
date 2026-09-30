@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::fmt::Write as _;
 use std::future::ready;
 use std::io;
 use std::sync::Arc;
@@ -274,7 +275,7 @@ async fn check_wheel_archive_prefetch(advertised: bool) -> Result<()> {
             let sidecar = name == "gate" || (name == "choice" && advertised);
             let mut metadata = format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n");
             for requirement in &requirements {
-                metadata.push_str(&format!("Requires-Dist: {requirement}\n"));
+                writeln!(metadata, "Requires-Dist: {requirement}")?;
             }
             files.push(json!({
                 "filename": filename,
