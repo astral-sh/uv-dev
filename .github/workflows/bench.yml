@@ -25,7 +25,7 @@ jobs:
     runs-on: depot-ubuntu-22.04-arm-4
     # uv-dev benchmarks pull requests but imports its main-branch measurements from uv.
     if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: "Checkout Branch"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
