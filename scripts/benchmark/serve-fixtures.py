@@ -33,6 +33,7 @@ class Fixtures:
         python_archives: Path | None = None,
     ) -> None:
         self.files: dict[str, Path] = {}
+        self.source_archives: dict[str, Path] = {}
         self.metadata: dict[str, bytes] = {}
         self.requirements: dict[str, bytes] = {}
         self.python_archives: dict[str, Path] = {}
@@ -103,6 +104,10 @@ class Fixtures:
         for item in json.loads(manifest.read_text()):
             filename = item["filename"]
             path = directory / filename
+            if filename.endswith(".tar.gz") and item.get("replay", True):
+                if not path.is_file():
+                    raise FileNotFoundError(f"Run prepare-fixtures.py first: {path}")
+                self.source_archives[filename] = path
             if requirements_path := item.get("requirements-path"):
                 self.requirements[requirements_path] = path.read_bytes()
             if queries := item.get("osv-queries"):
@@ -299,7 +304,9 @@ class Handler(BaseHTTPRequestHandler):
             if metadata is not None:
                 self.respond(metadata, "application/octet-stream", head=head)
                 return
-            file = self.server.fixtures.files.get(filename)
+            file = self.server.fixtures.files.get(
+                filename
+            ) or self.server.fixtures.source_archives.get(filename)
             if file is not None:
                 self.serve_file(file, head=head)
                 return

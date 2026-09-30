@@ -50,6 +50,7 @@ SUITES = (
     "python_concurrent_install",
     "python_bin_links",
     "cache_management",
+    "source_cache_prune",
     "virtualenv_creation",
     "concurrent_downloads",
     "local_wheel_concurrency",

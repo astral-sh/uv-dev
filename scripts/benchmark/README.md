@@ -75,6 +75,12 @@ installed files and cached wheel contents. Shared-cache cleanup requests one, ei
 installed package names, or the environment's complete dependency set. This models clearing one
 project's cached packages while retaining the packages used by other projects.
 
+Retained-source pruning uses the published Flask 3.1.1 and Django 5.2.6 source archives. It builds
+each archive through its pinned PEP 517 backend, checks that ordinary pruning retains the complete
+source payload, and copies the resulting cache before each measured `uv cache prune` invocation.
+Local archive and replay-server URL cases exercise both source-revision pointer formats. Cache
+preparation and copying are excluded from the timing.
+
 Run `python3 scripts/benchmark/prepare-file-caches.py` to prepare content-addressed caches for
 Packse's runtime and Apache Airflow 3.0.6 with the Amazon, Google, and Microsoft Azure providers.
 The Airflow requirements use its official Python 3.12 constraints at
@@ -102,12 +108,12 @@ execution. Each measured invocation starts with its own populated cache and a pr
 environment, so recreating an environment cannot accumulate abandoned environments across samples.
 
 Network workloads use `serve-fixtures.py` with the pinned Python 3.11 interpreter. It serves the
-prepared wheels, their actual core metadata, and Simple API listings derived from those wheels or an
-immutable lockfile. The server binds an ephemeral loopback port and applies a fixed 20 ms request
-delay to model an ordinary remote index without relying on live service timing. Wheel responses
-support byte ranges; only locally prepared artifact bodies can be downloaded. Fixtures marked
-`"replay": false` are used only by local-file workloads and do not change the replayed package
-listings.
+prepared wheels and source archives, wheel core metadata, and Simple API listings derived from
+wheels or an immutable lockfile. The server binds an ephemeral loopback port and applies a fixed 20
+ms request delay to model an ordinary remote index without relying on live service timing. Wheel
+responses support byte ranges; only locally prepared artifact bodies can be downloaded. Fixtures
+marked `"replay": false` are used only by local-file workloads and do not change the replayed
+package listings.
 
 The macOS certificate workload compares bundled and system certificate configuration during real
 metadata resolution. It uses plain HTTP replay requests to isolate client initialization and native
