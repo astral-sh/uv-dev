@@ -1191,8 +1191,6 @@ mod tests {
     use std::collections::HashSet;
 
     use uv_platform::{Arch, Libc, Os, Platform};
-    #[cfg(target_arch = "aarch64")]
-    use uv_python_types::ArchRequest;
     use uv_python_types::{LenientImplementationName, PythonInstallationKey};
 
     use super::*;
