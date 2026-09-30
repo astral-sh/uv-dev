@@ -3,12 +3,15 @@
 import hashlib
 import io
 import logging
+import os
 import re
+import selectors
+import signal
 import stat
 import subprocess
+import time
 import zlib
 from dataclasses import dataclass
-from threading import Event, Timer
 from urllib.parse import quote, urlencode
 from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile
 
@@ -34,6 +37,7 @@ MAX_MANIFEST_BYTES = 64 * 1024
 MAX_MANIFEST_ARCHIVE_BYTES = 128 * 1024
 MANIFEST_FILENAME = "manifest.json"
 MANIFEST_TIMEOUT_SECONDS = 60
+MANIFEST_CLEANUP_TIMEOUT_SECONDS = 1
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +347,41 @@ def decode_artifact(value: object, source: ActionsRun, name: str) -> ArtifactIde
     )
 
 
+def _stop_manifest_downloader(
+    process: subprocess.Popen[bytes], process_group: int | None
+) -> None:
+    if (
+        process_group == process.pid
+        and process_group is not None
+        and process_group > 0
+        and process_group != os.getpgrp()
+    ):
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            # On macOS, a group containing only the unreaped leader can return
+            # EPERM. Reap that leader without signaling a possibly reused group.
+            if process.poll() is None:
+                logger.warning("Could not stop the manifest downloader group")
+        except OSError:
+            logger.warning(
+                "Could not stop the manifest downloader group", exc_info=True
+            )
+    if process.poll() is None:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        except OSError:
+            logger.warning("Could not stop the manifest downloader", exc_info=True)
+    try:
+        process.wait(timeout=MANIFEST_CLEANUP_TIMEOUT_SECONDS)
+    except OSError, subprocess.TimeoutExpired:
+        logger.warning("Could not reap the manifest downloader", exc_info=True)
+
+
 class ActionsGitHub(GitHub):
     def list_manifest_artifacts(
         self, repository: RepositoryIdentity, name: str, *, limit: int
@@ -422,39 +461,61 @@ class ActionsGitHub(GitHub):
             "GET",
             f"repos/{artifact.repository.name}/actions/artifacts/{artifact.identifier}/zip",
         ]
-        timed_out = Event()
-        with subprocess.Popen(
+        deadline = time.monotonic() + MANIFEST_TIMEOUT_SECONDS
+        returncode = None
+        process_group = None
+        process = subprocess.Popen(
             arguments,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=self._environment(),
-        ) as process:
-
-            def expire() -> None:
-                if process.poll() is None:
-                    timed_out.set()
-                    process.kill()
-
-            timer = Timer(MANIFEST_TIMEOUT_SECONDS, expire)
-            timer.daemon = True
-            timer.start()
+            start_new_session=True,
+        )
+        try:
+            observed_group = os.getpgid(process.pid)
+            if observed_group != process.pid or observed_group == os.getpgrp():
+                raise RuntimeError(
+                    "The manifest downloader has no private process group"
+                )
+            process_group = observed_group
             try:
                 if process.stdout is None:
                     raise RuntimeError("The manifest downloader has no output stream")
-                content = process.stdout.read(MAX_MANIFEST_ARCHIVE_BYTES + 1)
-                if len(content) > MAX_MANIFEST_ARCHIVE_BYTES:
-                    raise ValueError("The JSON manifest archive exceeds the size limit")
-                returncode = process.wait()
-            finally:
-                timer.cancel()
-                if process.poll() is None:
-                    process.kill()
-                process.wait()
-        if timed_out.is_set():
-            raise subprocess.TimeoutExpired(arguments, MANIFEST_TIMEOUT_SECONDS)
+                content = bytearray()
+                with selectors.DefaultSelector() as selector:
+                    selector.register(process.stdout, selectors.EVENT_READ)
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(
+                                arguments, MANIFEST_TIMEOUT_SECONDS
+                            )
+                        if not selector.select(remaining):
+                            continue
+                        chunk = os.read(
+                            process.stdout.fileno(),
+                            min(65536, MAX_MANIFEST_ARCHIVE_BYTES + 1 - len(content)),
+                        )
+                        if not chunk:
+                            break
+                        content.extend(chunk)
+                        if len(content) > MAX_MANIFEST_ARCHIVE_BYTES:
+                            raise ValueError(
+                                "The JSON manifest archive exceeds the size limit"
+                            )
+                returncode = process.wait(timeout=max(0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                raise subprocess.TimeoutExpired(
+                    arguments, MANIFEST_TIMEOUT_SECONDS
+                ) from None
+        finally:
+            if returncode is None:
+                _stop_manifest_downloader(process, process_group)
+            if process.stdout is not None:
+                process.stdout.close()
         if returncode:
             raise subprocess.CalledProcessError(returncode, arguments)
-        return decode_json_manifest(artifact, content)
+        return decode_json_manifest(artifact, bytes(content))
 
     def list_successful_workflow_runs(
         self, repository: RepositoryName, workflow: str, *, limit: int
