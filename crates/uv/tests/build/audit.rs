@@ -161,6 +161,48 @@ async fn audit_no_vulnerabilities() {
     ");
 }
 
+/// Audit a project when OSV omits the result for a query.
+#[tokio::test]
+async fn audit_missing_batch_result() {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+    "#})
+        .unwrap();
+
+    context.lock().assert().success();
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": []
+        })))
+        .mount(&server)
+        .await;
+
+    // Reporting a clean audit when OSV omitted a result can hide vulnerabilities; see astral-sh/uv#22102.
+    uv_snapshot!(context.filters(), context
+        .audit()
+        .arg("--preview-features")
+        .arg("audit")
+        .arg("--frozen")
+        .arg("--service-url")
+        .arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Found no known vulnerabilities and no adverse project statuses in 1 package
+    ");
+}
+
 /// Audit a project with no vulnerabilities found, emitting JSON output.
 #[tokio::test]
 async fn audit_json_no_vulnerabilities() {
