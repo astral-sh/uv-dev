@@ -56,6 +56,15 @@ request and permits arbitrary batching and overlap after each pagination token
 becomes available. Report this as a synthetic audit workload. The pagination
 control exercises the API contract with deliberately small response pages.
 
+`make_tool_list_fixtures.py --directory DIR --packages N` creates two releases
+of each of `N` console-script packages and commands that install the older
+releases locally. Set `UV_TOOL_DIR={work}/tools` and
+`UV_TOOL_BIN_DIR={work}/bin` with `--env` to isolate each trial. The
+`latest_index_oracle.py` reference fetches the known Simple API pages through a
+bounded pool of persistent HTTP/1.1 connections. Its bound includes required
+response bytes and request waves, while its measured reference also pays the
+configured connection delay and records any immediate retries.
+
 Compare optimized binaries built from an exact parent and candidate commit:
 
 ```sh

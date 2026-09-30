@@ -21,6 +21,7 @@ def wheel(
     *,
     build_tag: int | None = None,
     payload_bytes: int = 0,
+    console_script: bool = False,
 ) -> dict:
     stem = name.replace("-", "_")
     dist_info = f"{stem}-{version}.0.dist-info"
@@ -39,6 +40,11 @@ def wheel(
             + (f"Build: {build_tag}\n".encode() if build_tag is not None else b"")
         ),
     }
+    if console_script:
+        contents[f"{stem}/cli.py"] = b"def main():\n    return None\n"
+        contents[f"{dist_info}/entry_points.txt"] = (
+            f"[console_scripts]\n{name} = {stem}.cli:main\n".encode()
+        )
     payload_path = f"{stem}/payload.bin"
     if payload_bytes:
         contents[payload_path] = random.Random(version).randbytes(payload_bytes)
