@@ -64,6 +64,9 @@ jobs:
       - name: "Prepare immutable Git fixtures"
         run: python3 scripts/benchmark/prepare-git.py
 
+      - name: "Prepare pinned Git runtime"
+        run: python3 scripts/benchmark/git-runtime.py prepare
+
       - name: "Prepare pinned Git release tags"
         run: python3 scripts/benchmark/prepare-git-tags.py
 
