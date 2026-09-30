@@ -8,12 +8,14 @@ use rustc_hash::FxHashMap;
 
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::{BaseClient, BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::Concurrency;
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{IndexCapabilities, RequiresPython};
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
+use uv_pep508::MarkerEnvironment;
+use uv_platform_tags::Platform;
 use uv_python::LenientImplementationName;
 use uv_settings::{Combine, ResolverInstallerOptions};
 use uv_tool::InstalledTools;
@@ -121,31 +123,50 @@ pub(crate) async fn list(
 
         let reporter = LatestVersionReporter::from(printer).with_length(valid_tools.len() as u64);
 
+        // Connection pools can be shared between tools with the same interpreter metadata. The
+        // user agent belongs to the underlying HTTP client, while each tool's index and keyring
+        // settings belong to its middleware.
+        let mut clients: Vec<(&MarkerEnvironment, &Platform, BaseClient)> = Vec::new();
+
         // Fetch the latest version for each tool.
         let mut fetches = futures::stream::iter(&valid_tools)
             .map(|(name, tool, tool_env, _version)| {
-                let client_builder = client_builder.clone();
                 let download_concurrency = download_concurrency.clone();
-                let args = args.clone();
-                let filesystem = filesystem.clone();
-                async move {
-                    let capabilities = IndexCapabilities::default();
-                    let settings = ResolverInstallerSettings::from(args.combine(
-                        ResolverInstallerOptions::from(tool.options().clone()).combine(filesystem),
-                    ));
-                    let interpreter = tool_env.environment().interpreter();
+                let settings = ResolverInstallerSettings::from(
+                    args.clone().combine(
+                        ResolverInstallerOptions::from(tool.options().clone())
+                            .combine(filesystem.clone()),
+                    ),
+                );
+                let interpreter = tool_env.environment().interpreter();
+                let builder = RegistryClientBuilder::new(
+                    client_builder
+                        .clone()
+                        .keyring(settings.resolver.keyring_provider),
+                    cache.clone().with_refresh(Refresh::All(Timestamp::now())),
+                )
+                .index_locations(settings.resolver.index_locations.clone())
+                .index_strategy(settings.resolver.index_strategy)
+                .markers(interpreter.markers())
+                .platform(interpreter.platform());
+                let client = if let Some((_, _, client)) =
+                    clients.iter().find(|(markers, platform, _)| {
+                        *markers == interpreter.markers() && *platform == interpreter.platform()
+                    }) {
+                    builder.wrap_existing(client)
+                } else {
+                    builder.build().inspect(|client| {
+                        clients.push((
+                            interpreter.markers(),
+                            interpreter.platform(),
+                            client.cached_client().uncached().clone(),
+                        ));
+                    })
+                };
 
-                    let client = RegistryClientBuilder::new(
-                        client_builder
-                            .clone()
-                            .keyring(settings.resolver.keyring_provider),
-                        cache.clone().with_refresh(Refresh::All(Timestamp::now())),
-                    )
-                    .index_locations(settings.resolver.index_locations.clone())
-                    .index_strategy(settings.resolver.index_strategy)
-                    .markers(interpreter.markers())
-                    .platform(interpreter.platform())
-                    .build()?;
+                async move {
+                    let client = client?;
+                    let capabilities = IndexCapabilities::default();
 
                     let requires_python = RequiresPython::greater_than_equal_version(
                         interpreter.python_full_version(),
