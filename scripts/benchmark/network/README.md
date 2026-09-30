@@ -180,6 +180,9 @@ lower bound accounts for different response delays along each index-to-metadata 
 `find_links_oracle.py` accepts repeated `--index-path` arguments, fetches every
 configured flat index concurrently, and then verifies one selected metadata sidecar.
 It reports both a known-package minimum and an all-index transfer reference.
+`make_duplicate_links_fixtures.py --directory DIR` creates a larger flat index
+for repeated-location studies. Give the oracle each unique location once, and
+retain single-location and distinct-location controls.
 Its `--route versions` mode stops after reading the index pages, as an outdated
 version lookup does. `make_outdated_fixtures.py --directory DIR` creates two wheel
 releases, setup commands that install the older release, and a nine-index latency
