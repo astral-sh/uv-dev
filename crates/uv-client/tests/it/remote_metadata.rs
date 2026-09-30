@@ -82,7 +82,7 @@ async fn remote_metadata_small_wheel_request_strategy() -> Result<()> {
                     .insert_header(ACCEPT_RANGES, "bytes")
                     .insert_header(CONTENT_LENGTH, wheel.len().to_string()),
             )
-            .expect(if use_ranges { 1 } else { 0 })
+            .expect(u64::from(use_ranges))
             .mount(&server)
             .await;
         let ranged_wheel = wheel.clone();
@@ -90,7 +90,7 @@ async fn remote_metadata_small_wheel_request_strategy() -> Result<()> {
             .and(path("/ok-1.0.0-py3-none-any.whl"))
             .and(header_exists(RANGE.as_str()))
             .respond_with(move |request: &Request| wheel_range_response(request, &ranged_wheel))
-            .expect(if use_ranges { 1 } else { 0 })
+            .expect(u64::from(use_ranges))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -101,7 +101,7 @@ async fn remote_metadata_small_wheel_request_strategy() -> Result<()> {
                     .set_body_raw(wheel.clone(), "application/octet-stream")
                     .insert_header("Cache-Control", "public, max-age=3600"),
             )
-            .expect(if use_ranges { 0 } else { 1 })
+            .expect(u64::from(!use_ranges))
             .mount(&server)
             .await;
         let cache = Cache::temp()?.init().await?;
