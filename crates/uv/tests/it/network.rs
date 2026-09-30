@@ -250,6 +250,134 @@ where
     (server, shutdown_tx)
 }
 
+async fn check_wheel_archive_prefetch(advertised: bool) -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    for (name, versions) in [("root", 1), ("gate", 1), ("choice", 2)] {
+        let mut files = Vec::new();
+        for number in 1..=versions {
+            let version = format!("{number}.0").parse()?;
+            let requirements = match name {
+                "root" => vec!["gate==1.0".parse()?, "choice".parse()?],
+                "gate" => vec!["choice==1.0".parse()?],
+                _ => Vec::new(),
+            };
+            let (filename, wheel) = uv_test::packse::generate_wheel(
+                &name.parse()?,
+                &version,
+                &requirements,
+                &std::collections::BTreeMap::new(),
+                None,
+                "py3-none-any",
+                &[],
+            );
+            let sidecar = name == "gate" || (name == "choice" && advertised);
+            let mut metadata = format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n");
+            for requirement in &requirements {
+                metadata.push_str(&format!("Requires-Dist: {requirement}\n"));
+            }
+            files.push(json!({
+                "filename": filename,
+                "url": format!("/files/{filename}"),
+                "hashes": {"sha256": format!("{:x}", Sha256::digest(&wheel))},
+                "size": wheel.len(),
+                "core-metadata": sidecar,
+                "upload-time": "2024-01-01T00:00:00Z",
+            }));
+            Mock::given(method("HEAD"))
+                .and(wiremock::matchers::path(format!("/files/{filename}")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("Content-Length", wheel.len().to_string()),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(wiremock::matchers::path(format!("/files/{filename}")))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+                .mount(&server)
+                .await;
+            let mut response = ResponseTemplate::new(200).set_body_raw(metadata, "text/plain");
+            if name == "gate" {
+                response = response.set_delay(Duration::from_millis(300));
+            }
+            Mock::given(method("GET"))
+                .and(wiremock::matchers::path(format!(
+                    "/files/{filename}.metadata"
+                )))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path(format!("/simple/{name}/")))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                json!({"name": name, "files": files}).to_string(),
+                "application/vnd.pypi.simple.v1+json",
+            ))
+            .mount(&server)
+            .await;
+    }
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("root==1.0\n")?;
+    let output = context
+        .pip_compile()
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .arg("--default-index")
+        .arg(format!("{}/simple", server.uri()))
+        .arg("requirements.in")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        "choice==1.0\ngate==1.0\nroot==1.0\n"
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.method.as_str() == "HEAD"
+                && request.url.path() == "/files/root-1.0-py3-none-any.whl")
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.url.path() == "/files/choice-2.0-py3-none-any.whl")
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .any(|request| request.url.path() == "/files/choice-2.0-py3-none-any.whl.metadata"),
+        advertised
+    );
+    assert!(requests.iter().any(|request| request.url.path()
+        == if advertised {
+            "/files/choice-1.0-py3-none-any.whl.metadata"
+        } else {
+            "/files/choice-1.0-py3-none-any.whl"
+        }));
+    Ok(())
+}
+
+/// A registry without range requests does not trigger speculative whole-wheel streams.
+#[tokio::test]
+async fn resolver_does_not_prefetch_no_range_wheels() -> Result<()> {
+    check_wheel_archive_prefetch(false).await
+}
+
+/// A registry without range requests can still serve cheap metadata sidecars.
+#[tokio::test]
+async fn resolver_prefetches_no_range_wheel_sidecars() -> Result<()> {
+    check_wheel_archive_prefetch(true).await
+}
+
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
 #[tokio::test]
 async fn invalid_ssl_cert_file_warns_default_roots_are_disabled() {

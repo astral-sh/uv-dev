@@ -2278,6 +2278,16 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     }
                 }
 
+                // A wheel without a metadata sidecar or working range requests can require
+                // streaming the whole archive. Fetch it only if the solver selects that version.
+                if let Some(wheel) = dist.wheel()
+                    && wheel.file.dist_info_metadata.is_none()
+                    && !self.capabilities.supports_range_requests(&wheel.index)
+                {
+                    debug!("Skipping wheel archive prefetch for: {package_name}");
+                    return Ok(None);
+                }
+
                 // Avoid prefetching source distributions with unbounded lower-bound ranges. This
                 // often leads to failed attempts to build legacy versions of packages that are
                 // incompatible with modern build tools.
