@@ -41,6 +41,16 @@ The observed release boundary matches the implementation. astral-sh/uv#21853 cha
 
 Before the parent regression pull request, existing tests did not cover this case. `crates/uv-platform-tags/src/tags.rs`, test `test_platform_tags_bsd`, asserted that `11.0_STABLE` generates `netbsd_11_0_stable_amd64`, but did not compare that tag with an uppercase parsed wheel tag. `crates/uv/tests/pip_install/pip_install.rs`, test `build_backend_wrong_wheel_platform`, verified rejection of genuinely incompatible built-wheel Python tags and the associated error path, but did not exercise NetBSD or case normalization. The parent pull request added `build_backend_netbsd_uppercase_release` to cover the missing end-to-end case.
 
+## Workaround
+
+The reporter confirmed that forcing maturin to emit a lowercase NetBSD release tag avoids the failure:
+
+```console
+MATURIN_NETBSD_VERSION=11.0_stable uv sync
+```
+
+This is a temporary workaround for affected maturin builds: it changes the built wheel's platform tag from `netbsd_11_0_STABLE_amd64` to the lowercase form accepted by uv 0.12.21. It does not address uv's case-preserving wheel-tag parsing.
+
 ## Classification
 
 This is a reproducible regression and a bug. A wheel built for the active NetBSD interpreter is rejected solely because its valid platform tag retains uppercase characters from the release name. The same uppercase fixture installs with uv 0.12.17, and the equivalent lowercase fixture installs with uv 0.12.21.
@@ -60,4 +70,4 @@ Focused debug-profile validation passed for `platform_tag::tests::release_arch`,
 - astral-sh/uv#21846 — Closed issue reporting the original casing mismatch on NetBSD 11 and Python 3.14. It involved a lowercase wheel tag compared with uv's then-uppercase generated compatible tag.
 - astral-sh/uv#21853 — Merged pull request that fixed astral-sh/uv#21846 by lowercasing generated NetBSD and other BSD-like platform tags. It shipped in uv 0.12.18 and introduced the demonstrated inverse mismatch for uppercase wheel tags.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/2231
+Pull request: astral-sh/uv-dev#2231
