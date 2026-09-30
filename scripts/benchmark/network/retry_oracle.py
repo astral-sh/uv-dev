@@ -44,11 +44,17 @@ def main() -> None:
     parser.add_argument("--profiles", type=Path, required=True)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--filename", required=True)
+    parser.add_argument("--flat-index-path")
     parser.add_argument("--max-delay", type=float, default=30)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.max_delay < 0:
         parser.error("--max-delay cannot be negative")
+    if (
+        args.flat_index_path is not None
+        and re.fullmatch(r"/flat/[A-Za-z0-9_-]+", args.flat_index_path) is None
+    ):
+        parser.error("--flat-index-path must identify one replay find-links page")
     profile = json.loads(args.profiles.read_text())[args.profile]
     fixtures = bench.Fixtures(
         args.manifest, args.directory, profile.get("pep658", True)
@@ -63,7 +69,11 @@ def main() -> None:
         parser.error("select a distribution with advertised metadata")
     package, entry = matches[0]
     paths = [
-        (f"/simple/{package}/", fixtures.simple[package]),
+        (
+            (args.flat_index_path, fixtures.flat)
+            if args.flat_index_path
+            else (f"/simple/{package}/", fixtures.simple[package])
+        ),
         (entry["url"] + ".metadata", fixtures.metadata[args.filename + ".metadata"]),
     ]
     server = bench.Server(fixtures, profile)
@@ -89,6 +99,7 @@ def main() -> None:
             except (
                 urllib.error.URLError,
                 http.client.RemoteDisconnected,
+                http.client.IncompleteRead,
                 ConnectionError,
             ):
                 if attempt == 3:
@@ -109,7 +120,7 @@ def main() -> None:
     required_waves = len(paths)
     required_latency = 0
     required_wait = 0
-    for path, _ in paths:
+    for path, body in paths:
         failure = profile.get("path_failures", {}).get(
             path,
             {
@@ -117,11 +128,15 @@ def main() -> None:
                 "count": profile.get("fail_count", 0),
             },
         )
+        cut = failure.get("cut_after_bytes", 0)
+        truncated = 0 < cut < len(body)
         count = (
             failure.get("count", 0)
-            if failure.get("status") or failure.get("disconnect")
+            if failure.get("status") or failure.get("disconnect") or truncated
             else 0
         )
+        if truncated and not failure.get("status") and not failure.get("disconnect"):
+            required_bytes += count * cut
         required_waves += count
         latency = max(
             0,
@@ -137,6 +152,7 @@ def main() -> None:
         "netem": bench.netem_profile(),
         "manifest_sha256": bench.digest(args.manifest),
         "filename": args.filename,
+        "flat_index_path": args.flat_index_path,
         "max_delay_seconds": args.max_delay,
         "seconds": seconds,
         "required_bytes": required_bytes,
@@ -150,7 +166,7 @@ def main() -> None:
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
-        "scope": "One known distribution. Fetch and verify its index and advertised metadata, retrying transient HTTP responses and disconnected requests up to three times per URL. Valid server delays are capped at the recorded maximum; missing or invalid advice and transport failures have zero oracle backoff. The bound includes fixed numeric Retry-After waits on this serial request chain. HTTP-date waits have a conservative zero minimum because clock and whole-second rounding vary. It excludes headers, TCP/TLS, and CPU costs.",
+        "scope": "One known distribution. Fetch and verify its index and advertised metadata, retrying transient HTTP responses, disconnected requests, and truncated bodies up to three times per URL. Valid server delays are capped at the recorded maximum; missing or invalid advice and transport failures have zero oracle backoff. The bound includes required truncated prefixes and fixed numeric Retry-After waits on this serial request chain. HTTP-date waits have a conservative zero minimum because clock and whole-second rounding vary. It excludes headers, TCP/TLS, and CPU costs.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")

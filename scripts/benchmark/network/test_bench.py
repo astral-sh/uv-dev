@@ -114,6 +114,36 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual([event["bytes"] for event in events], [0, len(self.body)])
         self.assertEqual(events[0]["injected_disconnect"], "before-headers")
 
+    def test_truncated_metadata_body_is_recorded(self) -> None:
+        self.fixtures.simple["example"] = b'{"name":"example","files":[]}'
+        for path, body in (
+            ("/simple/example/", self.fixtures.simple["example"]),
+            ("/flat/extra", self.fixtures.flat),
+        ):
+            with self.subTest(path=path):
+                server = self.server(
+                    {"path_failures": {path: {"cut_after_bytes": 17, "count": 1}}}
+                )
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+                try:
+                    connection.request("GET", path)
+                    response = connection.getresponse()
+                    with self.assertRaises(http.client.IncompleteRead) as error:
+                        response.read()
+                    self.assertEqual(error.exception.partial, body[:17])
+                    connection.close()
+                    connection.request("GET", path)
+                    response = connection.getresponse()
+                    self.assertEqual(response.read(), body)
+                finally:
+                    connection.close()
+                server.wait_idle()
+                events = sorted(server.events, key=lambda event: event["attempt"])
+                self.assertEqual([event["status"] for event in events], [200, 200])
+                self.assertEqual([event["bytes"] for event in events], [17, len(body)])
+                self.assertEqual(events[0]["response_length"], len(body))
+                self.assertTrue(events[0]["injected_disconnect"])
+
     def test_connection_reuse_is_recorded(self) -> None:
         server = self.server({})
         connection = http.client.HTTPConnection("127.0.0.1", server.server_port)

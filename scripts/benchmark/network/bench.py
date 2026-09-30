@@ -764,13 +764,15 @@ class Handler(BaseHTTPRequestHandler):
                 if is_artifact and event["attempt"] <= profile.get("cut_count", 0)
                 else 0
             )
+            if status in {200, 206} and event["attempt"] <= failure.get("count", 0):
+                cut = failure.get("cut_after_bytes", cut)
             if isinstance(body, Path):
                 with body.open("rb") as source:
                     source.seek(start)
                     self.send_body(source.read, length, cut, event)
             else:
                 source = io.BytesIO(body[start : end + 1])
-                self.send_body(source.read, length, 0, event)
+                self.send_body(source.read, length, cut, event)
         except (BrokenPipeError, ConnectionResetError) as error:
             event["client_disconnect"] = type(error).__name__
         finally:

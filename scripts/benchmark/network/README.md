@@ -169,6 +169,9 @@ matching connection before response headers. The trace records status `0`, zero
 response bytes, and `injected_disconnect: "before-headers"`. Use direct HTTP/1.1
 replay for this fault; a reverse proxy can translate a backend disconnect into an
 HTTP error response.
+Use `{"cut_after_bytes": 32, "count": 1}` to truncate a matching successful
+response after its headers and first 32 body bytes. This also applies to index
+pages and metadata sidecars, whose traces retain the advertised response length.
 Traces identify origin connections, including reuse across requests. Set
 `connection_latency_ms` to add a one-time delay after each origin connection is
 accepted; this isolates connection setup costs in application replay. Use kernel
@@ -277,6 +280,9 @@ fixed numeric delays on the serial request path. Pass the reported wait with
 at either metadata request, plus HTTP status controls. The retry oracle follows
 these transport failures immediately and includes their request latency in the
 recorded serial path.
+`first-body-retry-profiles.json` truncates Simple API pages and metadata sidecars
+after headers. The retry oracle includes the lost prefixes in its byte bound;
+`--flat-index-path /flat/all` selects a find-links page for the same experiment.
 `make_publish_fixtures.py --directory DIR` creates a batch of distinct wheel builds
 for repeated `publish --dry-run --check-url` checks. `publish_check_oracle.py` reads
 one current index per known package and verifies every selected local file against
