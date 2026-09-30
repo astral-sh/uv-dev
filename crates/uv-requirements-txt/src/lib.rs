@@ -1684,6 +1684,8 @@ fn calculate_row_column(content: &str, position: usize) -> (usize, usize) {
 #[cfg(test)]
 mod test {
     use std::collections::BTreeSet;
+    #[cfg(feature = "http")]
+    use std::fmt::Write;
     use std::path::{Path, PathBuf};
 
     use anyhow::Result;
@@ -1876,7 +1878,10 @@ mod test {
         use uv_configuration::RequirementsInput;
 
         let gate = Arc::new(Semaphore::new(0));
-        let includes = (0..12).map(|i| format!("-r {i}.txt\n")).collect::<String>();
+        let mut includes = String::new();
+        for index in 0..12 {
+            writeln!(includes, "-r {index}.txt")?;
+        }
         let mut routes = vec![("/root.txt".to_owned(), SourceResponse::ok(includes))];
         routes.extend((0..12).map(|i| {
             (
@@ -2043,10 +2048,10 @@ mod test {
         .await?;
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("requirements.txt");
-        let content = ["first.txt", "second.txt", "third.txt"]
-            .map(|name| server.url.join(name).map(|url| format!("-r {url}\n")))
-            .into_iter()
-            .collect::<Result<String, _>>()?;
+        let mut content = String::new();
+        for name in ["first.txt", "second.txt", "third.txt"] {
+            writeln!(content, "-r {}", server.url.join(name)?)?;
+        }
         fs::write(&path, content)?;
         let parse = tokio::spawn(async move {
             RequirementsTxt::parse_with_cache(
