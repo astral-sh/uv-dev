@@ -1,9 +1,10 @@
 """Keep every built benchmark in exactly one non-empty walltime shard."""
 
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 SPEC = importlib.util.spec_from_file_location(
     "walltime_shards",
@@ -163,6 +164,41 @@ class WalltimeShards(unittest.TestCase):
         for names in ([], ["uv", "uv"], ["--all"], ["../uv"]):
             with self.subTest(names=names), self.assertRaises(ValueError):
                 shards.partition(names)
+
+    def test_git_runtime_is_scoped_to_git_fetch(self):
+        root = Path("/benchmark")
+        command = ["cargo", "codspeed", "run", "-m", "walltime", "-p", "uv-bench"]
+        with patch.object(shards.subprocess, "run") as run:
+            shards.run_suites(root, ["git_fetch", "github_metadata", "uv"])
+        self.assertEqual(
+            run.call_args_list,
+            [
+                call(
+                    [
+                        sys.executable,
+                        str(root / "scripts/benchmark/git-runtime.py"),
+                        "run",
+                        "--",
+                        *command,
+                        "--bench",
+                        "git_fetch",
+                    ],
+                    cwd=root,
+                    check=True,
+                ),
+                call(
+                    [*command, "--bench", "github_metadata", "--bench", "uv"],
+                    cwd=root,
+                    check=True,
+                ),
+            ],
+        )
+
+    def test_git_only_shard_does_not_run_every_suite(self):
+        with patch.object(shards.subprocess, "run") as run:
+            shards.run_suites(Path("/benchmark"), ["git_fetch"])
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][-2:], ["--bench", "git_fetch"])
 
 
 if __name__ == "__main__":

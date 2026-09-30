@@ -126,6 +126,7 @@ fn git_fetch(c: &mut Criterion<WallTime>) {
                                 let fetched =
                                     fetch_with_settings(&runtime, git, cache.path(), settings);
                                 assert_eq!(fetched.git().precise(), git.precise());
+                                assert!(fetched.path().join(".git").is_dir());
                                 black_box(fetched);
                             }
                             black_box(cache)

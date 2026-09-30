@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 MAX_SHARDS = 8
@@ -76,6 +77,32 @@ def built_suites(root: Path) -> list[str]:
     return names
 
 
+def run_suites(root: Path, names: list[str]) -> None:
+    command = ["cargo", "codspeed", "run", "-m", "walltime", "-p", "uv-bench"]
+    # Git fetch measurements need the same modern Git on the build and runner hosts.
+    # Keep the local-transport-only runtime scoped to this suite.
+    if "git_fetch" in names:
+        subprocess.run(
+            [
+                sys.executable,
+                str(root / "scripts/benchmark/git-runtime.py"),
+                "run",
+                "--",
+                *command,
+                "--bench",
+                "git_fetch",
+            ],
+            cwd=root,
+            check=True,
+        )
+    remaining = [name for name in names if name != "git_fetch"]
+    if not remaining:
+        return
+    for name in remaining:
+        command.extend(["--bench", name])
+    subprocess.run(command, cwd=root, check=True)
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -111,10 +138,7 @@ def main() -> None:
         f"Running walltime shard {args.shard}/{selected['total']}: {', '.join(selected['benches'])}",
         flush=True,
     )
-    command = ["cargo", "codspeed", "run", "-m", "walltime", "-p", "uv-bench"]
-    for name in selected["benches"]:
-        command.extend(["--bench", name])
-    subprocess.run(command, cwd=root, check=True)
+    run_suites(root, selected["benches"])
 
 
 if __name__ == "__main__":
