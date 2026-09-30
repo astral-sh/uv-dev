@@ -286,6 +286,8 @@ after headers. The retry oracle includes the lost prefixes in its byte bound;
 `cached_wheel_oracle.py` verifies a complete wheel fixture and measures a local
 metadata read. A direct URL already identified by that content hash has a zero
 network-transfer bound; process startup, filesystem, and CPU costs remain.
+Use `--cache-state fresh` for a fresh HTTP cache entry or `--cache-state revalidate`
+to measure one conditional request before reading the unchanged cached metadata.
 `make_publish_fixtures.py --directory DIR` creates a batch of distinct wheel builds
 for repeated `publish --dry-run --check-url` checks. `publish_check_oracle.py` reads
 one current index per known package and verifies every selected local file against
