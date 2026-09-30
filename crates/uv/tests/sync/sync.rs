@@ -9890,12 +9890,10 @@ fn sync_scripts_workspace_member_not_packaged_root_dependency() -> Result<()> {
             print("entry point installed")
         "#})?;
 
-    // The warning says the entry point is skipped even though it is installed; see astral-sh/uv#22111.
     uv_snapshot!(context.filters(), context.sync().current_dir(member.path()), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    warning: Skipping installation of entry points (`project.scripts`) for package `member` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + member==0.1.0 (from file://[TEMP_DIR]/member)
