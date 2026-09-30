@@ -132,6 +132,8 @@ The results retain byte counts, request traces, output or installed-tree
 equivalence, and an optimistic network bound for the selected protocol strategy.
 These are exploratory configuration comparisons; selecting a promising limit
 requires fresh confirmation and does not qualify a source optimization.
+`make_concurrency_fixtures.py` supplies a deterministic set of independent wheels
+for exploring limits above the package count of a smaller real-world fixture.
 
 Set `head_ranges` to `false` to model a server that supports ranged `GET` but
 does not advertise that support in `HEAD` responses.
