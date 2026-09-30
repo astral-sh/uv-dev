@@ -115,17 +115,14 @@ impl SourceRequests {
             return;
         };
         while self.pending.len() < self.max_prefetch {
-            let statement = match parse_entry(
+            let Ok(Some(statement)) = parse_entry(
                 &mut lookahead.scanner,
                 lookahead.content,
                 working_dir,
                 requirements_txt,
-            ) {
-                Ok(Some(statement)) => statement,
-                Ok(None) | Err(_) => {
-                    lookahead.done = true;
-                    break;
-                }
+            ) else {
+                lookahead.done = true;
+                break;
             };
             let (filename, constraint) = match statement {
                 RequirementsTxtStatement::Requirements { filename, .. } => (filename, false),
@@ -133,12 +130,9 @@ impl SourceRequests {
                 _ => continue,
             };
             let filename = expand_env_vars(&filename);
-            let input = match requirements_txt.resolve(filename.as_ref(), working_dir) {
-                Ok(input) => input,
-                Err(_) => {
-                    lookahead.done = true;
-                    break;
-                }
+            let Ok(input) = requirements_txt.resolve(filename.as_ref(), working_dir) else {
+                lookahead.done = true;
+                break;
             };
             let RequirementsInput::Remote(url) = &input else {
                 continue;
