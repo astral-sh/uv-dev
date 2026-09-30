@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -17528,6 +17530,110 @@ fn install_missing_python_version_with_target() {
      + sniffio==1.3.1
     "
     );
+}
+
+/// A wheel built for a NetBSD release containing uppercase characters should be compatible with
+/// the interpreter that produced it.
+#[cfg(unix)]
+#[test]
+fn build_backend_netbsd_uppercase_release() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let interpreter = context.interpreter();
+    let netbsd_python = context.temp_dir.child("netbsd-python");
+    netbsd_python.write_str(&formatdoc! {r#"
+        #!{interpreter_path}
+        import json
+        import os
+        import subprocess
+        import sys
+
+        interpreter = {interpreter:?}
+        if not any("python.get_interpreter_info" in argument for argument in sys.argv):
+            os.execv(interpreter, [interpreter, *sys.argv[1:]])
+
+        result = subprocess.run(
+            [interpreter, *sys.argv[1:]], capture_output=True, check=False
+        )
+        if result.returncode:
+            sys.stdout.buffer.write(result.stdout)
+            sys.stderr.buffer.write(result.stderr)
+            raise SystemExit(result.returncode)
+
+        info = json.loads(result.stdout)
+        info["platform"] = {{
+            "os": {{"name": "netbsd", "release": "11.0_STABLE"}},
+            "arch": "x86_64",
+        }}
+        info["manylinux_compatible"] = False
+        info["markers"].update(
+            platform_machine="x86_64",
+            platform_release="11.0_STABLE",
+            platform_system="NetBSD",
+            sys_platform="netbsd11",
+        )
+        print(json.dumps(info))
+    "#,
+        interpreter_path = interpreter.display(),
+        interpreter = interpreter.to_string_lossy(),
+    })?;
+    let mut permissions = fs::metadata(&netbsd_python)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&netbsd_python, permissions)?;
+
+    let project = context.temp_dir.child("casewheel");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "casewheel"
+        version = "1.0.0"
+
+        [build-system]
+        requires = ["hatchling"]
+        backend-path = ["."]
+        build-backend = "build_backend"
+    "#})?;
+    project.child("build_backend.py").write_str(indoc! {r#"
+        import os
+
+        from hatchling.build import *
+        from hatchling.build import build_wheel as build_wheel_original
+
+
+        def build_wheel(
+            wheel_directory: str,
+            config_settings: "Mapping[Any, Any] | None" = None,
+            metadata_directory: "str | None" = None,
+        ) -> str:
+            filename = build_wheel_original(
+                wheel_directory, config_settings, metadata_directory
+            )
+            netbsd_wheel = (
+                "casewheel-1.0.0-cp312-cp312-netbsd_11_0_STABLE_amd64.whl"
+            )
+            os.rename(
+                os.path.join(wheel_directory, filename),
+                os.path.join(wheel_directory, netbsd_wheel),
+            )
+            return netbsd_wheel
+    "#})?;
+    project.child("src/casewheel/__init__.py").touch()?;
+
+    // Uppercase NetBSD releases produce valid wheels that uv rejects; see astral-sh/uv#22110.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("./casewheel")
+        .arg("--target")
+        .arg("target")
+        .arg("--python")
+        .arg(netbsd_python.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: .venv/bin/python
+    Resolved 1 package in [TIME]
+    error: Failed to build `casewheel @ file://[TEMP_DIR]/casewheel`
+      cause: The built wheel `casewheel-1.0.0-cp312-cp312-netbsd_11_0_STABLE_amd64.whl` is not compatible with the current Python 3.12 on NetBSD x86_64
+    ");
+
+    Ok(())
 }
 
 /// Use a wheel that is only compatible with Python 3.13 with Python 3.12 or Python 3.13 to simulate
