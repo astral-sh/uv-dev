@@ -726,7 +726,10 @@ async fn persist_with_retry(
     }
     #[cfg(not(windows))]
     {
-        async { fs_err::rename(from, to) }.await
+        let destination = to.as_ref().to_path_buf();
+        tokio::task::spawn_blocking(move || persist_with_retry_sync(from, destination))
+            .await
+            .map_err(io::Error::other)?
     }
 }
 
@@ -797,7 +800,19 @@ pub fn persist_with_retry_sync(
     }
     #[cfg(not(windows))]
     {
-        fs_err::rename(from, to)
+        // Disarm cleanup before another writer can reuse the temporary path.
+        let to = to.as_ref();
+        from.persist(to).map(|_| ()).map_err(|err| {
+            io::Error::new(
+                err.error.kind(),
+                format!(
+                    "failed to rename file from {} to {}: {}",
+                    err.file.path().display(),
+                    to.display(),
+                    err.error
+                ),
+            )
+        })
     }
 }
 
@@ -1043,8 +1058,111 @@ pub fn clear_virtualenv(location: &Path) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
+    #[cfg(not(windows))]
+    use std::cell::RefCell;
 
     use super::*;
+
+    /// Recreate a temporary path after its rename, before the rename's arguments are dropped.
+    #[cfg(not(windows))]
+    struct ReuseSourcePath<'a> {
+        source: &'a Path,
+        destination: &'a Path,
+        result: &'a RefCell<io::Result<()>>,
+    }
+
+    #[cfg(not(windows))]
+    impl AsRef<Path> for ReuseSourcePath<'_> {
+        fn as_ref(&self) -> &Path {
+            self.destination
+        }
+    }
+
+    #[cfg(not(windows))]
+    impl Drop for ReuseSourcePath<'_> {
+        fn drop(&mut self) {
+            *self.result.borrow_mut() = fs_err::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(self.source)
+                .and_then(|mut file| file.write_all(b"replacement"));
+        }
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn persist_sync_does_not_remove_reused_temporary_path() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut file = tempfile_in(directory.path())?;
+        file.write_all(b"original")?;
+        let source = file.path().to_path_buf();
+        let destination = directory.path().join("destination");
+        fs_err::write(&destination, b"old destination")?;
+        let result = RefCell::new(Err(io::Error::other("source path was not reused")));
+
+        persist_with_retry_sync(
+            file,
+            ReuseSourcePath {
+                source: &source,
+                destination: &destination,
+                result: &result,
+            },
+        )?;
+
+        result.into_inner()?;
+        assert_eq!(fs_err::read(&destination)?, b"original");
+        assert_eq!(fs_err::read(&source)?, b"replacement");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(all(not(windows), feature = "tokio"))]
+    async fn persist_does_not_remove_reused_temporary_path() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut file = tempfile_in(directory.path())?;
+        file.write_all(b"original")?;
+        let source = file.path().to_path_buf();
+        let destination = directory.path().join("destination");
+        fs_err::write(&destination, b"old destination")?;
+        let result = RefCell::new(Err(io::Error::other("source path was not reused")));
+
+        persist_with_retry(
+            file,
+            ReuseSourcePath {
+                source: &source,
+                destination: &destination,
+                result: &result,
+            },
+        )
+        .await?;
+
+        result.into_inner()?;
+        assert_eq!(fs_err::read(&destination)?, b"original");
+        assert_eq!(fs_err::read(&source)?, b"replacement");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn persist_sync_removes_temporary_path_on_error() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let file = tempfile_in(directory.path())?;
+        let source = file.path().to_path_buf();
+        let destination = directory.path().join("missing").join("destination");
+
+        let Err(expected) = fs_err::rename(&source, &destination) else {
+            return Err(io::Error::other("rename to missing directory succeeded"));
+        };
+        let Err(error) = persist_with_retry_sync(file, &destination) else {
+            return Err(io::Error::other("persist to missing directory succeeded"));
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(error.to_string(), expected.to_string());
+        assert!(!source.try_exists()?);
+        assert!(!destination.try_exists()?);
+        Ok(())
+    }
 
     #[test]
     fn remove_symlink_removes_directory_link_without_removing_target() -> io::Result<()> {
