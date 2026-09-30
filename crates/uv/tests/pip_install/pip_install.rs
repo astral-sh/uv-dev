@@ -3279,6 +3279,144 @@ fn install_git_public_https_missing_branch_or_tag() {
 
 #[tokio::test]
 #[cfg(feature = "test-git")]
+async fn pinned_git_subdirectory_skips_commit_lookup() -> Result<()> {
+    const REPOSITORY: &str = "https://github.com/uv-network-benchmark/pinned-subdirectory";
+    const MISSING: &str = "0000000000000000000000000000000000000001";
+    const NAMED_BRANCH: &str = "0000000000000000000000000000000000000002";
+
+    for (kind, expected_requests) in [
+        ("commit", 0),
+        ("short", 1),
+        ("branch", 1),
+        ("named-branch", 1),
+        ("missing", 0),
+    ] {
+        let context = uv_test::test_context!("3.12");
+        let repository = context.temp_dir.child("repository");
+        repository
+            .child("package/pyproject.toml")
+            .write_str(indoc! {r#"
+            [project]
+            name = "uv-pinned-subdirectory"
+            version = "1.0.0"
+            requires-python = ">=3.8"
+            dependencies = []
+        "#})?;
+        Command::new("git")
+            .args(["init", "--initial-branch=main"])
+            .arg(repository.path())
+            .assert()
+            .success();
+        Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(["add", "."])
+            .assert()
+            .success();
+        Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "Initial commit",
+            ])
+            .assert()
+            .success();
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(["rev-parse", "HEAD"])
+            .output()?;
+        assert!(output.status.success());
+        let commit = String::from_utf8(output.stdout)?.trim().to_owned();
+        let repository_url = Url::from_directory_path(repository.path())
+            .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+        let repository_url = repository_url.as_str().trim_end_matches('/');
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(commit.clone()))
+            .expect(expected_requests)
+            .mount(&server)
+            .await;
+
+        let mut command = if kind == "named-branch" {
+            Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args(["branch", NAMED_BRANCH])
+                .assert()
+                .success();
+            context.temp_dir.child("pyproject.toml").write_str(&formatdoc! {r#"
+                [project]
+                name = "project"
+                version = "1.0.0"
+                requires-python = ">=3.12"
+                dependencies = ["uv-pinned-subdirectory"]
+
+                [tool.uv.sources]
+                uv-pinned-subdirectory = {{ git = "{REPOSITORY}", branch = "{NAMED_BRANCH}", subdirectory = "package" }}
+            "#})?;
+            let mut command = context.lock();
+            command.arg("--no-index");
+            command
+        } else {
+            let reference = match kind {
+                "commit" => commit.as_str(),
+                "short" => &commit[..12],
+                "branch" => "main",
+                "missing" => MISSING,
+                _ => unreachable!(),
+            };
+            context
+                .temp_dir
+                .child("requirements.in")
+                .write_str(&format!(
+                    "uv-pinned-subdirectory @ git+{REPOSITORY}@{reference}#subdirectory=package\n"
+                ))?;
+            let mut command = context.pip_compile();
+            command.args([
+                "--no-header",
+                "--no-annotate",
+                "--no-index",
+                "--python-version",
+                "3.12",
+                "requirements.in",
+            ]);
+            command
+        };
+        command
+            .env("GIT_CONFIG_COUNT", "2")
+            .env(
+                "GIT_CONFIG_KEY_0",
+                format!("url.{repository_url}.insteadOf"),
+            )
+            .env("GIT_CONFIG_VALUE_0", REPOSITORY)
+            .env("GIT_CONFIG_KEY_1", "protocol.file.allow")
+            .env("GIT_CONFIG_VALUE_1", "always")
+            .env(EnvVars::UV_GITHUB_FAST_PATH_URL, server.uri());
+        if kind == "missing" {
+            command
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(MISSING));
+        } else {
+            command.assert().success();
+        }
+        server.verify().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "test-git")]
 async fn install_git_public_rejects_mismatched_github_api_commit() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
