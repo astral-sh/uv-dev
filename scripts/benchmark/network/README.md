@@ -70,6 +70,11 @@ releases locally. Set `UV_TOOL_DIR={work}/tools` and
 bounded pool of persistent HTTP/1.1 connections. Its bound includes required
 response bytes and request waves, while its measured reference also pays the
 configured connection delay and records any immediate retries.
+`make_tool_audit_fixtures.py --directory DIR --packages N` creates locked local
+tools with independent OSV queries. Its plain and paginated manifests exercise
+connection reuse across tool audits. The OSV oracle can query the complete known
+dependency set in one batch when it contains at most 1,000 packages, providing a
+realizable reference for further batching improvements.
 
 Compare optimized binaries built from an exact parent and candidate commit:
 
