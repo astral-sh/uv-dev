@@ -250,6 +250,144 @@ where
     (server, shutdown_tx)
 }
 
+async fn check_source_prefetch(advertised: bool) -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let gate_metadata =
+        "Metadata-Version: 2.3\nName: gate\nVersion: 1.0\nRequires-Dist: choice==1.0\n";
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/simple/gate/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                json!({
+                    "name": "gate",
+                    "files": [{
+                        "filename": "gate-1.0-py3-none-any.whl",
+                        "url": "/files/gate-1.0-py3-none-any.whl",
+                        "hashes": {},
+                        "core-metadata": true,
+                        "upload-time": "2024-01-01T00:00:00Z",
+                    }],
+                })
+                .to_string(),
+                "application/vnd.pypi.simple.v1+json",
+            ),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path(
+            "/files/gate-1.0-py3-none-any.whl.metadata",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_millis(300))
+                .set_body_raw(gate_metadata, "text/plain"),
+        )
+        .mount(&server)
+        .await;
+    let mut files = Vec::new();
+    for version in [1, 2] {
+        let filename = format!("choice-{version}.0.tar.gz");
+        let metadata = format!("Metadata-Version: 2.3\nName: choice\nVersion: {version}.0\n");
+        let pyproject = format!("[project]\nname = \"choice\"\nversion = \"{version}.0\"\n");
+        let mut archive = Vec::new();
+        uv_test::archive::write_tar_gz(
+            &mut archive,
+            &[
+                (
+                    format!("choice-{version}.0/PKG-INFO").as_str(),
+                    metadata.as_bytes(),
+                ),
+                (
+                    format!("choice-{version}.0/pyproject.toml").as_str(),
+                    pyproject.as_bytes(),
+                ),
+            ],
+        )?;
+        files.push(json!({
+            "filename": filename,
+            "url": format!("/files/{filename}"),
+            "hashes": {"sha256": format!("{:x}", Sha256::digest(&archive))},
+            "size": archive.len(),
+            "core-metadata": advertised,
+            "upload-time": "2024-01-01T00:00:00Z",
+        }));
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path(format!("/files/{filename}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(archive))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path(format!(
+                "/files/{filename}.metadata"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(metadata, "text/plain"))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/simple/choice/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            json!({"name": "choice", "files": files}).to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("gate==1.0\nchoice\n")?;
+    let output = context
+        .pip_compile()
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .arg("--default-index")
+        .arg(format!("{}/simple", server.uri()))
+        .arg("requirements.in")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        "choice==1.0\ngate==1.0\n"
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.url.path() == "/files/choice-2.0.tar.gz")
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .any(|request| request.url.path() == "/files/choice-2.0.tar.gz.metadata"),
+        advertised
+    );
+    assert!(requests.iter().any(|request| request.url.path()
+        == if advertised {
+            "/files/choice-1.0.tar.gz.metadata"
+        } else {
+            "/files/choice-1.0.tar.gz"
+        }));
+    Ok(())
+}
+
+/// The resolver only downloads a source archive once it selects that version.
+#[tokio::test]
+async fn resolver_does_not_prefetch_source_archives() -> Result<()> {
+    check_source_prefetch(false).await
+}
+
+/// Advertised static source metadata can still be prefetched cheaply.
+#[tokio::test]
+async fn resolver_prefetches_source_sidecars() -> Result<()> {
+    check_source_prefetch(true).await
+}
+
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
 #[tokio::test]
 async fn invalid_ssl_cert_file_warns_default_roots_are_disabled() {
