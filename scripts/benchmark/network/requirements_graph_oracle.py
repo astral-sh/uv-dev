@@ -38,7 +38,7 @@ def parse(path: str, body: bytes) -> tuple[list[str], bool]:
 
 
 def graph_bounds(
-    root: str,
+    roots: str | tuple[str, ...],
     graph: dict[str, list[str]],
     package_paths: set[str],
     metadata_paths: tuple[str, ...],
@@ -46,6 +46,9 @@ def graph_bounds(
     concurrency: int,
     rtt_ms: float,
 ) -> dict:
+    if isinstance(roots, str):
+        roots = (roots,)
+
     def application_latency(path: str) -> float:
         return max(
             0,
@@ -55,8 +58,9 @@ def graph_bounds(
 
     def distances(weight) -> dict[str, float]:
         # A shared include becomes available when any referring parent finishes.
-        result = {root: weight(root)}
-        queue = [(result[root], root)]
+        result = {root: weight(root) for root in roots}
+        queue = [(result[root], root) for root in roots]
+        heapq.heapify(queue)
         while queue:
             cost, path = heapq.heappop(queue)
             if cost != result[path]:
@@ -104,7 +108,9 @@ def main() -> None:
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--profiles", type=Path, default=bench.HERE / "profiles.json")
     parser.add_argument("--profile", default="fast")
-    parser.add_argument("--root", default="/requirements/prefetch-root.txt")
+    parser.add_argument(
+        "--root", action="append", help="Known input path; may be repeated"
+    )
     parser.add_argument(
         "--route",
         choices=["metadata", "requirements", "revalidate"],
@@ -115,6 +121,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.concurrency < 1:
         parser.error("--concurrency must be positive")
+    roots = tuple(dict.fromkeys(args.root or ["/requirements/prefetch-root.txt"]))
     profile = json.loads(args.profiles.read_text())[args.profile]
     if not profile.get("pep658", True):
         parser.error("the oracle requires PEP 658")
@@ -128,7 +135,7 @@ def main() -> None:
     graph = {}
     bodies = {}
     package_paths = set()
-    unseen = [args.root]
+    unseen = list(roots)
     while unseen:
         path = unseen.pop()
         if path in graph:
@@ -156,7 +163,7 @@ def main() -> None:
         conditional[metadata_paths[0]] = '"' + hashlib.sha256(index).hexdigest() + '"'
         bodies[metadata_paths[0]] = b""
     bounds = graph_bounds(
-        args.root,
+        roots,
         graph,
         package_paths,
         metadata_paths,
@@ -206,8 +213,8 @@ def main() -> None:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=args.concurrency
         ) as pool:
-            seen = {args.root}
-            pending = {pool.submit(read, args.root): args.root}
+            seen = set(roots)
+            pending = {pool.submit(read, root): root for root in roots}
             while pending:
                 completed, _ = concurrent.futures.wait(
                     pending, return_when=concurrent.futures.FIRST_COMPLETED
@@ -235,7 +242,8 @@ def main() -> None:
         "profile": profile,
         "netem": bench.netem_profile(),
         "manifest_sha256": bench.digest(args.manifest),
-        "root": args.root,
+        "root": roots[0] if len(roots) == 1 else None,
+        "roots": roots,
         "route": args.route,
         "concurrency": args.concurrency,
         "seconds": seconds,
@@ -251,8 +259,8 @@ def main() -> None:
         "requests": len(server.events),
         "events": server.events,
         "retry_scope": "Transient HTTP responses are retried up to three times per URL without oracle backoff. The optimistic floor excludes retries.",
-        "bound_scope": "All unique include bodies and the selected route's metadata are required. The bound combines shortest discovery paths, the download limit, and body serialization. It permits metadata lookup to overlap remaining includes and excludes connection startup, headers, parsing, and CPU work.",
-        "scope": "Discover and fetch remote includes at the recorded concurrency, reusing one HTTP/1.1 connection per worker. The metadata route then fetches the known package's index and metadata. The requirements route assumes those responses are fresh in cache. The revalidate route conditionally validates the unchanged index, whose strong PEP 658 hash identifies the cached sidecar. This is a realizable retrieval strategy; resolution is excluded.",
+        "bound_scope": "All unique input and include bodies and the selected route's metadata are required. The bound combines shortest discovery paths from the known inputs, the download limit, and body serialization. It permits metadata lookup to overlap remaining inputs and excludes connection startup, headers, parsing, and CPU work.",
+        "scope": "Fetch the known inputs and discover remote includes at the recorded concurrency, reusing one HTTP/1.1 connection per worker. The metadata route then fetches the known package's index and metadata. The requirements route assumes those responses are fresh in cache. The revalidate route conditionally validates the unchanged index, whose strong PEP 658 hash identifies the cached sidecar. This is a realizable retrieval strategy; resolution is excluded.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(data, indent=2) + "\n")

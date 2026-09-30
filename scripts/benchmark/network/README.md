@@ -89,7 +89,8 @@ the same kernel network profile to measure connection setup and remaining headro
 `make_requirements_prefetch_fixtures.py` creates independent sibling includes,
 a dependency chain, and repeated requirement/constraint includes.
 `requirements_graph_oracle.py --concurrency N` discovers the graph and retrieves
-each unique file with at most `N` requests in flight. It then reads the pinned
+each unique file with at most `N` requests in flight. Repeat `--root PATH` for
+multiple input URLs that are known before parsing begins. It then reads the pinned
 package's index and metadata. Its optimistic bound also permits those metadata
 requests to overlap remaining includes, so the measured oracle and the bound
 describe distinct, explicit assumptions. Use `--route requirements` for a warm
