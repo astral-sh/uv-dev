@@ -28,9 +28,12 @@ def main() -> None:
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--warm", action="store_true")
+    parser.add_argument("--revision", help="Fetch the fixture's known commit directly")
     args = parser.parse_args()
     profile = json.loads(args.profiles.read_text())[args.profile]
     descriptor = json.loads((args.directory / "git-descriptor.json").read_text())
+    if args.revision is not None and args.revision != descriptor["commit"]:
+        parser.error("--revision must equal the fixture's full commit")
     fixtures = bench.Fixtures(
         args.directory / "git-fixtures.json", args.directory, True
     )
@@ -59,6 +62,8 @@ def main() -> None:
                 capture_output=True,
                 check=True,
             )
+            source_ref = args.revision or "refs/heads/main"
+            target_ref = "refs/benchmark/commit" if args.revision else "refs/heads/main"
             command = [
                 "git",
                 "--git-dir",
@@ -67,7 +72,7 @@ def main() -> None:
                 "--no-tags",
                 "--force",
                 server.url + "/git/monorepo.git",
-                "refs/heads/main:refs/heads/main",
+                f"{source_ref}:{target_ref}",
             ]
             if args.warm:
                 subprocess.run(
@@ -80,7 +85,7 @@ def main() -> None:
             )
             seconds = time.perf_counter() - start
             commit = subprocess.check_output(
-                ["git", "--git-dir", str(repository), "rev-parse", "refs/heads/main"],
+                ["git", "--git-dir", str(repository), "rev-parse", target_ref],
                 env=env,
                 text=True,
             ).strip()
@@ -99,6 +104,7 @@ def main() -> None:
         "bundle_sha256": fixtures.hashes["monorepo.bundle"],
         "git_version": subprocess.check_output(["git", "--version"], text=True).strip(),
         "warm": args.warm,
+        "revision": args.revision,
         "seconds": seconds,
         "requests": len(server.events),
         "actual_bytes": sum(event["bytes"] for event in server.events),
@@ -106,7 +112,7 @@ def main() -> None:
         "required_waves": waves,
         "optimistic_network_floor_seconds": bench.network_floor(profile, 0, waves),
         "events": sorted(server.events, key=lambda event: event["start"]),
-        "scope": "A single Git CLI fetch of the known branch, verified against the pinned commit. The optimistic floor charges reference discovery and, for a cold fetch, one dependent pack response. Git pack compression and negotiation prevent treating the observed bytes as a strict minimum, so the byte floor is zero. The single-fetch bytes and time are a realizable reference.",
+        "scope": "A single Git CLI fetch of the known reference, verified against the pinned commit. The optimistic floor charges reference discovery and, for a cold fetch, one dependent pack response. Git pack compression and negotiation prevent treating the observed bytes as a strict minimum, so the byte floor is zero. The single-fetch bytes and time are a realizable reference.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(data, indent=2) + "\n")
