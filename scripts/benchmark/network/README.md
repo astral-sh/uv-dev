@@ -224,7 +224,8 @@ fixed numeric delays on the serial request path. Pass the reported wait with
 `make_publish_fixtures.py --directory DIR` creates a batch of distinct wheel builds
 for repeated `publish --dry-run --check-url` checks. `publish_check_oracle.py` reads
 one current index per known package and verifies every selected local file against
-its advertised SHA-256. The replay serves already-published files, so this workload
+its advertised SHA-256. Use `--route revalidate` to conditionally validate cached
+index bodies. The replay serves already-published files, so this workload
 does not upload anything. Report it as a synthetic repeat-publish workload.
 `make_frozen_fixtures.py --directory DIR` creates a wheel-only project and setup
 commands that lock it before timing. Its profiles include a slow or intermittently

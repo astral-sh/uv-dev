@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import importlib.util
 import json
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -26,6 +28,7 @@ def main() -> None:
     parser.add_argument("--profiles", type=Path, required=True)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--filename", action="append", default=[])
+    parser.add_argument("--route", choices=["current", "revalidate"], default="current")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
@@ -48,9 +51,33 @@ def main() -> None:
 
     def read(package: str) -> tuple[str, dict]:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(server.url + f"/simple/{package}/", timeout=60) as response:
-            body = response.read()
-        if body != fixtures.simple[package]:
+        expected = fixtures.simple[package]
+        etag = '"' + hashlib.sha256(expected).hexdigest() + '"'
+        request = urllib.request.Request(
+            server.url + f"/simple/{package}/",
+            headers={"If-None-Match": etag} if args.route == "revalidate" else {},
+        )
+        for attempt in range(4):
+            try:
+                response = opener.open(request, timeout=60)
+            except urllib.error.HTTPError as error:
+                response = error
+            with response:
+                status = response.status
+                body = response.read()
+                response_etag = response.headers.get("ETag")
+            if args.route == "revalidate" and status == 304 and response_etag == etag:
+                if body:
+                    raise ValueError(
+                        f"Conditional index response has a body: {package}"
+                    )
+                body = expected
+                break
+            if args.route == "current" and status == 200 and body == expected:
+                break
+            if attempt == 3 or status not in {408, 429, 500, 502, 503, 504}:
+                raise ValueError(f"Unexpected index response: {package} ({status})")
+        if body != expected:
             raise ValueError(f"Index response differs: {package}")
         return package, {
             entry["filename"]: entry for entry in json.loads(body)["files"]
@@ -74,7 +101,11 @@ def main() -> None:
         server.wait_idle()
         server.server_close()
         thread.join()
-    required_bytes = sum(len(fixtures.simple[package]) for package in packages)
+    required_bytes = (
+        sum(len(fixtures.simple[package]) for package in packages)
+        if args.route == "current"
+        else 0
+    )
     required_latency = max(
         max(
             0,
@@ -90,6 +121,7 @@ def main() -> None:
         "netem": bench.netem_profile(),
         "manifest_sha256": bench.digest(args.manifest),
         "filenames": sorted(selected),
+        "route": args.route,
         "seconds": seconds,
         "required_bytes": required_bytes,
         "required_waves": 1,
@@ -100,7 +132,8 @@ def main() -> None:
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
-        "scope": "Known local files and package names. Read each current index concurrently and verify every selected file's SHA-256. The floor excludes hashing, headers, TCP/TLS, and other CPU work.",
+        "retry_scope": "Transient HTTP responses are retried up to three times per URL without oracle backoff. The optimistic floor excludes retries.",
+        "scope": "Known local files and package names. Read each current index concurrently, or conditionally revalidate a cached index with its strong ETag, and verify every selected file's SHA-256. The floor excludes hashing, headers, TCP/TLS, and other CPU work.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
