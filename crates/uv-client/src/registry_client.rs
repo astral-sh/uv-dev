@@ -440,7 +440,9 @@ impl RegistryClient {
                             }
                         }
                     })
-                    .buffer_unordered(8)
+                    // Every fetch acquires the shared download semaphore. A separate per-package
+                    // limit would leave network slots idle when searching many indexes.
+                    .buffer_unordered(usize::MAX)
                     .filter_map(async |result: Result<_, Error>| match result {
                         Ok((position, index, Some(metadata))) => {
                             Some(Ok((position, (index, metadata))))
@@ -1828,6 +1830,7 @@ mod tests {
     use std::convert::Infallible;
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use http_body_util::Full;
@@ -1835,7 +1838,7 @@ mod tests {
     use hyper::service::service_fn;
     use hyper_util::rt::TokioIo;
     use tokio::net::TcpListener;
-    use tokio::sync::{Notify, Semaphore};
+    use tokio::sync::{Barrier, Notify, Semaphore};
     use url::Url;
     use uv_configuration::IndexStrategy;
     use uv_normalize::PackageName;
@@ -1857,6 +1860,116 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type Error = Box<dyn std::error::Error>;
+
+    #[tokio::test]
+    async fn concurrent_indexes_use_the_shared_download_limit() -> Result<(), Error> {
+        for strategy in [
+            IndexStrategy::UnsafeFirstMatch,
+            IndexStrategy::UnsafeBestMatch,
+        ] {
+            for limit in [1, 2, 9, 50] {
+                let listener = TcpListener::bind("127.0.0.1:0").await?;
+                let address = listener.local_addr()?;
+                let expected_parallelism = limit.min(18);
+                let barrier = Arc::new(Barrier::new(expected_parallelism));
+                let active = Arc::new(AtomicUsize::new(0));
+                let peak = Arc::new(AtomicUsize::new(0));
+                let server_peak = Arc::clone(&peak);
+                let server = tokio::spawn(async move {
+                    while let Ok((stream, _)) = listener.accept().await {
+                        let barrier = Arc::clone(&barrier);
+                        let active = Arc::clone(&active);
+                        let peak = Arc::clone(&server_peak);
+                        tokio::spawn(async move {
+                            let service = service_fn(
+                                move |request: hyper::Request<hyper::body::Incoming>| {
+                                    let barrier = Arc::clone(&barrier);
+                                    let active = Arc::clone(&active);
+                                    let peak = Arc::clone(&peak);
+                                    async move {
+                                        let concurrent = active.fetch_add(1, Ordering::SeqCst) + 1;
+                                        peak.fetch_max(concurrent, Ordering::SeqCst);
+                                        barrier.wait().await;
+                                        active.fetch_sub(1, Ordering::SeqCst);
+                                        let package = request
+                                            .uri()
+                                            .path()
+                                            .trim_end_matches('/')
+                                            .rsplit('/')
+                                            .next()
+                                            .unwrap_or_default();
+                                        let body = serde_json::json!({
+                                            "meta": {"api-version": "1.0"},
+                                            "name": package,
+                                            "files": [],
+                                        });
+                                        let mut response = hyper::Response::new(Full::new(
+                                            Bytes::from(body.to_string()),
+                                        ));
+                                        response.headers_mut().insert(
+                                            http::header::CONTENT_TYPE,
+                                            http::HeaderValue::from_static(
+                                                "application/vnd.pypi.simple.v1+json",
+                                            ),
+                                        );
+                                        Ok::<_, Infallible>(response)
+                                    }
+                                },
+                            );
+                            hyper::server::conn::http1::Builder::new()
+                                .serve_connection(TokioIo::new(stream), service)
+                                .await
+                        });
+                    }
+                });
+                let indexes = (0..9)
+                    .map(|position| {
+                        let url = IndexUrl::from_str(&format!("http://{address}/{position}"))?;
+                        Ok(if position == 8 {
+                            Index::from_index_url(url)
+                        } else {
+                            Index::from_extra_index_url(url)
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                let expected = indexes
+                    .iter()
+                    .map(|index| index.url.clone())
+                    .collect::<Vec<_>>();
+                let client = RegistryClientBuilder::new(
+                    BaseClientBuilder::default().retries(0),
+                    Cache::temp()?.init().await?,
+                )
+                .index_locations(IndexLocations::new(indexes, Vec::new(), false))
+                .index_strategy(strategy)
+                .build()?;
+                let semaphore = Semaphore::new(limit);
+                let capabilities = IndexCapabilities::default();
+                let first = PackageName::from_str("example")?;
+                let second = PackageName::from_str("another")?;
+                let result = tokio::time::timeout(Duration::from_secs(5), async {
+                    tokio::try_join!(
+                        client.simple_detail(&first, None, &capabilities, &semaphore),
+                        client.simple_detail(&second, None, &capabilities, &semaphore),
+                    )
+                })
+                .await;
+                server.abort();
+                let (first, second) = result??;
+                for result in [first, second] {
+                    assert_eq!(
+                        result
+                            .into_iter()
+                            .map(|(index, _)| index.clone())
+                            .collect::<Vec<_>>(),
+                        expected,
+                    );
+                }
+                assert_eq!(peak.load(Ordering::SeqCst), expected_parallelism);
+            }
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn concurrent_indexes_refill_slots_in_priority_order() -> Result<(), Error> {
