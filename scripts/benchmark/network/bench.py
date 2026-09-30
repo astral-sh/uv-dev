@@ -30,6 +30,28 @@ from urllib.parse import unquote, urlsplit
 HERE = Path(__file__).resolve().parent
 
 
+def netem_profile() -> dict:
+    return json.loads(os.environ.get("UV_BENCH_NETEM", "{}"))
+
+
+def network_floor(profile: dict, required_bytes: int, required_waves: int) -> float:
+    netem = netem_profile()
+    rates = [
+        rate
+        for rate in (
+            profile.get("bytes_per_second", 0),
+            netem.get("rate_mbit", 0) * 125000,
+        )
+        if rate
+    ]
+    latency = max(
+        0, profile.get("latency_ms", 0) - profile.get("jitter_ms", 0)
+    ) + netem.get("rtt_ms", 0)
+    return max(
+        required_bytes / min(rates) if rates else 0, required_waves * latency / 1000
+    )
+
+
 def normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
@@ -354,18 +376,19 @@ def calibrate(fixtures: Fixtures, profile: dict, output: Path) -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     url = f"{server.url}/files/{filename}"
+    loopback = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def transfer(_: int) -> None:
         request = urllib.request.Request(
             url, headers={"Range": f"bytes=0-{length - 1}"}
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with loopback.open(request, timeout=60) as response:
             if response.read() != expected:
                 raise ValueError("Calibration bytes differ from the pinned fixture")
 
     try:
         start = time.perf_counter()
-        with urllib.request.urlopen(
+        with loopback.open(
             urllib.request.Request(url, method="HEAD"), timeout=60
         ) as response:
             response.read()
@@ -381,6 +404,7 @@ def calibrate(fixtures: Fixtures, profile: dict, output: Path) -> None:
         thread.join()
     data = {
         "profile": profile,
+        "netem": netem_profile(),
         "head_seconds": head_seconds,
         "transfer_bytes": length * 2,
         "transfer_seconds": transfer_seconds,
@@ -418,9 +442,10 @@ def oracle(
     server = Server(fixtures, profile)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    loopback = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def read(path: str) -> bytes:
-        with urllib.request.urlopen(server.url + path, timeout=60) as response:
+        with loopback.open(server.url + path, timeout=60) as response:
             return response.read()
 
     def fetch(filename: str) -> None:
@@ -450,14 +475,10 @@ def oracle(
     required_bytes = sum(
         len(fixtures.simple[name]) for name in set(names.values())
     ) + sum(len(fixtures.metadata[filename + ".metadata"]) for filename in filenames)
-    floor = max(
-        required_bytes / profile["bytes_per_second"]
-        if profile.get("bytes_per_second")
-        else 0,
-        2 * max(0, profile.get("latency_ms", 0) - profile.get("jitter_ms", 0)) / 1000,
-    )
+    floor = network_floor(profile, required_bytes, 2)
     data = {
         "profile": profile,
+        "netem": netem_profile(),
         "filenames": filenames,
         "route": route,
         "seconds": seconds,
@@ -500,6 +521,7 @@ def run_one(
             UV_CACHE_DIR=str(work / "cache"),
             UV_PYTHON_DOWNLOADS="never",
             NO_PROXY="127.0.0.1,localhost",
+            no_proxy="127.0.0.1,localhost",
         )
         try:
             if args.cache_mode != "cold":
@@ -623,6 +645,7 @@ def main() -> None:
         },
         "manifest_sha256": digest(args.manifest),
         "profile": profile,
+        "netem": netem_profile(),
         "command": args.command,
         "requirements": args.requirement,
         "warmups": args.warmups,
@@ -631,14 +654,7 @@ def main() -> None:
         "lower_bound": {
             "required_bytes": args.required_bytes,
             "required_waves": args.required_waves,
-            "seconds": max(
-                args.required_bytes / profile["bytes_per_second"]
-                if profile.get("bytes_per_second")
-                else 0,
-                args.required_waves
-                * max(0, profile.get("latency_ms", 0) - profile.get("jitter_ms", 0))
-                / 1000,
-            ),
+            "seconds": network_floor(profile, args.required_bytes, args.required_waves),
             "model": "Optimistic maximum of required-body serialization and serial response-latency waves; excludes TCP/TLS and CPU costs.",
         },
     }

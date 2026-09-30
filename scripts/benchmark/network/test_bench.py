@@ -6,12 +6,14 @@ import concurrent.futures
 import hashlib
 import http.client
 import importlib.util
+import os
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
     "network_bench", Path(__file__).with_name("bench.py")
@@ -102,6 +104,11 @@ class ReplayTests(unittest.TestCase):
         )
         self.assertEqual(result["ratio_95ci"], [0.5, 0.5])
         self.assertTrue(result["qualifies_5_percent"])
+
+    def test_kernel_shape_contributes_to_bound(self) -> None:
+        with patch.dict(os.environ, {"UV_BENCH_NETEM": '{"rtt_ms":200,"rate_mbit":1}'}):
+            self.assertEqual(bench.network_floor({}, 125000, 2), 1)
+            self.assertEqual(bench.network_floor({"latency_ms": 100}, 1, 2), 0.6)
 
 
 if __name__ == "__main__":
