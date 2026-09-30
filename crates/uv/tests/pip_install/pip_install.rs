@@ -16139,6 +16139,196 @@ fn pep_751_dependency() -> Result<()> {
     Ok(())
 }
 
+/// A wheel-only `pylock.toml` can install without consulting build-dependency indexes.
+#[tokio::test]
+async fn pep_751_find_links_wheels() -> Result<()> {
+    for sync in [false, true] {
+        let context = uv_test::test_context!("3.12");
+        let server = MockServer::start().await;
+        let (filename, wheel) = generate_wheel(
+            &"network-wheel".parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        let hash = hex::encode(Sha256::digest(&wheel));
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{filename}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/flat"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        context
+            .temp_dir
+            .child("pylock.toml")
+            .write_str(&formatdoc! {r#"
+            lock-version = "1.0"
+            created-by = "uv"
+            requires-python = ">=3.12"
+
+            [[packages]]
+            name = "network-wheel"
+            version = "1.0.0"
+            wheels = [{{ url = "{server}/files/{filename}", hashes = {{ sha256 = "{hash}" }} }}]
+        "#, server = server.uri()})?;
+        let mut command = if sync {
+            context.pip_sync()
+        } else {
+            context.pip_install()
+        };
+        command.args([
+            "--preview",
+            "--no-index",
+            "--find-links",
+            &format!("{}/flat", server.uri()),
+        ]);
+        if !sync {
+            command.arg("-r");
+        }
+        command
+            .arg("pylock.toml")
+            .env(EnvVars::UV_HTTP_RETRIES, "0")
+            .assert()
+            .success();
+        context.assert_installed("network_wheel", "1.0.0");
+        server.verify().await;
+    }
+    Ok(())
+}
+
+/// Source selections retain the indexes needed by an isolated build.
+#[tokio::test]
+async fn pep_751_find_links_source_build() -> Result<()> {
+    for sync in [false, true] {
+        let context = uv_test::test_context!("3.12");
+        let server = MockServer::start().await;
+        let (dependency_filename, dependency_wheel) = generate_wheel(
+            &"build-dependency".parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        let dependency_hash = hex::encode(Sha256::digest(&dependency_wheel));
+        Mock::given(method("GET"))
+            .and(path("/flat"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                format!("<a href='/files/{dependency_filename}#sha256={dependency_hash}' data-upload-time='2024-01-01T00:00:00Z'>{dependency_filename}</a>"),
+                "text/html",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("HEAD"))
+            .and(path(format!("/files/{dependency_filename}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Length", dependency_wheel.len().to_string()),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{dependency_filename}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(dependency_wheel))
+            .mount(&server)
+            .await;
+        let (filename, wheel) = generate_wheel(
+            &"network-source".parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        context
+            .temp_dir
+            .child("package")
+            .child(&filename)
+            .write_binary(&wheel)?;
+        context
+            .temp_dir
+            .child("package")
+            .child("pyproject.toml")
+            .write_str(indoc! {r#"
+            [project]
+            name = "network-source"
+            version = "1.0.0"
+
+            [build-system]
+            requires = ["build-dependency==1.0.0"]
+            build-backend = "backend"
+            backend-path = ["."]
+        "#})?;
+        context
+            .temp_dir
+            .child("package")
+            .child("backend.py")
+            .write_str(&formatdoc! {r#"
+            import shutil
+            from pathlib import Path
+
+            import build_dependency
+            Path(__file__).with_name("backend-executed").touch()
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                wheel = Path(__file__).with_name("{filename}")
+                shutil.copyfile(wheel, Path(wheel_directory) / wheel.name)
+                return wheel.name
+        "#})?;
+        context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+            lock-version = "1.0"
+            created-by = "uv"
+            requires-python = ">=3.12"
+
+            [[packages]]
+            name = "network-source"
+            version = "1.0.0"
+            directory = { path = "package" }
+        "#})?;
+        let mut command = if sync {
+            context.pip_sync()
+        } else {
+            context.pip_install()
+        };
+        command.args([
+            "--preview",
+            "--no-index",
+            "--find-links",
+            &format!("{}/flat", server.uri()),
+        ]);
+        if !sync {
+            command.arg("-r");
+        }
+        command
+            .arg("pylock.toml")
+            .env(EnvVars::UV_HTTP_RETRIES, "0")
+            .assert()
+            .success();
+        assert!(
+            context
+                .temp_dir
+                .child("package")
+                .child("backend-executed")
+                .exists()
+        );
+        context.assert_installed("network_source", "1.0.0");
+        server.verify().await;
+    }
+    Ok(())
+}
+
 /// Test that we show an error instead of panicking for conflicting arguments in different levels,
 /// which are not caught by clap.
 #[test]
