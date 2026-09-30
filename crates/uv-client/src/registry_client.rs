@@ -411,8 +411,8 @@ impl RegistryClient {
 
             // Otherwise, fetch concurrently.
             IndexStrategy::UnsafeBestMatch | IndexStrategy::UnsafeFirstMatch => {
-                results = futures::stream::iter(indexes)
-                    .map(async |index| {
+                let mut indexed_results = futures::stream::iter(indexes.enumerate())
+                    .map(async |(position, index)| {
                         let _permit = download_concurrency.acquire().await;
                         match index.format {
                             IndexFormat::Simple => {
@@ -431,23 +431,32 @@ impl RegistryClient {
                                     SimpleMetadataSearchOutcome::Found(metadata) => Some(metadata),
                                     _ => None,
                                 };
-                                Ok((index.url, metadata.map(MetadataFormat::Simple)))
+                                Ok((position, index.url, metadata.map(MetadataFormat::Simple)))
                             }
                             IndexFormat::Flat => {
                                 let entries =
                                     self.flat_single_index(package_name, index.url).await?;
-                                Ok((index.url, Some(MetadataFormat::Flat(entries))))
+                                Ok((position, index.url, Some(MetadataFormat::Flat(entries))))
                             }
                         }
                     })
-                    .buffered(8)
+                    .buffer_unordered(8)
                     .filter_map(async |result: Result<_, Error>| match result {
-                        Ok((index, Some(metadata))) => Some(Ok((index, metadata))),
-                        Ok((_, None)) => None,
+                        Ok((position, index, Some(metadata))) => {
+                            Some(Ok((position, (index, metadata))))
+                        }
+                        Ok((_, _, None)) => None,
                         Err(err) => Some(Err(err)),
                     })
                     .try_collect::<Vec<_>>()
                     .await?;
+                // Index priority determines version selection. Restore that order after
+                // allowing completed requests to release their slots immediately.
+                indexed_results.sort_unstable_by_key(|(position, _)| *position);
+                results = indexed_results
+                    .into_iter()
+                    .map(|(_, result)| result)
+                    .collect();
             }
         }
 
@@ -1816,10 +1825,19 @@ impl Connectivity {
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
+    use std::convert::Infallible;
     use std::str::FromStr;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use tokio::sync::Semaphore;
+    use http_body_util::Full;
+    use hyper::body::Bytes;
+    use hyper::service::service_fn;
+    use hyper_util::rt::TokioIo;
+    use tokio::net::TcpListener;
+    use tokio::sync::{Notify, Semaphore};
     use url::Url;
+    use uv_configuration::IndexStrategy;
     use uv_normalize::PackageName;
     use uv_pypi_types::{HashDigest, HashDigests, PypiSimpleDetail};
     use uv_redacted::DisplaySafeUrl;
@@ -1839,6 +1857,92 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type Error = Box<dyn std::error::Error>;
+
+    #[tokio::test]
+    async fn concurrent_indexes_refill_slots_in_priority_order() -> Result<(), Error> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let last_started = Arc::new(Notify::new());
+        let server = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let last_started = Arc::clone(&last_started);
+                tokio::spawn(async move {
+                    let service = service_fn(
+                        move |request: hyper::Request<hyper::body::Incoming>| {
+                            let last_started = Arc::clone(&last_started);
+                            async move {
+                                match request.uri().path() {
+                                    "/0/example/" => last_started.notified().await,
+                                    "/8/example/" => last_started.notify_one(),
+                                    _ => {}
+                                }
+                                let mut response = hyper::Response::new(Full::new(
+                                    Bytes::from_static(
+                                        br#"{"meta":{"api-version":"1.0"},"name":"example","files":[]}"#,
+                                    ),
+                                ));
+                                response.headers_mut().insert(
+                                    http::header::CONTENT_TYPE,
+                                    http::HeaderValue::from_static(
+                                        "application/vnd.pypi.simple.v1+json",
+                                    ),
+                                );
+                                Ok::<_, Infallible>(response)
+                            }
+                        },
+                    );
+                    hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await
+                });
+            }
+        });
+        let indexes = (0..9)
+            .map(|position| {
+                let url = IndexUrl::from_str(&format!("http://{address}/{position}"))?;
+                Ok(if position == 8 {
+                    Index::from_index_url(url)
+                } else {
+                    Index::from_extra_index_url(url)
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let expected = indexes
+            .iter()
+            .map(|index| index.url.clone())
+            .collect::<Vec<_>>();
+        for strategy in [
+            IndexStrategy::UnsafeFirstMatch,
+            IndexStrategy::UnsafeBestMatch,
+        ] {
+            let client = RegistryClientBuilder::new(
+                BaseClientBuilder::default().retries(0),
+                Cache::temp()?.init().await?,
+            )
+            .index_locations(IndexLocations::new(indexes.clone(), Vec::new(), false))
+            .index_strategy(strategy)
+            .build()?;
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                client.simple_detail(
+                    &PackageName::from_str("example")?,
+                    None,
+                    &IndexCapabilities::default(),
+                    &Semaphore::new(8),
+                ),
+            )
+            .await??;
+            assert_eq!(
+                result
+                    .into_iter()
+                    .map(|(index, _)| index.clone())
+                    .collect::<Vec<_>>(),
+                expected,
+            );
+        }
+        server.abort();
+        Ok(())
+    }
 
     async fn start_test_server(username: &'static str, password: &'static str) -> MockServer {
         let server = MockServer::start().await;
