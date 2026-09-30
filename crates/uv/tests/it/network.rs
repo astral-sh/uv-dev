@@ -308,7 +308,7 @@ async fn check_source_prefetch(advertised: bool) -> Result<()> {
         files.push(json!({
             "filename": filename,
             "url": format!("/files/{filename}"),
-            "hashes": {"sha256": format!("{:x}", Sha256::digest(&archive))},
+            "hashes": {"sha256": hex::encode(Sha256::digest(&archive))},
             "size": archive.len(),
             "core-metadata": advertised,
             "upload-time": "2024-01-01T00:00:00Z",
