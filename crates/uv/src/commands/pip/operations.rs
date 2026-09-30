@@ -652,6 +652,14 @@ impl InstallationPlan {
             && (compile.is_none() || dry_run.enabled())
     }
 
+    /// Returns `true` if preparing the plan can resolve source-build dependencies.
+    pub(crate) fn requires_source_build(&self) -> bool {
+        self.plan
+            .remote
+            .iter()
+            .any(|dist| matches!(dist.as_ref(), Dist::Source(_)))
+    }
+
     /// Complete an installation that was determined to be a no-op.
     pub(crate) fn finish_noop(
         self,
