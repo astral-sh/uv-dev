@@ -322,6 +322,8 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(urlsplit(self.path).path)
         event = self.server.begin(self.command, path)
         event["range"] = self.headers.get("Range")
+        event["if_none_match"] = self.headers.get("If-None-Match")
+        event["if_range"] = self.headers.get("If-Range")
         profile = self.server.profile
         seed = f"{profile.get('seed', 1)}:{self.command}:{path}:{event['attempt']}"
         jitter = random.Random(seed).uniform(-1, 1) * profile.get("jitter_ms", 0)
@@ -357,11 +359,26 @@ class Handler(BaseHTTPRequestHandler):
             ):
                 status, body = profile["fail_status"], b"Injected transient failure"
             size = body.stat().st_size if isinstance(body, Path) else len(body)
+            etag = (
+                '"'
+                + (
+                    self.server.fixtures.hashes[body.name]
+                    if isinstance(body, Path)
+                    else hashlib.sha256(body).hexdigest()
+                )
+                + '"'
+            )
+            if status == 200 and any(
+                tag.strip().removeprefix("W/") in {etag, "*"}
+                for tag in (event["if_none_match"] or "").split(",")
+            ):
+                status = 304
             start, end = 0, size - 1
             if (
                 is_artifact
                 and status == 200
                 and event["range"]
+                and event["if_range"] in (None, etag)
                 and profile.get("ranges", True)
             ):
                 match = re.fullmatch(r"bytes=(\d*)-(\d*)", event["range"])
@@ -377,17 +394,6 @@ class Handler(BaseHTTPRequestHandler):
                     status = 206 if 0 <= start <= end < size else 416
                 if status == 416:
                     body, start, end = b"", 0, -1
-            etag = (
-                '"'
-                + (
-                    self.server.fixtures.hashes[body.name]
-                    if isinstance(body, Path)
-                    else hashlib.sha256(body).hexdigest()
-                )
-                + '"'
-            )
-            if status == 200 and self.headers.get("If-None-Match") == etag:
-                status = 304
             length = end - start + 1
             event.update(status=status, response_start=start, response_length=length)
             self.send_response(status)

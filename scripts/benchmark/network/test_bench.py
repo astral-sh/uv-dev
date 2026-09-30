@@ -86,6 +86,42 @@ class ReplayTests(unittest.TestCase):
                 self.assertEqual(self.get(server, header), (206, expected))
         self.assertEqual(self.get(server, "bytes=999999-"), (416, b""))
 
+    def test_conditional_requests_precede_ranges(self) -> None:
+        server = self.server({})
+        etag = f'"{hashlib.sha256(self.body).hexdigest()}"'
+        for range_, validator, expected_status in [
+            ("bytes=0-3", etag, 304),
+            ("bytes=999999-", etag, 304),
+            ("bytes=0-3", f"W/{etag}", 304),
+            ("bytes=0-3", '"different"', 206),
+        ]:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            try:
+                connection.request(
+                    "GET",
+                    "/files/example.whl",
+                    headers={"Range": range_, "If-None-Match": validator},
+                )
+                response = connection.getresponse()
+                self.assertEqual(response.status, expected_status)
+                self.assertEqual(
+                    response.read(), b"" if expected_status == 304 else self.body[:4]
+                )
+            finally:
+                connection.close()
+
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        try:
+            connection.request(
+                "GET",
+                "/files/example.whl",
+                headers={"Range": "bytes=0-3", "If-Range": '"different"'},
+            )
+            response = connection.getresponse()
+            self.assertEqual((response.status, response.read()), (200, self.body))
+        finally:
+            connection.close()
+
     def test_source_distribution_metadata(self) -> None:
         directory = Path(self.directory.name)
         source = directory / "example-1.0.tar.gz"
