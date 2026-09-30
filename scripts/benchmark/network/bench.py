@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from collections import Counter
@@ -44,11 +45,18 @@ def prepare(manifest: Path, directory: Path) -> None:
         path = directory / item["filename"]
         if not path.exists() or digest(path) != item["sha256"]:
             temporary = path.with_suffix(path.suffix + ".partial")
-            with (
-                urllib.request.urlopen(item["url"], timeout=60) as response,
-                temporary.open("wb") as output,
-            ):
-                shutil.copyfileobj(response, output)
+            for attempt in range(4):
+                try:
+                    with (
+                        urllib.request.urlopen(item["url"], timeout=60) as response,
+                        temporary.open("wb") as output,
+                    ):
+                        shutil.copyfileobj(response, output)
+                    break
+                except (OSError, urllib.error.URLError):
+                    if attempt == 3:
+                        raise
+                    time.sleep(2**attempt)
             if digest(temporary) != item["sha256"]:
                 raise ValueError(f"Fixture hash mismatch: {path.name}")
             temporary.replace(path)
