@@ -360,7 +360,7 @@ impl RequirementsTxt {
 
     /// Parse a `requirements.txt` file, using the given cache to avoid re-reading files from disk.
     #[instrument(skip_all)]
-    pub(crate) async fn parse_with_cache(
+    async fn parse_with_cache(
         requirements_txt: impl Into<RequirementsInput>,
         working_dir: impl AsRef<Path>,
         client_builder: &BaseClientBuilder<'_>,
