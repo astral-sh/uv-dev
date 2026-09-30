@@ -156,6 +156,10 @@ lower bound accounts for different response delays along each index-to-metadata 
 `find_links_oracle.py` accepts repeated `--index-path` arguments, fetches every
 configured flat index concurrently, and then verifies one selected metadata sidecar.
 It reports both a known-package minimum and an all-index transfer reference.
+Its `--route versions` mode stops after reading the index pages, as an outdated
+version lookup does. `make_outdated_fixtures.py --directory DIR` creates two wheel
+releases, setup commands that install the older release, and a nine-index latency
+profile for `pip list --outdated`.
 `zip_metadata_oracle.py` reads a known wheel metadata entry by its ZIP offset,
 verifies the received archive bytes, and reports its compressed-byte lower bound.
 With ranges disabled, it reads the necessary archive prefix instead.

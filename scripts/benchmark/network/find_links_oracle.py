@@ -26,13 +26,16 @@ def main() -> None:
     parser.add_argument("--profiles", type=Path, required=True)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--filename", required=True)
+    parser.add_argument("--route", choices=["metadata", "versions"], default="metadata")
     parser.add_argument("--index-path", action="append", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     profile = json.loads(args.profiles.read_text())[args.profile]
-    if not profile.get("pep658", True):
+    if args.route == "metadata" and not profile.get("pep658", True):
         parser.error("the metadata oracle requires PEP 658")
-    fixtures = bench.Fixtures(args.manifest, args.directory, True)
+    fixtures = bench.Fixtures(
+        args.manifest, args.directory, profile.get("pep658", True)
+    )
     metadata_path = f"/files/{args.filename}.metadata"
     metadata = fixtures.metadata[args.filename + ".metadata"]
     server = bench.Server(fixtures, profile)
@@ -55,7 +58,8 @@ def main() -> None:
             ]
             for future in futures:
                 future.result()
-        read(metadata_path, metadata)
+        if args.route == "metadata":
+            read(metadata_path, metadata)
         seconds = time.perf_counter() - start
     finally:
         server.shutdown()
@@ -70,35 +74,43 @@ def main() -> None:
             - profile.get("jitter_ms", 0),
         )
 
-    selected_bytes = len(fixtures.flat) + len(metadata)
-    selected_latency = min(map(minimum_latency, args.index_path)) + minimum_latency(
-        metadata_path
-    )
-    all_bytes = len(fixtures.flat) * len(args.index_path) + len(metadata)
-    all_latency = max(map(minimum_latency, args.index_path)) + minimum_latency(
-        metadata_path
-    )
+    metadata_bytes = len(metadata) if args.route == "metadata" else 0
+    metadata_latency = minimum_latency(metadata_path) if args.route == "metadata" else 0
+    waves = 2 if args.route == "metadata" else 1
+    selected_bytes = len(fixtures.flat) + metadata_bytes
+    selected_latency = min(map(minimum_latency, args.index_path)) + metadata_latency
+    all_bytes = len(fixtures.flat) * len(args.index_path) + metadata_bytes
+    all_latency = max(map(minimum_latency, args.index_path)) + metadata_latency
+    required_bytes = all_bytes if args.route == "versions" else selected_bytes
+    required_latency = all_latency if args.route == "versions" else selected_latency
     data = {
         "profile": profile,
         "netem": bench.netem_profile(),
         "manifest_sha256": bench.digest(args.manifest),
         "index_paths": args.index_path,
         "filename": args.filename,
+        "route": args.route,
         "seconds": seconds,
+        "required_bytes": required_bytes,
+        "required_waves": waves,
         "required_metadata_and_one_index_bytes": selected_bytes,
-        "required_latency_ms": selected_latency,
+        "required_latency_ms": required_latency,
         "optimistic_network_floor_seconds": bench.network_floor(
-            profile, selected_bytes, 2, selected_latency
+            profile, required_bytes, waves, required_latency
         ),
         "all_index_bytes": all_bytes,
         "all_index_latency_ms": all_latency,
         "optimistic_all_index_floor_seconds": bench.network_floor(
-            profile, all_bytes, 2, all_latency
+            profile, all_bytes, waves, all_latency
         ),
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
-        "scope": "Known selected package with unlimited concurrent index requests, followed by its metadata. The optimistic selected-package floor assumes the fastest index suffices; the all-index reference retains every configured location.",
+        "scope": (
+            "Read all configured find-links pages with unlimited concurrency to discover available versions. The all-index floor includes every response; wheel metadata is unnecessary."
+            if args.route == "versions"
+            else "Known selected package with unlimited concurrent index requests, followed by its metadata. The optimistic selected-package floor assumes the fastest index suffices; the all-index reference retains every configured location."
+        ),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(data, indent=2) + "\n")
