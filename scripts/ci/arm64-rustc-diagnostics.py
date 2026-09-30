@@ -24,6 +24,8 @@ def read_text(path: Path) -> str | None:
 
 def memory_snapshot() -> dict[str, object]:
     paths = [Path("/sys/fs/cgroup")]
+    if extra_cgroup := os.environ.get("UV_DIAGNOSTIC_CGROUP"):
+        paths.insert(0, Path(extra_cgroup))
     membership = read_text(Path("/proc/self/cgroup"))
     for line in (membership or "").splitlines():
         if line.startswith("0::"):
@@ -260,7 +262,11 @@ def monitor(output: Path, stop: Path) -> int:
 
 
 def instrument_dockerfile(
-    source: Path, scripts: Path, uv_digest: str, build_id: str | None = None
+    source: Path,
+    scripts: Path,
+    uv_digest: str,
+    build_id: str | None = None,
+    prepare_only: bool = False,
 ) -> int:
     if re.fullmatch(r"[0-9a-f]{64}", uv_digest) is None:
         raise ValueError("Expected the recorded uv image SHA-256 digest")
@@ -301,7 +307,16 @@ RUN case "${TARGETPLATFORM}" in \\
     cargo auditable zigbuild --bin uv --bin uvx --target $(cat rust_target.txt) --release"""
     if contents.count(original) != 1:
         raise ValueError("Expected exactly one production Docker build command")
-    dockerfile.write_text(contents.replace(original, replacement))
+    if prepare_only:
+        command = replacement.split("\nRUN ", 1)[1]
+        launcher = copied / "build.sh"
+        launcher.write_text("#!/bin/sh\nset -eu\n" + command + "\n")
+        launcher.chmod(0o755)
+        dockerfile.write_text(
+            contents.split(original, 1)[0] + "COPY .ci-2124 /root/.ci-2124\n"
+        )
+    else:
+        dockerfile.write_text(contents.replace(original, replacement))
     return 0
 
 
@@ -324,6 +339,7 @@ def main() -> int:
     dockerfile.add_argument("scripts", type=Path)
     dockerfile.add_argument("--uv-digest", required=True)
     dockerfile.add_argument("--build-id")
+    dockerfile.add_argument("--prepare-only", action="store_true")
     args = parser.parse_args()
     match args.command:
         case "rustc":
@@ -343,7 +359,11 @@ def main() -> int:
             print(json.dumps(compiler_report(args.root), sort_keys=True))
         case "dockerfile":
             return instrument_dockerfile(
-                args.source, args.scripts, args.uv_digest, args.build_id
+                args.source,
+                args.scripts,
+                args.uv_digest,
+                args.build_id,
+                args.prepare_only,
             )
     return 0
 

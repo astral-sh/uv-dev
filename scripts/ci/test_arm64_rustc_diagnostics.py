@@ -11,6 +11,15 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("arm64-rustc-diagnostics.py")
 WRAPPER = SCRIPT.with_name("arm64-rustc-wrapper.sh")
+DOCKERFILE = """FROM ubuntu:24.04 AS build
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+RUN case "${TARGETPLATFORM}" in \\
+  "linux/arm64") export JEMALLOC_SYS_WITH_LG_PAGE=16;; \\
+  esac && \\
+  cargo auditable zigbuild --bin uv --bin uvx --target $(cat rust_target.txt) --release
+FROM scratch
+COPY --from=build /uv /uvx /
+"""
 
 
 class CompilerDiagnosticsTest(unittest.TestCase):
@@ -55,6 +64,23 @@ class CompilerDiagnosticsTest(unittest.TestCase):
         self.assertEqual(record["returncode"], 42)
         self.assertNotIn("signal", record)
         self.assertGreater(record["max_rss_bytes"], 0)
+
+    def test_snapshot_includes_the_requested_parent_cgroup(self):
+        cgroup = self.root / "parent-cgroup"
+        cgroup.mkdir()
+        (cgroup / "memory.max").write_text("34359738368\n")
+        (cgroup / "memory.events").write_text("oom 2\noom_kill 1\n")
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "snapshot"],
+            env=self.environment | {"UV_DIAGNOSTIC_CGROUP": str(cgroup)},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        values = json.loads(result.stdout)["cgroups"][str(cgroup)]
+        self.assertEqual(values["memory.max"], "34359738368")
+        self.assertEqual(values["memory.events"], "oom 2\noom_kill 1")
 
     def test_reports_sigkill(self):
         result = self.observe("import os, signal; os.kill(os.getpid(), signal.SIGKILL)")
@@ -121,19 +147,12 @@ class CompilerDiagnosticsTest(unittest.TestCase):
         self.assertLessEqual(started["before"]["time"], completed["after"]["time"])
 
     def test_docker_attempts_have_distinct_build_inputs(self):
-        original = """FROM ubuntu:24.04 AS build
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-RUN case "${TARGETPLATFORM}" in \\
-  "linux/arm64") export JEMALLOC_SYS_WITH_LG_PAGE=16;; \\
-  esac && \\
-  cargo auditable zigbuild --bin uv --bin uvx --target $(cat rust_target.txt) --release
-"""
         rewritten = []
         digest = "a" * 64
         for build_id in ("run-1", "run-2"):
             source = self.root / build_id
             source.mkdir()
-            (source / "Dockerfile").write_text(original)
+            (source / "Dockerfile").write_text(DOCKERFILE)
             result = subprocess.run(
                 [
                     sys.executable,
@@ -160,6 +179,37 @@ RUN case "${TARGETPLATFORM}" in \\
             self.assertEqual(contents.count("cargo auditable zigbuild"), 1)
             rewritten.append(contents)
         self.assertEqual(rewritten[0], rewritten[1])
+
+    def test_prepares_docker_image_with_a_separate_build_command(self):
+        source = self.root / "prepared"
+        source.mkdir()
+        (source / "Dockerfile").write_text(DOCKERFILE)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "dockerfile",
+                str(source),
+                str(SCRIPT.parent),
+                "--uv-digest",
+                "a" * 64,
+                "--prepare-only",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        contents = (source / "Dockerfile").read_text()
+        self.assertIn("FROM ubuntu:24.04 AS build", contents)
+        self.assertIn("COPY .ci-2124 /root/.ci-2124", contents)
+        self.assertNotIn("FROM scratch", contents)
+        self.assertNotIn("cargo auditable zigbuild", contents)
+        launcher = source / ".ci-2124/build.sh"
+        self.assertTrue(os.access(launcher, os.X_OK))
+        self.assertIn("cargo auditable zigbuild", launcher.read_text())
+        syntax = subprocess.run(["sh", "-n", launcher], check=False)
+        self.assertEqual(syntax.returncode, 0)
 
     def test_preserves_inherited_jobserver_descriptors(self):
         read_fd, write_fd = os.pipe()

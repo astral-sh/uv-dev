@@ -12,6 +12,7 @@ on:
           - gnu-repeat
           - docker-repeat
           - docker-overlap
+          - docker-memory
       depot-project-id:
         description: Dedicated Depot project for the Docker overlap test
         type: string
@@ -163,7 +164,7 @@ jobs:
           if-no-files-found: error
 
   docker:
-    if: ${{ inputs.suite == 'baseline' || startsWith(inputs.suite, 'docker-') }}
+    if: ${{ inputs.suite == 'baseline' || inputs.suite == 'docker-repeat' || inputs.suite == 'docker-overlap' }}
     name: Docker / ${{ matrix.source.name }} / ${{ matrix.sample }}
     runs-on: github-ubuntu-24.04-x86_64-4
     timeout-minutes: 60
@@ -245,6 +246,70 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-2124-docker-${{ matrix.source.name }}-${{ matrix.sample }}
+          path: results/
+          retention-days: 30
+          if-no-files-found: error
+
+  docker-memory:
+    if: ${{ inputs.suite == 'docker-memory' }}
+    name: Docker memory / ${{ matrix.memory }}gb
+    runs-on: depot-ubuntu-24.04-arm-32
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        memory: [32, 64]
+    steps:
+      - name: Check out diagnostics
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: diagnostics
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /scripts/ci/arm64-rustc-diagnostics.py
+            /scripts/ci/arm64-rustc-wrapper.sh
+            /scripts/ci/arm64-docker-memory-stress.sh
+
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: astral-sh/uv
+          ref: 7f29beb52565079609f44e82facf9b351252fed1
+          path: source
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.13"
+          enable-cache: false
+
+      - name: Prepare the Docker toolchain image
+        env:
+          BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.memory }}
+        run: |
+          test "$(git -C source rev-parse HEAD)" = 7f29beb52565079609f44e82facf9b351252fed1
+          mkdir -p results "$HOME/code/tmp/uv-ci-2124"
+          echo "TMPDIR=$HOME/code/tmp/uv-ci-2124" >> "$GITHUB_ENV"
+          uv run --no-config --no-project --python "$PYTHON_VERSION" diagnostics/scripts/ci/arm64-rustc-diagnostics.py dockerfile source diagnostics/scripts/ci \
+            --uv-digest 04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424 \
+            --build-id "$BUILD_ID" --prepare-only
+          cp source/Dockerfile results/Dockerfile
+          cp source/.ci-2124/build.sh results/build.sh
+          docker build --platform linux/arm64 --progress plain --tag uv-ci-2124:toolchain source
+          docker run --rm uv-ci-2124:toolchain sh -c 'test ! -f /root/target/aarch64-unknown-linux-musl/release/uv'
+
+      - name: Run three compilations under a shared memory limit
+        env:
+          MEMORY_GIB: ${{ matrix.memory }}
+        run: bash diagnostics/scripts/ci/arm64-docker-memory-stress.sh "$MEMORY_GIB" "$PWD/results" "$PWD/diagnostics/scripts/ci/arm64-rustc-diagnostics.py"
+
+      - name: Upload diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-2124-docker-memory-${{ matrix.memory }}gb
           path: results/
           retention-days: 30
           if-no-files-found: error
