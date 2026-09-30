@@ -16,6 +16,7 @@ use owo_colors::OwoColorize;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::{Deserialize, Deserializer, de};
 use tracing::{debug, instrument, trace};
 use url::Url;
 
@@ -88,6 +89,7 @@ pub(crate) mod export;
 mod inputs;
 mod installable;
 mod map;
+mod marker_cache;
 mod requirements;
 mod serialize;
 mod tree;
@@ -305,8 +307,7 @@ pub(crate) struct HashedDist {
     hashes: HashDigests,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
-#[serde(try_from = "LockWire")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Lock {
     /// The (major) version of the lockfile format.
     ///
@@ -6402,11 +6403,23 @@ struct LockWire {
     requires_python: RequiresPython,
     /// If this lockfile was built from a forking resolution with non-identical forks, store the
     /// forks in the lockfile so we can recreate them in subsequent resolutions.
-    #[serde(rename = "resolution-markers", default)]
+    #[serde(
+        rename = "resolution-markers",
+        default,
+        deserialize_with = "marker_cache::deserialize_markers"
+    )]
     fork_markers: Vec<SimplifiedMarkerTree>,
-    #[serde(rename = "supported-markers", default)]
+    #[serde(
+        rename = "supported-markers",
+        default,
+        deserialize_with = "marker_cache::deserialize_markers"
+    )]
     supported_environments: Vec<SimplifiedMarkerTree>,
-    #[serde(rename = "required-markers", default)]
+    #[serde(
+        rename = "required-markers",
+        default,
+        deserialize_with = "marker_cache::deserialize_markers"
+    )]
     required_environments: Vec<SimplifiedMarkerTree>,
     #[serde(rename = "conflicts", default)]
     conflicts: Option<Conflicts>,
@@ -6417,6 +6430,16 @@ struct LockWire {
     manifest: ResolverManifest,
     #[serde(rename = "package", alias = "distribution", default)]
     packages: Vec<PackageWire>,
+}
+
+impl<'de> Deserialize<'de> for Lock {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = marker_cache::with_cache(|| LockWire::deserialize(deserializer))?;
+        Self::try_from(wire).map_err(de::Error::custom)
+    }
 }
 
 impl TryFrom<LockWire> for Lock {
@@ -7325,7 +7348,11 @@ struct PackageWire {
     sdist: Option<SourceDist>,
     #[serde(default)]
     wheels: Vec<Wheel>,
-    #[serde(default, rename = "resolution-markers")]
+    #[serde(
+        default,
+        rename = "resolution-markers",
+        deserialize_with = "marker_cache::deserialize_markers"
+    )]
     fork_markers: Vec<SimplifiedMarkerTree>,
     #[serde(default)]
     dependencies: Vec<DependencyWire>,
@@ -9197,7 +9224,7 @@ struct DependencyWire {
     package_id: PackageIdForDependency,
     #[serde(default)]
     extra: BTreeSet<ExtraName>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "marker_cache::deserialize_marker")]
     marker: SimplifiedMarkerTree,
 }
 

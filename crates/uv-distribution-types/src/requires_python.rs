@@ -1,4 +1,5 @@
 use std::collections::Bound;
+use std::str::FromStr;
 
 use version_ranges::Ranges;
 
@@ -7,7 +8,7 @@ use uv_pep440::{
     LowerBound, UpperBound, Version, VersionSpecifier, VersionSpecifiers,
     release_specifiers_to_ranges,
 };
-use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion};
+use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion, Pep508Error};
 use uv_platform_tags::{AbiTag, CPythonAbiVariants, LanguageTag};
 
 /// The `Requires-Python` requirement specifier.
@@ -586,6 +587,14 @@ impl From<RequiresPythonRange> for Ranges<Version> {
 /// `requires-python` constraint back to the marker.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, PartialOrd, Ord, serde::Deserialize)]
 pub struct SimplifiedMarkerTree(MarkerTree);
+
+impl FromStr for SimplifiedMarkerTree {
+    type Err = Pep508Error;
+
+    fn from_str(source: &str) -> Result<Self, Self::Err> {
+        MarkerTree::from_str(source).map(Self)
+    }
+}
 
 impl SimplifiedMarkerTree {
     /// Simplifies the given markers by assuming the given `requires-python`
