@@ -65,9 +65,12 @@ Executable-link workloads repeat `uv python install` after installing one, two, 
 including their real platform-specific links or launchers. Each timed command runs in a fresh uv
 process against an already-populated installation directory.
 
-Pass `--project-caches` to also prepare a separate cache for each frozen environment. Cache
-maintenance workloads copy these caches and reconstruct their environments before timing, retaining
-the real cache layout and links between installed files and cached wheel contents.
+Pass `--project-caches` to also prepare separate caches for each frozen environment and one shared
+cache containing all three environments. Cache maintenance workloads copy these caches and
+reconstruct their environments before timing, retaining the real cache layout and links between
+installed files and cached wheel contents. Shared-cache cleanup requests one, eight, or twenty
+installed package names, or the environment's complete dependency set. This models clearing one
+project's cached packages while retaining the packages used by other projects.
 
 Concurrent-environment workloads create one, eight, or 32 independent Prefect runtime environments
 from the same warm wheel cache. They measure the complete batch of frozen `uv sync` commands in

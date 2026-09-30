@@ -52,12 +52,17 @@ def main() -> None:
     temporary_root.mkdir(exist_ok=True)
     selected = [(workload, cache) for workload in workloads]
     selected.append(({"project": "prefect", "python": PYTHON, "sync-args": []}, cache))
+    shared_cache = cache / "bench-caches" / "shared"
+    package_sets = {}
     if args.project_caches:
+        if shared_cache.exists():
+            shutil.rmtree(shared_cache)
         for workload in workloads:
             project_cache = cache / "bench-caches" / workload["name"]
             if project_cache.exists():
                 shutil.rmtree(project_cache)
             selected.append((workload, project_cache))
+            selected.append((workload, shared_cache))
     for workload, project_cache in selected:
         with tempfile.TemporaryDirectory(
             prefix="bench-project-", dir=temporary_root
@@ -87,6 +92,31 @@ def main() -> None:
                 env=environment,
                 check=True,
             )
+            if project_cache == shared_cache:
+                installed = subprocess.run(
+                    [
+                        *command,
+                        "--cache-dir",
+                        str(project_cache),
+                        "pip",
+                        "list",
+                        "--python",
+                        str(project / ".venv"),
+                        "--format",
+                        "json",
+                    ],
+                    env=environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                package_sets[workload["name"]] = sorted(
+                    package["name"] for package in json.loads(installed.stdout)
+                )
+    if args.project_caches:
+        (fixtures / "environment-packages.json").write_text(
+            json.dumps(package_sets, indent=2) + "\n"
+        )
 
 
 if __name__ == "__main__":
