@@ -368,6 +368,17 @@ traffic are a realizable reference. The optimistic cold network floor assumes tw
 dependent responses and gives no byte minimum, since negotiated Git pack contents
 and compression can differ.
 
+`make_tool_git_fixtures.py --directory PATH` creates dependency-free console tools
+in a deterministic Git monorepo, separate-repository controls, and replayable
+GitHub commit responses. Pass its `tool-git-fixtures.json`, `git` directory, and
+one of its `tool-git-*-setup.json` files to `run` when measuring `tool upgrade
+--all`. The setup installs the selected tools before timing. Use
+`UV_GITHUB_FAST_PATH_URL={base}/github` and a Git URL rewrite from
+`https://github.com/uv-network-benchmark/` to `{base}/git/` so every request stays
+inside the replay. `tool_git_oracle.py` fetches and verifies each distinct GitHub
+reference once. Its optimistic bound also allows Git ref advertisement,
+conditional responses, and reuse of installed immutable revisions.
+
 `make_pool_fixtures.py --directory PATH --width 50` creates two wide groups of
 packages joined by one shared dependency. Its `gate` profile delays that shared
 dependency's index response, leaving a gap between request bursts. Use
