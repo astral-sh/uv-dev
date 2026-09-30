@@ -74,6 +74,11 @@ compares normalized standard error in addition to standard output.
 For installation files that embed their destination, `--normalize-tree-file GLOB`
 replaces the trial URL and directory before hashing only matching relative paths.
 Managed Python workloads use this for `**/_sysconfigdata_*.py`.
+`--normalize-tree-symlink GLOB` similarly normalizes selected absolute symlink
+targets beneath the trial directory. Targets outside that directory, relative
+targets, and unselected links remain exact comparisons. Managed Python workloads
+can select the minor-version link after confirming it is the only remaining
+trial-specific difference.
 
 `make_requirements_fixtures.py --directory DIR --manifest MANIFEST` creates a
 chain of six remote requirements files ending in a pinned `iniconfig` requirement.

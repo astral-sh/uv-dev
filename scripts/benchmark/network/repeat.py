@@ -61,7 +61,9 @@ def check_inputs(pilot: dict, args: argparse.Namespace) -> float:
         "Kernel network profile differs",
     )
     python_request = pilot.get("python_request")
-    require(isinstance(python_request, str), "Pilot did not record its Python executable")
+    require(
+        isinstance(python_request, str), "Pilot did not record its Python executable"
+    )
     python = Path(python_request)
     require(
         python.is_file()
@@ -171,6 +173,7 @@ def command(
     for key, flag in (
         ("requirements", "--requirement"),
         ("normalize_tree_file", "--normalize-tree-file"),
+        ("normalize_tree_symlink", "--normalize-tree-symlink"),
         ("verify_file", "--verify-file"),
     ):
         for value in pilot.get(key, []):
@@ -218,6 +221,7 @@ def check_repeat(pilot: dict, repeated: dict) -> None:
         "setup_commands": [],
         "environment_overrides": {},
         "normalize_tree_file": [],
+        "normalize_tree_symlink": [],
         "verify_file": [],
     }
     for key in (
@@ -236,6 +240,7 @@ def check_repeat(pilot: dict, repeated: dict) -> None:
         "environment_overrides",
         "verify_tree",
         "normalize_tree_file",
+        "normalize_tree_symlink",
         "verify_file",
         "http2_proxy",
         "cache_mode",

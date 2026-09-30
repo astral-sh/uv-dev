@@ -729,6 +729,34 @@ class ReplayTests(unittest.TestCase):
             ),
         )
 
+    def test_tree_symlink_normalization_is_limited_to_selected_trial_targets(
+        self,
+    ) -> None:
+        roots = [Path(self.directory.name) / variant for variant in ("parent", "head")]
+        for root in roots:
+            root.mkdir()
+            (root / "python3.12").write_bytes(b"interpreter")
+            (root / "python").symlink_to(root / "python3.12")
+
+        def normalized(root: Path) -> dict:
+            return bench.tree_digest(
+                root, context={"work": root}, normalized_symlinks=["python"]
+            )
+
+        self.assertNotEqual(bench.tree_digest(roots[0]), bench.tree_digest(roots[1]))
+        self.assertEqual(normalized(roots[0]), normalized(roots[1]))
+        for root in roots:
+            (root / "other").symlink_to(root / "python3.12")
+        self.assertNotEqual(normalized(roots[0]), normalized(roots[1]))
+        for root in roots:
+            (root / "other").unlink()
+        (roots[1] / "python").unlink()
+        (roots[1] / "python").symlink_to("python3.12")
+        self.assertNotEqual(normalized(roots[0]), normalized(roots[1]))
+        (roots[1] / "python").unlink()
+        (roots[1] / "python").symlink_to(roots[1] / ".." / "python3.12")
+        self.assertNotEqual(normalized(roots[0]), normalized(roots[1]))
+
 
 if __name__ == "__main__":
     unittest.main()

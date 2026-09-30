@@ -81,6 +81,7 @@ def tree_digest(
     root: Path,
     normalized_files: tuple[str, ...] | list[str] = (),
     context: dict | None = None,
+    normalized_symlinks: tuple[str, ...] | list[str] = (),
 ) -> dict:
     if not root.is_dir():
         raise ValueError(f"Verification directory does not exist: {root}")
@@ -88,7 +89,19 @@ def tree_digest(
     for path in sorted(root.rglob("*")):
         name = path.relative_to(root).as_posix()
         if path.is_symlink():
-            entries.append((name, "symlink", os.readlink(path)))
+            target = os.readlink(path)
+            if any(Path(name).match(pattern) for pattern in normalized_symlinks):
+                if context is None:
+                    raise ValueError("Tree normalization requires a trial context")
+                if Path(target).is_absolute():
+                    try:
+                        relative = Path(target).relative_to(context["work"])
+                    except ValueError:
+                        pass
+                    else:
+                        if ".." not in relative.parts:
+                            target = "[WORK]/" + relative.as_posix()
+            entries.append((name, "symlink", target))
         elif path.is_file():
             if any(Path(name).match(pattern) for pattern in normalized_files):
                 if context is None:
@@ -1248,6 +1261,7 @@ def run_one(
                     Path(args.verify_tree.format(work=work)),
                     args.normalize_tree_file,
                     context,
+                    args.normalize_tree_symlink,
                 )
                 if args.verify_tree
                 else None
@@ -1298,6 +1312,12 @@ def main() -> None:
         action="append",
         default=[],
         help="Glob of files whose trial URL and directory are normalized before hashing",
+    )
+    run.add_argument(
+        "--normalize-tree-symlink",
+        action="append",
+        default=[],
+        help="Glob of symlinks whose absolute target beneath the trial directory is normalized",
     )
     run.add_argument("--verify-file", action="append", default=[])
     run.add_argument("--compare-stderr", action="store_true")
@@ -1440,6 +1460,7 @@ def main() -> None:
         "environment_overrides": args.env,
         "verify_tree": args.verify_tree,
         "normalize_tree_file": args.normalize_tree_file,
+        "normalize_tree_symlink": args.normalize_tree_symlink,
         "verify_file": args.verify_file,
         "compare_stderr": args.compare_stderr,
         "http2_proxy": (

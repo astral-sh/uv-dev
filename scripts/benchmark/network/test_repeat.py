@@ -124,6 +124,7 @@ class RepeatTests(unittest.TestCase):
             environment_overrides={"UV_CONCURRENT_DOWNLOADS": "2"},
             verify_tree="{work}/site",
             normalize_tree_file=["**/_sysconfigdata_*.py"],
+            normalize_tree_symlink=["cpython-3.12-linux-x86_64-gnu"],
             verify_file=["{work}/uv.lock"],
             compare_stderr=True,
         )
@@ -140,6 +141,9 @@ class RepeatTests(unittest.TestCase):
         self.assertEqual(value("--env"), "UV_CONCURRENT_DOWNLOADS=2")
         self.assertEqual(value("--verify-tree"), "{work}/site")
         self.assertEqual(value("--normalize-tree-file"), "**/_sysconfigdata_*.py")
+        self.assertEqual(
+            value("--normalize-tree-symlink"), "cpython-3.12-linux-x86_64-gnu"
+        )
         self.assertEqual(value("--verify-file"), "{work}/uv.lock")
         self.assertIn("--compare-stderr", command)
         self.assertEqual(
@@ -166,6 +170,7 @@ class RepeatTests(unittest.TestCase):
             environment_overrides={},
             verify_tree=None,
             normalize_tree_file=[],
+            normalize_tree_symlink=[],
             verify_file=[],
             compare_stderr=False,
             http2_proxy=None,
