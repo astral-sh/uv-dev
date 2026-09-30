@@ -15,7 +15,7 @@ uv run --no-project python scripts/benchmark/network/bench.py \
 
 Use `--manifest scripts/benchmark/network/source-fixtures.json` before the
 subcommand to prepare or replay source distributions. These fixtures include
-static `PKG-INFO` metadata, so a `pip compile --no-deps --no-binary :all:` workload
+static `PKG-INFO` metadata, so a `pip compile --no-binary :all:` workload
 can exercise archive transfer and extraction without requiring a build backend.
 `python-fixtures.json` contains a pinned managed CPython archive. Manifest entries
 with `"kind": "raw"` are served as files without parsing package metadata.
