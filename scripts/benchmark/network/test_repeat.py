@@ -130,6 +130,7 @@ class RepeatTests(unittest.TestCase):
             verify_file=["{work}/uv.lock"],
             compare_stderr=True,
             kernel_counters=True,
+            set_python_environment=False,
             refresh_mode="implicit",
         )
         with patch.object(repeat.shutil, "which", return_value="/path/to/uv"):
@@ -152,6 +153,7 @@ class RepeatTests(unittest.TestCase):
         self.assertEqual(value("--verify-file"), "{work}/uv.lock")
         self.assertIn("--compare-stderr", command)
         self.assertIn("--kernel-counters", command)
+        self.assertIn("--no-python-env", command)
         self.assertEqual(
             json.loads(Path(value("--profiles")).read_text()),
             {"repeat": self.pilot["profile"]},
@@ -183,12 +185,14 @@ class RepeatTests(unittest.TestCase):
             http2_proxy=None,
             git_repositories=None,
             git_version=None,
+            set_python_environment=True,
         )
         repeated["lower_bound"]["required_wait_ms"] = 0
         repeat.check_repeat(self.pilot, repeated)
         for key, value in (
             ("command", ["pip", "sync"]),
             ("environment_overrides", {"UV_CONCURRENT_DOWNLOADS": "1"}),
+            ("set_python_environment", False),
         ):
             changed = copy.deepcopy(repeated)
             changed[key] = value

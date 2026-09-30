@@ -866,7 +866,10 @@ class ReplayTests(unittest.TestCase):
             work = kwargs["cwd"]
             self.assertEqual((work / "uv.toml").read_text(), args.templates["uv.toml"])
             self.assertEqual(kwargs["env"]["UV_CONCURRENT_DOWNLOADS"], "2")
-            self.assertEqual(kwargs["env"]["UV_PYTHON"], "3.12")
+            if getattr(args, "no_python_env", False):
+                self.assertNotIn("UV_PYTHON", kwargs["env"])
+            else:
+                self.assertEqual(kwargs["env"]["UV_PYTHON"], "3.12")
             for key in ("VIRTUAL_ENV", "CONDA_PREFIX", "PYTHONPATH", "PYTHONHOME"):
                 self.assertNotIn(key, kwargs["env"])
             if "lock" in command:
@@ -889,6 +892,14 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(
             result["stderr_sha256"], hashlib.sha256(b"[INDEX]/simple").hexdigest()
         )
+
+        args.no_python_env = True
+        with (
+            patch.dict(os.environ, {"UV_PYTHON": "/outer/python"}),
+            patch.object(bench.subprocess, "run", side_effect=run),
+        ):
+            without_python = bench.run_one(Path("/uv"), self.fixtures, {}, args)
+        self.assertEqual(result["verified_files"], without_python["verified_files"])
 
     def test_tree_digest_detects_content_changes(self) -> None:
         root = Path(self.directory.name) / "installed"

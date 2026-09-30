@@ -186,6 +186,8 @@ def command(
         result.append("--compare-stderr")
     if pilot.get("kernel_counters"):
         result.append("--kernel-counters")
+    if not pilot.get("set_python_environment", True):
+        result.append("--no-python-env")
     for key, value in pilot.get("environment_overrides", {}).items():
         result.extend(("--env", f"{key}={value}"))
     for name, flag in (
@@ -230,6 +232,7 @@ def check_repeat(pilot: dict, repeated: dict) -> None:
         "verify_file": [],
         "refresh_mode": "flag",
         "kernel_counters": False,
+        "set_python_environment": True,
     }
     for key in (
         "parent_sha",
@@ -240,6 +243,7 @@ def check_repeat(pilot: dict, repeated: dict) -> None:
         "netem",
         "command",
         "python_request",
+        "set_python_environment",
         "python_executable_sha256",
         "requirements",
         "templates",

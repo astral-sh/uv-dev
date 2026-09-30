@@ -1453,7 +1453,6 @@ def run_one(
             }
             env.update(
                 UV_CACHE_DIR=str(work / "cache"),
-                UV_PYTHON=args.python,
                 UV_PYTHON_DOWNLOADS="never",
                 GIT_CONFIG_NOSYSTEM="1",
                 GIT_CONFIG_GLOBAL=os.devnull,
@@ -1461,6 +1460,8 @@ def run_one(
                 NO_PROXY="127.0.0.1,localhost",
                 no_proxy="127.0.0.1,localhost",
             )
+            if not getattr(args, "no_python_env", False):
+                env["UV_PYTHON"] = args.python
             env.update({key: expand(value, context) for key, value in args.env.items()})
             if proxy:
                 env["SSL_CERT_FILE"] = str(args.tls_certificate)
@@ -1583,6 +1584,11 @@ def main() -> None:
     run.add_argument("--work-dir", type=Path, required=True)
     run.add_argument("--output", type=Path, required=True)
     run.add_argument("--python", default="3.12")
+    run.add_argument(
+        "--no-python-env",
+        action="store_true",
+        help="Do not set UV_PYTHON, which supplies a target to Python management commands",
+    )
     run.add_argument("--requirement", action="append", default=[])
     run.add_argument("--verify-tree", help="Directory to compare after each command")
     run.add_argument(
@@ -1742,6 +1748,7 @@ def main() -> None:
         "netem": netem_profile(),
         "command": args.command,
         "python_request": args.python,
+        "set_python_environment": not args.no_python_env,
         "python_executable_sha256": (
             digest(Path(args.python)) if Path(args.python).is_file() else None
         ),

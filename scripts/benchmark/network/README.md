@@ -138,9 +138,10 @@ isolated cache. `--config-template` and `--project-template` copy text templates
 to provide a locked `pylock.toml` input directly. Templates, arguments, and `--requirement` values
 support `{base}`, `{index}`, `{work}`, `{python}`, and `{fixtures}`. Use `--env KEY=VALUE` for
 settings such as `UV_CONCURRENT_DOWNLOADS`, and repeat `--verify-file '{work}/uv.lock'` to compare
-generated files after normalizing the temporary origin and work directory. Inputs and environment
-overrides are saved in the result. Each `/flat/NAME` endpoint serves a PEP 503 page for the
-manifest; profiles may set exact-path response delays in `path_latency_ms`. A profile's
+generated files after normalizing the temporary origin and work directory. Use `--no-python-env` for
+bare Python management commands, where `UV_PYTHON` would supply an explicit target. Inputs and
+environment overrides are saved in the result. Each `/flat/NAME` endpoint serves a PEP 503 page for
+the manifest; profiles may set exact-path response delays in `path_latency_ms`. A profile's
 `path_aliases` mapping can expose the same Simple API response through several index URLs while
 retaining each requested path in the trace.
 
