@@ -1211,9 +1211,20 @@ impl RegistryClient {
         if !prefer_streaming
             && index.is_none_or(|index| capabilities.supports_range_requests(index))
         {
-            let req = self
-                .uncached_client(url)
-                .head(Url::from(url.clone()))
+            // An advertised size lets us fetch the ZIP tail without a separate HEAD request.
+            // The response's Content-Range supplies the authoritative archive length.
+            let mut initial_range = size.and_then(|size| {
+                size.checked_sub(1)
+                    .map(|end| (size.saturating_sub(CENTRAL_DIRECTORY_SIZE), end))
+            });
+            loop {
+                let req = if let Some((start, end)) = initial_range {
+                    self.uncached_client(url)
+                        .get(Url::from(url.clone()))
+                        .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+                } else {
+                    self.uncached_client(url).head(Url::from(url.clone()))
+                }
                 .header(
                     "accept-encoding",
                     http::HeaderValue::from_static("identity"),
@@ -1223,84 +1234,133 @@ impl RegistryClient {
                     ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
                 })?;
 
-            // Copy authorization headers from the HEAD request to subsequent requests
-            let mut headers = HeaderMap::default();
-            if let Some(authorization) = req.headers().get("authorization") {
-                headers.append("authorization", authorization.clone());
-            }
-            // These range requests need the bytes from the wheel archive itself.
-            // After `reqwest` moved decompression to tower-http[1], this path could receive
-            // transparently decompressed responses. That breaks the byte offsets used by
-            // `AsyncHttpRangeReader` and results in us incorrectly trying to double-decompress gzip streams[2].
-            // We request with `Accept: identity` so that the range reader always sees the compressed wheel bytes.
-            //
-            // [1]: https://github.com/seanmonstar/reqwest/pull/2840
-            // [2]: https://github.com/astral-sh/async_http_range_reader/pull/3#discussion_r2700194798
-            headers.insert(
-                reqwest::header::ACCEPT_ENCODING,
-                reqwest::header::HeaderValue::from_static("identity"),
-            );
-            // This response callback is special, we actually make a number of subsequent requests to
-            // fetch the file from the remote zip.
-            let read_metadata_range_request = |response: Response, _: &mut RetryState| {
-                async {
-                    let mut reader = AsyncHttpRangeReader::from_head_response(
-                        self.uncached_client(url).clone(),
-                        response,
-                        Url::from(url.clone()),
-                        headers.clone(),
+                // Copy authorization headers from the initial request to subsequent requests.
+                let mut headers = HeaderMap::default();
+                if let Some(authorization) = req.headers().get("authorization") {
+                    headers.append("authorization", authorization.clone());
+                }
+                // These range requests need the bytes from the wheel archive itself.
+                // After `reqwest` moved decompression to tower-http[1], this path could receive
+                // transparently decompressed responses. That breaks the byte offsets used by
+                // `AsyncHttpRangeReader` and results in us incorrectly trying to double-decompress gzip streams[2].
+                // We request with `Accept: identity` so that the range reader always sees the compressed wheel bytes.
+                //
+                // [1]: https://github.com/seanmonstar/reqwest/pull/2840
+                // [2]: https://github.com/astral-sh/async_http_range_reader/pull/3#discussion_r2700194798
+                headers.insert(
+                    reqwest::header::ACCEPT_ENCODING,
+                    reqwest::header::HeaderValue::from_static("identity"),
+                );
+                // This response callback is special, we actually make a number of subsequent requests to
+                // fetch the file from the remote zip.
+                let read_metadata_range_request = |response: Response, _: &mut RetryState| {
+                    async {
+                        // A server may ignore Range and send the whole wheel. The response can be
+                        // consumed directly unless the caller requires range support.
+                        if initial_range.is_some()
+                            && response.status() == StatusCode::OK
+                            && self.metadata_range_request == MetadataRangeRequest::Fallback
+                        {
+                            if let Some(index) = index {
+                                capabilities.set_no_range_requests(index.clone());
+                            }
+                            let reader = response
+                                .bytes_stream()
+                                .map_err(|err| self.handle_response_errors(err))
+                                .into_async_read();
+                            return read_metadata_async_stream(filename, url.as_ref(), reader)
+                                .await
+                                .map_err(|err| ErrorKind::Metadata(url.to_string(), err).into());
+                        }
+                        let reader = if initial_range.is_some() {
+                            AsyncHttpRangeReader::from_range_response(
+                                self.uncached_client(url).clone(),
+                                response,
+                                Url::from(url.clone()),
+                                headers.clone(),
+                            )
+                            .await
+                        } else {
+                            AsyncHttpRangeReader::from_head_response(
+                                self.uncached_client(url).clone(),
+                                response,
+                                Url::from(url.clone()),
+                                headers.clone(),
+                            )
+                            .await
+                        };
+                        let mut reader = reader
+                            .map_err(|err| ErrorKind::AsyncHttpRangeReader(url.clone(), err))?;
+                        trace!("Getting metadata for {filename} by range request");
+                        let text =
+                            wheel_metadata_from_remote_zip(filename, url, &mut reader).await?;
+                        ResolutionMetadata::parse_metadata(text.as_bytes()).map_err(|err| {
+                            Error::from(ErrorKind::MetadataParseError(
+                                filename.clone(),
+                                url.to_string(),
+                                Box::new(err),
+                            ))
+                        })
+                    }
+                    .boxed_local()
+                    .instrument(info_span!("read_metadata_range_request", wheel = %filename))
+                };
+
+                let cached_client = if initial_range.is_some() {
+                    // The registry client disables reqwest's built-in redirects. As with the
+                    // range reader's later requests, a redirect here must fall back to streaming
+                    // from the original URL: signed redirect targets may forbid Range headers.
+                    self.cached_client()
+                        .with_complete_partial_payloads()
+                        .without_redirect_handling()
+                } else {
+                    self.cached_client().clone()
+                };
+                let result = cached_client
+                    .get_serde_with_retry(
+                        req,
+                        &cache_entry,
+                        cache_control.clone(),
+                        read_metadata_range_request,
                     )
                     .await
-                    .map_err(|err| ErrorKind::AsyncHttpRangeReader(url.clone(), err))?;
-                    trace!("Getting metadata for {filename} by range request");
-                    let text = wheel_metadata_from_remote_zip(filename, url, &mut reader).await?;
-                    ResolutionMetadata::parse_metadata(text.as_bytes()).map_err(|err| {
-                        Error::from(ErrorKind::MetadataParseError(
-                            filename.clone(),
-                            url.to_string(),
-                            Box::new(err),
-                        ))
-                    })
-                }
-                .boxed_local()
-                .instrument(info_span!("read_metadata_range_request", wheel = %filename))
-            };
+                    .map_err(crate::Error::from);
 
-            let result = self
-                .cached_client()
-                .get_serde_with_retry(
-                    req,
-                    &cache_entry,
-                    cache_control.clone(),
-                    read_metadata_range_request,
-                )
-                .await
-                .map_err(crate::Error::from);
+                match result {
+                    Ok(metadata) => return Ok(metadata),
+                    Err(err)
+                        if initial_range.is_some()
+                            && matches!(err.kind(), ErrorKind::WrappedReqwestError(_, err)
+                            if err.status() == Some(StatusCode::RANGE_NOT_SATISFIABLE)) =>
+                    {
+                        // The index size may be stale. Discover the current length with HEAD.
+                        initial_range = None;
+                        continue;
+                    }
+                    Err(err) => {
+                        if err.is_http_range_requests_unsupported(url, index) {
+                            if self.metadata_range_request == MetadataRangeRequest::Require {
+                                return Err(ErrorKind::MetadataRangeRequestsRequired(
+                                    url.clone(),
+                                    Box::new(err),
+                                )
+                                .into());
+                            }
 
-            match result {
-                Ok(metadata) => return Ok(metadata),
-                Err(err) => {
-                    if err.is_http_range_requests_unsupported(url, index) {
-                        if self.metadata_range_request == MetadataRangeRequest::Require {
-                            return Err(ErrorKind::MetadataRangeRequestsRequired(
-                                url.clone(),
-                                Box::new(err),
-                            )
-                            .into());
+                            // The range request version failed. Fall back to streaming the file to search
+                            // for the METADATA file.
+                            warn!("Range requests not supported for {filename}; streaming wheel");
+
+                            // Mark the index as not supporting range requests.
+                            if let Some(index) = index {
+                                capabilities.set_no_range_requests(index.clone());
+                            }
+                        } else {
+                            return Err(err);
                         }
-
-                        // The range request version failed. Fall back to streaming the file to search
-                        // for the METADATA file.
-                        warn!("Range requests not supported for {filename}; streaming wheel");
-
-                        // Mark the index as not supporting range requests.
-                        if let Some(index) = index {
-                            capabilities.set_no_range_requests(index.clone());
-                        }
-                    } else {
-                        return Err(err);
                     }
                 }
+                break;
             }
         }
 
