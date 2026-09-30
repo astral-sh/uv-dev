@@ -1,0 +1,11 @@
+{
+  "fast": {"latency_ms": 0, "bytes_per_second": 0},
+  "slow": {"latency_ms": 150, "bytes_per_second": 1250000},
+  "zero-slow": {"latency_ms": 150, "bytes_per_second": 1250000, "path_failures": {"/simple/iniconfig/": {"status": 503, "count": 2, "retry_after": "0"}}},
+  "zero-fast": {"latency_ms": 0, "bytes_per_second": 0, "path_failures": {"/simple/iniconfig/": {"status": 503, "count": 2, "retry_after": "0"}}},
+  "one-slow": {"latency_ms": 150, "bytes_per_second": 1250000, "path_failures": {"/simple/iniconfig/": {"status": 429, "count": 2, "retry_after": "1"}}},
+  "date-past": {"latency_ms": 150, "bytes_per_second": 1250000, "path_failures": {"/simple/iniconfig/": {"status": 503, "count": 2, "retry_after": "Sun, 06 Nov 1994 08:49:37 GMT"}}},
+  "date-future": {"latency_ms": 150, "bytes_per_second": 1250000, "path_failures": {"/simple/iniconfig/": {"status": 503, "count": 2, "retry_after_date_seconds": 1}}},
+  "no-header": {"latency_ms": 150, "bytes_per_second": 1250000, "path_failures": {"/simple/iniconfig/": {"status": 503, "count": 2}}},
+  "invalid-header": {"latency_ms": 150, "bytes_per_second": 1250000, "path_failures": {"/simple/iniconfig/": {"status": 503, "count": 2, "retry_after": "invalid"}}}
+}

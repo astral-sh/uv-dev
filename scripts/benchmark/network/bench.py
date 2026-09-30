@@ -45,6 +45,7 @@ def network_floor(
     required_bytes: int,
     required_waves: int,
     required_latency_ms: float | None = None,
+    required_wait_ms: float = 0,
 ) -> float:
     netem = netem_profile()
     rates = [
@@ -62,7 +63,9 @@ def network_floor(
         else required_latency_ms
     )
     latency = application_latency + required_waves * netem.get("rtt_ms", 0)
-    return max(required_bytes / min(rates) if rates else 0, latency / 1000)
+    return required_wait_ms / 1000 + max(
+        required_bytes / min(rates) if rates else 0, latency / 1000
+    )
 
 
 def normalize(name: str) -> str:
@@ -527,8 +530,15 @@ class Handler(BaseHTTPRequestHandler):
                     "count": profile.get("fail_count", 0),
                 },
             )
+            retry_after = None
             if failure.get("status") and event["attempt"] <= failure.get("count", 0):
                 status, body = failure["status"], b"Injected transient failure"
+                if "retry_after" in failure:
+                    retry_after = str(failure["retry_after"])
+                elif "retry_after_date_seconds" in failure:
+                    retry_after = email.utils.formatdate(
+                        time.time() + failure["retry_after_date_seconds"], usegmt=True
+                    )
             size = body.stat().st_size if isinstance(body, Path) else len(body)
             etag = (
                 '"'
@@ -587,6 +597,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("ETag", etag)
             if modified is not None:
                 self.send_header("Last-Modified", modified)
+            if retry_after is not None:
+                self.send_header("Retry-After", retry_after)
+                event["retry_after"] = retry_after
             if (
                 is_artifact
                 and profile.get("ranges", True)
@@ -1307,6 +1320,7 @@ def main() -> None:
     run.add_argument("--required-bytes", type=int, default=0)
     run.add_argument("--required-waves", type=int, default=0)
     run.add_argument("--required-latency-ms", type=float)
+    run.add_argument("--required-wait-ms", type=float, default=0)
     run.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.action == "prepare":
@@ -1336,6 +1350,8 @@ def main() -> None:
         parser.error("provide a command and at least two pairs")
     if args.required_latency_ms is not None and args.required_latency_ms < 0:
         parser.error("--required-latency-ms cannot be negative")
+    if args.required_wait_ms < 0:
+        parser.error("--required-wait-ms cannot be negative")
     args.templates = {
         name: path.read_text()
         for name, path in (
@@ -1443,13 +1459,15 @@ def main() -> None:
             "required_bytes": args.required_bytes,
             "required_waves": args.required_waves,
             "required_latency_ms": args.required_latency_ms,
+            "required_wait_ms": args.required_wait_ms,
             "seconds": network_floor(
                 profile,
                 args.required_bytes,
                 args.required_waves,
                 args.required_latency_ms,
+                args.required_wait_ms,
             ),
-            "model": "Optimistic maximum of required-body serialization and serial response-latency waves; excludes TCP/TLS and CPU costs.",
+            "model": "Optimistic maximum of required-body serialization and serial response-latency waves, plus required waits that cannot overlap those transfers; excludes TCP/TLS and CPU costs.",
         },
     }
     for index in range(args.warmups + args.pairs):

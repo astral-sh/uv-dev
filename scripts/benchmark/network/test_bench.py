@@ -166,6 +166,33 @@ class ReplayTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_retry_after_is_only_sent_on_injected_failures(self) -> None:
+        server = self.server(
+            {
+                "path_failures": {
+                    "/files/example.whl": {
+                        "status": 503,
+                        "count": 1,
+                        "retry_after": "0",
+                    }
+                }
+            }
+        )
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        try:
+            for status, header in [(503, "0"), (200, None)]:
+                connection.request("GET", "/files/example.whl")
+                response = connection.getresponse()
+                self.assertEqual(response.status, status)
+                self.assertEqual(response.getheader("Retry-After"), header)
+                response.read()
+        finally:
+            connection.close()
+        server.wait_idle()
+        self.assertEqual(
+            [event.get("retry_after") for event in server.events], ["0", None]
+        )
+
     def test_conditional_requests_precede_ranges(self) -> None:
         server = self.server({})
         etag = f'"{hashlib.sha256(self.body).hexdigest()}"'
@@ -581,6 +608,7 @@ class ReplayTests(unittest.TestCase):
             self.assertEqual(bench.network_floor({}, 125000, 2), 1)
             self.assertEqual(bench.network_floor({"latency_ms": 100}, 1, 2), 0.6)
             self.assertEqual(bench.network_floor({}, 1, 2, 1650), 2.05)
+            self.assertEqual(bench.network_floor({}, 1, 2, 1650, 1000), 3.05)
 
     def test_refresh_follows_subcommand(self) -> None:
         args = SimpleNamespace(

@@ -186,6 +186,11 @@ releases, setup commands that install the older release, and a nine-index latenc
 profile for `pip list --outdated`.
 `latest_version_oracle.py` measures concurrent version discovery across specified
 Simple API and find-links paths without fetching distribution metadata.
+`retry-after-profiles.json` supplies transient index errors with numeric, dated,
+missing, and invalid retry advice. `retry_oracle.py` fetches a known distribution's
+index and sidecar with the same retry budget and maximum delay. Its bound includes
+fixed numeric delays on the serial request path. Pass the reported wait with
+`run --required-wait-ms` only when it cannot overlap another required transfer.
 `make_publish_fixtures.py --directory DIR` creates a batch of distinct wheel builds
 for repeated `publish --dry-run --check-url` checks. `publish_check_oracle.py` reads
 one current index per known package and verifies every selected local file against

@@ -178,6 +178,8 @@ def verify(evidence: Path, repository: Path, study: dict) -> dict:
                 in inspect.signature(bench.network_floor).parameters
             ):
                 arguments.append(lower_bound.get("required_latency_ms"))
+            if "required_wait_ms" in inspect.signature(bench.network_floor).parameters:
+                arguments.append(lower_bound.get("required_wait_ms", 0))
             require(
                 bench.network_floor(*arguments) == lower_bound["seconds"],
                 f"{label}: lower-bound arithmetic",
