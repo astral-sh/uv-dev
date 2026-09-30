@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 21846,
+        "title": "uv rejects a wheel package built locally, because it uses case-sensitive compare for NetBSD tag",
+        "url": "https://github.com/astral-sh/uv/issues/21846",
+        "state": "closed",
+        "reason": "astral-sh/uv#21846 is the direct historical NetBSD casing issue, but it involved a lowercase wheel compared with an uppercase generated tag—the inverse of this report."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21853,
+        "title": "Fix BSD and Haiku platform tag casing",
+        "url": "https://github.com/astral-sh/uv/pull/21853",
+        "state": "merged",
+        "reason": "astral-sh/uv#21853 lowercased generated BSD compatible tags and shipped in uv 0.12.18. uv 0.12.21 contains the fix, but wheel parsing preserves maturin’s uppercase suffix, creating the reported regression."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for NetBSD, `netbsd_11_0_STABLE`, the exact incompatibility error, built-wheel rejection, maturin compatibility, BSD platform tags, sysconfig platform detection, casing normalization, and historical fixes. Followed astral-sh/uv#21846 to astral-sh/uv#21853 and verified its release timing and inclusion in uv 0.12.21. Closed alternatives astral-sh/uv#21848, astral-sh/uv#21852, and astral-sh/uv#21865 were superseded proposals. astral-sh/uv#18946, astral-sh/uv#17635, astral-sh/uv#18769, and astral-sh/uv#17061 share the generic error but involve different platforms, tag components, and mechanisms. No open issue or pull request tracks this inverse-case regression."
+  },
+  "type": "bug",
+  "type_reason": "uv 0.12.21 contains the previous lowercasing fix, while repository code shows that generated NetBSD compatible tags are lowercased but parsed BSD wheel suffixes retain their original case. The uppercase maturin wheel therefore fails comparison after astral-sh/uv#21853, making this a regression rather than a duplicate of astral-sh/uv#21846.",
+  "summary": "The closest references are historical issue astral-sh/uv#21846 and merged fix astral-sh/uv#21853. The new report exposes the inverse casing mismatch in a version containing that fix, with no existing open tracker.",
+  "draft_response": "Thanks for the report. uv 0.12.21 already contains the lowercasing change from astral-sh/uv#21853, released in 0.12.18, which fixed astral-sh/uv#21846 for lowercase NetBSD wheel tags. Your reproduction exposes the inverse case: maturin 1.15.0 emits `netbsd_11_0_STABLE_amd64`, while uv generates a lowercase compatible tag but preserves the uppercase suffix when parsing the built wheel, so the tags do not compare equal. This is a regression rather than a duplicate of astral-sh/uv#21846.\n\nCould you share the exact uv command that produced the failure and the output of `python3 -c \"import sysconfig; print(sysconfig.get_platform())\"`? That will let us cover the platform string reported by your Python and the same build path in a regression test."
+}
