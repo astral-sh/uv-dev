@@ -20,11 +20,165 @@ use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tokio_stream::wrappers::ReceiverStream;
-use wiremock::matchers::{any, method};
+use wiremock::matchers::{any, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_static::EnvVars;
 use uv_test::{TestContext, uv_snapshot};
+
+/// Complete, hash-verified wheel downloads can supply later resolution metadata. Index hash
+/// changes, weak identities, explicit refreshes, and configured file cache policies still fetch
+/// metadata from the origin.
+#[tokio::test]
+async fn resolution_reuses_verified_cached_wheel_metadata() -> Result<()> {
+    const FILENAME: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
+    const METADATA: &str = "Metadata-Version: 2.3\nName: build-tag\nVersion: 1.0.0\n";
+    for (algorithm, override_cache) in [
+        (Some("sha256"), false),
+        (Some("md5"), false),
+        (None, false),
+        (Some("sha256"), true),
+    ] {
+        let context = uv_test::test_context!("3.12");
+        context
+            .temp_dir
+            .child("requirements.in")
+            .write_str("build-tag==1.0.0\n")?;
+        let original = fs_err::read(context.workspace_root.join("test/links").join(FILENAME))?;
+        let mut changed = original.clone();
+        let end = changed.len();
+        assert_eq!(&changed[end - 22..end - 18], b"PK\x05\x06");
+        assert_eq!(&changed[end - 2..], &[0, 0]);
+        changed[end - 2..].copy_from_slice(&1_u16.to_le_bytes());
+        changed.push(b'x');
+        let archives = Arc::new([original, changed]);
+        let generation = Arc::new(AtomicUsize::new(0));
+        let artifact_requests = Arc::new(AtomicUsize::new(0));
+        let server = MockServer::start().await;
+        let index_archives = archives.clone();
+        let index_generation = generation.clone();
+        Mock::given(method("GET"))
+            .and(path("/simple/build-tag/"))
+            .respond_with(move |_: &Request| {
+                let archive = &index_archives[index_generation.load(Ordering::SeqCst)];
+                let mut hashes = serde_json::Map::new();
+                if let Some(algorithm) = algorithm {
+                    let digest = if algorithm == "sha256" {
+                        hex::encode(Sha256::digest(archive))
+                    } else {
+                        let mut hasher =
+                            uv_extract::hash::Hasher::from(uv_pypi_types::HashAlgorithm::Md5);
+                        hasher.update(archive);
+                        uv_pypi_types::HashDigest::from(hasher)
+                            .to_string()
+                            .strip_prefix("md5:")
+                            .unwrap()
+                            .to_owned()
+                    };
+                    hashes.insert(algorithm.to_owned(), json!(digest));
+                }
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .set_body_json(json!({
+                        "meta": {"api-version": "1.0"},
+                        "name": "build-tag",
+                        "files": [{
+                            "filename": FILENAME,
+                            "url": format!("/files/{FILENAME}"),
+                            "hashes": hashes,
+                            "size": archive.len(),
+                            "core-metadata": true,
+                            "upload-time": "2023-01-01T00:00:00Z"
+                        }]
+                    }))
+                    .insert_header("Content-Type", "application/vnd.pypi.simple.v1+json")
+            })
+            .mount(&server)
+            .await;
+        let download_requests = artifact_requests.clone();
+        let download_generation = generation.clone();
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{FILENAME}")))
+            .respond_with(move |_: &Request| {
+                download_requests.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .set_body_bytes(archives[download_generation.load(Ordering::SeqCst)].clone())
+            })
+            .mount(&server)
+            .await;
+        let metadata_requests = artifact_requests.clone();
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{FILENAME}.metadata")))
+            .respond_with(move |_: &Request| {
+                metadata_requests.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .set_body_string(METADATA)
+            })
+            .mount(&server)
+            .await;
+        let index = format!("{}/simple", server.uri());
+        let config = context.temp_dir.child("cache-control.toml");
+        config.write_str(&formatdoc! {
+            r#"
+            [[index]]
+            url = "{index}"
+            default = true
+            cache-control = {{ files = "max-age=0" }}
+            "#
+        })?;
+        let configure = |command: &mut std::process::Command| {
+            if override_cache {
+                command.arg("--config-file").arg(config.path());
+            } else {
+                command.arg("--default-index").arg(&index);
+            }
+        };
+        let mut install = context.pip_install();
+        install.arg("--no-deps").arg("build-tag==1.0.0");
+        configure(&mut install);
+        let output = tokio::task::spawn_blocking(move || install.output()).await??;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(artifact_requests.load(Ordering::SeqCst), 1);
+        let run = async |refresh| -> Result<Vec<u8>> {
+            let mut command = context.pip_compile();
+            command
+                .arg("requirements.in")
+                .arg("--no-header")
+                .arg("--no-annotate");
+            configure(&mut command);
+            if refresh {
+                command.arg("--refresh");
+            }
+            let output = tokio::task::spawn_blocking(move || command.output()).await??;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(output.stdout)
+        };
+        let expected_reuse = algorithm == Some("sha256") && !override_cache;
+        let first = run(false).await?;
+        assert_eq!(
+            artifact_requests.load(Ordering::SeqCst),
+            if expected_reuse { 1 } else { 2 }
+        );
+        let before = artifact_requests.load(Ordering::SeqCst);
+        generation.store(1, Ordering::SeqCst);
+        assert_eq!(run(false).await?, first);
+        assert!(artifact_requests.load(Ordering::SeqCst) > before);
+        let before = artifact_requests.load(Ordering::SeqCst);
+        assert_eq!(run(true).await?, first);
+        assert!(artifact_requests.load(Ordering::SeqCst) > before);
+    }
+    Ok(())
+}
 
 /// Creates a CONNECT tunnel proxy that forwards connections to the target.
 ///
