@@ -18,15 +18,29 @@ spec.loader.exec_module(scheduling)
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
+    parser.add_argument("--packages", type=int, default=1)
     args = parser.parse_args()
+    if args.packages < 1:
+        parser.error("--packages must be positive")
     args.directory.mkdir(parents=True, exist_ok=True)
     manifest = [
-        scheduling.wheel(args.directory, "uv-bench-outdated", version, None)
+        scheduling.wheel(
+            args.directory,
+            "uv-bench-outdated" if package == 0 else f"uv-bench-outdated-{package}",
+            version,
+            None,
+        )
+        for package in range(args.packages)
         for version in (1, 2)
     ]
     profiles = {
         "fast": {"latency_ms": 0, "bytes_per_second": 0},
         "slow": {"latency_ms": 150, "bytes_per_second": 1250000},
+        "flaky": {
+            "latency_ms": 150,
+            "bytes_per_second": 1250000,
+            "path_failures": {"/flat/08": {"status": 503, "count": 1}},
+        },
         "slow-early-late": {
             "latency_ms": 150,
             "bytes_per_second": 1250000,
@@ -53,7 +67,7 @@ def main() -> None:
             "{work}/env/bin/python",
             "--no-index",
             "--no-deps",
-            "{fixtures}/" + manifest[0]["filename"],
+            *("{fixtures}/" + item["filename"] for item in manifest[::2]),
         ],
     ]
     for name, contents in (
@@ -64,7 +78,11 @@ def main() -> None:
         (args.directory / name).write_text(json.dumps(contents, indent=2) + "\n")
     print(
         json.dumps(
-            {"installed": manifest[0]["filename"], "latest": manifest[1]["filename"]}
+            {
+                "packages": args.packages,
+                "installed": manifest[0]["filename"],
+                "latest": manifest[1]["filename"],
+            }
         )
     )
 
