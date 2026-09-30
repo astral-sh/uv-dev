@@ -96,6 +96,52 @@ async fn middleware_retries_are_not_counted_twice() -> Result<()> {
 }
 
 #[tokio::test]
+async fn callback_retry_predicate_preserves_request_retries() -> Result<()> {
+    let server = MockServer::start().await;
+    let requests = AtomicUsize::new(0);
+    Mock::given(any())
+        .respond_with(move |_: &Request| {
+            if requests.fetch_add(1, Ordering::Relaxed) == 0 {
+                ResponseTemplate::new(503)
+            } else {
+                ResponseTemplate::new(200).set_body_string("response")
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    let cache = tempfile::tempdir()?;
+    let entry = CacheEntry::new(cache.path(), "response.msgpack");
+    let client = CachedClient::new(
+        BaseClientBuilder::default()
+            .retries(2)
+            .no_retry_delay(true)
+            .build()?,
+    );
+    let url = server.uri().parse()?;
+    let request = client.uncached().for_host(&url).get(server.uri()).build()?;
+    let result = client
+        .get_serde_with_retry_if(
+            request,
+            &entry,
+            CacheControl::None,
+            async |response: Response, _: &mut RetryState| {
+                response.bytes().await.map_err(io::Error::other)?;
+                Err::<String, _>(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "interrupted response",
+                ))
+            },
+            |_| false,
+        )
+        .await;
+
+    assert_matches!(result, Err(CachedClientError::Callback { retries: 1, .. }));
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn send_counts_middleware_retries() -> Result<()> {
     for network_error in [false, true] {
         let server = MockServer::start().await;
