@@ -17,6 +17,8 @@ Use `--manifest scripts/benchmark/network/source-fixtures.json` before the
 subcommand to prepare or replay source distributions. These fixtures include
 static `PKG-INFO` metadata, so a `pip compile --no-deps --no-binary :all:` workload
 can exercise archive transfer and extraction without requiring a build backend.
+`python-fixtures.json` contains a pinned managed CPython archive. Manifest entries
+with `"kind": "raw"` are served as files without parsing package metadata.
 
 Compare optimized binaries built from an exact parent and candidate commit:
 
@@ -101,7 +103,8 @@ fixture directory and network namespace as the actual benchmark.
 The `oracle` subcommand takes one or more `--filename` arguments and fetches the
 known package graph with unlimited concurrency. `--route metadata` uses PEP 658;
 `--route wheel` downloads whole wheels; `--route resume` immediately retries
-interrupted bodies using byte ranges and checks the completed artifact. It reports
+interrupted bodies using byte ranges and checks the completed artifact. The `raw`
+and `raw-resume` routes use known artifact URLs without an index lookup. It reports
 a realizable reference time, actual traffic, and optimistic metadata and
 full-artifact transfer bounds. The
 oracle assumes all selected versions and dependencies are already known, so its

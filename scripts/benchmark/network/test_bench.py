@@ -153,6 +153,34 @@ class ReplayTests(unittest.TestCase):
             [None, "bytes=65536-", "bytes=131072-", "bytes=196608-"],
         )
 
+    def test_raw_fixture_oracle(self) -> None:
+        directory = Path(self.directory.name)
+        manifest = directory / "raw-fixtures.json"
+        manifest.write_text(
+            json.dumps(
+                [
+                    {
+                        "kind": "raw",
+                        "filename": self.path.name,
+                        "sha256": bench.digest(self.path),
+                    }
+                ]
+            )
+        )
+        fixtures = bench.Fixtures(manifest, directory, pep658=True)
+        output = directory / "oracle.json"
+        bench.oracle(
+            fixtures,
+            {"cut_after_bytes": 65536, "cut_count": 3},
+            [self.path.name],
+            "raw-resume",
+            output,
+        )
+        result = json.loads(output.read_text())
+        self.assertEqual(result["actual_bytes"], len(self.body))
+        self.assertEqual(result["required_artifact_and_index_bytes"], len(self.body))
+        self.assertEqual(result["requests"], 4)
+
     def test_bandwidth_is_shared(self) -> None:
         server = self.server({"bytes_per_second": len(self.body) * 2})
         start = time.perf_counter()

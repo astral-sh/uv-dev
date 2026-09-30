@@ -149,10 +149,12 @@ class Fixtures:
             path = directory / item["filename"]
             if digest(path) != item["sha256"]:
                 raise ValueError(f"Fixture hash mismatch: {path}")
-            metadata = distribution_metadata(path)
-            headers = email.parser.BytesParser().parsebytes(metadata, headersonly=True)
             self.files[path.name] = path
             self.hashes[path.name] = item["sha256"]
+            if item.get("kind") == "raw":
+                continue
+            metadata = distribution_metadata(path)
+            headers = email.parser.BytesParser().parsebytes(metadata, headersonly=True)
             self.metadata[path.name + ".metadata"] = metadata
             self.packages.setdefault(normalize(headers["Name"]), []).append(
                 {
@@ -563,12 +565,15 @@ def oracle(
     """Fetch a known artifact set with perfect dependency foreknowledge."""
     if route == "metadata" and not profile.get("pep658", True):
         raise ValueError("The metadata oracle requires PEP 658 in the selected profile")
+    raw = route in {"raw", "raw-resume"}
     names = {}
     for name, files in fixtures.packages.items():
         for file in files:
             if file["filename"] in filenames:
                 names[file["filename"]] = name
-    if set(names) != set(filenames):
+    if not set(filenames).issubset(fixtures.files) or (
+        not raw and set(names) != set(filenames)
+    ):
         raise ValueError("Every oracle filename must occur in the fixture manifest")
     server = Server(fixtures, profile)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -580,12 +585,20 @@ def oracle(
             return response.read()
 
     def fetch(filename: str) -> None:
-        index = json.loads(read(f"/simple/{names[filename]}/"))
-        artifact = next(file for file in index["files"] if file["filename"] == filename)
+        if raw:
+            artifact = {
+                "url": f"/files/{filename}",
+                "size": fixtures.files[filename].stat().st_size,
+            }
+        else:
+            index = json.loads(read(f"/simple/{names[filename]}/"))
+            artifact = next(
+                file for file in index["files"] if file["filename"] == filename
+            )
         suffix = ".metadata" if route == "metadata" else ""
         body = (
             read_resumable(loopback, server.url + artifact["url"], artifact["size"])
-            if route == "resume"
+            if route in {"resume", "raw-resume"}
             else read(artifact["url"] + suffix)
         )
         expected = (
@@ -607,29 +620,37 @@ def oracle(
         server.shutdown()
         server.server_close()
         thread.join()
-    required_bytes = sum(
-        len(fixtures.simple[name]) for name in set(names.values())
-    ) + sum(len(fixtures.metadata[filename + ".metadata"]) for filename in filenames)
-    floor = network_floor(profile, required_bytes, 2)
-    artifact_bytes = sum(
-        len(fixtures.simple[name]) for name in set(names.values())
-    ) + sum(fixtures.files[filename].stat().st_size for filename in filenames)
+    index_bytes = (
+        0 if raw else sum(len(fixtures.simple[name]) for name in set(names.values()))
+    )
+    artifact_bytes = index_bytes + sum(
+        fixtures.files[filename].stat().st_size for filename in filenames
+    )
+    required_bytes = (
+        artifact_bytes
+        if raw
+        else index_bytes
+        + sum(len(fixtures.metadata[filename + ".metadata"]) for filename in filenames)
+    )
+    waves = 1 if raw else 2
+    floor = network_floor(profile, required_bytes, waves)
     data = {
         "profile": profile,
         "netem": netem_profile(),
         "filenames": filenames,
         "route": route,
         "seconds": seconds,
-        "required_metadata_and_index_bytes": required_bytes,
+        "required_metadata_and_index_bytes": None if raw else required_bytes,
+        "required_payload_bytes": required_bytes,
         "optimistic_network_floor_seconds": floor,
         "required_artifact_and_index_bytes": artifact_bytes,
         "optimistic_artifact_transfer_floor_seconds": network_floor(
-            profile, artifact_bytes, 2
+            profile, artifact_bytes, waves
         ),
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
-        "scope": "A known dependency graph with unlimited request concurrency. Full-wheel transfer is a realizable strategy, not a minimum-byte metadata claim. The resume route retries immediately and verifies the complete artifact; it excludes resolution and installation.",
+        "scope": "A known dependency graph with unlimited request concurrency. Full-artifact transfer is a realizable strategy, not a minimum-byte metadata claim. Raw routes fetch known artifact URLs without index metadata. Resume routes retry immediately and verify the complete artifact; they exclude resolution and installation.",
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(data, indent=2) + "\n")
@@ -889,7 +910,9 @@ def main() -> None:
     reference.add_argument("--profiles", type=Path, default=HERE / "profiles.json")
     reference.add_argument("--filename", action="append", required=True)
     reference.add_argument(
-        "--route", choices=["metadata", "wheel", "resume"], default="metadata"
+        "--route",
+        choices=["metadata", "wheel", "resume", "raw", "raw-resume"],
+        default="metadata",
     )
     reference.add_argument("--output", type=Path, required=True)
     run = subparsers.add_parser("run")
