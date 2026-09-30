@@ -10,6 +10,24 @@ import subprocess
 from pathlib import Path
 
 MAX_SHARDS = 8
+# Approximate five-minute runtime units on the Linux walltime runners. New
+# suites start at one unit; long-running suites need a larger scheduling weight.
+DEFAULT_WEIGHT = 1
+SUITE_WEIGHTS = {
+    "build_frontend": 2,
+    "cache_management": 2,
+    "concurrent_environments": 3,
+    "download_hashing": 2,
+    "git_fetch": 3,
+    "github_metadata": 3,
+    "local_wheel_cache": 2,
+    "lockfile": 3,
+    "native_source_install": 2,
+    "python_install": 2,
+    "source_build_reuse": 9,
+    "source_metadata": 5,
+    "uv": 2,
+}
 
 
 def partition(names: list[str]) -> list[dict]:
@@ -17,11 +35,18 @@ def partition(names: list[str]) -> list[dict]:
         raise ValueError("Expected a non-empty set of unique benchmark suites")
     if any(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]*", name) is None for name in names):
         raise ValueError("Unexpected benchmark suite name")
-    names = sorted(names)
     count = min(MAX_SHARDS, len(names))
+    groups: list[list[str]] = [[] for _ in range(count)]
+    loads = [0] * count
+    for name in sorted(
+        names, key=lambda name: (-SUITE_WEIGHTS.get(name, DEFAULT_WEIGHT), name)
+    ):
+        index = min(range(count), key=lambda index: (loads[index], index))
+        groups[index].append(name)
+        loads[index] += SUITE_WEIGHTS.get(name, DEFAULT_WEIGHT)
     return [
-        {"index": index + 1, "total": count, "benches": names[index::count]}
-        for index in range(count)
+        {"index": index + 1, "total": count, "benches": sorted(group)}
+        for index, group in enumerate(groups)
     ]
 
 
