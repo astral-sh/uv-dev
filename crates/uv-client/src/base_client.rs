@@ -602,9 +602,12 @@ impl<'a> BaseClientBuilder<'a> {
         security: Security,
         redirect_policy: RedirectPolicy,
     ) -> Result<Client, ClientBuildError> {
-        // Configure the builder.
+        // Keep enough HTTP/2 receive credit for artifact transfers on connections with a high
+        // bandwidth-delay product.
         let client_builder = ClientBuilder::new()
             .http1_title_case_headers()
+            .http2_initial_stream_window_size(16 * 1024 * 1024)
+            .http2_initial_connection_window_size(32 * 1024 * 1024)
             .user_agent(user_agent)
             .pool_max_idle_per_host(20)
             .read_timeout(read_timeout)
