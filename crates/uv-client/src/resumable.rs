@@ -10,13 +10,12 @@ use reqwest::header::{
 use reqwest::{Response, StatusCode};
 use tokio_util::bytes::Bytes;
 use tracing::debug;
-use url::Url;
 
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 
 use crate::{RedirectClientWithMiddleware, RetryState};
 
-/// Read a complete response, resuming an interrupted body when the server supplies a strong ETag.
+/// Read a complete response, resuming an interrupted body when the server supplies a strong `ETag`.
 ///
 /// The initial request must use identity encoding and have its middleware retries recorded in
 /// `retry_state`. Continuations consume the same retry budget. A resumed response must describe the
@@ -24,7 +23,7 @@ use crate::{RedirectClientWithMiddleware, RetryState};
 pub fn resumable_bytes_stream<'a>(
     response: Response,
     client: &'a RedirectClientWithMiddleware,
-    url: &'a DisplaySafeUrl,
+    url: &'a SafeUrl,
     retry_state: &'a mut RetryState,
 ) -> BoxStream<'a, reqwest_middleware::Result<Bytes>> {
     let representation = Representation::from_response(&response);
@@ -97,7 +96,7 @@ struct Download<'a> {
     range_end: Option<u64>,
     resumed_at: Option<u64>,
     client: &'a RedirectClientWithMiddleware,
-    url: &'a DisplaySafeUrl,
+    url: &'a SafeUrl,
     retry_state: &'a mut RetryState,
 }
 
@@ -118,7 +117,7 @@ impl Download<'_> {
             .retry_state
             .send(
                 self.client
-                    .get(Url::from(self.url.clone()))
+                    .get(self.url.clone())
                     .header(ACCEPT_ENCODING, HeaderValue::from_static("identity"))
                     .header(RANGE, format!("bytes={}-", self.offset))
                     .header(IF_RANGE, representation.etag.clone()),
@@ -170,7 +169,7 @@ impl Representation {
 
     fn range_end(&self, response: &Response, offset: u64) -> Option<u64> {
         if response.status() != StatusCode::PARTIAL_CONTENT
-            || response.headers().get(ETAG)? != &self.etag
+            || response.headers().get(ETAG)? != self.etag
             || !identity_encoded(response)
         {
             return None;

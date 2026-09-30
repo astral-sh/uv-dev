@@ -8,7 +8,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 use uv_client::{BaseClientBuilder, RetryState, resumable_bytes_stream};
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 
 type Headers = BTreeMap<String, String>;
 
@@ -39,9 +39,9 @@ fn range(headers: &str, length: usize, body: &'static [u8]) -> Reply {
     reply(206, &format!("ETag: \"one\"\r\n{headers}"), length, body)
 }
 
-async fn server(replies: Vec<Reply>) -> Result<(DisplaySafeUrl, JoinHandle<Result<Vec<Headers>>>)> {
+async fn server(replies: Vec<Reply>) -> Result<(SafeUrl, JoinHandle<Result<Vec<Headers>>>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let url = DisplaySafeUrl::parse(&format!("http://{}/archive", listener.local_addr()?))?;
+    let url = SafeUrl::parse(&format!("http://{}/archive", listener.local_addr()?))?;
     let task = tokio::spawn(async move {
         let mut requests = Vec::new();
         for reply in replies {
@@ -82,7 +82,7 @@ async fn download(
         .send(
             client
                 .for_host(&url)
-                .get(url.as_str())
+                .get(url.clone())
                 .header("accept-encoding", "identity"),
         )
         .await?
