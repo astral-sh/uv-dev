@@ -7,7 +7,7 @@ use rustc_hash::FxHashSet;
 use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
 use uv_cache::Cache;
 use uv_cli::AuditOutputFormat;
-use uv_client::{BaseClientBuilder, CachedClient};
+use uv_client::{BaseClient, BaseClientBuilder, CachedClient, RegistryClientBuilder};
 use uv_configuration::{Concurrency, DependencyGroupsWithDefaults, ExtrasSpecification};
 use uv_fs::Simplified;
 use uv_lock::{Lock, LockParseError};
@@ -116,6 +116,7 @@ pub(crate) async fn audit(
     let mut audits = Vec::new();
     let mut matched_ignores = FxHashSet::default();
     let osv_client = CachedClient::new(client_builder.clone().build()?);
+    let mut registry_transport: Option<BaseClient> = None;
 
     for (name, tool) in tools {
         let tool = match tool {
@@ -198,13 +199,25 @@ pub(crate) async fn audit(
         let settings = ResolverInstallerSettings::from(
             ResolverInstallerOptions::from(tool.options().clone()).combine(filesystem.clone()),
         );
+        // Transport settings are shared by the invocation. Each tool's saved indexes and keyring
+        // settings still require their own middleware.
+        let builder = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
+            .index_locations(settings.resolver.index_locations.clone())
+            .keyring(settings.resolver.keyring_provider);
+        let registry_client = if let Some(existing) = registry_transport.as_ref() {
+            builder.wrap_existing(existing)?
+        } else {
+            let client = builder.build()?;
+            registry_transport = Some(client.cached_client().uncached().clone());
+            client
+        };
         let outcome = audit_lock(
             &lock,
             &root,
             &extras,
             &groups,
             &settings.resolver,
-            client_builder.clone(),
+            &registry_client,
             osv_client.clone(),
             concurrency.clone(),
             cache,
