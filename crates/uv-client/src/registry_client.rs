@@ -1211,12 +1211,16 @@ impl RegistryClient {
         if !prefer_streaming
             && index.is_none_or(|index| capabilities.supports_range_requests(index))
         {
-            // An advertised size lets us fetch the ZIP tail without a separate HEAD request.
-            // The response's Content-Range supplies the authoritative archive length.
-            let mut initial_range = size.and_then(|size| {
-                size.checked_sub(1)
-                    .map(|end| (size.saturating_sub(CENTRAL_DIRECTORY_SIZE), end))
-            });
+            // An advertised size lets us fetch the ZIP tail directly. Otherwise, a one-byte
+            // bounded GET discovers the length without relying on HEAD to advertise range
+            // support. Content-Range supplies the authoritative archive length in either case.
+            let mut initial_range = Some(
+                size.and_then(|size| {
+                    size.checked_sub(1)
+                        .map(|end| (size.saturating_sub(CENTRAL_DIRECTORY_SIZE), end))
+                })
+                .unwrap_or((0, 0)),
+            );
             loop {
                 let req = if let Some((start, end)) = initial_range {
                     self.uncached_client(url)
@@ -1333,7 +1337,8 @@ impl RegistryClient {
                             && matches!(err.kind(), ErrorKind::WrappedReqwestError(_, err)
                             if err.status() == Some(StatusCode::RANGE_NOT_SATISFIABLE)) =>
                     {
-                        // The index size may be stale. Discover the current length with HEAD.
+                        // A size hint may be stale, or the server may reject the probe.
+                        // Discover the current length with HEAD before retrying bounded ranges.
                         initial_range = None;
                         continue;
                     }
