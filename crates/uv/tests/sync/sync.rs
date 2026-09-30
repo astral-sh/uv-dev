@@ -6033,6 +6033,8 @@ fn sync_default_groups() -> Result<()> {
         "#,
     )?;
 
+    context.lock().assert().success();
+
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -6062,6 +6064,8 @@ fn sync_default_groups() -> Result<()> {
         default-groups = ["foo"]
         "#,
     )?;
+
+    context.lock().assert().success();
 
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
@@ -7893,7 +7897,14 @@ fn no_install_workspace() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     warning: Using `uv.lock` without a `pyproject.toml` is experimental and may change without warning. Pass `--preview-features frozen-lockfile` to disable this warning.
-    Checked 4 packages in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Would create project environment at: .venv
+    Would download 4 packages
+    Would install 4 packages
+     + anyio==3.7.0
+     + idna==3.6
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
     ");
 
     Ok(())
