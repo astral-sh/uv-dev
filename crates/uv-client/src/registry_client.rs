@@ -368,9 +368,9 @@ impl RegistryClient {
             // If we're searching for the first index that contains the package, fetch serially.
             IndexStrategy::FirstIndex => {
                 for index in indexes {
-                    let _permit = download_concurrency.acquire().await;
                     match index.format {
                         IndexFormat::Simple => {
+                            let _permit = download_concurrency.acquire().await;
                             let status_code_strategy =
                                 self.indexes.status_code_strategy_for(index.url);
                             match self
@@ -399,7 +399,9 @@ impl RegistryClient {
                             }
                         }
                         IndexFormat::Flat => {
-                            let entries = self.flat_single_index(package_name, index.url).await?;
+                            let entries = self
+                                .flat_single_index(package_name, index.url, download_concurrency)
+                                .await?;
                             if !entries.is_empty() {
                                 results.push((index.url, MetadataFormat::Flat(entries)));
                                 break;
@@ -413,9 +415,9 @@ impl RegistryClient {
             IndexStrategy::UnsafeBestMatch | IndexStrategy::UnsafeFirstMatch => {
                 results = futures::stream::iter(indexes)
                     .map(async |index| {
-                        let _permit = download_concurrency.acquire().await;
                         match index.format {
                             IndexFormat::Simple => {
+                                let _permit = download_concurrency.acquire().await;
                                 // For unsafe matches, ignore authentication failures.
                                 let status_code_strategy =
                                     IndexStatusCodeStrategy::ignore_authentication_error_codes();
@@ -434,8 +436,13 @@ impl RegistryClient {
                                 Ok((index.url, metadata.map(MetadataFormat::Simple)))
                             }
                             IndexFormat::Flat => {
-                                let entries =
-                                    self.flat_single_index(package_name, index.url).await?;
+                                let entries = self
+                                    .flat_single_index(
+                                        package_name,
+                                        index.url,
+                                        download_concurrency,
+                                    )
+                                    .await?;
                                 Ok((index.url, Some(MetadataFormat::Flat(entries))))
                             }
                         }
@@ -472,8 +479,8 @@ impl RegistryClient {
     ) -> Result<Vec<FlatIndexEntry>, Error> {
         Ok(futures::stream::iter(self.indexes.flat_indexes())
             .map(async |index| {
-                let _permit = download_concurrency.acquire().await;
-                self.flat_single_index(package_name, index.url()).await
+                self.flat_single_index(package_name, index.url(), download_concurrency)
+                    .await
             })
             .buffered(8)
             .try_collect::<Vec<_>>()
@@ -488,6 +495,7 @@ impl RegistryClient {
         &self,
         package_name: &PackageName,
         index: &IndexUrl,
+        download_concurrency: &Semaphore,
     ) -> Result<Vec<FlatIndexEntry>, Error> {
         // Each flat index gets its own slot, so lookups for the same index share a fetch while
         // unrelated indexes can proceed concurrently.
@@ -500,6 +508,10 @@ impl RegistryClient {
         if let Some(entries) = flat_index.as_ref() {
             return Ok(entries.get(package_name).cloned().unwrap_or_default());
         }
+
+        // Concurrent lookups share this fetch. Waiting for its result or reading entries already
+        // in memory does not occupy a network slot.
+        let _permit = download_concurrency.acquire().await;
 
         let client = FlatIndexClient::new(self.cached_client(), self.connectivity, &self.cache);
 
@@ -1817,6 +1829,7 @@ impl Connectivity {
 mod tests {
     use std::assert_matches;
     use std::str::FromStr;
+    use std::time::Duration;
 
     use tokio::sync::Semaphore;
     use url::Url;
@@ -1965,6 +1978,62 @@ mod tests {
 
         assert_no_index(&registry_client, "validation", None).await?;
         assert_no_requests(&server).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cached_flat_indexes_do_not_require_a_download_permit() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"<a href="example-1.0-py3-none-any.whl">example</a>"#,
+                "text/html",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let index_url = IndexUrl::from_str(&server.uri())?;
+        let client =
+            RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?.init().await?)
+                .index_locations(IndexLocations::new(
+                    vec![],
+                    vec![Index::from_find_links(index_url.clone())],
+                    false,
+                ))
+                .build()?;
+        let package = PackageName::from_str("example")?;
+        let concurrency = Semaphore::new(1);
+        assert_eq!(
+            client
+                .find_links_entries(&package, &concurrency)
+                .await?
+                .len(),
+            1
+        );
+
+        let _busy_download = concurrency.acquire().await?;
+        let cached = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.find_links_entries(&package, &concurrency),
+        )
+        .await??;
+        assert_eq!(cached.len(), 1);
+        let capabilities = IndexCapabilities::default();
+        let cached = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.simple_detail(
+                &package,
+                Some(IndexMetadataRef {
+                    url: &index_url,
+                    format: IndexFormat::Flat,
+                }),
+                &capabilities,
+                &concurrency,
+            ),
+        )
+        .await??;
+        assert_eq!(cached.len(), 1);
+        server.verify().await;
         Ok(())
     }
 
