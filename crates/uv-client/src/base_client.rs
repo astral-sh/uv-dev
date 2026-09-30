@@ -14,8 +14,8 @@ use reqwest::{
     Certificate, Client, ClientBuilder, IntoUrl, NoProxy, Proxy, Request, Response, multipart,
 };
 use reqwest_middleware::{ClientWithMiddleware, Middleware};
+use reqwest_retry::Jitter;
 use reqwest_retry::policies::ExponentialBackoff;
-use reqwest_retry::{Jitter, RetryTransientMiddleware};
 use thiserror::Error;
 use tracing::{debug, warn};
 use url::ParseError;
@@ -40,8 +40,9 @@ use uv_warnings::warn_user_once_with_chain;
 
 use crate::linehaul::LineHaul;
 use crate::middleware::{AzureStorageMiddleware, OfflineMiddleware};
+use crate::retry::UvRetryMiddleware;
 use crate::tls::{Certificates, read_identity};
-use crate::{Connectivity, MetadataRangeRequest, RetriableError, RetryState, UvRetryableStrategy};
+use crate::{Connectivity, MetadataRangeRequest, RetriableError, RetryState};
 
 pub const DEFAULT_RETRIES: u32 = 3;
 
@@ -684,10 +685,7 @@ impl<'a> BaseClientBuilder<'a> {
                 // Avoid uncloneable errors with a streaming body during publish.
                 if self.retries > 0 {
                     // Initialize the retry strategy.
-                    let retry_strategy = RetryTransientMiddleware::new_with_policy_and_strategy(
-                        self.retry_policy(),
-                        UvRetryableStrategy,
-                    );
+                    let retry_strategy = UvRetryMiddleware::new(self.retry_policy());
                     client = client.with(retry_strategy);
                 }
 
