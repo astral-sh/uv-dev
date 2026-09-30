@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using uv 0.12.21 with CPython 3.12.3 and an interpreter probe emulating NetBSD 11.0_STABLE x86_64, `uv pip install ./uppercase --target ./target --python ./netbsd-python --no-config` built `casewheel-1.0.0-cp312-cp312-netbsd_11_0_STABLE_amd64.whl` and then rejected it as incompatible. Changing only `STABLE` to `stable` installed successfully. uv 0.12.17 also installed the uppercase wheel, confirming a regression introduced in uv 0.12.18 with astral-sh/uv#21853. Existing `test_platform_tags_bsd` coverage only checks lowercase tag generation, not uppercase wheel-tag compatibility. All reproduction files and caches were under `/tmp`; the issue-context README was updated."
+}

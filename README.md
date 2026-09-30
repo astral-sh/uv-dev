@@ -8,29 +8,48 @@ Classification: bug
 
 On NetBSD 11_STABLE x86_64 with Python 3.14.7 and uv 0.12.21, maturin 1.15.0 successfully builds native wheels for packages including pyreqwest, orjson, and ty, but uv then rejects the wheels as incompatible. The reported wheel tag is `cp314-cp314-netbsd_11_0_STABLE_amd64`; the reporter also demonstrated that an extracted orjson extension loads on the same host.
 
-The closest historical report is astral-sh/uv#21846, where uv rejected a lowercase `netbsd_11_0_stable_amd64` wheel because its generated compatible tag retained uppercase `STABLE`. Merged fix astral-sh/uv#21853 lowercased generated NetBSD and other BSD-like platform tags and shipped in uv 0.12.18. uv 0.12.21 contains that fix.
+The behavior is reproducible with a minimal local PEP 517 backend and an emulated NetBSD interpreter probe. uv 0.12.21 rejects a built wheel whose NetBSD release component contains uppercase `STABLE`, but accepts an otherwise identical wheel with lowercase `stable`. uv 0.12.17 accepts the uppercase wheel, placing the regression boundary at uv 0.12.18, which included astral-sh/uv#21853.
 
-The new report has the inverse casing. The 0.12.21 source generates the compatible platform tag as lowercase, while `PlatformTag::from_str` stores the `ReleaseArch` suffix from a wheel filename without lowercasing it. Consequently, maturin's uppercase `netbsd_11_0_STABLE_amd64` tag does not equal uv's lowercase compatible tag. PyPA packaging's `Tag` constructor lowercases incoming interpreter, ABI, and platform strings, which supports treating this as a uv normalization bug rather than an incompatible native artifact.
+## Reproduction
 
-No open issue or pull request was found that already tracks this post-fix inverse mismatch.
+Outcome: **reproducible**.
 
-## Draft response
+The runner is Linux x86_64, so the reproduction used uv's normal interpreter-discovery interface to report the relevant NetBSD platform (`sysconfig.get_platform() == "netbsd-11.0_STABLE-amd64"`) while delegating builds to the host CPython 3.12.3. A minimal local PEP 517 backend, with no build dependencies, returned one of these wheel filenames:
 
-Thanks for the report. uv 0.12.21 already contains the lowercasing change from astral-sh/uv#21853, released in 0.12.18, which fixed astral-sh/uv#21846 for lowercase NetBSD wheel tags. Your reproduction exposes the inverse case: maturin 1.15.0 emits `netbsd_11_0_STABLE_amd64`, while uv generates a lowercase compatible tag but preserves the uppercase suffix when parsing the built wheel, so the tags do not compare equal. This is a regression rather than a duplicate of astral-sh/uv#21846.
+```text
+casewheel-1.0.0-cp312-cp312-netbsd_11_0_STABLE_amd64.whl
+casewheel-1.0.0-cp312-cp312-netbsd_11_0_stable_amd64.whl
+```
 
-Could you share the exact uv command that produced the failure and the output of `python3 -c "import sysconfig; print(sysconfig.get_platform())"`? That will let us cover the platform string reported by your Python and the same build path in a regression test.
+The core command was run using the installed `uv` as the `uvx` launcher so the reported release could be tested exactly; all files, targets, tools, Python data, and caches were under `/tmp/uv-issue-22110-repro`:
+
+```console
+$ uvx --from uv==0.12.21 uv pip install /tmp/uv-issue-22110-repro/uppercase \
+    --target /tmp/uv-issue-22110-repro/target-uppercase \
+    --python /tmp/uv-issue-22110-repro/netbsd-python \
+    --cache-dir /tmp/uv-issue-22110-repro/inner-cache-uppercase \
+    --no-config --no-progress
+Resolved 1 package in 1ms
+      Built casewheel @ file:///tmp/uv-issue-22110-repro/uppercase
+error: Failed to build `casewheel @ file:///tmp/uv-issue-22110-repro/uppercase`
+  cause: The built wheel `casewheel-1.0.0-cp312-cp312-netbsd_11_0_STABLE_amd64.whl` is not compatible with the current Python 3.12 on NetBSD x86_64
+```
+
+Changing only `STABLE` to `stable` made uv 0.12.21 prepare and install `casewheel==1.0.0`. Running the uppercase fixture with uv 0.12.17 also prepared and installed it successfully. This isolates the failure to platform-tag case handling; it does not depend on Python 3.14, maturin, or a particular native extension.
+
+The observed release boundary matches the implementation. astral-sh/uv#21853 changed `crates/uv-platform-tags/src/tags.rs` so a detected NetBSD release such as `11.0_STABLE` generates the compatible tag `netbsd_11_0_stable_amd64`. `PlatformTag::from_str` in `crates/uv-platform-tags/src/platform_tag.rs` retains the `ReleaseArch` suffix's original case when parsing a wheel filename, so the uppercase built-wheel tag and lowercase compatible tag compare unequal.
+
+Existing tests do not cover this regression. `crates/uv-platform-tags/src/tags.rs`, test `test_platform_tags_bsd`, asserts that `11.0_STABLE` generates `netbsd_11_0_stable_amd64`, but does not compare that tag with an uppercase parsed wheel tag. `crates/uv/tests/pip_install/pip_install.rs`, test `build_backend_wrong_wheel_platform`, verifies rejection of genuinely incompatible built-wheel Python tags and the associated error path, but does not exercise NetBSD or case normalization. No NetBSD integration coverage was found under `crates/uv/tests/` or `crates/uv-client/tests/it/`.
 
 ## Classification
 
-This is a bug. Rejecting a native wheel that uv just built for the active NetBSD interpreter is incorrect, and the repository source establishes a casing mismatch: generated compatible tags are lowercased by astral-sh/uv#21853, while parsed BSD `ReleaseArch` values retain the wheel's case. Because uv 0.12.21 includes the merged fix and the newly reported uppercase wheel now fails in the opposite direction, this is a regression, not a duplicate of the closed historical report. No open issue or pull request currently centralizes this regression.
+This is a reproducible regression and a bug. A wheel built for the active NetBSD interpreter is rejected solely because its valid platform tag retains uppercase characters from the release name. The same uppercase fixture installs with uv 0.12.17, and the equivalent lowercase fixture installs with uv 0.12.21.
 
 ## Related
 
-- astral-sh/uv#21846 — Closed issue. This is the direct historical case-handling report on NetBSD 11 and Python 3.14. It observed the same incompatible-platform rejection, but for a lowercase wheel tag compared with uv's then-uppercase compatible tag. It is important history, but the casing direction and release timing differ from astral-sh/uv#22110.
-- astral-sh/uv#21853 — Merged pull request. This fixed astral-sh/uv#21846 by lowercasing generated NetBSD, OpenBSD, DragonFly, and Haiku release strings. It merged on 2026-09-20, shipped in uv 0.12.18 on 2026-09-22, and is an ancestor of uv 0.12.21. Its generated-tag normalization, combined with case-preserving parsing of the new uppercase wheel tag, directly explains the regression boundary.
+- astral-sh/uv#21846 — Closed issue reporting the original casing mismatch on NetBSD 11 and Python 3.14. It involved a lowercase wheel tag compared with uv's then-uppercase generated compatible tag.
+- astral-sh/uv#21853 — Merged pull request that fixed astral-sh/uv#21846 by lowercasing generated NetBSD and other BSD-like platform tags. It shipped in uv 0.12.18 and introduced the demonstrated inverse mismatch for uppercase wheel tags.
 
-## Search and evidence
+## Maintainer notes
 
-The report was decomposed into the NetBSD 11_STABLE/x86_64 trigger, successful PEP 517/maturin builds followed by install-time rejection, the exact `netbsd_11_0_STABLE_amd64` identifier and incompatibility error, and the uv 0.12.21/Python 3.14 release condition. Open and closed issues and open, closed, and merged pull requests were searched separately using literal terms (`NetBSD`, `netbsd_11_0_STABLE`, `not compatible with the current Python`, and `built wheel`) and conceptual terms (`maturin wheel compatibility`, BSD platform tags, sysconfig platform detection, case normalization, and historical fixes).
-
-The search followed astral-sh/uv#21846 through its timeline to merged fix astral-sh/uv#21853 and verified that uv 0.12.18 lists the fix and that the uv 0.12.21 tag contains its merge commit. Closed alternative fixes astral-sh/uv#21848, astral-sh/uv#21852, and astral-sh/uv#21865 were inspected but are superseded proposals for the same historical issue, not separate canonical discussions. astral-sh/uv#18946 (Android API-level mismatch), astral-sh/uv#17635 and astral-sh/uv#18769 (debug/free-threaded ABI tags), and astral-sh/uv#17061 (`cp3-none-any`) share the generic built-wheel incompatibility error but were ruled out because their platforms, tag components, and confirmed mechanisms differ.
+The minimal regression test should compare or install a wheel tagged `netbsd_11_0_STABLE_amd64` against compatible tags generated from NetBSD release `11.0_STABLE`. It should retain the existing lowercase-generation assertion and add coverage that parsed wheel tags follow the same normalization rule.
