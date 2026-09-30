@@ -200,6 +200,11 @@ impl PythonVersionFile {
                     })
                     .map(PythonRequest::parse)
                     .filter(|request| {
+                        // Retain malformed version requests so selecting Python reports their
+                        // errors instead of falling back to an unconstrained interpreter.
+                        if request.check_build_suffix().is_err() {
+                            return true;
+                        }
                         if let PythonRequest::ExecutableName(name) = request {
                             warn_user_once!(
                                 "Ignoring unsupported Python request `{name}` in version file: {}",

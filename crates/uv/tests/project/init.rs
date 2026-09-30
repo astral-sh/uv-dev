@@ -109,6 +109,68 @@ fn init_bare() {
     });
 }
 
+#[test]
+fn init_invalid_build_suffix_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let child = context.temp_dir.child("foo");
+    child.create_dir_all()?;
+    child
+        .child(".python-version")
+        .write_str(">=3.13,!=3.13.4+1\n")?;
+
+    uv_snapshot!(context.filters(), context.init().arg(child.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid Python request `>=3.13,!=3.13.4+1`: build names must start with an ASCII letter and contain only ASCII letters, digits, and underscores
+
+    hint: In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.
+    ");
+    child
+        .child("pyproject.toml")
+        .assert(predicate::path::missing());
+
+    uv_snapshot!(context.filters(), context.init().arg(child.path()).arg("--python").arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Initialized project `foo` at `[TEMP_DIR]/foo`
+    ");
+    assert_snapshot!(context.read("foo/.python-version"), @"3.12");
+    child
+        .child("pyproject.toml")
+        .assert(predicate::path::exists());
+    Ok(())
+}
+
+#[test]
+fn init_invalid_build_suffix_workspace_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r"
+        [tool.uv.workspace]
+        members = []
+    "})?;
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str(">=3.13,!=3.13.4+1\n")?;
+
+    uv_snapshot!(context.filters(), context.init().arg("foo").arg("--python").arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Adding `foo` as member of workspace `[TEMP_DIR]/`
+    Initialized project `foo` at `[TEMP_DIR]/foo`
+    ");
+    assert_snapshot!(context.read("foo/.python-version"), @"3.12");
+    assert_snapshot!(context.read(".python-version"), @">=3.13,!=3.13.4+1");
+    context
+        .temp_dir
+        .child("foo/pyproject.toml")
+        .assert(predicate::path::exists());
+    Ok(())
+}
+
 /// Run `uv init --app` to create a packaged application project
 #[test]
 fn init_application() -> Result<()> {

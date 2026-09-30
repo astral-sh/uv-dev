@@ -11,8 +11,8 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::DependencyGroupsWithDefaults;
 use uv_fs::Simplified;
 use uv_python::{
-    EnvironmentPreference, PYTHON_VERSION_FILENAME, PythonArchitecture, PythonDownloads,
-    PythonInstallation, PythonPreference, PythonRequest, PythonVersionFile,
+    EnvironmentPreference, Error as PythonError, PYTHON_VERSION_FILENAME, PythonArchitecture,
+    PythonDownloads, PythonInstallation, PythonPreference, PythonRequest, PythonVersionFile,
     VersionFileDiscoveryOptions,
 };
 use uv_settings::PythonInstallMirrors;
@@ -113,6 +113,7 @@ pub(crate) async fn pin(
             };
 
             for pin in pins {
+                pin.check_build_suffix().map_err(PythonError::from)?;
                 writeln!(printer.stdout(), "{}", pin.to_canonical_string())?;
                 if let Some(virtual_project) = &virtual_project
                     && let Some(download_list) = &download_list
@@ -132,6 +133,7 @@ pub(crate) async fn pin(
         bail!("No Python version file found; specify a version to create one")
     };
     let request = PythonRequest::parse(&request);
+    request.check_build_suffix().map_err(PythonError::from)?;
 
     if let PythonRequest::ExecutableName(name) = request {
         bail!("Requests for arbitrary names (e.g., `{name}`) are not supported in version files");

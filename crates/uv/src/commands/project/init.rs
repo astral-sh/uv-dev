@@ -484,7 +484,10 @@ async fn init_project(
         if let Some(python_request) = python_pin {
             if PythonVersionFile::discover(path, &VersionFileDiscoveryOptions::default())
                 .await?
-                .filter(|file| file.version().is_some())
+                .filter(|file| {
+                    file.version()
+                        .is_some_and(|request| request.check_build_suffix().is_ok())
+                })
                 .as_ref()
                 .is_none_or(|file| file.path().parent().is_none_or(|parent| parent != path))
             {

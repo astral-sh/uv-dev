@@ -497,12 +497,16 @@ pub enum Commands {
     /// - `<version>` e.g. `3`, `3.12`, `3.12.3`
     /// - `<version-specifier>` e.g. `>=3.12,<3.13`
     /// - `<version><short-variant>` (e.g., `3.13t`, `3.12.0d`)
-    /// - `<version>+<variants>` (e.g., `3.13+freethreaded`, `3.13+custom`, `3.13+freethreaded+custom`)
+    /// - `<version>+<variant>` (e.g., `3.13+freethreaded`)
+    /// - `<version>+<build-name>` (e.g., `3.13+custom`)
+    /// - `<version>+<variant>+<build-name>` (e.g., `3.13+freethreaded+custom`)
     /// - `<implementation>` e.g. `cpython` or `cp`
     /// - `<implementation>@<version>` e.g. `cpython@3.12`
     /// - `<implementation><version>` e.g. `cpython3.12` or `cp312`
     /// - `<implementation><version-specifier>` e.g. `cpython>=3.12,<3.13`
     /// - `<implementation>-<version>-<os>-<arch>-<libc>` e.g. `cpython-3.12.3-macos-aarch64-none`
+    ///
+    /// The variant and build name can appear in either order, e.g., `3.13+custom+freethreaded`.
     ///
     /// Additionally, a specific system Python interpreter can often be requested with:
     ///

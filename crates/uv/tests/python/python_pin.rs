@@ -395,6 +395,55 @@ fn python_pin_no_python() {
     ");
 }
 
+/// Invalid build suffixes must not be saved as executable-name requests.
+#[test]
+fn python_pin_invalid_build_suffix() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.python_pin().arg(">=3.13,!=3.13.4+1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid Python request `>=3.13,!=3.13.4+1`: build names must start with an ASCII letter and contain only ASCII letters, digits, and underscores
+
+    hint: In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.
+    ");
+    assert!(!context.temp_dir.child(PYTHON_VERSION_FILENAME).exists());
+
+    context
+        .temp_dir
+        .child(PYTHON_VERSION_FILENAME)
+        .write_str(">=3.13,!=3.13.4+1\n")?;
+    uv_snapshot!(context.filters(), context.python_pin(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid Python request `>=3.13,!=3.13.4+1`: build names must start with an ASCII letter and contain only ASCII letters, digits, and underscores
+
+    hint: In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.
+    ");
+    Ok(())
+}
+
+/// Sorting version constraints must retain the build selector when reading the pin.
+#[test]
+fn python_pin_build_name_range_roundtrip() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+
+    context
+        .python_pin()
+        .arg("==3.13.7,>=3.12+custom")
+        .arg("--quiet")
+        .assert()
+        .success();
+    assert_snapshot!(context.read(PYTHON_VERSION_FILENAME), @">=3.12, ==3.13.7+custom");
+
+    // Reading the saved pin must request the same named build, not a PEP 440 local version.
+    uv_snapshot!(context.filters(), context.python_find().arg("--managed-python"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python >=3.12, ==3.13.7+custom in virtual environments or managed installations
+    ");
+}
+
 /// Build names can be pinned without first resolving an interpreter.
 #[cfg(unix)]
 #[test]
@@ -1050,5 +1099,40 @@ fn python_pin_rm_versions() -> Result<()> {
     ");
     assert!(!global_versions.exists());
 
+    Ok(())
+}
+
+#[test]
+fn python_pin_rm_invalid_build_suffix() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let local = context.temp_dir.child(PYTHON_VERSION_FILENAME);
+    local.write_str(">=3.13,!=3.13.4+1\n")?;
+    let global = context
+        .user_config_dir
+        .child("uv")
+        .child(PYTHON_VERSION_FILENAME);
+    global.write_str(">=3.13,!=3.13.4+1\n")?;
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Removed Python version file at `.python-version`
+    ");
+    assert!(!local.exists());
+    assert!(global.exists());
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No Python version file found; use `--rm --global` to remove the global pin
+    ");
+    assert!(global.exists());
+
+    uv_snapshot!(context.filters(), context.python_pin().arg("--rm").arg("--global"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Removed global Python pin at `[UV_USER_CONFIG_DIR]/.python-version`
+    ");
+    assert!(!global.exists());
     Ok(())
 }

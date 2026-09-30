@@ -26,6 +26,32 @@ use wiremock::{
 };
 
 #[test]
+fn python_install_invalid_build_suffix() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.python_install().arg(">=3.13,!=3.13.4+1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid Python request `>=3.13,!=3.13.4+1`: build names must start with an ASCII letter and contain only ASCII letters, digits, and underscores
+
+    hint: In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.
+    ");
+
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str(">=3.13,!=3.13.4+1\n")?;
+    uv_snapshot!(context.filters(), context.python_install(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid Python request `>=3.13,!=3.13.4+1`: build names must start with an ASCII letter and contain only ASCII letters, digits, and underscores
+
+    hint: In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.
+    ");
+    Ok(())
+}
+
+#[test]
 fn python_install() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
@@ -357,6 +383,26 @@ fn python_find_build_name() -> anyhow::Result<()> {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+
+    // Equality and exclusion constraints apply to the Python version, with the build selected
+    // separately by the suffix.
+    let python_version = unnamed.key().version();
+    uv_snapshot!(context.filters(), context.python_find().arg(format!("=={python_version}+custom")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    uv_snapshot!(context.filters(), context.python_find().arg(">=3.12,!=3.12.0+custom"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/managed/cpython-3.13.[LATEST]+custom-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    ");
+    uv_snapshot!(context.filters(), context.python_find().arg(format!(">=3.12,!={python_version}+custom")), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python >=3.12, !=3.13.[LATEST]+custom in [PYTHON SOURCES]
+    ");
+
     uv_snapshot!(context.filters(), context.python_find().arg("3.13+custom_internal"), @"
     exit_code: 2 (failure)
     ----- stderr -----

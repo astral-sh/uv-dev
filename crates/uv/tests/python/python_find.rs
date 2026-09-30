@@ -1,8 +1,11 @@
+use std::env::consts::EXE_SUFFIX;
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::{FileTouch, PathChild};
 use assert_fs::{fixture::FileWriteStr, prelude::PathCreateDir};
 use indoc::indoc;
+use insta::allow_duplicates;
 
 use uv_platform::{Arch, Os};
 use uv_static::EnvVars;
@@ -68,6 +71,82 @@ fn python_find_default_arch() -> Result<()> {
 }
 
 #[test]
+fn python_find_invalid_build_suffix() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    for managed in [false, true] {
+        let mut command = context.python_find();
+        command.arg(">=3.13,!=3.13.4+1");
+        if managed {
+            command.arg("--managed-python");
+        }
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), command, @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Invalid Python request `>=3.13,!=3.13.4+1`: build names must start with an ASCII letter and contain only ASCII letters, digits, and underscores
+
+            hint: In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.
+            ");
+        }
+    }
+
+    uv_snapshot!(context.filters(), context.python_find().arg(">=3.13,!=3.13.4+custom.1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid Python request `>=3.13,!=3.13.4+custom.1`: build names must start with an ASCII letter and contain only ASCII letters, digits, and underscores
+
+    hint: In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find().arg("!=3.13.4+custom,>=3.13"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid Python request `!=3.13.4+custom,>=3.13`: the variant and build-name suffix must follow all version constraints
+
+    hint: In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find().arg(">=3.13+gil+freethreaded"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid Python request `>=3.13+gil+freethreaded`: invalid combination of Python variants and build names
+
+    hint: In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.
+    ");
+}
+
+#[test]
+fn python_find_invalid_build_suffix_pin() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str(">=3.13,!=3.13.4+1\n")?;
+
+    // A malformed constraint must not be ignored in favor of an unconstrained interpreter.
+    uv_snapshot!(context.filters(), context.python_find(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid Python request `>=3.13,!=3.13.4+1`: build names must start with an ASCII letter and contain only ASCII letters, digits, and underscores
+
+    hint: In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find().arg("3.12").arg("--show-version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    ");
+    uv_snapshot!(context.filters(), context.python_find().arg("--no-config").arg("--show-version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    ");
+    Ok(())
+}
+
+#[test]
 fn python_default_arch_existing_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
     context
@@ -99,6 +178,32 @@ fn python_default_arch_existing_environment() -> Result<()> {
     error: No interpreter found for any-3.12-any-wasm32-any in [PYTHON SOURCES]
     ");
 
+    Ok(())
+}
+
+#[test]
+fn python_find_plus_in_executable_name() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let environment = context.temp_dir.child("env+custom");
+    context.venv().arg(environment.path()).assert().success();
+    let bin = venv_bin_path(&environment);
+    let name = format!("python+custom{EXE_SUFFIX}");
+    let executable = bin.join(&name);
+    fs_err::copy(bin.join(format!("python{EXE_SUFFIX}")), &executable)?;
+
+    uv_snapshot!(context.filters(), context.python_find().arg(&name)
+        .arg("--show-version").env(EnvVars::PATH, &bin), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    ");
+
+    uv_snapshot!(context.filters(), context.python_find().arg(&executable)
+        .arg("--show-version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    ");
     Ok(())
 }
 

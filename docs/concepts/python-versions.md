@@ -34,13 +34,28 @@ The following Python version request formats are supported:
 - `<version>` (e.g., `3`, `3.12`, `3.12.3`)
 - `<version-specifier>` (e.g., `>=3.12,<3.13`)
 - `<version><short-variant>` (e.g., `3.13t`, `3.12.0d`)
-- `<version>+<python-variant-or-build-name>` (e.g., `3.13+freethreaded`, `3.13+custom`)
-- `<version>+<python-variant>+<build-name>` (e.g., `3.13+freethreaded+custom`)
+- `<version>+<variant>` (e.g., `3.13+freethreaded`)
+- `<version>+<build-name>` (e.g., `3.13+custom`)
+- `<version>+<variant>+<build-name>` (e.g., `3.13+freethreaded+custom`)
 - `<implementation>` (e.g., `cpython` or `cp`)
 - `<implementation>@<version>` (e.g., `cpython@3.12`)
 - `<implementation><version>` (e.g., `cpython3.12` or `cp312`)
 - `<implementation><version-specifier>` (e.g., `cpython>=3.12,<3.13`)
 - `<implementation>-<version>-<os>-<arch>-<libc>` (e.g., `cpython-3.12.3-macos-aarch64-none`)
+
+The variant and build name can appear in either order, e.g., `3.13+custom+freethreaded`.
+
+A variant or build-name suffix can follow a version specifier and applies to the entire request. For
+example, `>=3.13,!=3.13.4+custom` requests the `custom` build of Python 3.13 or later, excluding
+3.13.4. The suffix must follow all version constraints.
+
+!!! note
+
+    Earlier uv versions accepted some PEP 440 local-version constraints in Python requests.
+    In version requests, `+` now selects a variant or build name, not a local-version label:
+    for example, `==3.13.4+custom` selects the `custom` build, `==3.13.4+debug` selects the debug
+    variant, and `==3.13.4+1` is invalid. Package dependency specifiers and `requires-python`
+    metadata are unaffected.
 
 Additionally, a specific system Python interpreter can be requested with:
 
@@ -333,9 +348,9 @@ Python version instead.
 ## Python build names
 
 Python download metadata can label artifacts with a publisher-defined build name such as `custom`.
-Select it explicitly with a request like `3.13+custom`. Python variants and build names can be
-composed, as in `3.13+freethreaded+custom`. An unqualified request, such as `3.13`, selects an
-unnamed build.
+Select it explicitly with a request like `3.13+custom`. Build-name input is case-insensitive and uv
+normalizes it to lowercase. Python variants and build names can be composed, as in
+`3.13+freethreaded+custom`. An unqualified version request, such as `3.13`, matches unnamed builds.
 
 ## Free-threaded Python
 

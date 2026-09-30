@@ -15,8 +15,8 @@ use uv_python::downloads::{
     Error as PythonDownloadError, ManagedPythonDownloadList, PythonDownloadRequest,
 };
 use uv_python::{
-    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
-    PythonSource, find_all_python_installations,
+    EnvironmentPreference, Error as PythonError, PythonArchitecture, PythonDownloads,
+    PythonPreference, PythonRequest, PythonSource, find_all_python_installations,
 };
 
 use crate::commands::ExitStatus;
@@ -78,6 +78,9 @@ pub(crate) async fn list(
         python_arch
     };
     let request = request.as_deref().map(PythonRequest::parse);
+    if let Some(request) = &request {
+        request.check_build_suffix().map_err(PythonError::from)?;
+    }
     let base_download_request = if python_preference == PythonPreference::OnlySystem {
         None
     } else {

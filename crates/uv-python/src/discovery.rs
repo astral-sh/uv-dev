@@ -372,6 +372,12 @@ pub enum Error {
     #[error("Invalid version request: {0}")]
     InvalidVersionRequest(String),
 
+    #[error("Invalid Python request `{request}`: {reason}")]
+    InvalidBuildSuffix {
+        request: String,
+        reason: &'static str,
+    },
+
     /// The @latest version request was given
     #[error("Requesting the 'latest' Python version is not yet supported")]
     LatestVersionRequest,
@@ -388,6 +394,9 @@ impl uv_errors::Hinted for Error {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
             Self::Query(err, _, _) => err.hints(),
+            Self::InvalidBuildSuffix { .. } => uv_errors::Hints::from(
+                "In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.",
+            ),
             _ => uv_errors::Hints::none(),
         }
     }
@@ -1253,6 +1262,10 @@ fn find_python_installations_with_strategy<'a>(
     cache: &'a Cache,
     strategy: QueryStrategy,
 ) -> Box<dyn Iterator<Item = Result<FindPythonResult, Error>> + 'a> {
+    if let Err(err) = request.check_build_suffix() {
+        return Box::new(iter::once(Err(err)));
+    }
+
     let arch = arch.map(|arch| {
         PythonDownloadRequest::from_request(request)
             .and_then(|request| request.arch().map(ArchRequest::inner))
@@ -2122,6 +2135,41 @@ impl PythonRequest {
         // Finally, we'll treat it as the name of an executable (i.e. in the search PATH)
         // e.g. foo.exe
         Self::ExecutableName(value.to_string())
+    }
+
+    /// Diagnose malformed build suffixes on otherwise valid version specifiers.
+    ///
+    /// [`Self::parse`] falls back to executable names for unrecognized inputs. A version
+    /// constraint with an invalid suffix should report its syntax error instead of searching
+    /// for an executable. Paths and other executable names are not version constraints.
+    pub fn check_build_suffix(&self) -> Result<(), Error> {
+        let Self::ExecutableName(request) = self else {
+            return Ok(());
+        };
+        let Some((version, suffix)) = request.split_once('+') else {
+            return Ok(());
+        };
+        let Ok(specifiers) = VersionSpecifiers::from_str(version) else {
+            return Ok(());
+        };
+        if specifiers.is_empty() || PythonBuildRequest::from_str(suffix).is_ok() {
+            return Ok(());
+        }
+
+        let reason = if suffix.contains(',') {
+            "the variant and build-name suffix must follow all version constraints"
+        } else if suffix.split('+').any(|component| {
+            PythonVariant::from_str(component).is_err()
+                && PythonBuildName::from_str(component).is_err()
+        }) {
+            "build names must start with an ASCII letter and contain only ASCII letters, digits, and underscores"
+        } else {
+            "invalid combination of Python variants and build names"
+        };
+        Err(Error::InvalidBuildSuffix {
+            request: request.clone(),
+            reason,
+        })
     }
 
     /// Try to parse a tool name as a Python version, e.g. `uvx python311`.
@@ -3645,6 +3693,8 @@ impl FromStr for VersionRequest {
 
             // Split an explicit Python variant or build name before looking for the end of the
             // numeric version. Build names may themselves end in digits, e.g., `avx2`.
+            // In version specifiers, `+` selects the build for the entire request, not a local
+            // version in the final constraint.
             if let Some(start) = s.find('+') {
                 let prefix = &s[..start];
                 let version = prefix.trim_end_matches(['t', 'd']);
@@ -4971,6 +5021,47 @@ mod tests {
             VersionRequest::from_str("==3.12.1").unwrap(),
             VersionRequest::MajorMinorPatch(3, 12, 1, PythonVariant::Default.into())
         );
+    }
+
+    #[test]
+    fn version_request_build_suffix_specifiers() -> Result<(), Error> {
+        for (request, specifiers, suffix) in [
+            ("==3.13.7+custom", "==3.13.7", "custom"),
+            ("!=3.13.4+custom", "!=3.13.4", "custom"),
+            (">=3.13,!=3.13.4+custom", ">=3.13,!=3.13.4", "custom"),
+            ("==3.13.7,>=3.12+custom", "==3.13.7,>=3.12", "custom"),
+            (
+                ">=3.13,!=3.13.4+debug+custom",
+                ">=3.13,!=3.13.4",
+                "debug+custom",
+            ),
+            ("==3.13+freethreaded", "==3.13", "freethreaded"),
+        ] {
+            let build_request = PythonBuildRequest::from_str(suffix).expect("Valid build request");
+            let expected = VersionRequest::from_str(specifiers)?.with_build_request(build_request);
+            let parsed = VersionRequest::from_str(request)?;
+            assert_eq!(parsed, expected, "request: {request}");
+            assert_eq!(
+                VersionRequest::from_str(&parsed.to_string())?,
+                expected,
+                "request: {request}"
+            );
+        }
+
+        // A suffix must select a valid variant or build name and follow all version constraints.
+        for request in [
+            "==3.13.4+1",
+            ">=3.13,!=3.13.4+1",
+            ">=3.13,!=3.13.4+custom.1",
+            "!=3.13.4+custom,>=3.13",
+        ] {
+            assert_matches!(
+                VersionRequest::from_str(request),
+                Err(Error::InvalidVersionRequest(_)),
+                "request: {request}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

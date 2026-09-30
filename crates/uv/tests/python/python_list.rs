@@ -56,6 +56,21 @@ fn python_list_default_arch() {
 }
 
 #[test]
+fn python_list_invalid_build_suffix() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    // Download-only listings do not go through interpreter discovery.
+    uv_snapshot!(context.filters(), context.python_list().arg(">=3.13,!=3.13.4+1")
+        .arg("--only-downloads"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid Python request `>=3.13,!=3.13.4+1`: build names must start with an ASCII letter and contain only ASCII letters, digits, and underscores
+
+    hint: In Python version requests, `+` selects a variant or build name, not a PEP 440 local-version label.
+    ");
+}
+
+#[test]
 fn python_list_versioned_catalog_artifacts() -> Result<()> {
     // Listing catalog entries does not download or execute Python.
     let context = uv_test::test_context_with_versions!(&[]);

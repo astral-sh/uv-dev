@@ -31,9 +31,9 @@ use uv_python::managed::{
     python_executable_dir,
 };
 use uv_python::{
-    ConfigDiscovery, ImplementationName, Interpreter, PythonArchitecture, PythonDownloads,
-    PythonInstallationKey, PythonInstallationMinorVersionKey, PythonRequest, PythonVersionFile,
-    VersionFileDiscoveryOptions, VersionFilePreference, VersionRequest,
+    ConfigDiscovery, Error as PythonError, ImplementationName, Interpreter, PythonArchitecture,
+    PythonDownloads, PythonInstallationKey, PythonInstallationMinorVersionKey, PythonRequest,
+    PythonVersionFile, VersionFileDiscoveryOptions, VersionFilePreference, VersionRequest,
 };
 use uv_shell::Shell;
 use uv_trampoline_builder::{Launcher, LauncherKind};
@@ -60,6 +60,8 @@ impl<'a> InstallRequest<'a> {
         arch: Option<PythonArchitecture>,
         download_list: &'a ManagedPythonDownloadList,
     ) -> Result<Self> {
+        request.check_build_suffix().map_err(PythonError::from)?;
+
         // Make sure the request is a valid download request and fill platform information
         let download_request = PythonDownloadRequest::from_request(&request)
             .ok_or_else(|| {
