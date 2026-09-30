@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use futures::{FutureExt, StreamExt};
 use reqwest::Response;
+use rustc_hash::FxHashSet;
 use tracing::{Instrument, debug, info_span, warn};
 use url::Url;
 
@@ -143,7 +144,10 @@ impl<'a> FlatIndexClient<'a> {
         &self,
         indexes: impl Iterator<Item = &IndexUrl>,
     ) -> Result<FlatIndexEntries, FlatIndexError> {
-        let mut fetches = futures::stream::iter(indexes)
+        // The same location can be inherited from several requirements or configuration files.
+        // Match the full URL so different credentials and query parameters remain independent.
+        let mut seen = FxHashSet::default();
+        let mut fetches = futures::stream::iter(indexes.filter(|index| seen.insert(index.url())))
             .map(async |index| {
                 let entries = self.fetch_index(index).await?;
                 if entries.is_empty() {
@@ -405,6 +409,80 @@ mod tests {
     use fs_err::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn duplicate_urls_are_fetched_once() -> Result<(), Box<dyn std::error::Error>> {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        for version in [1, 2] {
+            Mock::given(method("GET"))
+                .and(path("/flat"))
+                .and(query_param("version", version.to_string()))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(
+                    format!("<a href='/example-{version}.0-py3-none-any.whl'>wheel</a>"),
+                    "text/html",
+                ))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let first = IndexUrl::parse(&format!("{}/flat?version=1", server.uri()), None)?;
+        let second = IndexUrl::parse(&format!("{}/flat?version=2", server.uri()), None)?;
+        let indexes = [&first, &first, &second, &first, &second];
+        let cache = Cache::temp()?;
+        let client = CachedClient::new(crate::BaseClientBuilder::default().build()?);
+        let entries = FlatIndexClient::new(&client, Connectivity::Online, &cache)
+            .fetch_all(indexes.into_iter())
+            .await?;
+        assert_eq!(entries.entries.len(), 2);
+        assert_eq!(
+            entries.entries[0].filename.to_string(),
+            "example-1.0-py3-none-any.whl"
+        );
+        assert_eq!(
+            entries.entries[1].filename.to_string(),
+            "example-2.0-py3-none-any.whl"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate_urls_keep_distinct_credentials() -> Result<(), Box<dyn std::error::Error>> {
+        use wiremock::matchers::{basic_auth, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        for (username, version) in [("first", 1), ("second", 2)] {
+            Mock::given(method("GET"))
+                .and(path("/flat"))
+                .and(basic_auth(username, "secret"))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(
+                    format!("<a href='/example-{version}.0-py3-none-any.whl'>wheel</a>"),
+                    "text/html",
+                ))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let first = IndexUrl::parse(
+            &format!("{}/flat", server.uri()).replacen("http://", "http://first:secret@", 1),
+            None,
+        )?;
+        let second = IndexUrl::parse(
+            &format!("{}/flat", server.uri()).replacen("http://", "http://second:secret@", 1),
+            None,
+        )?;
+        let indexes = [&first, &first, &second, &second];
+        let cache = Cache::temp()?;
+        let client = CachedClient::new(crate::BaseClientBuilder::default().build()?);
+        let entries = FlatIndexClient::new(&client, Connectivity::Online, &cache)
+            .fetch_all(indexes.into_iter())
+            .await?;
+        assert_eq!(entries.entries.len(), 2);
+        Ok(())
+    }
 
     /// Round-trip a synthetic flat-index cache entry and preserve sidecar hashes.
     #[test]
