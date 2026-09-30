@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use arcstr::ArcStr;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use uv_normalize::{ExtraName, GroupName};
@@ -574,21 +575,85 @@ fn parse_extra_expr(
     None
 }
 
+const MIN_CACHED_MARKER_BYTES: usize = 256;
+const MAX_CACHED_EXPRESSIONS: usize = 4_096;
+
+/// Reuses warning-free atomic expressions within one long marker string.
+struct ExpressionCache<'a> {
+    enabled: bool,
+    expressions: FxHashMap<&'a str, MarkerTree>,
+}
+
+/// Finds the source of one atomic expression without interpreting its values.
+fn expression_source(source: &str) -> &str {
+    let mut chars = source.char_indices().peekable();
+    let mut quote = None;
+    while let Some((index, char)) = chars.next() {
+        if let Some(quotation_mark) = quote {
+            if char == quotation_mark {
+                quote = None;
+            }
+        } else if matches!(char, '\'' | '"') {
+            quote = Some(char);
+        } else if char == ')' {
+            return source[..index].trim_end();
+        } else if char.is_whitespace() {
+            while chars.peek().is_some_and(|(_, char)| char.is_whitespace()) {
+                chars.next();
+            }
+            if let Some(&(next, _)) = chars.peek() {
+                let rest = &source[next..];
+                if rest
+                    .strip_prefix("and")
+                    .or_else(|| rest.strip_prefix("or"))
+                    .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+                {
+                    return source[..index].trim_end();
+                }
+            }
+        }
+    }
+    source.trim_end()
+}
+
 /// ```text
 /// marker_expr   = marker_var:l marker_op:o marker_var:r -> (o, l, r)
 ///               | wsp* '(' marker:m wsp* ')' -> m
 /// ```
-fn parse_marker_expr<T: Pep508Url>(
-    cursor: &mut Cursor,
+fn parse_marker_expr<'a, T: Pep508Url>(
+    cursor: &mut Cursor<'a>,
+    cache: &mut ExpressionCache<'a>,
     reporter: &mut impl Reporter,
 ) -> Result<Option<MarkerTree>, Pep508Error<T>> {
     cursor.eat_whitespace();
     if let Some(start_pos) = cursor.eat_char('(') {
-        let marker = parse_marker_or(cursor, reporter)?;
+        let marker = parse_marker_or(cursor, cache, reporter)?;
         cursor.next_expect_char(')', start_pos)?;
         Ok(marker)
     } else {
-        Ok(parse_marker_key_op_value(cursor, reporter)?.map(MarkerTree::expression))
+        if !cache.enabled {
+            return Ok(parse_marker_key_op_value(cursor, reporter)?.map(MarkerTree::expression));
+        }
+        let source = expression_source(cursor.remaining());
+        if let Some(&marker) = cache.expressions.get(source) {
+            *cursor = cursor.clone().at(cursor.pos() + source.len());
+            return Ok(Some(marker));
+        }
+        let start = cursor.pos();
+        let mut warned = false;
+        let marker = parse_marker_key_op_value(cursor, &mut |kind, warning| {
+            warned = true;
+            reporter.report(kind, warning);
+        })?
+        .map(MarkerTree::expression);
+        if let Some(marker) = marker
+            && !warned
+            && cursor.pos() - start == source.len()
+            && cache.expressions.len() < MAX_CACHED_EXPRESSIONS
+        {
+            cache.expressions.insert(source, marker);
+        }
+        Ok(marker)
     }
 }
 
@@ -596,41 +661,56 @@ fn parse_marker_expr<T: Pep508Url>(
 /// marker_and    = marker_expr:l wsp* 'and' marker_expr:r -> ('and', l, r)
 ///               | marker_expr:m -> m
 /// ```
-fn parse_marker_and<T: Pep508Url>(
-    cursor: &mut Cursor,
+fn parse_marker_and<'a, T: Pep508Url>(
+    cursor: &mut Cursor<'a>,
+    cache: &mut ExpressionCache<'a>,
     reporter: &mut impl Reporter,
 ) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    parse_marker_op(cursor, "and", MarkerTree::and, parse_marker_expr, reporter)
+    parse_marker_op(
+        cursor,
+        cache,
+        "and",
+        MarkerTree::and,
+        parse_marker_expr,
+        reporter,
+    )
 }
 
 /// ```text
 /// marker_or     = marker_and:l wsp* 'or' marker_and:r -> ('or', l, r)
 ///                   | marker_and:m -> m
 /// ```
-fn parse_marker_or<T: Pep508Url>(
-    cursor: &mut Cursor,
+fn parse_marker_or<'a, T: Pep508Url>(
+    cursor: &mut Cursor<'a>,
+    cache: &mut ExpressionCache<'a>,
     reporter: &mut impl Reporter,
 ) -> Result<Option<MarkerTree>, Pep508Error<T>> {
     parse_marker_op(
         cursor,
+        cache,
         "or",
         MarkerTree::or,
-        |cursor, reporter| parse_marker_and(cursor, reporter),
+        |cursor, cache, reporter| parse_marker_and(cursor, cache, reporter),
         reporter,
     )
 }
 
 /// Parses both `marker_and` and `marker_or`
 #[expect(clippy::type_complexity)]
-fn parse_marker_op<T: Pep508Url, R: Reporter>(
-    cursor: &mut Cursor,
+fn parse_marker_op<'a, T: Pep508Url, R: Reporter>(
+    cursor: &mut Cursor<'a>,
+    cache: &mut ExpressionCache<'a>,
     op: &str,
     apply: fn(MarkerTree, MarkerTree) -> MarkerTree,
-    parse_inner: fn(&mut Cursor, &mut R) -> Result<Option<MarkerTree>, Pep508Error<T>>,
+    parse_inner: fn(
+        &mut Cursor<'a>,
+        &mut ExpressionCache<'a>,
+        &mut R,
+    ) -> Result<Option<MarkerTree>, Pep508Error<T>>,
     reporter: &mut R,
 ) -> Result<Option<MarkerTree>, Pep508Error<T>> {
     let mut expressions = SmallVec::<[MarkerTree; 4]>::new();
-    expressions.extend(parse_inner(cursor, reporter)?);
+    expressions.extend(parse_inner(cursor, cache, reporter)?);
 
     loop {
         // wsp*
@@ -641,7 +721,7 @@ fn parse_marker_op<T: Pep508Url, R: Reporter>(
             value if value == op => {
                 cursor.take_while(|c| !c.is_whitespace());
 
-                expressions.extend(parse_inner(cursor, reporter)?);
+                expressions.extend(parse_inner(cursor, cache, reporter)?);
             }
             _ => break,
         }
@@ -670,7 +750,19 @@ pub(crate) fn parse_markers_cursor<T: Pep508Url>(
     cursor: &mut Cursor,
     reporter: &mut impl Reporter,
 ) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    let marker = parse_marker_or(cursor, reporter)?;
+    let mut cache = ExpressionCache {
+        enabled: cursor.remaining().len() >= MIN_CACHED_MARKER_BYTES,
+        expressions: FxHashMap::default(),
+    };
+    parse_markers_cursor_cached(cursor, &mut cache, reporter)
+}
+
+fn parse_markers_cursor_cached<'a, T: Pep508Url>(
+    cursor: &mut Cursor<'a>,
+    cache: &mut ExpressionCache<'a>,
+    reporter: &mut impl Reporter,
+) -> Result<Option<MarkerTree>, Pep508Error<T>> {
+    let marker = parse_marker_or(cursor, cache, reporter)?;
     cursor.eat_whitespace();
     if let Some((pos, unexpected)) = cursor.next() {
         // If we're here, both parse_marker_or and parse_marker_and returned because the next
@@ -700,4 +792,93 @@ pub(crate) fn parse_markers<T: Pep508Url>(
     // If the tree consisted entirely of arbitrary expressions
     // that were ignored, it evaluates to true.
     parse_markers_cursor(&mut chars, reporter).map(|result| result.unwrap_or(MarkerTree::TRUE))
+}
+
+#[cfg(test)]
+mod tests {
+    use rustc_hash::FxHashMap;
+
+    use crate::cursor::Cursor;
+    use crate::{MarkerTree, MarkerWarningKind, VerbatimUrl};
+
+    use super::{
+        ExpressionCache, MAX_CACHED_EXPRESSIONS, parse_marker_expr, parse_markers_cursor_cached,
+    };
+
+    #[derive(Debug, PartialEq)]
+    struct ParseResult {
+        marker: Result<Option<MarkerTree>, String>,
+        warnings: Vec<(MarkerWarningKind, String)>,
+    }
+
+    fn parse(source: &str, enabled: bool) -> ParseResult {
+        let mut cursor = Cursor::new(source);
+        let mut cache = ExpressionCache {
+            enabled,
+            expressions: FxHashMap::default(),
+        };
+        let mut warnings = Vec::new();
+        let result = parse_markers_cursor_cached::<VerbatimUrl>(
+            &mut cursor,
+            &mut cache,
+            &mut |kind, warning| warnings.push((kind, warning)),
+        )
+        .map_err(|error| {
+            format!(
+                "{}:{}:{}:{}",
+                error.message, error.start, error.len, error.input
+            )
+        });
+        ParseResult {
+            marker: result,
+            warnings,
+        }
+    }
+
+    #[test]
+    fn cached_expressions_match_uncached_parsing() {
+        for expression in [
+            "extra == 'docs'",
+            "extra != 'Some_Name'",
+            "python_version in '3.10 3.11'",
+            "sys_platform == 'linux and darwin)'",
+            "os_name not in 'a or b'",
+            "'and' in sys_platform",
+            "'dev' in dependency_groups",
+            "sys.platform == 'darwin'",
+            "extra == 'bad!name'",
+            "extra > 'docs'",
+        ] {
+            for separator in [" and ", " or ", "\u{2003}or\n"] {
+                let source = [expression; 12].join(separator);
+                assert_eq!(parse(&source, true), parse(&source, false), "{source}");
+                for suffix in ["and", " and ", " and )", ")", " or extra == '", " junk"] {
+                    let source = format!("({source}){suffix}");
+                    assert_eq!(parse(&source, true), parse(&source, false), "{source}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn expression_cache_is_bounded() {
+        let sources = (0..=MAX_CACHED_EXPRESSIONS)
+            .map(|index| format!("extra == 'item-{index}'"))
+            .collect::<Vec<_>>();
+        let mut cache = ExpressionCache {
+            enabled: true,
+            expressions: FxHashMap::default(),
+        };
+        let mut warnings = Vec::new();
+        for source in &sources {
+            parse_marker_expr::<VerbatimUrl>(
+                &mut Cursor::new(source),
+                &mut cache,
+                &mut |kind, warning| warnings.push((kind, warning)),
+            )
+            .expect("valid extra marker");
+        }
+        assert!(warnings.is_empty());
+        assert_eq!(cache.expressions.len(), MAX_CACHED_EXPRESSIONS);
+    }
 }
