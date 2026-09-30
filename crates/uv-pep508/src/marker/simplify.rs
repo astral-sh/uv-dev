@@ -4,7 +4,7 @@ use std::ops::Bound;
 use arcstr::ArcStr;
 use indexmap::IndexMap;
 use itertools::Itertools;
-use rustc_hash::FxBuildHasher;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use version_ranges::Ranges;
 
 use uv_pep440::{Version, VersionSpecifier};
@@ -235,9 +235,124 @@ fn collect_dnf(
 /// level without any truth table expansion. Combined with the normalization applied by decision
 /// trees, this seems to be sufficient in practice.
 ///
-/// Note: This function has quadratic time complexity. However, it is not applied on every marker
-/// operation, only to user facing output, which are typically very simple.
+/// The number of clause comparisons is quadratic. Most user-facing markers are simple; the
+/// indexed path reduces the cost of comparing larger ones.
 fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
+    if dnf.len() >= 8 && simplify_indexed(dnf) {
+        return;
+    }
+    simplify_linear(dnf);
+}
+
+/// Intern large DNF expressions so subset checks compare bit sets instead of marker values.
+/// Terms and clauses must be simplified in order because each removal can affect later clauses.
+/// Returns `false` without modifying the DNF if the linear algorithm is required.
+fn simplify_indexed(dnf: &mut Vec<Vec<MarkerExpression>>) -> bool {
+    const MAX_INDEX_WORDS: usize = 32 * 1024 * 1024 / size_of::<u64>();
+
+    let mut terms = FxHashMap::default();
+    let mut expressions = Vec::new();
+    let mut clauses = Vec::with_capacity(dnf.len());
+    for clause in dnf.iter() {
+        let mut indexes = Vec::with_capacity(clause.len());
+        for term in clause {
+            let index = *terms.entry(term).or_insert_with(|| {
+                let index = expressions.len();
+                expressions.push(term);
+                index
+            });
+            indexes.push(index);
+        }
+        clauses.push(indexes);
+    }
+
+    let words = expressions.len().div_ceil(64);
+    // A sparse expression can have far more distinct terms than terms per clause.
+    // Bound the dense index to 32 MiB and use the linear algorithm beyond that.
+    if dnf.len().saturating_mul(words) > MAX_INDEX_WORDS {
+        return false;
+    }
+    let mut negated = Vec::with_capacity(expressions.len());
+    for expression in &expressions {
+        negated.push(negate_expression(expression).and_then(|term| terms.get(&term).copied()));
+    }
+    drop(terms);
+    drop(expressions);
+
+    let mut sets = Vec::with_capacity(clauses.len());
+    for clause in &clauses {
+        let mut set = vec![0u64; words];
+        for &term in clause {
+            // The linear algorithm tracks the first occurrence of a repeated term.
+            // A set cannot represent that distinction.
+            if set[term / 64] & (1 << (term % 64)) != 0 {
+                return false;
+            }
+            set[term / 64] |= 1 << (term % 64);
+        }
+        sets.push(set);
+    }
+
+    // A term is redundant when another clause is a subset of this clause with that term negated.
+    for (i, clause) in clauses.iter().enumerate() {
+        for &skipped in clause {
+            let redundant = sets.iter().enumerate().any(|(j, other)| {
+                if i == j || other[skipped / 64] & (1 << (skipped % 64)) != 0 {
+                    return false;
+                }
+                other
+                    .iter()
+                    .zip(&sets[i])
+                    .enumerate()
+                    .all(|(word, (&other, &this))| {
+                        let mut missing = other & !this;
+                        while missing != 0 {
+                            let term = word * 64 + missing.trailing_zeros() as usize;
+                            if negated[term] != Some(skipped) {
+                                return false;
+                            }
+                            missing &= missing - 1;
+                        }
+                        true
+                    })
+            });
+            if redundant {
+                sets[i][skipped / 64] &= !(1 << (skipped % 64));
+            }
+        }
+    }
+
+    // After removing terms, eliminate clauses that contain another surviving clause.
+    let mut redundant_clauses = vec![false; clauses.len()];
+    for (i, set) in sets.iter().enumerate() {
+        redundant_clauses[i] = sets.iter().enumerate().any(|(j, other)| {
+            i != j
+                && !redundant_clauses[j]
+                && other
+                    .iter()
+                    .zip(set)
+                    .all(|(&other, &this)| other & !this == 0)
+        });
+    }
+
+    for ((clause, indexes), set) in dnf.iter_mut().zip(clauses).zip(sets) {
+        let mut position = 0;
+        clause.retain(|_| {
+            let term = indexes[position];
+            position += 1;
+            set[term / 64] & (1 << (term % 64)) != 0
+        });
+    }
+    let mut position = 0;
+    dnf.retain(|_| {
+        let keep = !redundant_clauses[position];
+        position += 1;
+        keep
+    });
+    true
+}
+
+fn simplify_linear(dnf: &mut Vec<Vec<MarkerExpression>>) {
     for i in 0..dnf.len() {
         let clause = &dnf[i];
 
@@ -265,8 +380,6 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
                         return true;
                     }
 
-                    // TODO(ibraheem): if we intern variables we could reduce this
-                    // from a linear search to an integer `HashSet` lookup
                     clause
                         .iter()
                         .position(|x| x == term)
@@ -301,11 +414,7 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
             }
 
             // There is another clause that is a subset of this one, thus this clause is redundant.
-            if other_clause.iter().all(|term| {
-                // TODO(ibraheem): if we intern variables we could reduce this
-                // from a linear search to an integer `HashSet` lookup
-                clause.contains(term)
-            }) {
+            if other_clause.iter().all(|term| clause.contains(term)) {
                 redundant_clauses.push(i);
                 continue 'clause;
             }
@@ -488,5 +597,166 @@ fn is_negation(left: &MarkerExpression, right: &MarkerExpression) -> bool {
 
             pair == pair2 && operator != operator2
         }
+    }
+}
+
+/// Construct the single expression accepted by [`is_negation`] for this left operand.
+fn negate_expression(expression: &MarkerExpression) -> Option<MarkerExpression> {
+    Some(match expression {
+        MarkerExpression::Version { key, specifier } => MarkerExpression::Version {
+            key: *key,
+            specifier: VersionSpecifier::from_version(
+                specifier.operator().negate()?,
+                specifier.version().clone(),
+            )
+            .ok()?,
+        },
+        MarkerExpression::VersionIn {
+            key,
+            versions,
+            operator,
+        } => MarkerExpression::VersionIn {
+            key: *key,
+            versions: versions.clone(),
+            operator: operator.negate(),
+        },
+        MarkerExpression::String {
+            key,
+            operator,
+            value,
+        } => MarkerExpression::String {
+            key: *key,
+            operator: operator.negate()?,
+            value: value.clone(),
+        },
+        MarkerExpression::List { pair, operator } => MarkerExpression::List {
+            pair: pair.clone(),
+            operator: operator.negate(),
+        },
+        MarkerExpression::Extra { name, operator } => MarkerExpression::Extra {
+            name: name.clone(),
+            operator: operator.negate(),
+        },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_pep440::{Operator, Version, VersionSpecifier};
+
+    use super::{is_negation, negate_expression, simplify, simplify_indexed, simplify_linear};
+    use crate::{MarkerExpression, MarkerValueVersion};
+
+    fn expression(value: &str) -> MarkerExpression {
+        MarkerExpression::from_str(value)
+            .expect("valid marker expression")
+            .expect("nontrivial marker expression")
+    }
+
+    #[test]
+    fn indexed_simplification_matches_linear_order() {
+        let mut expressions: Vec<_> = [
+            "extra == 'a'",
+            "extra != 'a'",
+            "extra == 'b'",
+            "extra != 'b'",
+            "python_version == '3.10'",
+            "python_version != '3.10'",
+            "python_version >= '3.9'",
+            "python_version < '3.9'",
+            "python_version ~= '3.9'",
+            "python_version in '3.9 3.10'",
+            "python_version not in '3.9 3.10'",
+            "sys_platform == 'linux'",
+            "sys_platform != 'linux'",
+            "'linux' in sys_platform",
+            "'linux' not in sys_platform",
+            "'test' in extras",
+            "'test' not in extras",
+        ]
+        .map(expression)
+        .into();
+        expressions.push(MarkerExpression::Version {
+            key: MarkerValueVersion::PythonVersion,
+            specifier: VersionSpecifier::from_version(Operator::ExactEqual, Version::new([3, 10]))
+                .expect("valid exact-equality version specifier"),
+        });
+        for left in &expressions {
+            for right in &expressions {
+                assert_eq!(
+                    is_negation(left, right),
+                    negate_expression(left).as_ref() == Some(right)
+                );
+            }
+        }
+        let mut seed = 17u64;
+        let mut indexed_cases = 0;
+        for case in 0..2_000 {
+            let mut next = || {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                (seed >> 32) as usize
+            };
+            let mut expected = Vec::new();
+            for _ in 0..next() % 30 {
+                let mut clause = Vec::new();
+                for _ in 0..next() % 12 {
+                    let term = expressions[next() % expressions.len()].clone();
+                    if case % 2 == 0 || !clause.contains(&term) {
+                        clause.push(term);
+                    }
+                }
+                expected.push(clause);
+            }
+            let mut actual = expected.clone();
+            simplify_linear(&mut expected);
+            if simplify_indexed(&mut actual) {
+                indexed_cases += 1;
+            } else {
+                simplify_linear(&mut actual);
+            }
+            assert_eq!(actual, expected, "case {case}");
+        }
+        assert!(indexed_cases >= 1_000);
+    }
+
+    #[test]
+    fn indexed_simplification_spans_multiple_words() {
+        let terms: Vec<_> = (0..70)
+            .map(|index| expression(&format!("extra == 'extra-{index}'")))
+            .collect();
+        let mut other = terms[..69].to_vec();
+        other.push(expression("extra != 'extra-69'"));
+        let mut actual = vec![terms.clone(), other];
+        let mut expected = actual.clone();
+
+        simplify_linear(&mut expected);
+        assert_eq!(expected, vec![terms[..69].to_vec()]);
+        assert!(simplify_indexed(&mut actual));
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn indexed_simplification_falls_back_for_repeated_terms() {
+        let term = expression("extra == 'a'");
+        let mut expected = vec![vec![term.clone(), term]; 8];
+        let mut actual = expected.clone();
+
+        assert!(!simplify_indexed(&mut actual));
+        assert_eq!(actual, expected);
+        simplify_linear(&mut expected);
+        simplify(&mut actual);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn indexed_simplification_limits_dense_storage() {
+        // 16,385 distinct terms in separate clauses require more than 32 MiB of bit sets.
+        let mut actual: Vec<_> = (0..16_385)
+            .map(|index| vec![expression(&format!("extra == 'extra-{index}'"))])
+            .collect();
+        let expected = actual.clone();
+
+        assert!(!simplify_indexed(&mut actual));
+        assert_eq!(actual, expected);
     }
 }
