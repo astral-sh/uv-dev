@@ -23,6 +23,14 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def is_study_spec(path: Path, study: dict) -> bool:
+    """Allow an archived copy of the exact study manifest beside its results."""
+    return (
+        path.name == "verification-spec.json"
+        or path.name.endswith("-verification-spec.json")
+    ) and json.loads(path.read_text()) == study
+
+
 def verify(evidence: Path, repository: Path, study: dict) -> dict:
     parent, head = study["parent"], study["head"]
     for revision in (parent, head):
@@ -78,7 +86,7 @@ def verify(evidence: Path, repository: Path, study: dict) -> dict:
         path.name
         for pattern in study["result_globs"]
         for path in evidence.glob(pattern)
-        if path.is_file()
+        if path.is_file() and not is_study_spec(path, study)
     }
     require(
         observed_files == expected_files,
