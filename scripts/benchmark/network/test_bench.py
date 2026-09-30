@@ -6,9 +6,12 @@ import concurrent.futures
 import hashlib
 import http.client
 import importlib.util
+import io
+import json
 import os
 import socket
 import subprocess
+import tarfile
 import tempfile
 import threading
 import time
@@ -81,6 +84,22 @@ class ReplayTests(unittest.TestCase):
             with self.subTest(header=header):
                 self.assertEqual(self.get(server, header), (206, expected))
         self.assertEqual(self.get(server, "bytes=999999-"), (416, b""))
+
+    def test_source_distribution_metadata(self) -> None:
+        directory = Path(self.directory.name)
+        source = directory / "example-1.0.tar.gz"
+        metadata = b"Metadata-Version: 2.4\nName: example\nVersion: 1.0\n\n"
+        with tarfile.open(source, "w:gz") as archive:
+            member = tarfile.TarInfo("example-1.0/PKG-INFO")
+            member.size = len(metadata)
+            archive.addfile(member, io.BytesIO(metadata))
+        manifest = directory / "source-fixtures.json"
+        manifest.write_text(
+            json.dumps([{"filename": source.name, "sha256": bench.digest(source)}])
+        )
+        fixtures = bench.Fixtures(manifest, directory, pep658=False)
+        self.assertEqual(fixtures.metadata[source.name + ".metadata"], metadata)
+        self.assertEqual(fixtures.packages["example"][0]["core-metadata"], False)
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "Unix sockets unavailable")
     def test_unix_origin(self) -> None:

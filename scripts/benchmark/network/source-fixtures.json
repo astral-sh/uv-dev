@@ -1,0 +1,14 @@
+[
+  {
+    "filename": "packaging-25.0.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/a1/d4/1fc4078c65507b51b96ca8f8c3ba19e6a61c8253c72794544580a7b6c24d/packaging-25.0.tar.gz",
+    "sha256": "d443872c98d677bf60f6a1f2f8c1cb748e8fe762d2bf9d3148b5599295b0fc4f",
+    "size": 165727
+  },
+  {
+    "filename": "orjson-3.10.18.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/81/0b/fea456a3ffe74e70ba30e01ec183a9b26bec4d497f61dcfce1b601059c60/orjson-3.10.18.tar.gz",
+    "sha256": "e8da3947d92123eda795b68228cafe2724815621fe35e8e320a9e9593a4bcd53",
+    "size": 5422810
+  }
+]

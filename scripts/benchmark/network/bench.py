@@ -1,4 +1,4 @@
-"""Replay pinned wheels under controlled network conditions and compare uv binaries."""
+"""Replay pinned distributions under controlled network conditions and compare uv binaries."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import socket
 import ssl
 import statistics
 import subprocess
+import tarfile
 import tempfile
 import threading
 import time
@@ -108,6 +109,35 @@ def prepare(manifest: Path, directory: Path) -> None:
             raise ValueError(f"Fixture size mismatch: {path.name}")
 
 
+def distribution_metadata(path: Path) -> bytes:
+    if path.suffix in (".whl", ".zip"):
+        with zipfile.ZipFile(path) as archive:
+            names = [
+                name
+                for name in archive.namelist()
+                if (
+                    name.endswith(".dist-info/METADATA")
+                    if path.suffix == ".whl"
+                    else name.count("/") == 1 and name.endswith("/PKG-INFO")
+                )
+            ]
+            if len(names) != 1:
+                raise ValueError(f"Expected one distribution metadata file: {path}")
+            return archive.read(names[0])
+    with tarfile.open(path) as archive:
+        members = [
+            member
+            for member in archive
+            if member.isfile()
+            and member.name.count("/") == 1
+            and member.name.endswith("/PKG-INFO")
+        ]
+        if len(members) != 1:
+            raise ValueError(f"Expected one distribution metadata file: {path}")
+        with archive.extractfile(members[0]) as metadata:
+            return metadata.read()
+
+
 class Fixtures:
     def __init__(self, manifest: Path, directory: Path, pep658: bool) -> None:
         self.files: dict[str, Path] = {}
@@ -118,13 +148,7 @@ class Fixtures:
             path = directory / item["filename"]
             if digest(path) != item["sha256"]:
                 raise ValueError(f"Fixture hash mismatch: {path}")
-            with zipfile.ZipFile(path) as wheel:
-                names = [
-                    n for n in wheel.namelist() if n.endswith(".dist-info/METADATA")
-                ]
-                if len(names) != 1:
-                    raise ValueError(f"Expected one METADATA file: {path}")
-                metadata = wheel.read(names[0])
+            metadata = distribution_metadata(path)
             headers = email.parser.BytesParser().parsebytes(metadata, headersonly=True)
             self.files[path.name] = path
             self.hashes[path.name] = item["sha256"]

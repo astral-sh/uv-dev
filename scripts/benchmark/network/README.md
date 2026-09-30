@@ -1,6 +1,6 @@
 # Network replay
 
-`bench.py` serves hash-pinned public wheels over loopback. It can impose a shared
+`bench.py` serves hash-pinned public distributions over loopback. It can impose a shared
 response-body bandwidth cap, response latency, deterministic per-request jitter,
 transient HTTP failures, truncated downloads, missing PEP 658 metadata, and missing
 range support. Each trial gets a fresh cache and working directory. `--cache-mode
@@ -12,6 +12,11 @@ Prepare the immutable artifacts once, outside the measured interval:
 uv run --no-project python scripts/benchmark/network/bench.py \
   --directory "$HOME/code/tmp/uv-network-fixtures" prepare
 ```
+
+Use `--manifest scripts/benchmark/network/source-fixtures.json` before the
+subcommand to prepare or replay source distributions. These fixtures include
+static `PKG-INFO` metadata, so a `pip compile --no-deps --no-binary :all:` workload
+can exercise archive transfer and extraction without requiring a build backend.
 
 Compare optimized binaries built from an exact parent and candidate commit:
 
