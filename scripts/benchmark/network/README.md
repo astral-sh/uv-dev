@@ -55,6 +55,8 @@ change. A successful command is required, and normalized standard output must
 match within each pair. Installation workloads should pass `--verify-tree
 '{work}/site'` (and install into that directory) to compare every installed file,
 executable bit, directory, and symlink after the timed command.
+Use `--compare-stderr` when the command's diagnostic output is deterministic; it
+compares normalized standard error in addition to standard output.
 For installation files that embed their destination, `--normalize-tree-file GLOB`
 replaces the trial URL and directory before hashing only matching relative paths.
 Managed Python workloads use this for `**/_sysconfigdata_*.py`.
@@ -170,6 +172,11 @@ releases, setup commands that install the older release, and a nine-index latenc
 profile for `pip list --outdated`.
 `latest_version_oracle.py` measures concurrent version discovery across specified
 Simple API and find-links paths without fetching distribution metadata.
+`make_publish_fixtures.py --directory DIR` creates a batch of distinct wheel builds
+for repeated `publish --dry-run --check-url` checks. `publish_check_oracle.py` reads
+one current index per known package and verifies every selected local file against
+its advertised SHA-256. The replay serves already-published files, so this workload
+does not upload anything. Report it as a synthetic repeat-publish workload.
 `make_frozen_fixtures.py --directory DIR` creates a wheel-only project and setup
 commands that lock it before timing. Its profiles include a slow or intermittently
 failing find-links source that is introduced only for the frozen installation.
@@ -232,5 +239,6 @@ specification lists `parent`, `head`, `binary_sha256`, `scope`, `result_globs`, 
 every case's `file`, `pairs`, and `role` (`primary`, `fast`, or `control`). Mark the
 primary qualifying case with `qualifying: true`; use `requires_tree` or
 `required_files` for commands that produce installation trees or output files.
+Use `requires_stderr: true` for studies that must compare diagnostic output.
 The verifier recomputes confidence intervals and traffic totals and rejects
 omitted cases. Review the workload and oracle assumptions separately.

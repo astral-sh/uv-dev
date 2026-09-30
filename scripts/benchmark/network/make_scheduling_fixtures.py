@@ -13,7 +13,12 @@ from pathlib import Path
 
 
 def wheel(
-    directory: Path, name: str, version: int, requires: str | list[str] | None
+    directory: Path,
+    name: str,
+    version: int,
+    requires: str | list[str] | None,
+    *,
+    build_tag: int | None = None,
 ) -> dict:
     stem = name.replace("-", "_")
     dist_info = f"{stem}-{version}.0.dist-info"
@@ -29,6 +34,7 @@ def wheel(
         f"{dist_info}/WHEEL": (
             b"Wheel-Version: 1.0\nGenerator: uv-network-bench\n"
             b"Root-Is-Purelib: true\nTag: py3-none-any\n"
+            + (f"Build: {build_tag}\n".encode() if build_tag is not None else b"")
         ),
     }
     record = io.StringIO(newline="")
@@ -38,7 +44,8 @@ def wheel(
         writer.writerow((path, f"sha256={digest.decode()}", len(data)))
     writer.writerow((f"{dist_info}/RECORD", "", ""))
     contents[f"{dist_info}/RECORD"] = record.getvalue().encode()
-    path = directory / f"{stem}-{version}.0-py3-none-any.whl"
+    build = f"-{build_tag}" if build_tag is not None else ""
+    path = directory / f"{stem}-{version}.0{build}-py3-none-any.whl"
     with zipfile.ZipFile(path, "w") as archive:
         for member_name, data in sorted(contents.items()):
             info = zipfile.ZipInfo(member_name, date_time=(1980, 1, 1, 0, 0, 0))

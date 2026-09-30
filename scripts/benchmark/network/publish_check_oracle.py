@@ -1,0 +1,115 @@
+"""Check a known batch of local distributions against one current index snapshot."""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import importlib.util
+import json
+import threading
+import time
+import urllib.request
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location(
+    "network_bench", Path(__file__).with_name("bench.py")
+)
+assert spec is not None and spec.loader is not None
+bench = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bench)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--directory", type=Path, required=True)
+    parser.add_argument("--profiles", type=Path, required=True)
+    parser.add_argument("--profile", required=True)
+    parser.add_argument("--filename", action="append", default=[])
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    manifest = json.loads(args.manifest.read_text())
+    selected = (
+        set(args.filename) if args.filename else {x["filename"] for x in manifest}
+    )
+    entries = [entry for entry in manifest if entry["filename"] in selected]
+    if {entry["filename"] for entry in entries} != selected or not entries:
+        parser.error("every selected distribution must appear in the manifest")
+    packages = sorted(
+        {bench.normalize(entry["filename"].split("-")[0]) for entry in entries}
+    )
+    profile = json.loads(args.profiles.read_text())[args.profile]
+    fixtures = bench.Fixtures(
+        args.manifest, args.directory, profile.get("pep658", True)
+    )
+    server = bench.Server(fixtures, profile)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def read(package: str) -> tuple[str, dict]:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(server.url + f"/simple/{package}/", timeout=60) as response:
+            body = response.read()
+        if body != fixtures.simple[package]:
+            raise ValueError(f"Index response differs: {package}")
+        return package, {
+            entry["filename"]: entry for entry in json.loads(body)["files"]
+        }
+
+    started = time.perf_counter()
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(packages)) as pool:
+            indexes = dict(pool.map(read, packages))
+        for entry in entries:
+            package = bench.normalize(entry["filename"].split("-")[0])
+            remote = indexes[package][entry["filename"]]["hashes"]["sha256"]
+            if (
+                remote != entry["sha256"]
+                or bench.digest(args.directory / entry["filename"]) != remote
+            ):
+                raise ValueError(f"Distribution digest differs: {entry['filename']}")
+        seconds = time.perf_counter() - started
+    finally:
+        server.shutdown()
+        server.wait_idle()
+        server.server_close()
+        thread.join()
+    required_bytes = sum(len(fixtures.simple[package]) for package in packages)
+    required_latency = max(
+        max(
+            0,
+            profile.get("path_latency_ms", {}).get(
+                f"/simple/{package}/", profile.get("latency_ms", 0)
+            )
+            - profile.get("jitter_ms", 0),
+        )
+        for package in packages
+    )
+    result = {
+        "profile": profile,
+        "netem": bench.netem_profile(),
+        "manifest_sha256": bench.digest(args.manifest),
+        "filenames": sorted(selected),
+        "seconds": seconds,
+        "required_bytes": required_bytes,
+        "required_waves": 1,
+        "required_latency_ms": required_latency,
+        "optimistic_network_floor_seconds": bench.network_floor(
+            profile, required_bytes, 1, required_latency
+        ),
+        "actual_bytes": sum(event["bytes"] for event in server.events),
+        "requests": len(server.events),
+        "events": server.events,
+        "scope": "Known local files and package names. Read each current index concurrently and verify every selected file's SHA-256. The floor excludes hashing, headers, TCP/TLS, and other CPU work.",
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(result, indent=2) + "\n")
+    print(
+        json.dumps(
+            {key: value for key, value in result.items() if key != "events"}, indent=2
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

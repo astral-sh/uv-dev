@@ -1209,6 +1209,7 @@ def run_one(
                 proxy.stop()
             replay.stop()
         output = normalize_output(result.stdout, context)
+        stderr = normalize_output(result.stderr, context)
         if result.returncode:
             raise RuntimeError(
                 f"Command failed ({result.returncode}): {command}\n{result.stderr.decode(errors='replace')}"
@@ -1219,6 +1220,7 @@ def run_one(
             "stdout_sha256": hashlib.sha256(output).hexdigest(),
             "stdout": output.decode(errors="replace"),
             "stderr": result.stderr.decode(errors="replace"),
+            "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
             "origins": replay.urls,
             "events": events,
             "bytes": sum(event["bytes"] for event in events),
@@ -1285,6 +1287,7 @@ def main() -> None:
         help="Glob of files whose trial URL and directory are normalized before hashing",
     )
     run.add_argument("--verify-file", action="append", default=[])
+    run.add_argument("--compare-stderr", action="store_true")
     run.add_argument("--config-template", type=Path)
     run.add_argument("--project-template", type=Path)
     run.add_argument("--git-root", type=Path, help="Directory of bare Git fixtures")
@@ -1420,6 +1423,7 @@ def main() -> None:
         "verify_tree": args.verify_tree,
         "normalize_tree_file": args.normalize_tree_file,
         "verify_file": args.verify_file,
+        "compare_stderr": args.compare_stderr,
         "http2_proxy": (
             {
                 "binary": str(args.http2_proxy),
@@ -1455,6 +1459,11 @@ def main() -> None:
         }
         if pair["parent"]["stdout_sha256"] != pair["head"]["stdout_sha256"]:
             raise ValueError("Parent and head command outputs differ")
+        if (
+            args.compare_stderr
+            and pair["parent"]["stderr_sha256"] != pair["head"]["stderr_sha256"]
+        ):
+            raise ValueError("Parent and head diagnostic outputs differ")
         if pair["parent"]["verified_tree"] != pair["head"]["verified_tree"]:
             raise ValueError("Parent and head installed file contents differ")
         if pair["parent"]["verified_files"] != pair["head"]["verified_files"]:

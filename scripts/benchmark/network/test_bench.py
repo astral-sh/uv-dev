@@ -630,6 +630,7 @@ class ReplayTests(unittest.TestCase):
                 self.assertNotIn(key, kwargs["env"])
             if "lock" in command:
                 (work / "uv.lock").write_text(command[-1])
+                return subprocess.CompletedProcess([], 0, b"", command[-1].encode())
             return subprocess.CompletedProcess([], 0, b"", b"")
 
         with (
@@ -643,6 +644,9 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(
             result["verified_files"],
             {"{work}/uv.lock": hashlib.sha256(b"[INDEX]/simple").hexdigest()},
+        )
+        self.assertEqual(
+            result["stderr_sha256"], hashlib.sha256(b"[INDEX]/simple").hexdigest()
         )
 
     def test_tree_digest_detects_content_changes(self) -> None:

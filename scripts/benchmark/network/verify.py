@@ -114,11 +114,20 @@ def verify(evidence: Path, repository: Path, study: dict) -> dict:
             )
         pairs = data["pairs"]
         require(len(pairs) == case["pairs"] >= 20, f"{label}: sample count")
+        if case.get("requires_stderr"):
+            require(data.get("compare_stderr"), f"{label}: missing stderr comparison")
         require(
             bench.summary(pairs) == data["summary"],
             f"{label}: paired bootstrap differs",
         )
         for pair in pairs:
+            if data.get("compare_stderr"):
+                require(
+                    bool(pair["parent"].get("stderr_sha256"))
+                    and pair["parent"]["stderr_sha256"]
+                    == pair["head"].get("stderr_sha256"),
+                    f"{label}: stderr differs",
+                )
             for key in ("stdout_sha256", "verified_tree", "verified_files"):
                 require(
                     pair["parent"].get(key) == pair["head"].get(key),
