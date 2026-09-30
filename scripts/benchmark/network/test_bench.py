@@ -310,11 +310,17 @@ class ReplayTests(unittest.TestCase):
             work = kwargs["cwd"]
             self.assertEqual((work / "uv.toml").read_text(), args.templates["uv.toml"])
             self.assertEqual(kwargs["env"]["UV_CONCURRENT_DOWNLOADS"], "2")
+            self.assertEqual(kwargs["env"]["UV_PYTHON"], "3.12")
+            for key in ("VIRTUAL_ENV", "CONDA_PREFIX", "PYTHONPATH", "PYTHONHOME"):
+                self.assertNotIn(key, kwargs["env"])
             if "lock" in command:
                 (work / "uv.lock").write_text(command[-1])
             return subprocess.CompletedProcess([], 0, b"", b"")
 
-        with patch.object(bench.subprocess, "run", side_effect=run):
+        with (
+            patch.dict(os.environ, {"VIRTUAL_ENV": "/outer", "PYTHONPATH": "/outer"}),
+            patch.object(bench.subprocess, "run", side_effect=run),
+        ):
             result = bench.run_one(Path("/uv"), self.fixtures, {}, args)
         self.assertIn("venv", commands[0])
         self.assertIn("lock", commands[1])

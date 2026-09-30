@@ -842,9 +842,12 @@ def run_one(
                 key: value
                 for key, value in os.environ.items()
                 if not key.startswith("UV_")
+                and key
+                not in {"VIRTUAL_ENV", "CONDA_PREFIX", "PYTHONPATH", "PYTHONHOME"}
             }
             env.update(
                 UV_CACHE_DIR=str(work / "cache"),
+                UV_PYTHON=args.python,
                 UV_PYTHON_DOWNLOADS="never",
                 NO_PROXY="127.0.0.1,localhost",
                 no_proxy="127.0.0.1,localhost",
@@ -1026,6 +1029,7 @@ def main() -> None:
     args.env = dict(item.split("=", 1) for item in args.env)
     reserved_environment = {
         "UV_CACHE_DIR",
+        "UV_PYTHON",
         "UV_BENCH_NETEM",
         "NO_PROXY",
         "no_proxy",
@@ -1061,6 +1065,10 @@ def main() -> None:
         "profile": profile,
         "netem": netem_profile(),
         "command": args.command,
+        "python_request": args.python,
+        "python_executable_sha256": (
+            digest(Path(args.python)) if Path(args.python).is_file() else None
+        ),
         "requirements": args.requirement,
         "templates": args.templates,
         "setup_commands": args.setup_commands,
