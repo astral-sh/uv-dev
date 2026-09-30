@@ -18,9 +18,12 @@ requirements. Included contents are loaded before timing so CPU simulation measu
 conflating it with filesystem access.
 
 `walltime-shards.py` assigns every built walltime suite to exactly one of up to eight independent
-runs. The saved plan is checked against the extracted benchmark binaries before execution, so a
-missing or stale artifact cannot silently reduce coverage. Each shard retains its own CodSpeed
-profile for main-branch baseline imports.
+runs. It places longer suites first into the lightest shard, using approximate five-minute runtime
+weights for the Linux walltime runners. New suites receive one unit; increase their weight if
+recorded runs show that they need more time. These weights are scheduling hints, not changes to
+benchmark sampling. The saved plan is checked against the extracted benchmark binaries before
+execution, so a missing or stale artifact cannot silently reduce coverage. Each shard retains its
+own CodSpeed profile for main-branch baseline imports.
 
 Source-build workloads use the published backend wheels in the same fixture manifest and pin their
 versions with `source-build-constraints.txt`. This lets isolated builds use their real PEP 517
