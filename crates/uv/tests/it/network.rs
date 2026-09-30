@@ -324,8 +324,9 @@ fn check_requirements_input_downloads(concurrency: usize) -> Result<()> {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8(output.stdout)?;
     allow_duplicates! {
-        assert_snapshot!(String::from_utf8(output.stdout)?, @"build-tag==1.0.0");
+        assert_snapshot!(stdout, @"build-tag==1.0.0");
     }
     Ok(())
 }
