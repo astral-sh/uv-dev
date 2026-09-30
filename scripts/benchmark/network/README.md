@@ -283,6 +283,9 @@ recorded serial path.
 `first-body-retry-profiles.json` truncates Simple API pages and metadata sidecars
 after headers. The retry oracle includes the lost prefixes in its byte bound;
 `--flat-index-path /flat/all` selects a find-links page for the same experiment.
+`cached_wheel_oracle.py` verifies a complete wheel fixture and measures a local
+metadata read. A direct URL already identified by that content hash has a zero
+network-transfer bound; process startup, filesystem, and CPU costs remain.
 `make_publish_fixtures.py --directory DIR` creates a batch of distinct wheel builds
 for repeated `publish --dry-run --check-url` checks. `publish_check_oracle.py` reads
 one current index per known package and verifies every selected local file against
