@@ -160,6 +160,8 @@ pub struct GitFixture {
     pub reference: String,
     #[serde(default)]
     pub revisions: Vec<GitFixtureRevision>,
+    #[serde(default)]
+    pub packages: Vec<GitFixturePackage>,
 }
 
 /// A historical revision of a Git benchmark fixture.
@@ -167,6 +169,13 @@ pub struct GitFixture {
 pub struct GitFixtureRevision {
     pub name: String,
     pub commit: String,
+}
+
+/// An installable package within a Git monorepo.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct GitFixturePackage {
+    pub name: String,
+    pub subdirectory: String,
 }
 
 impl GitFixture {
@@ -178,7 +187,8 @@ impl GitFixture {
         .expect("Failed to locate Git fixture");
         assert!(
             path.join("HEAD").is_file(),
-            "Missing Git fixture. Run `python3 scripts/benchmark/prepare-git.py`."
+            "Missing Git fixture {}. Run `python3 scripts/benchmark/prepare-git.py` with the corresponding manifest.",
+            self.name
         );
         path
     }
@@ -189,6 +199,26 @@ pub fn git_fixtures() -> Vec<GitFixture> {
     serde_json::from_str(include_str!("../../../scripts/benchmark/git.json"))
         .expect("Invalid Git fixture manifest")
 }
+
+/// Popular Python projects used by the Git fetch and monorepo workloads.
+pub fn popular_git_fixtures() -> Vec<GitFixture> {
+    serde_json::from_str(include_str!("../../../scripts/benchmark/git-popular.json"))
+        .expect("Invalid popular Git fixture manifest")
+}
+
+/// Large Git histories used by explicitly requested extended benchmarks.
+pub fn large_git_fixtures() -> Vec<GitFixture> {
+    serde_json::from_str(include_str!("../../../scripts/benchmark/git-large.json"))
+        .expect("Invalid large Git fixture manifest")
+}
+
+/// Independent combinations of partial fetches and shared worktrees.
+pub const GIT_FETCH_MODES: &[(&str, bool, bool)] = &[
+    ("full_clone", false, false),
+    ("partial_clone", true, false),
+    ("full_worktree", false, true),
+    ("partial_worktree", true, true),
+];
 
 /// Run an optimized uv binary without inheriting user-specific uv configuration.
 pub fn uv_command() -> Command {

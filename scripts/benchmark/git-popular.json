@@ -1,0 +1,69 @@
+[
+  {
+    "name": "requests",
+    "repository": "https://github.com/psf/requests",
+    "commit": "b25c87d7cb8d6a18a37fa12442b5f883f9e41741",
+    "reference": "refs/tags/v2.32.5",
+    "fsck-skip": ["5e6ecdad9f69b1ff789a17733b8edc6fd7091bd8"],
+    "revisions": [
+      {
+        "name": "2.31.0",
+        "commit": "147c8511ddbfa5e8f71bbf5c18ede0c4ceb3bba4"
+      },
+      {
+        "name": "2.32.0",
+        "commit": "d6ebc4a2f1f68b7e355fb7e4dd5ffc0845547f9f"
+      },
+      {
+        "name": "2.32.3",
+        "commit": "0e322af87745eff34caffe4df68456ebc20d9068"
+      },
+      { "name": "2.32.5", "commit": "b25c87d7cb8d6a18a37fa12442b5f883f9e41741" }
+    ]
+  },
+  {
+    "name": "transformers",
+    "repository": "https://github.com/huggingface/transformers",
+    "commit": "d79b2d981f28b2730d402244ac3c2e9a8c054eee",
+    "reference": "refs/tags/v4.55.4",
+    "revisions": [
+      {
+        "name": "4.55.1",
+        "commit": "ea2eee0bc8920a880db73a12c87ad39b41d3e834"
+      },
+      {
+        "name": "4.55.2",
+        "commit": "acf295aec3383b2e68ff8e4b6891c3c18fd078fa"
+      },
+      {
+        "name": "4.55.3",
+        "commit": "170b2708cb1977690a87753bbe55280974388513"
+      },
+      { "name": "4.55.4", "commit": "d79b2d981f28b2730d402244ac3c2e9a8c054eee" }
+    ]
+  },
+  {
+    "name": "airflow",
+    "repository": "https://github.com/apache/airflow",
+    "commit": "7fa400745ac7aebc7cc4ec21d3a047e9fb258310",
+    "reference": "refs/heads/main",
+    "packages": [
+      {
+        "name": "apache-airflow-providers-standard",
+        "subdirectory": "providers/standard"
+      },
+      {
+        "name": "apache-airflow-providers-http",
+        "subdirectory": "providers/http"
+      },
+      {
+        "name": "apache-airflow-providers-amazon",
+        "subdirectory": "providers/amazon"
+      },
+      {
+        "name": "apache-airflow-providers-postgres",
+        "subdirectory": "providers/postgres"
+      }
+    ]
+  }
+]

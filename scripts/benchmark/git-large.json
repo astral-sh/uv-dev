@@ -1,0 +1,26 @@
+[
+  {
+    "name": "odoo",
+    "repository": "https://github.com/odoo/odoo",
+    "commit": "561cb2da8452175ec701fa1202ce9b978d5212cd",
+    "reference": "refs/heads/17.0",
+    "revisions": [
+      {
+        "name": "2023-11-01",
+        "commit": "ec0cd75328f614e2202a2e463f03e9c97929339f"
+      },
+      {
+        "name": "2023-12-07",
+        "commit": "b23cb16487e2bc054c81ee07ede5460de8409493"
+      },
+      {
+        "name": "2023-12-15",
+        "commit": "8d66636a76fe0dd091cbe8bc97a7aa80d22e3fb3"
+      },
+      {
+        "name": "2024-01-29",
+        "commit": "561cb2da8452175ec701fa1202ce9b978d5212cd"
+      }
+    ]
+  }
+]

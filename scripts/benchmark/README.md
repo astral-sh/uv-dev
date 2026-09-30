@@ -136,6 +136,13 @@ without fetching live upstream data while timing. The local upload-pack server a
 filtering and subsequent object-ID requests, so partial-fetch implementations can avoid transferring
 unneeded history while retaining the complete upstream repository as the benchmark input.
 
+Use `--manifest scripts/benchmark/git-popular.json` to prepare Requests, Transformers, and Airflow.
+Requests represents a common small source dependency, and Transformers represents users installing
+unreleased model support or fixes, as described in its
+[installation guide](https://github.com/huggingface/transformers/blob/d79b2d981f28b2730d402244ac3c2e9a8c054eee/docs/source/en/installation.md).
+Airflow uses the same complete monorepo snapshot as the real-workspace benchmarks. These inputs are
+separate from `git.json` because GitHub metadata replay has different fixture requirements.
+
 Run `python3 scripts/benchmark/prepare-git-tags.py` to prepare the release refs in `git-tags.json`.
 The manifest captures the real tags created by each pinned source snapshot's date: zero for
 sampleproject, 67 for Flask, and 477 for Django. Git cache-key workloads use real checkouts and
@@ -174,9 +181,24 @@ The revision-history cases retain one cache across one, four, or ten actual Djan
 `python3 scripts/benchmark/git-runtime.py prepare` with Python 3.12.11 or newer to build the pinned
 Git 2.55 runtime, then use
 `python3 scripts/benchmark/git-runtime.py run -- cargo bench -p uv-bench --bench git_fetch` to run
-the suite. CI carries that runtime in the benchmark artifact and uses it only for `git_fetch`, so
-the runner's system Git cannot silently select an older checkout implementation. The runtime
+the suite. CI carries that runtime in the benchmark artifact and uses it for Git transport suites,
+so the runner's system Git cannot silently select an older checkout implementation. The runtime
 includes the local transport used by the fixtures; remote transports are excluded.
+
+The `git_fetch_popular` suite measures fresh installs, four successive releases, and warm precise
+reuse for Requests and Transformers. Every workload runs with ordinary clones, partial-fetch clones,
+full-fetch worktrees, and partial-fetch worktrees. The `git_monorepo` suite runs offline
+`uv pip compile --no-deps --no-build` for one or four real Airflow provider packages at the same
+commit, both with a fresh cache and with populated source metadata. Its static package metadata
+keeps package builds and registry resolution out of the measurement. Both suites run in CodSpeed.
+
+Odoo's multi-gigabyte history from [uv#1737](https://github.com/astral-sh/uv/issues/1737) is
+available as an extended workload. Prepare it with
+`python3 scripts/benchmark/prepare-git.py --manifest scripts/benchmark/git-large.json`, then run
+`python3 scripts/benchmark/git-runtime.py run -- cargo bench -p uv-bench --bench git_fetch_large`.
+The same four settings cover a fresh checkout and four actual revisions of the 17.0 branch. This
+suite is explicit because repeatedly fetching the complete history is too expensive for every pull
+request's shared benchmark artifact and walltime budget.
 
 GitHub metadata workloads compare empty source caches with real, already-materialized checkouts. The
 sample project and Flask have static metadata; Django and the pip regression fixture require their
