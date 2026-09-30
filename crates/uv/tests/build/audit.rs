@@ -3,7 +3,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use serde_json::json;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
@@ -202,6 +202,71 @@ async fn audit_missing_batch_result() {
     ----- stderr -----
     error: OSV returned an invalid batch response: query count (1) does not match result count (0)
     ");
+}
+
+/// Audit a project when OSV omits the result for a continuation query.
+#[tokio::test]
+async fn audit_missing_batch_page_result() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+    "#})?;
+
+    context.lock().assert().success();
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .and(body_json(json!({
+            "queries": [{
+                "package": {"name": "iniconfig", "ecosystem": "PyPI"},
+                "version": "2.0.0",
+            }]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": [], "next_page_token": "next"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .and(body_json(json!({
+            "queries": [{
+                "package": {"name": "iniconfig", "ecosystem": "PyPI"},
+                "version": "2.0.0",
+                "page_token": "next",
+            }]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": []
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // The first page accounts for the package but does not complete its audit.
+    uv_snapshot!(context.filters(), context
+        .audit()
+        .arg("--preview-features")
+        .arg("audit")
+        .arg("--frozen")
+        .arg("--service-url")
+        .arg(server.uri()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: OSV returned an invalid batch response: query count (1) does not match result count (0)
+    ");
+
+    Ok(())
 }
 
 /// Audit a project with no vulnerabilities found, emitting JSON output.
