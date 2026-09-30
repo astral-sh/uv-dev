@@ -55,6 +55,7 @@ use itertools::{Either, Itertools};
 use rustc_hash::FxHashMap;
 use version_ranges::Ranges;
 
+use uv_normalize::ExtraName;
 use uv_pep440::{Operator, Version, VersionPattern, VersionSpecifier, release_specifier_to_range};
 
 use crate::marker::MarkerValueExtra;
@@ -568,6 +569,119 @@ impl InternerGuard<'_> {
         // Restrict all nodes recursively.
         let children = node.children.map(i, |node| self.restrict_by(node, f));
         self.create_node(node.var.clone(), children)
+    }
+
+    /// Simultaneously substitutes the given marker for each named extra.
+    pub(crate) fn substitute_extras(
+        &mut self,
+        value: NodeId,
+        replacements: &FxHashMap<ExtraName, NodeId>,
+    ) -> NodeId {
+        self.substitute_extras_cached(value, replacements, &mut FxHashMap::default())
+    }
+
+    fn substitute_extras_cached(
+        &mut self,
+        value: NodeId,
+        replacements: &FxHashMap<ExtraName, NodeId>,
+        cache: &mut FxHashMap<NodeId, NodeId>,
+    ) -> NodeId {
+        if value.is_true() || value.is_false() {
+            return value;
+        }
+        if value.is_complement() {
+            return self
+                .substitute_extras_cached(value.not(), replacements, cache)
+                .not();
+        }
+        if let Some(&result) = cache.get(&value) {
+            return result;
+        }
+
+        let node = self.shared.node(value);
+        let replacement =
+            if let Variable::Extra(CanonicalMarkerValueExtra::Extra(extra)) = &node.var {
+                replacements.get(extra).copied()
+            } else {
+                None
+            };
+        let result = if let Some(replacement) = replacement
+            && let Edges::Boolean { high, low } = node.children
+        {
+            if replacement.is_true() {
+                self.substitute_extras_cached(high, replacements, cache)
+            } else if replacement.is_false() {
+                self.substitute_extras_cached(low, replacements, cache)
+            } else {
+                let high = self.substitute_extras_cached(high, replacements, cache);
+                let low = self.substitute_extras_cached(low, replacements, cache);
+                self.select(replacement, high, low)
+            }
+        } else {
+            let children = node.children.map(value, |child| {
+                self.substitute_extras_cached(child, replacements, cache)
+            });
+            if children == node.children {
+                value
+            } else {
+                // A substituted marker may introduce an earlier variable. Recombine through
+                // Boolean operations so the result follows the global decision order.
+                match children {
+                    Edges::Boolean { high, low } => {
+                        let condition = self.create_node(node.var.clone(), Edges::from_bool(true));
+                        self.select(condition, high, low)
+                    }
+                    Edges::Version { edges } => {
+                        let mut result = NodeId::FALSE;
+                        for (range, child) in edges {
+                            if child.is_false() {
+                                continue;
+                            }
+                            let condition = self.create_node(
+                                node.var.clone(),
+                                Edges::Version {
+                                    edges: Edges::from_range(&range),
+                                },
+                            );
+                            let branch = self.and(condition, child);
+                            result = self.or(result, branch);
+                        }
+                        result
+                    }
+                    Edges::String { edges } => {
+                        let mut result = NodeId::FALSE;
+                        for (range, child) in edges {
+                            if child.is_false() {
+                                continue;
+                            }
+                            let condition = self.create_node(
+                                node.var.clone(),
+                                Edges::String {
+                                    edges: Edges::from_range(&range),
+                                },
+                            );
+                            let branch = self.and(condition, child);
+                            result = self.or(result, branch);
+                        }
+                        result
+                    }
+                }
+            }
+        };
+        cache.insert(value, result);
+        result
+    }
+
+    fn select(&mut self, condition: NodeId, high: NodeId, low: NodeId) -> NodeId {
+        if condition.is_true() || high == low {
+            return high;
+        }
+        if condition.is_false() {
+            return low;
+        }
+        let high = self.and(condition, high);
+        let low = self.and(condition.not(), low);
+        self.or(high, low)
     }
 
     /// Restrict a marker by assuming that another marker is true.

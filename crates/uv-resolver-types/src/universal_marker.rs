@@ -961,14 +961,7 @@ fn resolve_activated_extras_bdd(
         .filter(|(extra, _)| extras.contains(extra))
         .collect();
 
-    // Substitute extras in BDD variable order. Restricting a later variable before an earlier one
-    // can leave adjacent version/string ranges pointing at the same child, which is semantically
-    // equivalent but not canonical and can prevent downstream reachability from converging.
-    let mut extras: Vec<_> = extras.into_iter().collect();
-    extras.sort_unstable();
-
-    let mut transformed = marker;
-    for extra in extras {
+    marker.substitute_extras(extras.into_iter().map(|extra| {
         // Encoded extras take precedence over a package-scoped extra with the same name.
         let activated = encoded_conflicts
             .get(&extra)
@@ -981,19 +974,8 @@ fn resolve_activated_extras_bdd(
             })
             .unwrap_or(MarkerTree::FALSE);
 
-        // Substitute the activation marker directly into the BDD. Activation markers have already
-        // been resolved, so they contain no extras that a later substitution could rewrite.
-        let mut activated_branch =
-            transformed.simplify_extras_with(|candidate| *candidate == extra);
-        activated_branch = activated_branch.and(activated);
-        let mut inactive_branch =
-            transformed.simplify_not_extras_with(|candidate| *candidate == extra);
-        inactive_branch = inactive_branch.and(activated.negate());
-        activated_branch = activated_branch.or(inactive_branch);
-        transformed = activated_branch;
-    }
-
-    transformed
+        (extra, activated)
+    }))
 }
 
 #[cfg(test)]
