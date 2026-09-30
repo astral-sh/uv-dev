@@ -126,7 +126,9 @@ Run `python3 scripts/benchmark/prepare-git.py` to prepare the Git sources in `gi
 project, Flask, Django, and the small pip regression fixture. Each captured ref points to its pinned
 commit. Their complete reachable history lets the ordinary Git client fetch branches and tags
 without requiring special handling for a shallow remote. Git workloads use these local repositories
-without fetching live upstream data while timing.
+without fetching live upstream data while timing. The local upload-pack server allows object
+filtering and subsequent object-ID requests, so partial-fetch implementations can avoid transferring
+unneeded history while retaining the complete upstream repository as the benchmark input.
 
 Run `python3 scripts/benchmark/prepare-git-tags.py` to prepare the release refs in `git-tags.json`.
 The manifest captures the real tags created by each pinned source snapshot's date: zero for

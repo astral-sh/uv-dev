@@ -31,6 +31,13 @@ def git(directory: Path, *args: str) -> str:
     ).strip()
 
 
+def configure_upload_pack(directory: Path) -> None:
+    # The local transport must advertise the same filtering capability as the
+    # upstream hosts, including requests for trees and blobs by object ID.
+    git(directory, "config", "uploadpack.allowFilter", "true")
+    git(directory, "config", "uploadpack.allowAnySHA1InWant", "true")
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -48,6 +55,7 @@ def main() -> None:
         directory.mkdir(parents=True, exist_ok=True)
         if not (directory / "HEAD").is_file():
             git(directory, "-c", "init.templateDir=", "init", "--bare", "--quiet")
+        configure_upload_pack(directory)
         try:
             present = git(directory, "rev-parse", "--verify", "--quiet", reference)
         except subprocess.CalledProcessError:
