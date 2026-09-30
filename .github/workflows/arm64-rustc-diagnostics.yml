@@ -37,6 +37,8 @@ env:
 jobs:
   gnu-pgo:
     if: ${{ inputs.suite == 'baseline' || inputs.suite == 'gnu-repeat' }}
+    # Compiler failures are diagnostic results and must not trigger automatic CI retries.
+    continue-on-error: true
     name: GNU PGO / ${{ matrix.source.name }} / ${{ matrix.machine.name }} / ${{ matrix.sample }}
     runs-on: ${{ matrix.machine.runner }}
     timeout-minutes: 75
@@ -165,6 +167,7 @@ jobs:
 
   docker:
     if: ${{ inputs.suite == 'baseline' || inputs.suite == 'docker-repeat' || inputs.suite == 'docker-overlap' }}
+    continue-on-error: true
     name: Docker / ${{ matrix.source.name }} / ${{ matrix.sample }}
     runs-on: github-ubuntu-24.04-x86_64-4
     timeout-minutes: 60
@@ -252,6 +255,7 @@ jobs:
 
   docker-memory:
     if: ${{ inputs.suite == 'docker-memory' }}
+    continue-on-error: true
     name: Docker memory / ${{ matrix.memory }}gb
     runs-on: depot-ubuntu-24.04-arm-32
     timeout-minutes: 90
