@@ -173,6 +173,15 @@ a realizable reference time, actual traffic, and optimistic metadata and
 full-artifact transfer bounds. The
 oracle assumes all selected versions and dependencies are already known, so its
 advantage includes dependency-discovery work that a cold resolver may need to do.
+`repeat.py --pilot PILOT --manifest MANIFEST --directory DIR --work-dir WORK
+--output RESULT --pairs 30` reruns a completed pilot with its recorded binaries,
+Python executable, profile, command, setup, cache mode, and output checks. It verifies
+their identities before timing and refuses to replace an existing result. For an
+older pilot that records Python identity but omits the command timeout, pass the
+original `--timeout` explicitly. Run kernel-network pilots inside the same `netem.sh`
+profile and supply the original `--git-root` or TLS certificate and key when used.
+The output records the pilot's SHA-256. A repeat remains separate evidence; retain
+the original pilot and every planned control when reviewing a qualification study.
 `flat_index_oracle.py` accepts a manifest, profiles file, profile, selected filenames,
 and `--flat-package` names. It fetches the shared flat index once and the remaining
 Simple API pages independently, then verifies the selected metadata sidecars. Its

@@ -1453,6 +1453,7 @@ def main() -> None:
             else None
         ),
         "warmups": args.warmups,
+        "timeout_seconds": args.timeout,
         "cache_mode": args.cache_mode,
         "pairs": [],
         "lower_bound": {
