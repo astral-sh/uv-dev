@@ -82,6 +82,22 @@ additional manifestation was found. Focused validation passed for the parent reg
 empty and vulnerable end-to-end audit responses, all seven OSV service tests (including mapping,
 batch limits, pagination, and malware filtering), and Rust formatting.
 
+## Scope and open question
+
+A maintainer asked whether the reporter encountered a short OSV response in production or only
+demonstrated it with the synthetic service in the issue reproduction. The discussion does not yet
+contain the reporter's answer, so a real-world occurrence is not established. The local targeted
+reproduction establishes the uv behavior independently, but it does not establish that OSV or an
+intermediary has emitted such a response in practice.
+
+The maintainer also noted an important trust boundary: cardinality validation detects a
+structurally incomplete batch response, but it cannot make an arbitrarily manipulated
+vulnerability-service response trustworthy. A service capable of returning fabricated data could
+still return one empty result for every query and thereby produce a clean audit. The fix is scoped
+to enforcing the API's query/result shape invariant and preventing this detectable incomplete
+response from being interpreted as success; it is not a general defense against a compromised or
+malicious service.
+
 ## Draft response
 
 Confirmed by a targeted reproduction and fixed: this was a bug. The batch-response path now rejects
