@@ -1303,6 +1303,7 @@ def main() -> None:
     run.add_argument("--compare-stderr", action="store_true")
     run.add_argument("--config-template", type=Path)
     run.add_argument("--project-template", type=Path)
+    run.add_argument("--pylock-template", type=Path)
     run.add_argument("--git-root", type=Path, help="Directory of bare Git fixtures")
     run.add_argument(
         "--setup-commands", type=Path, help="JSON array of uv argument arrays"
@@ -1357,6 +1358,7 @@ def main() -> None:
         for name, path in (
             ("uv.toml", args.config_template),
             ("pyproject.toml", args.project_template),
+            ("pylock.toml", args.pylock_template),
         )
         if path is not None
     }

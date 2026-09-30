@@ -85,8 +85,9 @@ For commands that require an installed environment or project files, pass
 `--setup-commands PATH` with a JSON array of uv argument arrays. Those commands
 run before timing with the same binary and isolated cache. `--config-template`
 and `--project-template` copy text templates to the trial's `uv.toml` and
-`pyproject.toml`; the former is selected with `--config-file`. Templates and
-arguments and `--requirement` values support `{base}`, `{index}`, `{work}`,
+`pyproject.toml`; the former is selected with `--config-file`. Use
+`--pylock-template` to provide a locked `pylock.toml` input directly. Templates,
+arguments, and `--requirement` values support `{base}`, `{index}`, `{work}`,
 `{python}`, and `{fixtures}`.
 Use `--env KEY=VALUE` for settings such as `UV_CONCURRENT_DOWNLOADS`, and repeat
 `--verify-file '{work}/uv.lock'` to compare generated files after normalizing the
@@ -211,6 +212,9 @@ does not upload anything. Report it as a synthetic repeat-publish workload.
 `make_frozen_fixtures.py --directory DIR` creates a wheel-only project and setup
 commands that lock it before timing. Its profiles include a slow or intermittently
 failing find-links source that is introduced only for the frozen installation.
+`make_pylock_fixtures.py --directory DIR` creates direct wheel and local source-build
+`pylock.toml` inputs. The source build imports a dependency available from the replay
+index and copies a valid wheel, providing a control for indexes needed during builds.
 `sdist_metadata_oracle.py` measures a gzip prefix through a known `PKG-INFO` entry
 when the index does not advertise a metadata sidecar. This optimistic reference
 does not require full-archive integrity validation; use the full-artifact oracle

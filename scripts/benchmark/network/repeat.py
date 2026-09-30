@@ -184,6 +184,7 @@ def command(
     for name, flag in (
         ("uv.toml", "--config-template"),
         ("pyproject.toml", "--project-template"),
+        ("pylock.toml", "--pylock-template"),
     ):
         if name in pilot.get("templates", {}):
             path = temporary / name

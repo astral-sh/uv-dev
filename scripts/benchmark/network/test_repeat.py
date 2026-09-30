@@ -115,7 +115,11 @@ class RepeatTests(unittest.TestCase):
 
     def test_command_retains_workload_settings(self) -> None:
         self.pilot.update(
-            templates={"uv.toml": "offline = false\n", "pyproject.toml": "[project]\n"},
+            templates={
+                "uv.toml": "offline = false\n",
+                "pyproject.toml": "[project]\n",
+                "pylock.toml": 'lock-version = "1.0"\n',
+            },
             setup_commands=[["venv", "{work}/venv"]],
             environment_overrides={"UV_CONCURRENT_DOWNLOADS": "2"},
             verify_tree="{work}/site",
@@ -146,6 +150,9 @@ class RepeatTests(unittest.TestCase):
             Path(value("--config-template")).read_text(), "offline = false\n"
         )
         self.assertEqual(Path(value("--project-template")).read_text(), "[project]\n")
+        self.assertEqual(
+            Path(value("--pylock-template")).read_text(), 'lock-version = "1.0"\n'
+        )
         self.assertEqual(
             json.loads(Path(value("--setup-commands")).read_text()),
             self.pilot["setup_commands"],
