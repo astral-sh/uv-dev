@@ -1,4 +1,7 @@
+use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -12,11 +15,150 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use indoc::indoc;
 use insta::assert_json_snapshot;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use uv_normalize::PackageName;
+use uv_pep440::Version;
 use uv_static::EnvVars;
+use uv_test::packse::generate_wheel;
 use uv_test::{TestContext, uv_snapshot};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AuditRequest {
+    connection: usize,
+    path: String,
+    packages: Vec<String>,
+}
+
+struct AuditServer {
+    address: SocketAddr,
+    connections: Arc<AtomicUsize>,
+    requests: Arc<Mutex<Vec<AuditRequest>>>,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl AuditServer {
+    fn start(responses: BTreeMap<String, (&'static str, Vec<u8>)>) -> Result<Self> {
+        let connections = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let responses = Arc::new(responses);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let address = listener.local_addr()?;
+        let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let thread = std::thread::spawn({
+            let connections = Arc::clone(&connections);
+            let requests = Arc::clone(&requests);
+            move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("test server runtime");
+                runtime.block_on(async move {
+                    let listener =
+                        tokio::net::TcpListener::from_std(listener).expect("test server listener");
+                    let serve = async {
+                        while let Ok((stream, _)) = listener.accept().await {
+                            let connection = connections.fetch_add(1, Ordering::SeqCst);
+                            let requests = Arc::clone(&requests);
+                            let responses = Arc::clone(&responses);
+                            tokio::spawn(async move {
+                                let _ = hyper_util::server::conn::auto::Builder::new(
+                                    TokioExecutor::new(),
+                                )
+                                .serve_connection(
+                                    TokioIo::new(stream),
+                                    service_fn(
+                                        move |request: hyper::Request<hyper::body::Incoming>| {
+                                            let requests = Arc::clone(&requests);
+                                            let responses = Arc::clone(&responses);
+                                            async move {
+                                                let method = request.method().clone();
+                                                let path = request.uri().path().to_owned();
+                                                let body = request
+                                                    .into_body()
+                                                    .collect()
+                                                    .await
+                                                    .expect("complete request body")
+                                                    .to_bytes();
+                                                let mut packages = Vec::new();
+                                                let (status, content_type, body) = if method
+                                                    == hyper::Method::POST
+                                                    && path == "/v1/querybatch"
+                                                {
+                                                    let body: Value = serde_json::from_slice(&body)
+                                                        .expect("valid OSV query");
+                                                    let queries = body["queries"]
+                                                        .as_array()
+                                                        .expect("OSV query array");
+                                                    packages = queries
+                                                        .iter()
+                                                        .map(|query| {
+                                                            query["package"]["name"]
+                                                                .as_str()
+                                                                .expect("package name")
+                                                                .to_owned()
+                                                        })
+                                                        .collect();
+                                                    let body = json!({
+                                                        "results": vec![json!({"vulns": []}); queries.len()]
+                                                    });
+                                                    (200, "application/json", body.to_string().into_bytes())
+                                                } else if method == hyper::Method::GET
+                                                    && let Some((content_type, body)) = responses.get(&path)
+                                                {
+                                                    (200, *content_type, body.clone())
+                                                } else {
+                                                    (404, "text/plain", Vec::new())
+                                                };
+                                                requests
+                                                    .lock()
+                                                    .expect("request record mutex")
+                                                    .push(AuditRequest { connection, path, packages });
+                                                Ok::<_, Infallible>(
+                                                    hyper::Response::builder()
+                                                        .status(status)
+                                                        .header("content-type", content_type)
+                                                        .header("cache-control", "no-store")
+                                                        .body(Full::new(Bytes::from(body)))
+                                                        .expect("valid audit response"),
+                                                )
+                                            }
+                                        },
+                                    ),
+                                )
+                                .await;
+                            });
+                        }
+                    };
+                    tokio::select! {
+                        () = serve => {}
+                        _ = shutdown_rx => {}
+                    }
+                });
+            }
+        });
+        Ok(Self {
+            address,
+            connections,
+            requests,
+            shutdown,
+            thread,
+        })
+    }
+
+    fn stop(self) -> (usize, Vec<AuditRequest>) {
+        drop(self.shutdown);
+        self.thread.join().expect("test server thread");
+        (
+            self.connections.load(Ordering::SeqCst),
+            self.requests.lock().expect("request record mutex").clone(),
+        )
+    }
+}
 
 fn install_tool(context: &TestContext, name: &str, locked: bool) {
     let links = context.workspace_root.join("test/links");
@@ -398,92 +540,12 @@ fn tool_audit_reuses_osv_connections() -> Result<()> {
     install_tool(&context, "simple-launcher", true);
     install_tool(&context, "basic-app", true);
 
-    let connections = Arc::new(AtomicUsize::new(0));
-    let requests = Arc::new(Mutex::new(Vec::new()));
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    listener.set_nonblocking(true)?;
-    let address = listener.local_addr()?;
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    let server = std::thread::spawn({
-        let connections = Arc::clone(&connections);
-        let requests = Arc::clone(&requests);
-        move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("test server runtime");
-            runtime.block_on(async move {
-                let listener =
-                    tokio::net::TcpListener::from_std(listener).expect("test server listener");
-                let serve = async {
-                    while let Ok((stream, _)) = listener.accept().await {
-                        let connection = connections.fetch_add(1, Ordering::SeqCst);
-                        let requests = Arc::clone(&requests);
-                        tokio::spawn(async move {
-                            let _ = hyper_util::server::conn::auto::Builder::new(
-                                TokioExecutor::new(),
-                            )
-                            .serve_connection(
-                                TokioIo::new(stream),
-                                service_fn(
-                                    move |request: hyper::Request<hyper::body::Incoming>| {
-                                        let requests = Arc::clone(&requests);
-                                        async move {
-                                            assert_eq!(request.method(), hyper::Method::POST);
-                                            assert_eq!(request.uri().path(), "/v1/querybatch");
-                                            let body = request
-                                                .into_body()
-                                                .collect()
-                                                .await
-                                                .expect("complete query body")
-                                                .to_bytes();
-                                            let body: Value = serde_json::from_slice(&body)
-                                                .expect("valid OSV query");
-                                            let queries = body["queries"]
-                                                .as_array()
-                                                .expect("OSV query array");
-                                            let names = queries
-                                                .iter()
-                                                .map(|query| {
-                                                    query["package"]["name"]
-                                                        .as_str()
-                                                        .expect("package name")
-                                                        .to_owned()
-                                                })
-                                                .collect::<Vec<_>>();
-                                            requests
-                                                .lock()
-                                                .expect("request record mutex")
-                                                .push((connection, names));
-                                            let body = json!({
-                                                "results": vec![json!({"vulns": []}); queries.len()]
-                                            });
-                                            Ok::<_, Infallible>(
-                                                hyper::Response::builder()
-                                                    .header("content-type", "application/json")
-                                                    .body(Full::new(Bytes::from(body.to_string())))
-                                                    .expect("valid OSV response"),
-                                            )
-                                        }
-                                    },
-                                ),
-                            )
-                            .await;
-                        });
-                    }
-                };
-                tokio::select! {
-                    () = serve => {}
-                    _ = shutdown_rx => {}
-                }
-            });
-        }
-    });
+    let server = AuditServer::start(BTreeMap::new())?;
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
         .arg("--service-url")
-        .arg(format!("http://{address}"))
+        .arg(format!("http://{}", server.address))
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
         , @"
     exit_code: 0 (success)
@@ -494,16 +556,136 @@ fn tool_audit_reuses_osv_connections() -> Result<()> {
     Found no known vulnerabilities and no adverse project statuses in 1 package
     ");
 
-    drop(shutdown_tx);
-    server.join().expect("test server thread");
-    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    let (connections, requests) = server.stop();
+    assert_eq!(connections, 1);
     assert_eq!(
-        *requests.lock().expect("request record mutex"),
+        requests,
         [
-            (0, vec!["basic-app".to_owned()]),
-            (0, vec!["simple-launcher".to_owned()]),
+            AuditRequest {
+                connection: 0,
+                path: "/v1/querybatch".to_owned(),
+                packages: vec!["basic-app".to_owned()],
+            },
+            AuditRequest {
+                connection: 0,
+                path: "/v1/querybatch".to_owned(),
+                packages: vec!["simple-launcher".to_owned()],
+            },
         ]
     );
+    Ok(())
+}
+
+#[test]
+fn tool_audit_reuses_registry_connections() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let mut responses = BTreeMap::new();
+    for (index, name, status) in [
+        ("first", "audit-tool-a", "active"),
+        ("second", "audit-tool-b", "archived"),
+    ] {
+        let name = PackageName::from_str(name)?;
+        let version = Version::from_str("1.0")?;
+        let (filename, wheel) = generate_wheel(
+            &name,
+            &version,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[name.to_string()],
+        );
+        let metadata =
+            format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n").into_bytes();
+        let simple_index = json!({
+            "meta": { "api-version": "1.1" },
+            "name": name,
+            "project-status": { "status": status },
+            "files": [{
+                "filename": filename,
+                "url": format!("/files/{filename}"),
+                "hashes": { "sha256": hex::encode(Sha256::digest(&wheel)) },
+                "core-metadata": { "sha256": hex::encode(Sha256::digest(&metadata)) },
+                "upload-time": "2024-03-24T00:00:00Z"
+            }]
+        });
+        responses.insert(
+            format!("/{index}/{name}/"),
+            (
+                "application/vnd.pypi.simple.v1+json",
+                simple_index.to_string().into_bytes(),
+            ),
+        );
+        responses.insert(
+            format!("/files/{filename}.metadata"),
+            ("text/plain", metadata),
+        );
+        responses.insert(
+            format!("/files/{filename}"),
+            ("application/octet-stream", wheel),
+        );
+    }
+    let server = AuditServer::start(responses)?;
+    for (index, name) in [("first", "audit-tool-a"), ("second", "audit-tool-b")] {
+        context
+            .tool_install()
+            .arg(name)
+            .arg("--default-index")
+            .arg(format!("http://{}/{index}/", server.address))
+            .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+            .assert()
+            .success();
+    }
+    let initial_connections = server.connections.load(Ordering::SeqCst);
+    server
+        .requests
+        .lock()
+        .expect("request record mutex")
+        .clear();
+
+    uv_snapshot!(context.filters(), context.tool_audit()
+        .arg("--all")
+        .arg("--service-url")
+        .arg(format!("http://{}", server.address))
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
+        , @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Tool `audit-tool-b`:
+
+    Adverse statuses:
+
+    - audit-tool-b is archived
+
+    ----- stderr -----
+    Auditing `audit-tool-a`
+    Found no known vulnerabilities and no adverse project statuses in 1 package
+    Auditing `audit-tool-b`
+    Found no known vulnerabilities and 1 adverse project status in 1 package
+    ");
+
+    let (connections, requests) = server.stop();
+    assert_eq!(connections - initial_connections, 2);
+    let registry_requests = requests
+        .iter()
+        .filter(|request| request.path != "/v1/querybatch")
+        .collect::<Vec<_>>();
+    assert_eq!(registry_requests.len(), 2);
+    assert_eq!(registry_requests[0].path, "/first/audit-tool-a/");
+    assert_eq!(registry_requests[1].path, "/second/audit-tool-b/");
+    assert_eq!(
+        registry_requests[0].connection,
+        registry_requests[1].connection
+    );
+    let osv_requests = requests
+        .iter()
+        .filter(|request| request.path == "/v1/querybatch")
+        .collect::<Vec<_>>();
+    assert_eq!(osv_requests.len(), 2);
+    assert_eq!(osv_requests[0].packages, ["audit-tool-a"]);
+    assert_eq!(osv_requests[1].packages, ["audit-tool-b"]);
+    assert_eq!(osv_requests[0].connection, osv_requests[1].connection);
+    assert_ne!(osv_requests[0].connection, registry_requests[0].connection);
     Ok(())
 }
 

@@ -26,7 +26,7 @@ use uv_audit::{
 };
 use uv_cache::Cache;
 use uv_cli::AuditOutputFormat;
-use uv_client::{BaseClientBuilder, CachedClient, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, CachedClient, RegistryClient, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
     ExtrasSpecification, ExtrasSpecificationWithDefaults, TargetTriple,
@@ -214,13 +214,17 @@ pub(crate) async fn audit(
     });
 
     let osv_client = CachedClient::new(client_builder.clone().build()?);
+    let registry_client = RegistryClientBuilder::new(client_builder, cache.clone())
+        .index_locations(settings.index_locations.clone())
+        .keyring(settings.keyring_provider)
+        .build()?;
     let outcome = audit_lock(
         &lock,
         target.install_path(),
         &extras,
         &groups,
         &settings,
-        client_builder,
+        &registry_client,
         osv_client,
         concurrency,
         &cache,
@@ -275,7 +279,7 @@ pub(crate) async fn audit_lock(
     extras: &ExtrasSpecificationWithDefaults,
     groups: &DependencyGroupsWithDefaults,
     settings: &ResolverSettings,
-    client_builder: BaseClientBuilder<'_>,
+    registry_client: &RegistryClient,
     osv_client: CachedClient,
     concurrency: Concurrency,
     cache: &Cache,
@@ -301,13 +305,8 @@ pub(crate) async fn audit_lock(
         .packages()
         .map(|(name, version)| Dependency::new(name.clone(), version.clone()))
         .collect();
-    let registry_client = RegistryClientBuilder::new(client_builder, cache.clone())
-        .index_locations(settings.index_locations.clone())
-        .keyring(settings.keyring_provider)
-        .build()?;
     let capabilities = IndexCapabilities::default();
-    let status_audit =
-        ProjectStatusAudit::new(&registry_client, &capabilities, concurrency.clone());
+    let status_audit = ProjectStatusAudit::new(registry_client, &capabilities, concurrency.clone());
 
     let osv_future = async {
         match service {
