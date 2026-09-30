@@ -125,6 +125,10 @@ a realizable reference time, actual traffic, and optimistic metadata and
 full-artifact transfer bounds. The
 oracle assumes all selected versions and dependencies are already known, so its
 advantage includes dependency-discovery work that a cold resolver may need to do.
+`flat_index_oracle.py` accepts a manifest, profiles file, profile, selected filenames,
+and `--flat-package` names. It fetches the shared flat index once and the remaining
+Simple API pages independently, then verifies the selected metadata sidecars. Its
+lower bound accounts for different response delays along each index-to-metadata path.
 
 Run protocol and bottleneck checks with:
 
