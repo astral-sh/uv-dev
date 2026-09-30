@@ -75,6 +75,12 @@ tools with independent OSV queries. Its plain and paginated manifests exercise
 connection reuse across tool audits. The OSV oracle can query the complete known
 dependency set in one batch when it contains at most 1,000 packages, providing a
 realizable reference for further batching improvements.
+Pass `--source registry` to install the tools from two saved index paths and
+exercise their project-status lookups. `tool_audit_oracle.py` retrieves those
+complete Simple API pages while batching the OSV queries across tools. It records
+an optimistic bound that permits the two services to overlap. The `cached`
+profile keeps registry responses fresh; pair it with `--cached-registry` on the
+oracle to exclude already available pages from the required network bytes.
 
 Compare optimized binaries built from an exact parent and candidate commit:
 
