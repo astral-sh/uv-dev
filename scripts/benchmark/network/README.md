@@ -70,6 +70,12 @@ releases locally. Set `UV_TOOL_DIR={work}/tools` and
 bounded pool of persistent HTTP/1.1 connections. Its bound includes required
 response bytes and request waves, while its measured reference also pays the
 configured connection delay and records any immediate retries.
+`make_tool_filename_fixtures.py --directory DIR` creates an executable wheel,
+the equivalent normalized source archive, and source-directory and unnamed-archive
+controls. Its setup commands install each tool with an uncached flat index.
+Repeating the same archive request measures whether name inference can finish
+without consulting that index; the required network bytes for a satisfied local
+requirement are zero. Fresh installation controls still require their artifacts.
 `make_tool_audit_fixtures.py --directory DIR --packages N` creates locked local
 tools with independent OSV queries. Its plain and paginated manifests exercise
 connection reuse across tool audits. The OSV oracle can query the complete known
