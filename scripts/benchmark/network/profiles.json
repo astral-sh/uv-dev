@@ -10,5 +10,6 @@
   "transient-503": {"latency_ms": 100, "bytes_per_second": 1250000, "fail_status": 503, "fail_count": 1, "pep658": true},
   "interrupted": {"latency_ms": 150, "bytes_per_second": 1250000, "cut_after_bytes": 65536, "cut_count": 1, "pep658": true},
   "interrupted-once": {"latency_ms": 150, "bytes_per_second": 1250000, "cut_after_bytes": 1048576, "cut_count": 1, "pep658": true},
-  "interrupted-repeated": {"latency_ms": 150, "bytes_per_second": 1250000, "cut_after_bytes": 1048576, "cut_count": 3, "pep658": true}
+  "interrupted-repeated": {"latency_ms": 150, "bytes_per_second": 1250000, "cut_after_bytes": 1048576, "cut_count": 3, "pep658": true},
+  "interrupted-no-ranges": {"latency_ms": 150, "bytes_per_second": 1250000, "cut_after_bytes": 1048576, "cut_count": 3, "pep658": true, "ranges": false}
 }

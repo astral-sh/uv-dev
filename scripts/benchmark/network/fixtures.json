@@ -70,5 +70,17 @@
     "url": "https://files.pythonhosted.org/packages/8a/1f/f041989e93b001bc4e44bb1669ccdcf54d3f00e628229a85b08d330615c5/charset_normalizer-3.4.3-py3-none-any.whl",
     "sha256": "ce571ab16d890d23b5c278547ba694193a45011ff86a9162a71307ed9f86759a",
     "size": 53175
+  },
+  {
+    "filename": "numpy-2.2.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "url": "https://files.pythonhosted.org/packages/8c/3d/1e1db36cfd41f895d266b103df00ca5b3cbe965184df824dec5c08c6b803/numpy-2.2.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "sha256": "fd83c01228a688733f1ded5201c678f0c53ecc1006ffbc404db9f7a899ac6249",
+    "size": 16527618
+  },
+  {
+    "filename": "pyarrow-20.0.0-cp312-cp312-manylinux_2_28_x86_64.whl",
+    "url": "https://files.pythonhosted.org/packages/bb/1b/2168d6050e52ff1e6cefc61d600723870bf569cbf41d13db939c8cf97a16/pyarrow-20.0.0-cp312-cp312-manylinux_2_28_x86_64.whl",
+    "sha256": "4250e28a22302ce8692d3a0e8ec9d9dde54ec00d237cff4dfa9c1fbf79e472a8",
+    "size": 42295639
   }
 ]
