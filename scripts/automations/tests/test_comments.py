@@ -288,6 +288,11 @@ class FakeGitHub:
             comment for comment in self.conversation if comment.identifier == identifier
         )
 
+    def find_retained_conversation_comment(
+        self, scope: CommentScope, identifier: int
+    ) -> ConversationComment | None:
+        return self.get_conversation_comment(scope, identifier)
+
     def get_review(self, scope: CommentScope, identifier: int) -> SubmittedReview:
         self.get_comment_pull_request(scope)
         return next(

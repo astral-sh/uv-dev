@@ -27,7 +27,12 @@ from test_comments import (
     write_session,
 )
 
-from uv_automations.comment_models import CommentScope, InlineComment
+from uv_automations.comment_models import (
+    CommentScope,
+    ConversationComment,
+    InlineComment,
+)
+from uv_automations.github_comments import CommentGitHub
 from uv_automations.models import Timestamp
 from uv_automations.sessions import snapshot_sessions
 from uv_automations.workflows.comments import (
@@ -57,6 +62,56 @@ class FailingCollectionGitHub(FakeGitHub):
         if self.failures:
             raise self.failures.pop(0)
         return super().list_inline_comments(scope, since)
+
+
+@dataclass
+class RemovedCommentGitHub(FailingCollectionGitHub):
+    missing_identifier: int = 3
+    response_status: int = 404
+    retained_reads: list[int] = field(default_factory=list)
+
+    @override
+    def get_conversation_comment(
+        self, scope: CommentScope, identifier: int
+    ) -> ConversationComment:
+        if identifier == self.missing_identifier:
+            raise subprocess.CalledProcessError(
+                1,
+                [
+                    "gh",
+                    "api",
+                    "--method",
+                    "GET",
+                    f"repos/{scope.repository.name}/issues/comments/{identifier}",
+                ],
+                stderr=f"HTTP {self.response_status}",
+            )
+        return super().get_conversation_comment(scope, identifier)
+
+    @override
+    def find_retained_conversation_comment(
+        self, scope: CommentScope, identifier: int
+    ) -> ConversationComment | None:
+        self.retained_reads.append(identifier)
+        if identifier != self.missing_identifier:
+            return super().find_retained_conversation_comment(scope, identifier)
+        response = subprocess.CompletedProcess(
+            [],
+            1,
+            f'HTTP/2.0 {self.response_status}\r\nContent-Type: application/json\r\n\r\n{{"message":"Not Found"}}',
+            f"HTTP {self.response_status}",
+        )
+        with (
+            patch(
+                "uv_automations.github_comments.subprocess.run", return_value=response
+            ),
+            patch.object(
+                CommentGitHub,
+                "get_comment_pull_request",
+                side_effect=self.get_comment_pull_request,
+            ),
+        ):
+            return CommentGitHub().find_retained_conversation_comment(scope, identifier)
 
 
 class CommentCollectionRetryTests(unittest.TestCase):
@@ -213,6 +268,62 @@ class CommentCollectionRetryTests(unittest.TestCase):
         self.assertEqual(self.github.collection_reads, [EARLIER.overlap()])
         self.assertEqual(tuple(self.destination.iterdir()), ())
         clock.sleep.assert_not_called()
+
+    def test_deleted_pending_comment_keeps_checkpoint_and_progress(self) -> None:
+        github = RemovedCommentGitHub(
+            pull_request=self.github.pull_request,
+            conversation=self.github.conversation,
+        )
+        self.github = github
+        self.previous = replace(
+            self.previous,
+            state=replace(
+                self.previous.state,
+                collection=replace(
+                    self.previous.state.collection,
+                    pending=(conversation(3, updated_at=EARLIER).revision,),
+                ),
+            ),
+        )
+        with patch("uv_automations.workflows.comments.time", create=True) as clock:
+            prepared = self.prepare(previous=self.previous)
+        self.assertEqual(prepared.after, EARLIER)
+        self.assertEqual(prepared.targets, (self.new.revision,))
+        self.assertEqual(prepared.collection.pending, ())
+        self.assertEqual(prepared.processed_targets, 2)
+        self.assertEqual(prepared.session_id, SESSION_ID)
+        self.assertEqual(github.collection_reads, [EARLIER.overlap()])
+        self.assertEqual(github.retained_reads, [3])
+        clock.sleep.assert_not_called()
+
+    def test_other_pending_comment_failures_keep_bounded_retry_and_fallback(
+        self,
+    ) -> None:
+        github = RemovedCommentGitHub(
+            pull_request=self.github.pull_request,
+            conversation=self.github.conversation,
+            response_status=503,
+        )
+        self.github = github
+        self.previous = replace(
+            self.previous,
+            state=replace(
+                self.previous.state,
+                collection=replace(
+                    self.previous.state.collection,
+                    pending=(conversation(3, updated_at=EARLIER).revision,),
+                ),
+            ),
+        )
+        with patch("uv_automations.workflows.comments.time", create=True) as clock:
+            prepared = self.prepare(previous=self.previous)
+        self.assertIsNone(prepared.after)
+        self.assertEqual(prepared.targets, (self.old.revision, self.new.revision))
+        self.assertEqual(github.retained_reads, [3, 3, 3])
+        self.assertEqual(github.collection_reads, [EARLIER.overlap()] * 3 + [None])
+        self.assertEqual(
+            [call.args for call in clock.sleep.call_args_list], [(5,), (10,)]
+        )
 
 
 if __name__ == "__main__":

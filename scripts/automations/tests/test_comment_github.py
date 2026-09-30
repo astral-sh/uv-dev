@@ -4,6 +4,8 @@ import unittest
 from dataclasses import replace
 from unittest.mock import patch
 
+from test_comments import pull_request
+
 from uv_automations.comment_models import (
     MAX_COLLECTION_PAGES,
     MAX_PAGE_SIZE,
@@ -85,6 +87,156 @@ def conversation_payload() -> dict[str, object]:
 
 
 class CommentGitHubTests(unittest.TestCase):
+    def test_removed_retained_comment_requires_a_readable_enclosing_pull_request(
+        self,
+    ) -> None:
+        response = subprocess.CompletedProcess(
+            [],
+            1,
+            'HTTP/2.0 404\r\nContent-Type: application/json\r\n\r\n{"message":"Not Found"}',
+            "Not Found",
+        )
+        with (
+            patch(
+                "uv_automations.github_comments.subprocess.run", return_value=response
+            ) as run,
+            patch.object(
+                CommentGitHub, "get_comment_pull_request", return_value=pull_request()
+            ) as parent,
+        ):
+            self.assertIsNone(
+                CommentGitHub().find_retained_conversation_comment(SCOPE, 1)
+            )
+        parent.assert_called_once_with(SCOPE)
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "gh",
+                "api",
+                "--method",
+                "GET",
+                "repos/astral-sh/uv-dev/issues/comments/1",
+                "--include",
+            ],
+        )
+        self.assertIs(run.call_args.kwargs["check"], False)
+        self.assertIs(run.call_args.kwargs["capture_output"], True)
+
+    def test_non_404_retained_comment_failures_remain_errors(self) -> None:
+        for status in (401, 403, 408, 429, 500, 503):
+            response = subprocess.CompletedProcess(
+                [],
+                1,
+                f"HTTP/2.0 {status}\nContent-Type: application/json\n\n{{}}",
+                "failure",
+            )
+            with (
+                self.subTest(status=status),
+                patch(
+                    "uv_automations.github_comments.subprocess.run",
+                    return_value=response,
+                ),
+                patch.object(CommentGitHub, "get_comment_pull_request") as parent,
+                self.assertRaises(subprocess.CalledProcessError),
+            ):
+                CommentGitHub().find_retained_conversation_comment(SCOPE, 1)
+            parent.assert_not_called()
+
+    def test_unverified_404_does_not_discard_a_retained_comment(self) -> None:
+        for stdout, returncode in (
+            ('{"status":"404"}', 1),
+            ("HTTP/2.0 404\ninvalid\n\n{}", 1),
+            ("HTTP/2.0 404\n\n{}", 0),
+        ):
+            with (
+                self.subTest(stdout=stdout, returncode=returncode),
+                patch(
+                    "uv_automations.github_comments.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        [], returncode, stdout, "failure"
+                    ),
+                ),
+                patch.object(CommentGitHub, "get_comment_pull_request") as parent,
+                self.assertRaises((subprocess.CalledProcessError, ValueError)),
+            ):
+                CommentGitHub().find_retained_conversation_comment(SCOPE, 1)
+            parent.assert_not_called()
+
+    def test_missing_or_foreign_enclosing_pull_request_remains_an_error(self) -> None:
+        response = subprocess.CompletedProcess([], 1, "HTTP/2.0 404\n\n{}", "failure")
+        current = pull_request()
+        foreign = replace(
+            current,
+            details=replace(
+                current.details,
+                base=replace(
+                    current.details.base, repository=replace(REPOSITORY, database_id=1)
+                ),
+            ),
+        )
+        missing = subprocess.CalledProcessError(
+            1, ["gh", "api", "pulls/123"], stderr="HTTP 404"
+        )
+        for result in (foreign, missing):
+            with (
+                self.subTest(result=type(result).__name__),
+                patch(
+                    "uv_automations.github_comments.subprocess.run",
+                    return_value=response,
+                ),
+                patch.object(
+                    CommentGitHub,
+                    "get_comment_pull_request",
+                    side_effect=result if isinstance(result, Exception) else None,
+                    return_value=result,
+                ),
+                self.assertRaises((subprocess.CalledProcessError, ValueError)),
+            ):
+                CommentGitHub().find_retained_conversation_comment(SCOPE, 1)
+
+    def test_retained_comment_success_keeps_exact_target_identity(self) -> None:
+        payload = {
+            **conversation_payload(),
+            "issue_url": "https://api.github.com/repos/astral-sh/uv-dev/issues/123",
+        }
+        for changed in (
+            payload,
+            {**payload, "id": 2},
+            {
+                **payload,
+                "issue_url": "https://api.github.com/repos/astral-sh/uv-dev/issues/999",
+            },
+        ):
+            response = subprocess.CompletedProcess(
+                [],
+                0,
+                "HTTP/2.0 200 OK\nContent-Type: application/json\n\n"
+                + json.dumps(changed),
+                "",
+            )
+            with patch(
+                "uv_automations.github_comments.subprocess.run", return_value=response
+            ):
+                if changed == payload:
+                    comment = CommentGitHub().find_retained_conversation_comment(
+                        SCOPE, 1
+                    )
+                    if comment is None:
+                        raise AssertionError("Expected the retained comment")
+                    self.assertEqual(comment.identifier, 1)
+                else:
+                    with self.assertRaises(ValueError):
+                        CommentGitHub().find_retained_conversation_comment(SCOPE, 1)
+
+    def test_publisher_comment_read_still_rejects_missing_targets(self) -> None:
+        missing = subprocess.CalledProcessError(1, ["gh", "api"], stderr="HTTP 404")
+        with (
+            patch.object(CommentGitHub, "_api", side_effect=missing),
+            self.assertRaises(subprocess.CalledProcessError) as caught,
+        ):
+            CommentGitHub().get_conversation_comment(SCOPE, 1)
+        self.assertIs(caught.exception, missing)
+
     def test_enterprise_user_account_is_preserved_as_non_trigger_context(self) -> None:
         payload = thread_payload()
         comment = as_object(as_array(as_object(payload["comments"])["nodes"])[0])
