@@ -83,15 +83,15 @@ impl Middleware for UvRetryMiddleware {
     ) -> reqwest_middleware::Result<Response> {
         // The retry library passes responses to its strategy and timing decisions to its policy.
         // Keep their shared state local to this request, including all of its retry attempts.
-        let retry_after = Arc::new(Mutex::new(None));
+        let advice = Arc::new(Mutex::new(None));
         RetryTransientMiddleware::new_with_policy_and_strategy(
-            RetryAfterPolicy {
+            RetryAdvicePolicy {
                 policy: self.policy,
-                retry_after: retry_after.clone(),
+                advice: advice.clone(),
             },
-            RetryAfterStrategy {
+            RetryAdviceStrategy {
                 max_delay: self.policy.max_retry_interval,
-                retry_after,
+                advice,
             },
         )
         .handle(request, extensions, next)
@@ -99,46 +99,79 @@ impl Middleware for UvRetryMiddleware {
     }
 }
 
-struct RetryAfterPolicy {
-    policy: ExponentialBackoff,
-    retry_after: Arc<Mutex<Option<SystemTime>>>,
+enum RetryAdvice {
+    After(SystemTime),
+    TransportFailure,
 }
 
-impl RetryPolicy for RetryAfterPolicy {
+struct RetryAdvicePolicy {
+    policy: ExponentialBackoff,
+    advice: Arc<Mutex<Option<RetryAdvice>>>,
+}
+
+impl RetryPolicy for RetryAdvicePolicy {
     fn should_retry(&self, start: SystemTime, past_retries: u32) -> RetryDecision {
         match self.policy.should_retry(start, past_retries) {
             decision @ RetryDecision::DoNotRetry => decision,
-            decision @ RetryDecision::Retry { .. } => self
-                .retry_after
+            decision @ RetryDecision::Retry { .. } => match self
+                .advice
                 .lock()
-                .expect("Retry-After state poisoned")
+                .expect("Retry advice state poisoned")
                 .take()
-                .map_or(decision, |execute_after| RetryDecision::Retry {
-                    execute_after,
-                }),
+            {
+                Some(RetryAdvice::After(execute_after)) => RetryDecision::Retry { execute_after },
+                // One immediate retry can replace a dropped connection. Repeated failures still
+                // use the configured backoff, and every attempt consumes the same retry budget.
+                Some(RetryAdvice::TransportFailure) if past_retries == 0 => RetryDecision::Retry {
+                    execute_after: SystemTime::now(),
+                },
+                Some(RetryAdvice::TransportFailure) | None => decision,
+            },
         }
     }
 }
 
-struct RetryAfterStrategy {
+struct RetryAdviceStrategy {
     max_delay: Duration,
-    retry_after: Arc<Mutex<Option<SystemTime>>>,
+    advice: Arc<Mutex<Option<RetryAdvice>>>,
 }
 
-impl RetryableStrategy for RetryAfterStrategy {
+impl RetryableStrategy for RetryAdviceStrategy {
     fn handle(&self, response: &reqwest_middleware::Result<Response>) -> Option<Retryable> {
         let retryable = UvRetryableStrategy.handle(response);
-        let execute_after = if retryable == Some(Retryable::Transient) {
-            response.as_ref().ok().and_then(|response| {
-                let now = SystemTime::now();
-                retry_after(response.headers(), now, self.max_delay)
-                    .and_then(|delay| now.checked_add(delay))
-            })
+        let advice = if retryable == Some(Retryable::Transient) {
+            match response {
+                Ok(response) => {
+                    let now = SystemTime::now();
+                    retry_after(response.headers(), now, self.max_delay)
+                        .and_then(|delay| now.checked_add(delay))
+                        .map(RetryAdvice::After)
+                }
+                Err(err) if !has_status_error(err) => Some(RetryAdvice::TransportFailure),
+                Err(_) => None,
+            }
         } else {
             None
         };
-        *self.retry_after.lock().expect("Retry-After state poisoned") = execute_after;
+        *self.advice.lock().expect("Retry advice state poisoned") = advice;
         retryable
+    }
+}
+
+/// Status errors returned by middleware still require the normal server-error backoff.
+fn has_status_error(err: &reqwest_middleware::Error) -> bool {
+    match err {
+        reqwest_middleware::Error::Reqwest(err) => err.status().is_some(),
+        reqwest_middleware::Error::Middleware(err) => err.chain().any(|err| {
+            err.downcast_ref::<reqwest::Error>()
+                .is_some_and(|err| err.status().is_some())
+                || err
+                    .downcast_ref::<WrappedReqwestError>()
+                    .is_some_and(|err| err.status().is_some())
+                || err
+                    .downcast_ref::<reqwest_middleware::Error>()
+                    .is_some_and(has_status_error)
+        }),
     }
 }
 
@@ -552,13 +585,13 @@ mod tests {
     #[test]
     fn retry_after_keeps_the_retry_budget_and_clears_stale_advice() {
         let now = SystemTime::now();
-        let retry_after = Arc::new(Mutex::new(Some(now)));
-        let policy = RetryAfterPolicy {
+        let advice = Arc::new(Mutex::new(Some(RetryAdvice::After(now))));
+        let policy = RetryAdvicePolicy {
             policy: ExponentialBackoff::builder()
                 .jitter(reqwest_retry::Jitter::None)
                 .retry_bounds(Duration::from_secs(2), Duration::from_secs(30))
                 .build_with_max_retries(1),
-            retry_after: retry_after.clone(),
+            advice: advice.clone(),
         };
         assert!(matches!(
             policy.should_retry(now, 1),
@@ -567,10 +600,10 @@ mod tests {
         assert!(
             matches!(policy.should_retry(now, 0), RetryDecision::Retry { execute_after } if execute_after == now)
         );
-        *retry_after.lock().unwrap() = Some(now);
-        let strategy = RetryAfterStrategy {
+        *advice.lock().unwrap() = Some(RetryAdvice::After(now));
+        let strategy = RetryAdviceStrategy {
             max_delay: Duration::from_secs(30),
-            retry_after: retry_after.clone(),
+            advice: advice.clone(),
         };
         let response = http::Response::builder()
             .status(503)
@@ -581,10 +614,163 @@ mod tests {
             strategy.handle(&Ok(response)),
             Some(Retryable::Transient)
         ));
-        assert!(retry_after.lock().unwrap().is_none());
+        assert!(advice.lock().unwrap().is_none());
         assert!(
             matches!(policy.should_retry(now, 0), RetryDecision::Retry { execute_after } if execute_after.duration_since(now).unwrap() >= Duration::from_secs(2))
         );
+    }
+
+    async fn disconnected_request_error() -> Result<reqwest::Error> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await?;
+            stream.read_exact(&mut [0; 1]).await?;
+            stream.shutdown().await?;
+            Ok::<_, io::Error>(())
+        });
+        let error = Client::builder()
+            .no_proxy()
+            .http1_only()
+            .build()?
+            .get(format!("http://{address}/metadata"))
+            .send()
+            .await
+            .unwrap_err();
+        server.await??;
+        Ok(error)
+    }
+
+    #[tokio::test]
+    async fn first_transport_retry_keeps_backoff_and_budget() -> Result<()> {
+        let advice = Arc::new(Mutex::new(None));
+        let policy = RetryAdvicePolicy {
+            policy: ExponentialBackoff::builder()
+                .jitter(reqwest_retry::Jitter::None)
+                .retry_bounds(Duration::from_secs(60), Duration::from_secs(60))
+                .build_with_max_retries(2),
+            advice: advice.clone(),
+        };
+        let strategy = RetryAdviceStrategy {
+            max_delay: Duration::from_secs(60),
+            advice: advice.clone(),
+        };
+        let failure = Err(reqwest_middleware::Error::Reqwest(
+            disconnected_request_error().await?,
+        ));
+        let start = SystemTime::now();
+        assert!(matches!(
+            strategy.handle(&failure),
+            Some(Retryable::Transient)
+        ));
+        assert!(
+            matches!(policy.should_retry(start, 0), RetryDecision::Retry { execute_after } if execute_after.duration_since(start).unwrap() < Duration::from_secs(1))
+        );
+        assert!(advice.lock().unwrap().is_none());
+
+        strategy.handle(&failure);
+        assert!(
+            matches!(policy.should_retry(start, 1), RetryDecision::Retry { execute_after } if execute_after.duration_since(start).unwrap() >= Duration::from_secs(60))
+        );
+        strategy.handle(&failure);
+        assert!(matches!(
+            policy.should_retry(start, 2),
+            RetryDecision::DoNotRetry
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn status_errors_keep_server_backoff() -> Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(path("/unavailable"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let error = Client::new()
+            .get(format!("{}/unavailable", server.uri()))
+            .send()
+            .await?
+            .error_for_status()
+            .unwrap_err();
+        let advice = Arc::new(Mutex::new(None));
+        let strategy = RetryAdviceStrategy {
+            max_delay: Duration::from_secs(60),
+            advice: advice.clone(),
+        };
+        let failure = Err(reqwest_middleware::Error::Reqwest(error));
+        assert!(has_status_error(failure.as_ref().unwrap_err()));
+        assert!(matches!(
+            strategy.handle(&failure),
+            Some(Retryable::Transient)
+        ));
+        assert!(advice.lock().unwrap().is_none());
+        let Err(error) = failure else {
+            unreachable!();
+        };
+        let error = reqwest_middleware::Error::middleware(error);
+        assert!(has_status_error(&error));
+        strategy.handle(&Err(error));
+        assert!(advice.lock().unwrap().is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn first_transport_retry_is_immediate() -> Result<()> {
+        struct DisconnectOnce(Mutex<Option<reqwest::Error>>);
+
+        #[async_trait::async_trait]
+        impl Middleware for DisconnectOnce {
+            async fn handle(
+                &self,
+                request: Request,
+                extensions: &mut Extensions,
+                next: Next<'_>,
+            ) -> reqwest_middleware::Result<Response> {
+                let error = self
+                    .0
+                    .lock()
+                    .expect("Transport error state poisoned")
+                    .take();
+                if let Some(error) = error {
+                    return Err(error.into());
+                }
+                next.run(request, extensions).await
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(path("/metadata"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let client = reqwest_middleware::ClientBuilder::new(Client::new())
+            .with(UvRetryMiddleware::new(
+                ExponentialBackoff::builder()
+                    .jitter(reqwest_retry::Jitter::None)
+                    .retry_bounds(Duration::from_secs(60), Duration::from_secs(60))
+                    .build_with_max_retries(1),
+            ))
+            .with(DisconnectOnce(Mutex::new(Some(
+                disconnected_request_error().await?,
+            ))))
+            .build();
+        let response = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.get(format!("{}/metadata", server.uri())).send(),
+        )
+        .await??;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .extensions()
+                .get::<reqwest_retry::RetryCount>()
+                .map(|count| count.value()),
+            Some(1)
+        );
+        Ok(())
     }
 
     #[tokio::test]
