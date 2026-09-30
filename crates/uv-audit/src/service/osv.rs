@@ -40,6 +40,14 @@ pub enum Error {
     /// An error when constructing the URL for an API request.
     #[error("Invalid API URL: {0}")]
     Url(DisplaySafeUrl, #[source] DisplaySafeUrlError),
+    /// An error when OSV returns a different number of results than queries.
+    #[error(
+        "OSV returned an invalid batch response: query count ({query_count}) does not match result count ({result_count})"
+    )]
+    InvalidBatchResponse {
+        query_count: usize,
+        result_count: usize,
+    },
     /// An error when OSV returns an invalid vulnerability record.
     #[error("OSV returned a malformed vulnerability record for `{id}`")]
     MalformedRecord {
@@ -319,6 +327,13 @@ impl Osv {
                     .json()
                     .await
                     .map_err(reqwest_middleware::Error::Reqwest)?;
+
+                if batch_response.results.len() != pending_batch.len() {
+                    return Err(Error::InvalidBatchResponse {
+                        query_count: pending_batch.len(),
+                        result_count: batch_response.results.len(),
+                    });
+                }
 
                 for ((dep, _), batch_result) in
                     pending_batch.iter().zip(batch_response.results.iter())

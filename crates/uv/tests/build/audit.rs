@@ -189,7 +189,7 @@ async fn audit_missing_batch_result() {
         .mount(&server)
         .await;
 
-    // Reporting a clean audit when OSV omitted a result can hide vulnerabilities; see astral-sh/uv#22102.
+    // A missing result makes the service response incomplete, so the audit must fail closed.
     uv_snapshot!(context.filters(), context
         .audit()
         .arg("--preview-features")
@@ -197,9 +197,9 @@ async fn audit_missing_batch_result() {
         .arg("--frozen")
         .arg("--service-url")
         .arg(server.uri()), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
-    Found no known vulnerabilities and no adverse project statuses in 1 package
+    error: OSV returned an invalid batch response: query count (1) does not match result count (0)
     ");
 }
 
