@@ -24,7 +24,7 @@ use serde::Deserialize;
 use tar_codec::{Archive as _, Member, MemberPayload as _, TarArchive};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, BufReader};
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 use tokio_util::io::ReaderStream;
 use tracing::{Level, debug, enabled, trace, warn};
 use url::Url;
@@ -34,6 +34,7 @@ use uv_cache::{Cache, Refresh};
 use uv_client::{
     BaseClient, ClientBuildError, DEFAULT_MAX_REDIRECTS, MetadataFormat, OwnedArchive,
     ProblemDetails, RegistryClientBuilder, RequestBuilder, RetryParsingError, RetryState,
+    SimpleDetailMetadata,
 };
 use uv_configuration::{KeyringProviderType, TrustedPublishing};
 use uv_distribution_filename::{DistFilename, SourceDistExtension, SourceDistFilename};
@@ -298,12 +299,13 @@ impl PreparedDistribution {
     }
 }
 
-/// Context for using a fresh registry client for check URL requests.
+/// Context for checking a package index during one publishing session.
 struct CheckUrlClient<'a> {
     index_url: IndexUrl,
     registry_client_builder: RegistryClientBuilder<'a>,
     index_capabilities: IndexCapabilities,
     cache: &'a Cache,
+    metadata: Mutex<FxHashMap<String, Option<Arc<SimpleDetailMetadata>>>>,
 }
 
 /// Shared state for preparing, uploading, and finalizing a set of distributions.
@@ -635,6 +637,7 @@ impl<'a> PublishSession<'a> {
             registry_client_builder,
             index_capabilities: IndexCapabilities::default(),
             cache,
+            metadata: Mutex::default(),
         });
         self
     }
@@ -793,7 +796,10 @@ impl<'a> PublishSession<'a> {
                 Err(err) => {
                     match &err {
                         PublishSendError::Status(..) | PublishSendError::StatusNoBody(..) => {
-                            if self.check_existing(&prepared, reporter.clone()).await? {
+                            if self
+                                .check_existing_inner(&prepared, reporter.clone(), true)
+                                .await?
+                            {
                                 // A concurrent upload succeeded, so the right file now exists.
                                 return Ok(UploadOutcome::AlreadyExists);
                             }
@@ -825,55 +831,20 @@ impl<'a> PublishSession<'a> {
         prepared: &PreparedDistribution,
         reporter: Arc<impl Reporter>,
     ) -> Result<bool, PublishError> {
+        self.check_existing_inner(prepared, reporter, false).await
+    }
+
+    async fn check_existing_inner(
+        &self,
+        prepared: &PreparedDistribution,
+        reporter: Arc<impl Reporter>,
+        refresh: bool,
+    ) -> Result<bool, PublishError> {
         let file = &prepared.file;
         let filename = &prepared.filename;
-        let Some(CheckUrlClient {
-            index_url,
-            registry_client_builder,
-            index_capabilities,
-            cache,
-        }) = &self.check_url_client
-        else {
+        let Some(simple_metadata) = self.check_url_metadata(filename, refresh).await? else {
             return Ok(false);
         };
-
-        // Avoid using the PyPI 10min default cache.
-        let cache_refresh = (*cache)
-            .clone()
-            .with_refresh(Refresh::from_args(None, vec![filename.name().clone()]));
-        let registry_client = registry_client_builder
-            .clone()
-            .cache(cache_refresh)
-            .wrap_existing(self.upload_client)?;
-
-        debug!("Checking for {filename} in the registry");
-        let response = match registry_client
-            .simple_detail(
-                filename.name(),
-                Some(index_url.into()),
-                index_capabilities,
-                &self.download_concurrency,
-            )
-            .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                return match err.kind() {
-                    uv_client::ErrorKind::RemotePackageNotFound(_) => {
-                        // The package doesn't exist, so we can't have uploaded it.
-                        warn!(
-                            "Package not found in the registry; skipping upload check for {filename}"
-                        );
-                        Ok(false)
-                    }
-                    _ => Err(PublishError::CheckUrlIndex(err)),
-                };
-            }
-        };
-        let [(_, MetadataFormat::Simple(simple_metadata))] = response.as_slice() else {
-            unreachable!("We queried a single index, we must get a single response");
-        };
-        let simple_metadata = OwnedArchive::deserialize(simple_metadata);
         let Some(metadatum) = simple_metadata
             .iter()
             .find(|metadatum| &metadatum.version == filename.version())
@@ -924,6 +895,71 @@ impl<'a> PublishSession<'a> {
         } else {
             Err(PublishError::MissingHash(Box::new(filename.clone())))
         }
+    }
+
+    /// Read one package snapshot for initial upload checks. A rejected upload must revalidate it,
+    /// since another publisher may have added the distribution after the initial lookup.
+    async fn check_url_metadata(
+        &self,
+        filename: &DistFilename,
+        refresh: bool,
+    ) -> Result<Option<Arc<SimpleDetailMetadata>>, PublishError> {
+        let Some(CheckUrlClient {
+            index_url,
+            registry_client_builder,
+            index_capabilities,
+            cache,
+            metadata,
+        }) = &self.check_url_client
+        else {
+            return Ok(None);
+        };
+
+        let mut metadata = metadata.lock().await;
+        if !refresh && let Some(cached) = metadata.get::<str>(filename.name().as_ref()) {
+            return Ok(cached.clone());
+        }
+
+        // Avoid using the PyPI 10min default cache.
+        let cache_refresh = (*cache)
+            .clone()
+            .with_refresh(Refresh::from_args(None, vec![filename.name().clone()]));
+        let registry_client = registry_client_builder
+            .clone()
+            .cache(cache_refresh)
+            .wrap_existing(self.upload_client)?;
+
+        debug!("Checking for {filename} in the registry");
+        let response = match registry_client
+            .simple_detail(
+                filename.name(),
+                Some(index_url.into()),
+                index_capabilities,
+                &self.download_concurrency,
+            )
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                return match err.kind() {
+                    uv_client::ErrorKind::RemotePackageNotFound(_) => {
+                        // The package doesn't exist, so we can't have uploaded it.
+                        warn!(
+                            "Package not found in the registry; skipping upload check for {filename}"
+                        );
+                        metadata.insert(filename.name().to_string(), None);
+                        Ok(None)
+                    }
+                    _ => Err(PublishError::CheckUrlIndex(err)),
+                };
+            }
+        };
+        let [(_, MetadataFormat::Simple(simple_metadata))] = response.as_slice() else {
+            unreachable!("We queried a single index, we must get a single response");
+        };
+        let simple_metadata = Arc::new(OwnedArchive::deserialize(simple_metadata));
+        metadata.insert(filename.name().to_string(), Some(simple_metadata.clone()));
+        Ok(Some(simple_metadata))
     }
 
     /// Finish the session and request invalidation of any trusted publishing token.
