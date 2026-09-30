@@ -64,6 +64,26 @@ fn generated_lock(package_count: usize, extra_count: usize, distinct: bool) -> S
 
 fn lock_markers(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("lock_markers");
+    for (name, input) in [
+        (
+            "ordinary-small",
+            include_str!("../../../test/packages/built-by-uv/uv.lock"),
+        ),
+        (
+            "ordinary-large",
+            include_str!("../../../scripts/benchmark/uv.lock"),
+        ),
+    ] {
+        let expected: Lock = toml::from_str(input).expect("valid benchmark lock");
+        assert_eq!(
+            Lock::from_toml(input).expect("valid benchmark lock"),
+            expected
+        );
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_with_input(BenchmarkId::new("parse", name), input, |bench, input| {
+            bench.iter(|| Lock::from_toml(black_box(input)).expect("valid benchmark lock"));
+        });
+    }
     for (name, packages, extras, distinct) in [
         ("small-repeated", 128, 2, false),
         ("large-repeated", 128, 32, false),
