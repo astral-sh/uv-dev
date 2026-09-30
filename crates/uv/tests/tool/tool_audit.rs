@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
@@ -36,14 +37,24 @@ struct AuditServer {
     address: SocketAddr,
     connections: Arc<AtomicUsize>,
     requests: Arc<Mutex<Vec<AuditRequest>>>,
+    registry_peak: Arc<AtomicUsize>,
     shutdown: tokio::sync::oneshot::Sender<()>,
     thread: std::thread::JoinHandle<()>,
 }
 
 impl AuditServer {
     fn start(responses: BTreeMap<String, (&'static str, Vec<u8>)>) -> Result<Self> {
+        Self::start_with_delay(responses, Duration::ZERO)
+    }
+
+    fn start_with_delay(
+        responses: BTreeMap<String, (&'static str, Vec<u8>)>,
+        registry_delay: Duration,
+    ) -> Result<Self> {
         let connections = Arc::new(AtomicUsize::new(0));
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let registry_active = Arc::new(AtomicUsize::new(0));
+        let registry_peak = Arc::new(AtomicUsize::new(0));
         let responses = Arc::new(responses);
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         listener.set_nonblocking(true)?;
@@ -52,6 +63,7 @@ impl AuditServer {
         let thread = std::thread::spawn({
             let connections = Arc::clone(&connections);
             let requests = Arc::clone(&requests);
+            let registry_peak = Arc::clone(&registry_peak);
             move || {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -65,6 +77,8 @@ impl AuditServer {
                             let connection = connections.fetch_add(1, Ordering::SeqCst);
                             let requests = Arc::clone(&requests);
                             let responses = Arc::clone(&responses);
+                            let registry_active = Arc::clone(&registry_active);
+                            let registry_peak = Arc::clone(&registry_peak);
                             tokio::spawn(async move {
                                 let _ = hyper_util::server::conn::auto::Builder::new(
                                     TokioExecutor::new(),
@@ -75,6 +89,8 @@ impl AuditServer {
                                         move |request: hyper::Request<hyper::body::Incoming>| {
                                             let requests = Arc::clone(&requests);
                                             let responses = Arc::clone(&responses);
+                                            let registry_active = Arc::clone(&registry_active);
+                                            let registry_peak = Arc::clone(&registry_peak);
                                             async move {
                                                 let method = request.method().clone();
                                                 let path = request.uri().path().to_owned();
@@ -110,6 +126,12 @@ impl AuditServer {
                                                 } else if method == hyper::Method::GET
                                                     && let Some((content_type, body)) = responses.get(&path)
                                                 {
+                                                    if *content_type == "application/vnd.pypi.simple.v1+json" {
+                                                        let active = registry_active.fetch_add(1, Ordering::SeqCst) + 1;
+                                                        registry_peak.fetch_max(active, Ordering::SeqCst);
+                                                        tokio::time::sleep(registry_delay).await;
+                                                        registry_active.fetch_sub(1, Ordering::SeqCst);
+                                                    }
                                                     (200, *content_type, body.clone())
                                                 } else {
                                                     (404, "text/plain", Vec::new())
@@ -145,6 +167,7 @@ impl AuditServer {
             address,
             connections,
             requests,
+            registry_peak,
             shutdown,
             thread,
         })
@@ -571,76 +594,85 @@ fn tool_audit_batches_osv_queries() -> Result<()> {
 
 #[test]
 fn tool_audit_reuses_registry_connections() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
-    let mut responses = BTreeMap::new();
-    for (index, name, status) in [
-        ("first", "audit-tool-a", "active"),
-        ("second", "audit-tool-b", "archived"),
-    ] {
-        let name = PackageName::from_str(name)?;
-        let version = Version::from_str("1.0")?;
-        let (filename, wheel) = generate_wheel(
-            &name,
-            &version,
-            &[],
-            &BTreeMap::new(),
-            None,
-            "py3-none-any",
-            &[name.to_string()],
-        );
-        let metadata =
-            format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n").into_bytes();
-        let simple_index = json!({
-            "meta": { "api-version": "1.1" },
-            "name": name,
-            "project-status": { "status": status },
-            "files": [{
-                "filename": filename,
-                "url": format!("/files/{filename}"),
-                "hashes": { "sha256": hex::encode(Sha256::digest(&wheel)) },
-                "core-metadata": { "sha256": hex::encode(Sha256::digest(&metadata)) },
-                "upload-time": "2024-03-24T00:00:00Z"
-            }]
-        });
-        responses.insert(
-            format!("/{index}/{name}/"),
-            (
-                "application/vnd.pypi.simple.v1+json",
-                simple_index.to_string().into_bytes(),
-            ),
-        );
-        responses.insert(
-            format!("/files/{filename}.metadata"),
-            ("text/plain", metadata),
-        );
-        responses.insert(
-            format!("/files/{filename}"),
-            ("application/octet-stream", wheel),
-        );
-    }
-    let server = AuditServer::start(responses)?;
-    for (index, name) in [("first", "audit-tool-a"), ("second", "audit-tool-b")] {
-        context
-            .tool_install()
-            .arg(name)
-            .arg("--default-index")
-            .arg(format!("http://{}/{index}/", server.address))
-            .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-            .assert()
-            .success();
-    }
-    let initial_connections = server.connections.load(Ordering::SeqCst);
-    server
-        .requests
-        .lock()
-        .expect("request record mutex")
-        .clear();
+    for limit in [1_usize, 2] {
+        let context = uv_test::test_context!("3.12").with_tool_dirs();
+        let mut responses = BTreeMap::new();
+        for (index, name, status) in [
+            ("first", "audit-tool-a", "active"),
+            ("second", "audit-tool-b", "archived"),
+            ("first", "audit-tool-c", "active"),
+        ] {
+            let name = PackageName::from_str(name)?;
+            let version = Version::from_str("1.0")?;
+            let (filename, wheel) = generate_wheel(
+                &name,
+                &version,
+                &[],
+                &BTreeMap::new(),
+                None,
+                "py3-none-any",
+                &[name.to_string()],
+            );
+            let metadata =
+                format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n").into_bytes();
+            let simple_index = json!({
+                "meta": { "api-version": "1.1" },
+                "name": name,
+                "project-status": { "status": status },
+                "files": [{
+                    "filename": filename,
+                    "url": format!("/files/{filename}"),
+                    "hashes": { "sha256": hex::encode(Sha256::digest(&wheel)) },
+                    "core-metadata": { "sha256": hex::encode(Sha256::digest(&metadata)) },
+                    "upload-time": "2024-03-24T00:00:00Z"
+                }]
+            });
+            responses.insert(
+                format!("/{index}/{name}/"),
+                (
+                    "application/vnd.pypi.simple.v1+json",
+                    simple_index.to_string().into_bytes(),
+                ),
+            );
+            responses.insert(
+                format!("/files/{filename}.metadata"),
+                ("text/plain", metadata),
+            );
+            responses.insert(
+                format!("/files/{filename}"),
+                ("application/octet-stream", wheel),
+            );
+        }
+        let server = AuditServer::start_with_delay(responses, Duration::from_millis(100))?;
+        for (index, name) in [
+            ("first", "audit-tool-a"),
+            ("second", "audit-tool-b"),
+            ("first", "audit-tool-c"),
+        ] {
+            context
+                .tool_install()
+                .arg(name)
+                .arg("--default-index")
+                .arg(format!("http://{}/{index}/", server.address))
+                .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+                .assert()
+                .success();
+        }
+        let initial_connections = server.connections.load(Ordering::SeqCst);
+        server.registry_peak.store(0, Ordering::SeqCst);
+        server
+            .requests
+            .lock()
+            .expect("request record mutex")
+            .clear();
 
-    uv_snapshot!(context.filters(), context.tool_audit()
+        insta::allow_duplicates! {
+        uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
         .arg("--service-url")
         .arg(format!("http://{}", server.address))
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
+        .env(EnvVars::UV_CONCURRENT_DOWNLOADS, limit.to_string())
         , @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -655,28 +687,40 @@ fn tool_audit_reuses_registry_connections() -> Result<()> {
     Found no known vulnerabilities and no adverse project statuses in 1 package
     Auditing `audit-tool-b`
     Found no known vulnerabilities and 1 adverse project status in 1 package
+    Auditing `audit-tool-c`
+    Found no known vulnerabilities and no adverse project statuses in 1 package
     ");
+        }
 
-    let (connections, requests) = server.stop();
-    assert_eq!(connections - initial_connections, 2);
-    let registry_requests = requests
-        .iter()
-        .filter(|request| request.path != "/v1/querybatch")
-        .collect::<Vec<_>>();
-    assert_eq!(registry_requests.len(), 2);
-    assert_eq!(registry_requests[0].path, "/first/audit-tool-a/");
-    assert_eq!(registry_requests[1].path, "/second/audit-tool-b/");
-    assert_eq!(
-        registry_requests[0].connection,
-        registry_requests[1].connection
-    );
-    let osv_requests = requests
-        .iter()
-        .filter(|request| request.path == "/v1/querybatch")
-        .collect::<Vec<_>>();
-    assert_eq!(osv_requests.len(), 1);
-    assert_eq!(osv_requests[0].packages, ["audit-tool-a", "audit-tool-b"]);
-    assert_ne!(osv_requests[0].connection, registry_requests[0].connection);
+        let peak = server.registry_peak.load(Ordering::SeqCst);
+        let (connections, requests) = server.stop();
+        assert_eq!(peak, limit);
+        assert_eq!(connections - initial_connections, limit + 1);
+        let registry_requests = requests
+            .iter()
+            .filter(|request| request.path != "/v1/querybatch")
+            .collect::<Vec<_>>();
+        assert_eq!(registry_requests.len(), 3);
+        let first_connections = registry_requests
+            .iter()
+            .filter(|request| request.path.starts_with("/first/"))
+            .map(|request| request.connection)
+            .collect::<Vec<_>>();
+        assert_eq!(first_connections.len(), 2);
+        assert_eq!(first_connections[0] == first_connections[1], limit == 1);
+        assert_eq!(registry_requests[2].path, "/second/audit-tool-b/");
+        assert!(first_connections.contains(&registry_requests[2].connection));
+        let osv_requests = requests
+            .iter()
+            .filter(|request| request.path == "/v1/querybatch")
+            .collect::<Vec<_>>();
+        assert_eq!(osv_requests.len(), 1);
+        assert_eq!(
+            osv_requests[0].packages,
+            ["audit-tool-a", "audit-tool-b", "audit-tool-c"]
+        );
+        assert_ne!(osv_requests[0].connection, registry_requests[0].connection);
+    }
     Ok(())
 }
 
