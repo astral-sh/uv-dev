@@ -171,7 +171,8 @@ a populated cache with a precise commit, a full commit-like reference, or an ups
 These cases do not claim to evict the operating system's filesystem cache.
 
 The revision-history cases retain one cache across one, four, or ten actual Django releases. Run
-`python3 scripts/benchmark/git-runtime.py prepare` to build the pinned Git 2.55 runtime, then use
+`python3 scripts/benchmark/git-runtime.py prepare` with Python 3.12.11 or newer to build the pinned
+Git 2.55 runtime, then use
 `python3 scripts/benchmark/git-runtime.py run -- cargo bench -p uv-bench --bench git_fetch` to run
 the suite. CI carries that runtime in the benchmark artifact and uses it only for `git_fetch`, so
 the runner's system Git cannot silently select an older checkout implementation. The runtime

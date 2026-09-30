@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -132,6 +133,8 @@ def main() -> None:
     args = parser.parse_args()
     directory = args.directory.resolve()
     if args.action == "prepare":
+        if sys.version_info < (3, 12, 11):
+            parser.error("prepare requires Python 3.12.11 or newer")
         if args.jobs < 1:
             parser.error("--jobs must be positive")
         prepare(directory, args.jobs)
