@@ -219,3 +219,12 @@ Run protocol and bottleneck checks with:
 ```sh
 uv run --no-project python scripts/benchmark/network/test_bench.py
 ```
+
+`verify.py --evidence DIR --repository REPO --spec STUDY.json --output RESULT.json`
+checks an archived paired study against exact local source revisions. The study
+specification lists `parent`, `head`, `binary_sha256`, `scope`, `result_globs`, and
+every case's `file`, `pairs`, and `role` (`primary`, `fast`, or `control`). Mark the
+primary qualifying case with `qualifying: true`; use `requires_tree` or
+`required_files` for commands that produce installation trees or output files.
+The verifier recomputes confidence intervals and traffic totals and rejects
+omitted cases. Review the workload and oracle assumptions separately.
