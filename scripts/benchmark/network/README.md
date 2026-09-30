@@ -76,6 +76,9 @@ controls. Its setup commands install each tool with an uncached flat index.
 Repeating the same archive request measures whether name inference can finish
 without consulting that index; the required network bytes for a satisfied local
 requirement are zero. Fresh installation controls still require their artifacts.
+Pass `--build-dependency` to add a separate wheel required by the source backend,
+so installation-plan studies can verify that source builds still resolve their
+build dependencies from the flat index.
 `make_tool_audit_fixtures.py --directory DIR --packages N` creates locked local
 tools with independent OSV queries. Its plain and paginated manifests exercise
 connection reuse across tool audits. The OSV oracle can query the complete known

@@ -22,22 +22,32 @@ spec.loader.exec_module(scheduling)
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
+    parser.add_argument("--build-dependency", action="store_true")
     args = parser.parse_args()
     args.directory.mkdir(parents=True, exist_ok=True)
     name = "uv-bench-filename-tool"
     wheel = scheduling.wheel(args.directory, name, 1, None, console_script=True)
+    build_dependencies = (
+        [scheduling.wheel(args.directory, "uv-bench-build-dependency", 1, None)]
+        if args.build_dependency
+        else []
+    )
+    build_requires = ["uv-bench-build-dependency==1.0"] if args.build_dependency else []
     source = args.directory / "source-project"
     source.mkdir(exist_ok=True)
     files = {
         "pyproject.toml": (
             f'[project]\nname = "{name}"\nversion = "1.0"\n'
-            '[build-system]\nrequires = []\nbuild-backend = "backend"\n'
+            f"[build-system]\nrequires = {json.dumps(build_requires)}\n"
+            'build-backend = "backend"\n'
             'backend-path = ["."]\n'
         ).encode(),
         "PKG-INFO": (f"Metadata-Version: 2.3\nName: {name}\nVersion: 1.0\n").encode(),
         "backend.py": (
-            "import shutil\nfrom pathlib import Path\n\n"
-            "def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):\n"
+            "import shutil\nfrom pathlib import Path\n"
+            + ("import uv_bench_build_dependency\n" if args.build_dependency else "")
+            + "\n"
+            + "def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):\n"
             f"    wheel = Path(__file__).with_name({wheel['filename']!r})\n"
             "    shutil.copyfile(wheel, Path(wheel_directory) / wheel.name)\n"
             "    return wheel.name\n"
@@ -117,7 +127,7 @@ def main() -> None:
             json.dumps(setup, indent=2) + "\n"
         )
     for filename, value in (
-        ("tool-filename-fixtures.json", [wheel, *archives]),
+        ("tool-filename-fixtures.json", [wheel, *archives, *build_dependencies]),
         ("tool-filename-profiles.json", profiles),
         ("tool-filename-targets.json", targets),
     ):
