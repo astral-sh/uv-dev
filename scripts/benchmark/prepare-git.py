@@ -42,8 +42,11 @@ def main() -> None:
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, default=root / ".cache/bench-git")
+    parser.add_argument(
+        "--manifest", type=Path, default=Path(__file__).with_name("git.json")
+    )
     args = parser.parse_args()
-    for fixture in json.loads(Path(__file__).with_name("git.json").read_text()):
+    for fixture in json.loads(args.manifest.read_text()):
         name, commit, reference = (
             fixture["name"],
             fixture["commit"],
@@ -56,6 +59,20 @@ def main() -> None:
         if not (directory / "HEAD").is_file():
             git(directory, "-c", "init.templateDir=", "init", "--bare", "--quiet")
         configure_upload_pack(directory)
+        # Some upstream histories contain known malformed legacy objects. Keep
+        # fsck enabled while exempting only the exact objects in the manifest.
+        fsck_options = []
+        if skipped := fixture.get("fsck-skip", []):
+            if any(not re.fullmatch("[0-9a-f]{40}", item) for item in skipped):
+                raise ValueError(f"Invalid fsck skip list for {name}")
+            skip_list = directory / "info/bench-fsck-skip-list"
+            skip_list.write_text("\n".join(skipped) + "\n")
+            fsck_options = [
+                "-c",
+                f"fetch.fsck.skipList={skip_list.resolve()}",
+                "-c",
+                f"fsck.skipList={skip_list.resolve()}",
+            ]
         try:
             present = git(directory, "rev-parse", "--verify", "--quiet", reference)
         except subprocess.CalledProcessError:
@@ -69,6 +86,7 @@ def main() -> None:
                 # Early Git versions wrote this legacy tree encoding in Flask's history.
                 "-c",
                 "fetch.fsck.zeroPaddedFilemode=ignore",
+                *fsck_options,
                 "fetch",
                 "--quiet",
                 "--no-tags",
@@ -91,13 +109,21 @@ def main() -> None:
             directory,
             "-c",
             "fsck.zeroPaddedFilemode=ignore",
+            *fsck_options,
             "fsck",
             "--no-reflogs",
             "--connectivity-only",
         )
         entries = git(directory, "ls-tree", "-rl", commit).splitlines()
-        sizes = [int(entry.split()[3]) for entry in entries]
-        print(f"{name}: {commit}, {len(entries)} files, {sum(sizes):,} bytes")
+        sizes = [
+            int(entry.split()[3]) for entry in entries if entry.split()[1] == "blob"
+        ]
+        for package in fixture.get("packages", []):
+            subdirectory = Path(package["subdirectory"])
+            if subdirectory.is_absolute() or ".." in subdirectory.parts:
+                raise ValueError(f"Invalid Git package: {package}")
+            git(directory, "cat-file", "-e", f"{commit}:{subdirectory}/pyproject.toml")
+        print(f"{name}: {commit}, {len(sizes)} files, {sum(sizes):,} bytes")
 
 
 if __name__ == "__main__":

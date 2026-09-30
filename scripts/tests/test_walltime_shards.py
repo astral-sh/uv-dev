@@ -66,6 +66,8 @@ SUITES = (
     "tool_list",
     "cached_tool_run",
     "git_fetch",
+    "git_fetch_popular",
+    "git_monorepo",
     "github_metadata",
     "github_revisions",
 )
@@ -165,11 +167,20 @@ class WalltimeShards(unittest.TestCase):
             with self.subTest(names=names), self.assertRaises(ValueError):
                 shards.partition(names)
 
-    def test_git_runtime_is_scoped_to_git_fetch(self):
+    def test_git_runtime_is_scoped_to_git_transport_suites(self):
         root = Path("/benchmark")
         command = ["cargo", "codspeed", "run", "-m", "walltime", "-p", "uv-bench"]
         with patch.object(shards.subprocess, "run") as run:
-            shards.run_suites(root, ["git_fetch", "github_metadata", "uv"])
+            shards.run_suites(
+                root,
+                [
+                    "git_fetch",
+                    "git_fetch_popular",
+                    "git_monorepo",
+                    "github_metadata",
+                    "uv",
+                ],
+            )
         self.assertEqual(
             run.call_args_list,
             [
@@ -182,6 +193,10 @@ class WalltimeShards(unittest.TestCase):
                         *command,
                         "--bench",
                         "git_fetch",
+                        "--bench",
+                        "git_fetch_popular",
+                        "--bench",
+                        "git_monorepo",
                     ],
                     cwd=root,
                     check=True,

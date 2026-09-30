@@ -20,14 +20,22 @@ SUITE_WEIGHTS = {
     "concurrent_environments": 3,
     "download_hashing": 2,
     "git_fetch": 3,
+    "git_fetch_popular": 6,
+    "git_monorepo": 5,
     "github_metadata": 3,
     "local_wheel_cache": 2,
     "lockfile": 3,
     "native_source_install": 2,
     "python_install": 2,
-    "source_build_reuse": 9,
+    "source_build_reuse": 11,
     "source_metadata": 5,
     "uv": 2,
+}
+PINNED_GIT_SUITES = {
+    "git_fetch",
+    "git_fetch_popular",
+    "git_fetch_large",
+    "git_monorepo",
 }
 
 
@@ -80,8 +88,10 @@ def built_suites(root: Path) -> list[str]:
 def run_suites(root: Path, names: list[str]) -> None:
     command = ["cargo", "codspeed", "run", "-m", "walltime", "-p", "uv-bench"]
     # Git fetch measurements need the same modern Git on the build and runner hosts.
-    # Keep the local-transport-only runtime scoped to this suite.
-    if "git_fetch" in names:
+    # Keep the local-transport-only runtime scoped to Git transport suites.
+    selected = [name for name in names if name in PINNED_GIT_SUITES]
+    if selected:
+        arguments = [argument for name in selected for argument in ("--bench", name)]
         subprocess.run(
             [
                 sys.executable,
@@ -89,13 +99,12 @@ def run_suites(root: Path, names: list[str]) -> None:
                 "run",
                 "--",
                 *command,
-                "--bench",
-                "git_fetch",
+                *arguments,
             ],
             cwd=root,
             check=True,
         )
-    remaining = [name for name in names if name != "git_fetch"]
+    remaining = [name for name in names if name not in PINNED_GIT_SUITES]
     if not remaining:
         return
     for name in remaining:

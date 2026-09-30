@@ -329,6 +329,21 @@ path = "benches/git_fetch.rs"
 harness = false
 
 [[bench]]
+name = "git_fetch_popular"
+path = "benches/git_fetch_popular.rs"
+harness = false
+
+[[bench]]
+name = "git_fetch_large"
+path = "benches/git_fetch_large.rs"
+harness = false
+
+[[bench]]
+name = "git_monorepo"
+path = "benches/git_monorepo.rs"
+harness = false
+
+[[bench]]
 name = "github_metadata"
 path = "benches/github_metadata.rs"
 harness = false
