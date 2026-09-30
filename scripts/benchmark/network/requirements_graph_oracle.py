@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import heapq
 import http.client
 import importlib.util
@@ -105,7 +106,9 @@ def main() -> None:
     parser.add_argument("--profile", default="fast")
     parser.add_argument("--root", default="/requirements/prefetch-root.txt")
     parser.add_argument(
-        "--route", choices=["metadata", "requirements"], default="metadata"
+        "--route",
+        choices=["metadata", "requirements", "revalidate"],
+        default="metadata",
     )
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--output", type=Path, required=True)
@@ -117,11 +120,11 @@ def main() -> None:
         parser.error("the oracle requires PEP 658")
     fixtures = bench.Fixtures(args.manifest, args.directory, True)
     filename = "iniconfig-2.1.0-py3-none-any.whl"
-    metadata_paths = (
-        ("/simple/iniconfig/", f"/files/{filename}.metadata")
-        if args.route == "metadata"
-        else ()
-    )
+    metadata_paths = {
+        "metadata": ("/simple/iniconfig/", f"/files/{filename}.metadata"),
+        "requirements": (),
+        "revalidate": ("/simple/iniconfig/",),
+    }[args.route]
     graph = {}
     bodies = {}
     package_paths = set()
@@ -139,9 +142,19 @@ def main() -> None:
         unseen.extend(children)
     if not package_paths:
         raise ValueError("Requirements graph has no pinned package")
-    if metadata_paths:
+    conditional = {}
+    if args.route == "metadata":
         bodies[metadata_paths[0]] = fixtures.simple["iniconfig"]
         bodies[metadata_paths[1]] = fixtures.metadata[filename + ".metadata"]
+    elif args.route == "revalidate":
+        index = fixtures.simple["iniconfig"]
+        sidecar_hash = hashlib.sha256(
+            fixtures.metadata[filename + ".metadata"]
+        ).hexdigest()
+        if sidecar_hash.encode() not in index:
+            raise ValueError("Index does not identify the cached metadata sidecar")
+        conditional[metadata_paths[0]] = '"' + hashlib.sha256(index).hexdigest() + '"'
+        bodies[metadata_paths[0]] = b""
     bounds = graph_bounds(
         args.root,
         graph,
@@ -168,10 +181,21 @@ def main() -> None:
                 connections.append(local.connection)
         connection = local.connection
         for attempt in range(4):
-            connection.request("GET", path)
+            headers = (
+                {"If-None-Match": conditional[path]} if path in conditional else {}
+            )
+            connection.request("GET", path, headers=headers)
             response = connection.getresponse()
             body = response.read()
-            if response.status == 200 and body == bodies[path]:
+            expected_status = 304 if path in conditional else 200
+            if (
+                response.status == expected_status
+                and body == bodies[path]
+                and (
+                    path not in conditional
+                    or response.getheader("ETag") == conditional[path]
+                )
+            ):
                 return body
             if attempt == 3 or response.status not in {408, 429, 500, 502, 503, 504}:
                 raise ValueError(f"Oracle response differs: {path}")
@@ -228,7 +252,7 @@ def main() -> None:
         "events": server.events,
         "retry_scope": "Transient HTTP responses are retried up to three times per URL without oracle backoff. The optimistic floor excludes retries.",
         "bound_scope": "All unique include bodies and the selected route's metadata are required. The bound combines shortest discovery paths, the download limit, and body serialization. It permits metadata lookup to overlap remaining includes and excludes connection startup, headers, parsing, and CPU work.",
-        "scope": "Discover and fetch remote includes at the recorded concurrency, reusing one HTTP/1.1 connection per worker. The metadata route then fetches the known package's index and metadata; the requirements route assumes those responses are already cached. This is a realizable retrieval strategy; resolution is excluded.",
+        "scope": "Discover and fetch remote includes at the recorded concurrency, reusing one HTTP/1.1 connection per worker. The metadata route then fetches the known package's index and metadata. The requirements route assumes those responses are fresh in cache. The revalidate route conditionally validates the unchanged index, whose strong PEP 658 hash identifies the cached sidecar. This is a realizable retrieval strategy; resolution is excluded.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(data, indent=2) + "\n")

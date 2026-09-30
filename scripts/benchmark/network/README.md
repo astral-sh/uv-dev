@@ -93,7 +93,8 @@ each unique file with at most `N` requests in flight. It then reads the pinned
 package's index and metadata. Its optimistic bound also permits those metadata
 requests to overlap remaining includes, so the measured oracle and the bound
 describe distinct, explicit assumptions. Use `--route requirements` for a warm
-cache whose selected package metadata is already available.
+cache whose selected package metadata is already available, or `--route revalidate`
+to conditionally validate an unchanged index that identifies the cached sidecar.
 
 For commands that require an installed environment or project files, pass
 `--setup-commands PATH` with a JSON array of uv argument arrays. Those commands
