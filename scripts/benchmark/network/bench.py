@@ -534,7 +534,7 @@ def run_one(
                 )
                 server.reset()
             if args.cache_mode == "refresh":
-                command.insert(1, "--refresh")
+                command.append("--refresh")
             start = time.perf_counter()
             result = subprocess.run(
                 command, env=env, capture_output=True, timeout=args.timeout, check=False

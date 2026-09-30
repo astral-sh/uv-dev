@@ -7,6 +7,7 @@ import hashlib
 import http.client
 import importlib.util
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -109,6 +110,28 @@ class ReplayTests(unittest.TestCase):
         with patch.dict(os.environ, {"UV_BENCH_NETEM": '{"rtt_ms":200,"rate_mbit":1}'}):
             self.assertEqual(bench.network_floor({}, 125000, 2), 1)
             self.assertEqual(bench.network_floor({"latency_ms": 100}, 1, 2), 0.6)
+
+    def test_refresh_follows_subcommand(self) -> None:
+        args = SimpleNamespace(
+            work_dir=Path(self.directory.name),
+            requirement=["example==1"],
+            python="3.12",
+            command=["pip", "compile", "{work}/requirements.in"],
+            cache_mode="refresh",
+            timeout=10,
+        )
+        completed = subprocess.CompletedProcess([], 0, b"example==1\n", b"")
+        commands = []
+
+        def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            commands.append(command.copy())
+            return completed
+
+        with patch.object(bench.subprocess, "run", side_effect=run):
+            bench.run_one(Path("uv"), self.fixtures, {}, args)
+        warm_command, timed_command = commands
+        self.assertNotIn("--refresh", warm_command)
+        self.assertEqual(timed_command, [*warm_command, "--refresh"])
 
 
 if __name__ == "__main__":
