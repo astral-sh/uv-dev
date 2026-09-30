@@ -542,7 +542,9 @@ impl Osv {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::str::FromStr;
+    use std::time::Duration;
 
     use serde_json::json;
     use uv_cache::Cache;
@@ -566,6 +568,23 @@ mod tests {
                 .build()
                 .expect("Failed to build test client"),
         )
+    }
+
+    async fn wait_for_requests(server: &MockServer, count: usize, timeout: Duration) {
+        tokio::time::timeout(timeout, async {
+            loop {
+                let requests = server
+                    .received_requests()
+                    .await
+                    .expect("requests should be recorded");
+                if requests.len() >= count {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("expected requests should arrive");
     }
 
     #[test]
@@ -760,6 +779,90 @@ mod tests {
             batch_sizes,
             [1, 1, OSV_QUERY_BATCH_SIZE, OSV_QUERY_BATCH_SIZE]
         );
+    }
+
+    /// Independent OSV batches share the download limit and refill a completed request slot.
+    #[tokio::test]
+    async fn test_query_identifiers_refills_download_slots() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/querybatch"))
+            .respond_with(|request: &Request| {
+                let body = serde_json::from_slice::<serde_json::Value>(&request.body)
+                    .expect("request body should be valid JSON");
+                let queries = body
+                    .get("queries")
+                    .and_then(serde_json::Value::as_array)
+                    .expect("request body should contain a query array");
+                let first = queries[0]["package"]["name"]
+                    .as_str()
+                    .expect("query should contain a package name");
+                let delay = match first {
+                    "package-0" => Duration::from_secs(3),
+                    "package-1000" => Duration::from_millis(100),
+                    _ => Duration::ZERO,
+                };
+                ResponseTemplate::new(200)
+                    .set_delay(delay)
+                    .set_body_json(json!({
+                        "results": vec![json!({ "vulns": [] }); queries.len()]
+                    }))
+            })
+            .mount(&server)
+            .await;
+
+        let concurrency = Concurrency::new(2, 1, 1, 1);
+        let reserved = concurrency
+            .downloads_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("download semaphore should be open");
+        let osv = Osv::new(
+            test_client(),
+            Some(SafeUrl::parse(&server.uri()).expect("server URL should be valid")),
+            concurrency,
+            Cache::temp().expect("temporary cache should be available"),
+        );
+        let query = tokio::spawn(async move {
+            let dependencies = (0..=2 * OSV_QUERY_BATCH_SIZE)
+                .map(|index| {
+                    Dependency::new(
+                        PackageName::from_str(&format!("package-{index}"))
+                            .expect("package name should be valid"),
+                        Version::from_str("1.0").expect("version should be valid"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let identifiers = osv
+                .query_identifiers(&dependencies, Filter::All)
+                .await
+                .expect("query should succeed");
+            assert_eq!(
+                identifiers.keys().copied().collect::<Vec<_>>(),
+                dependencies.iter().collect::<Vec<_>>()
+            );
+            assert!(identifiers.values().all(HashSet::is_empty));
+        });
+
+        wait_for_requests(&server, 1, Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("requests should be recorded")
+                .len(),
+            1
+        );
+        drop(reserved);
+        wait_for_requests(&server, 2, Duration::from_secs(3)).await;
+        wait_for_requests(&server, 3, Duration::from_secs(1)).await;
+        tokio::time::timeout(Duration::from_secs(5), query)
+            .await
+            .expect("query should complete")
+            .expect("query task should succeed");
     }
 
     /// Ensure that `query_batch` returns the correct findings for a batch of dependencies
