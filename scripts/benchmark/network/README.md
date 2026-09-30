@@ -141,6 +141,9 @@ advantage includes dependency-discovery work that a cold resolver may need to do
 and `--flat-package` names. It fetches the shared flat index once and the remaining
 Simple API pages independently, then verifies the selected metadata sidecars. Its
 lower bound accounts for different response delays along each index-to-metadata path.
+`find_links_oracle.py` accepts repeated `--index-path` arguments, fetches every
+configured flat index concurrently, and then verifies one selected metadata sidecar.
+It reports both a known-package minimum and an all-index transfer reference.
 
 Run protocol and bottleneck checks with:
 
