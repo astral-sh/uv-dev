@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use futures::{FutureExt, StreamExt};
 use reqwest::Response;
+use tokio::sync::Semaphore;
 use tracing::{Instrument, debug, info_span, warn};
 use url::Url;
 
@@ -142,9 +143,15 @@ impl<'a> FlatIndexClient<'a> {
     pub async fn fetch_all(
         &self,
         indexes: impl Iterator<Item = &IndexUrl>,
+        download_concurrency: &Semaphore,
     ) -> Result<FlatIndexEntries, FlatIndexError> {
+        let local_concurrency = Semaphore::new(16);
         let mut fetches = futures::stream::iter(indexes)
             .map(async |index| {
+                let _permit = match index {
+                    IndexUrl::Path(_) => local_concurrency.acquire().await,
+                    IndexUrl::Pypi(_) | IndexUrl::Url(_) => download_concurrency.acquire().await,
+                };
                 let entries = self.fetch_index(index).await?;
                 if entries.is_empty() {
                     warn!("No packages found in `--find-links` entry: {}", index);
@@ -158,9 +165,9 @@ impl<'a> FlatIndexClient<'a> {
                 }
                 Ok::<FlatIndexEntries, FlatIndexError>(entries)
             })
-            // Results are sorted below. Consume completed fetches immediately so one slow
-            // index does not prevent later locations from using an available slot.
-            .buffer_unordered(16);
+            // The semaphores bound active reads. Consume completed fetches immediately so
+            // slow indexes cannot keep later locations from using an available permit.
+            .buffer_unordered(usize::MAX);
 
         let mut results = FlatIndexEntries::default();
         while let Some(entries) = fetches.next().await.transpose()? {
@@ -403,24 +410,25 @@ impl<'a> FlatIndexClient<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use fs_err::File;
+    use std::convert::Infallible;
     use std::io::Write;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use fs_err::File;
+    use http_body_util::Full;
+    use hyper::body::Bytes;
+    use hyper::service::service_fn;
+    use hyper_util::rt::TokioIo;
     use tempfile::tempdir;
+    use tokio::net::TcpListener;
+    use tokio::sync::{Barrier, Notify};
+
+    use super::*;
 
     #[tokio::test]
     async fn completed_fetches_start_later_indexes() -> anyhow::Result<()> {
-        use std::convert::Infallible;
-        use std::sync::Arc;
-        use std::time::Duration;
-
-        use http_body_util::Full;
-        use hyper::body::Bytes;
-        use hyper::service::service_fn;
-        use hyper_util::rt::TokioIo;
-        use tokio::net::TcpListener;
-        use tokio::sync::Notify;
-
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let last_started = Arc::new(Notify::new());
@@ -456,8 +464,12 @@ mod tests {
         let cache = Cache::temp()?.init().await?;
         let client = CachedClient::new(crate::BaseClientBuilder::default().build()?);
         let flat = FlatIndexClient::new(&client, Connectivity::Online, &cache);
-        let result =
-            tokio::time::timeout(Duration::from_secs(2), flat.fetch_all(indexes.iter())).await;
+        let semaphore = Semaphore::new(16);
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            flat.fetch_all(indexes.iter(), &semaphore),
+        )
+        .await;
         server.abort();
         let entries = result??;
         assert_eq!(entries.entries.len(), 17);
@@ -468,6 +480,106 @@ mod tests {
                 .then(pair[0].index.cmp(&pair[1].index))
                 .is_le()
         }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fetch_all_uses_the_shared_download_limit() -> anyhow::Result<()> {
+        for limit in [1, 2, 9, 16, 17, 50] {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let expected_parallelism = limit.min(34);
+            let barrier = Arc::new(Barrier::new(expected_parallelism));
+            let started = Arc::new(AtomicUsize::new(0));
+            let active = Arc::new(AtomicUsize::new(0));
+            let peak = Arc::new(AtomicUsize::new(0));
+            let server_started = Arc::clone(&started);
+            let server_peak = Arc::clone(&peak);
+            let server = tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    let barrier = Arc::clone(&barrier);
+                    let started = Arc::clone(&server_started);
+                    let active = Arc::clone(&active);
+                    let peak = Arc::clone(&server_peak);
+                    tokio::spawn(async move {
+                        let service =
+                            service_fn(move |_: hyper::Request<hyper::body::Incoming>| {
+                                let barrier = Arc::clone(&barrier);
+                                let started = Arc::clone(&started);
+                                let active = Arc::clone(&active);
+                                let peak = Arc::clone(&peak);
+                                async move {
+                                    let concurrent = active.fetch_add(1, Ordering::SeqCst) + 1;
+                                    peak.fetch_max(concurrent, Ordering::SeqCst);
+                                    if started.fetch_add(1, Ordering::SeqCst) < expected_parallelism
+                                    {
+                                        barrier.wait().await;
+                                    }
+                                    active.fetch_sub(1, Ordering::SeqCst);
+                                    Ok::<_, Infallible>(hyper::Response::new(Full::new(
+                                        Bytes::from_static(
+                                            b"<a href='example-1.0-py3-none-any.whl'>example</a>",
+                                        ),
+                                    )))
+                                }
+                            });
+                        hyper::server::conn::http1::Builder::new()
+                            .serve_connection(TokioIo::new(stream), service)
+                            .await
+                    });
+                }
+            });
+            let indexes = (0..34)
+                .map(|index| IndexUrl::parse(&format!("http://{address}/{index}"), None))
+                .collect::<Result<Vec<_>, _>>()?;
+            let cache = Cache::temp()?.init().await?;
+            let client = CachedClient::new(crate::BaseClientBuilder::default().retries(0).build()?);
+            let flat = FlatIndexClient::new(&client, Connectivity::Online, &cache);
+            let semaphore = Semaphore::new(limit);
+            let result = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::try_join!(
+                    flat.fetch_all(indexes[..17].iter(), &semaphore),
+                    flat.fetch_all(indexes[17..].iter(), &semaphore),
+                )
+            })
+            .await;
+            server.abort();
+            let (first, second) = result??;
+            for (result, expected) in [(first, &indexes[..17]), (second, &indexes[17..])] {
+                let mut expected = expected.to_vec();
+                expected.sort();
+                assert_eq!(
+                    result
+                        .entries
+                        .into_iter()
+                        .map(|entry| entry.index)
+                        .collect::<Vec<_>>(),
+                    expected,
+                );
+            }
+            assert_eq!(started.load(Ordering::SeqCst), 34);
+            assert_eq!(peak.load(Ordering::SeqCst), expected_parallelism);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_indexes_do_not_need_a_download_permit() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let filename = "example-1.0-py3-none-any.whl";
+        File::create(directory.path().join(filename))?;
+        let indexes = [IndexUrl::parse(&directory.path().to_string_lossy(), None)?];
+        let cache = Cache::temp()?.init().await?;
+        let client = CachedClient::new(crate::BaseClientBuilder::default().build()?);
+        let flat = FlatIndexClient::new(&client, Connectivity::Online, &cache);
+        let semaphore = Semaphore::new(0);
+        let entries = tokio::time::timeout(
+            Duration::from_secs(2),
+            flat.fetch_all(indexes.iter(), &semaphore),
+        )
+        .await??;
+        assert_eq!(entries.entries.len(), 1);
+        assert_eq!(entries.entries[0].filename.to_string(), filename);
         Ok(())
     }
 

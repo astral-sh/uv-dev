@@ -486,7 +486,13 @@ pub(crate) async fn pip_compile(
     let build_options = build_options.combine(no_binary, no_build);
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;
+    let flat_index = FlatIndex::load(
+        &client,
+        &cache,
+        &index_locations,
+        &concurrency.downloads_semaphore,
+    )
+    .await?;
 
     // Determine whether to enable build isolation.
     let environment;

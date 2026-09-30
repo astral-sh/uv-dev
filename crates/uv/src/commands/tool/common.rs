@@ -476,7 +476,13 @@ impl ToolLock {
             HashCheckingMode::Verify,
         )?;
 
-        let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+        let flat_index = FlatIndex::load(
+            &client,
+            cache,
+            index_locations,
+            &concurrency.downloads_semaphore,
+        )
+        .await?;
 
         let extra_build_requires =
             LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())

@@ -896,7 +896,13 @@ async fn do_lock(
     let groups = BTreeMap::new();
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    let flat_index = FlatIndex::load(
+        &client,
+        cache,
+        index_locations,
+        &concurrency.downloads_semaphore,
+    )
+    .await?;
 
     // Lower the extra build dependencies.
     let extra_build_requires = match &target {
