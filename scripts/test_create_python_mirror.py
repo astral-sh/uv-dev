@@ -29,6 +29,7 @@ from types import ModuleType
 from unittest.mock import patch
 
 import httpx
+from git import Actor, GitCommandError, Repo
 
 
 def load_mirror(path: Path) -> ModuleType:
@@ -231,6 +232,81 @@ class PythonMirrorArgumentsTest(unittest.TestCase):
         self.assertIn("invalid int value", error.getvalue())
 
 
+class PythonMirrorHistoryTest(unittest.TestCase):
+    def setUp(self):
+        self.directory = TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.repository = Repo.init(self.root)
+        self.addCleanup(self.repository.close)
+        self.versions_file = (
+            self.root / "crates" / "uv-python" / "download-metadata.json"
+        )
+        self.versions_file.parent.mkdir(parents=True)
+        self.relative_path = str(self.versions_file.relative_to(self.root))
+        self.actor = Actor("Python mirror test", "mirror@example.com")
+
+    def commit(self, contents: str):
+        self.versions_file.write_text(contents)
+        self.repository.index.add([self.relative_path])
+        return self.repository.index.commit(
+            "Update Python metadata", author=self.actor, committer=self.actor
+        )
+
+    def collect(self):
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(MIRROR, "REPO_ROOT", self.root))
+            stack.enter_context(
+                patch.object(MIRROR, "VERSIONS_FILE", self.versions_file)
+            )
+            return MIRROR.collect_metadata_from_git_history()
+
+    def test_complete_history_returns_every_revision(self):
+        earlier = {"url": URL, "sha256": None}
+        current = {
+            "url": URL.replace("python.tar.gz", "current.tar.gz"),
+            "sha256": None,
+        }
+        self.commit(json.dumps({"python": earlier}))
+        self.commit(json.dumps({"python": current}))
+        self.assertEqual(self.collect(), [current, earlier])
+
+    def test_deleted_metadata_revision_is_skipped(self):
+        earlier = {"url": URL, "sha256": None}
+        self.commit(json.dumps({"python": earlier}))
+        self.repository.index.remove([self.relative_path], working_tree=True)
+        self.repository.index.commit(
+            "Remove Python metadata", author=self.actor, committer=self.actor
+        )
+        self.assertEqual(self.collect(), [earlier])
+
+    def test_malformed_metadata_does_not_return_partial_history(self):
+        self.commit(json.dumps({"python": {"url": URL, "sha256": None}}))
+        malformed = self.commit("{invalid JSON")
+        self.commit(json.dumps({"python": {"url": URL, "sha256": None}}))
+        with self.assertRaisesRegex(ValueError, malformed.hexsha):
+            self.collect()
+
+    def test_interrupted_git_history_does_not_return_partial_metadata(self):
+        commit = self.commit(json.dumps({"python": {"url": URL, "sha256": None}}))
+
+        def interrupted():
+            yield commit
+            raise GitCommandError("git log", 128, stderr="history read failed")
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(MIRROR, "Repo", return_value=self.repository)
+            )
+            stack.enter_context(
+                patch.object(
+                    self.repository, "iter_commits", return_value=interrupted()
+                )
+            )
+            with self.assertRaises(GitCommandError):
+                self.collect()
+
+
 class PythonMirrorCliTest(unittest.TestCase):
     def setUp(self):
         self.directory = TemporaryDirectory()
@@ -239,7 +315,12 @@ class PythonMirrorCliTest(unittest.TestCase):
         self.target = self.root / "mirror"
         self.requests = []
 
-    def run_cli(self, responses: dict[str, int], client_error: OSError | None = None):
+    def run_cli(
+        self,
+        responses: dict[str, int],
+        client_error: OSError | None = None,
+        history_error: GitCommandError | None = None,
+    ):
         original_open = builtins.open
         original_client = httpx.AsyncClient
         metadata = json.dumps({url: {"url": url, "sha256": None} for url in responses})
@@ -265,11 +346,15 @@ class PythonMirrorCliTest(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(patch.object(builtins, "open", open_metadata))
             stack.enter_context(patch.object(httpx, "AsyncClient", client))
+            arguments = [str(MIRROR.__file__), "--target", str(self.target)]
+            if history_error is not None:
+                stack.enter_context(patch("git.Repo", side_effect=history_error))
+                arguments.append("--from-all-history")
             stack.enter_context(
                 patch.object(
                     sys,
                     "argv",
-                    [str(MIRROR.__file__), "--target", str(self.target)],
+                    arguments,
                 )
             )
             stack.enter_context(redirect_stdout(output))
@@ -314,6 +399,14 @@ class PythonMirrorCliTest(unittest.TestCase):
     def test_empty_selection_exits_zero(self):
         code, output = self.run_cli({})
         self.assertEqual(code, 0)
+        self.assertEqual(self.requests, [])
+        self.assertEqual(output, "")
+
+    def test_history_error_exits_nonzero_before_downloads(self):
+        code, output = self.run_cli(
+            {}, history_error=GitCommandError("git log", 128, stderr="history failed")
+        )
+        self.assertEqual(code, 1)
         self.assertEqual(self.requests, [])
         self.assertEqual(output, "")
 
