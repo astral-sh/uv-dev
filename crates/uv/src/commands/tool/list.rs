@@ -8,10 +8,10 @@ use rustc_hash::FxHashMap;
 
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
-use uv_client::{BaseClient, BaseClientBuilder, RegistryClientBuilder};
-use uv_configuration::Concurrency;
+use uv_client::{BaseClientBuilder, RegistryClient, RegistryClientBuilder};
+use uv_configuration::{Concurrency, IndexStrategy, KeyringProviderType};
 use uv_distribution_filename::DistFilename;
-use uv_distribution_types::{IndexCapabilities, RequiresPython};
+use uv_distribution_types::{IndexCapabilities, IndexLocations, RequiresPython};
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep508::MarkerEnvironment;
@@ -26,6 +26,21 @@ use crate::commands::pip::latest::LatestClient;
 use crate::commands::reporters::LatestVersionReporter;
 use crate::printer::Printer;
 use crate::settings::ResolverInstallerSettings;
+
+struct ToolRegistryClient<'a> {
+    markers: &'a MarkerEnvironment,
+    platform: &'a Platform,
+    index_locations: IndexLocations,
+    index_strategy: IndexStrategy,
+    keyring_provider: KeyringProviderType,
+    client: RegistryClient,
+}
+
+impl ToolRegistryClient<'_> {
+    fn matches_interpreter(&self, markers: &MarkerEnvironment, platform: &Platform) -> bool {
+        self.markers == markers && self.platform == platform
+    }
+}
 
 /// List installed tools.
 #[expect(clippy::fn_params_excessive_bools)]
@@ -123,10 +138,10 @@ pub(crate) async fn list(
 
         let reporter = LatestVersionReporter::from(printer).with_length(valid_tools.len() as u64);
 
-        // Connection pools can be shared between tools with the same interpreter metadata. The
-        // user agent belongs to the underlying HTTP client, while each tool's index and keyring
-        // settings belong to its middleware.
-        let mut clients: Vec<(&MarkerEnvironment, &Platform, BaseClient)> = Vec::new();
+        // Matching registry clients share in-memory index responses. Tools with different index
+        // or keyring settings can still share an HTTP connection pool when their interpreter
+        // metadata, which is included in the user agent, matches.
+        let mut clients: Vec<ToolRegistryClient<'_>> = Vec::new();
 
         // Fetch the latest version for each tool.
         let mut fetches = futures::stream::iter(&valid_tools)
@@ -149,18 +164,30 @@ pub(crate) async fn list(
                 .index_strategy(settings.resolver.index_strategy)
                 .markers(interpreter.markers())
                 .platform(interpreter.platform());
-                let client = if let Some((_, _, client)) =
-                    clients.iter().find(|(markers, platform, _)| {
-                        *markers == interpreter.markers() && *platform == interpreter.platform()
-                    }) {
-                    builder.wrap_existing(client)
+                let client = if let Some(client) = clients.iter().find(|client| {
+                    client.matches_interpreter(interpreter.markers(), interpreter.platform())
+                        && client.index_locations == settings.resolver.index_locations
+                        && client.index_strategy == settings.resolver.index_strategy
+                        && client.keyring_provider == settings.resolver.keyring_provider
+                }) {
+                    Ok(client.client.clone())
                 } else {
-                    builder.build().inspect(|client| {
-                        clients.push((
-                            interpreter.markers(),
-                            interpreter.platform(),
-                            client.cached_client().uncached().clone(),
-                        ));
+                    let client = if let Some(client) = clients.iter().find(|client| {
+                        client.matches_interpreter(interpreter.markers(), interpreter.platform())
+                    }) {
+                        builder.wrap_existing(client.client.cached_client().uncached())
+                    } else {
+                        builder.build()
+                    };
+                    client.inspect(|client| {
+                        clients.push(ToolRegistryClient {
+                            markers: interpreter.markers(),
+                            platform: interpreter.platform(),
+                            index_locations: settings.resolver.index_locations.clone(),
+                            index_strategy: settings.resolver.index_strategy,
+                            keyring_provider: settings.resolver.keyring_provider,
+                            client: client.clone(),
+                        });
                     })
                 };
 
