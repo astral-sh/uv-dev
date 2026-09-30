@@ -8,6 +8,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::osv::mock_clean_batch;
 use uv_test::{TestContext, uv_snapshot};
 
 fn install_tool(context: &TestContext, name: &str, locked: bool) {
@@ -426,11 +427,10 @@ async fn tool_audit_shared_dependencies() {
     install_tool(&context, "basic-app", true);
 
     let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{ "vulns": [] }, { "vulns": [] }]
-        })))
+    mock_clean_batch(&[("basic-app", "0.1.0")])
+        .mount(&server)
+        .await;
+    mock_clean_batch(&[("basic-app", "0.1.0"), ("simple-launcher", "0.1.0")])
         .mount(&server)
         .await;
 
