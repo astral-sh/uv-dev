@@ -156,6 +156,19 @@ It reports both a known-package minimum and an all-index transfer reference.
 verifies the received archive bytes, and reports its compressed-byte lower bound.
 With ranges disabled, it reads the necessary archive prefix instead.
 
+For Git fetch scheduling, `make_git_fixtures.py --directory PATH --packages 8`
+creates a deterministic bare monorepo, a hash-pinned bundle, and a project template
+that depends on eight subdirectories at the same branch. Pass its
+`git-fixtures.json` to `--manifest`, its `git` directory to `run --git-root`, and
+`git-project.toml` to `--project-template`. The replay delegates read-only smart
+HTTP requests to `git http-backend`; its trace includes protocol headers, request
+body hashes and sizes, response bytes, and timings. Result files also record the
+served refs and Git version. Use `git_oracle.py` with the same fixture directory,
+profiles, and work directory for a single verified branch fetch. Its time and
+traffic are a realizable reference. The optimistic cold network floor assumes two
+dependent responses and gives no byte minimum, since negotiated Git pack contents
+and compression can differ.
+
 Run protocol and bottleneck checks with:
 
 ```sh

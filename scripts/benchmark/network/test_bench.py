@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import socket
 import subprocess
 import tarfile
@@ -56,8 +57,8 @@ class ReplayTests(unittest.TestCase):
             thread.join()
         self.directory.cleanup()
 
-    def server(self, profile: dict) -> Server:
-        server = Server(self.fixtures, profile)
+    def server(self, profile: dict, *, git_root: Path | None = None) -> Server:
+        server = Server(self.fixtures, profile, git_root=git_root)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.servers.append((server, thread))
@@ -183,6 +184,52 @@ class ReplayTests(unittest.TestCase):
         with urllib.request.urlopen(server.url + "/flat/one") as response:
             self.assertEqual(response.headers["Content-Type"], "text/html")
             self.assertEqual(response.read(), self.fixtures.flat)
+
+    @unittest.skipUnless(shutil.which("git"), "Git unavailable")
+    def test_smart_git_http_replay(self) -> None:
+        root = Path(self.directory.name)
+        repository = root / "example.git"
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("GIT_")
+        }
+        env.update(
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_AUTHOR_NAME="uv test",
+            GIT_AUTHOR_EMAIL="uv-test@example.com",
+            GIT_COMMITTER_NAME="uv test",
+            GIT_COMMITTER_EMAIL="uv-test@example.com",
+        )
+
+        def git(*args: str, input: bytes | None = None) -> bytes:
+            return subprocess.check_output(["git", *args], input=input, env=env)
+
+        git("init", "--bare", "--initial-branch=main", str(repository))
+        tree = git("--git-dir", str(repository), "mktree", input=b"").strip().decode()
+        commit = (
+            git("--git-dir", str(repository), "commit-tree", tree, input=b"fixture\n")
+            .strip()
+            .decode()
+        )
+        git("--git-dir", str(repository), "update-ref", "refs/heads/main", commit)
+        server = self.server({}, git_root=root)
+        checkout = root / "checkout"
+        git("clone", "--quiet", server.url + "/git/example.git", str(checkout))
+        self.assertEqual(
+            git("-C", str(checkout), "rev-parse", "HEAD").decode().strip(), commit
+        )
+        server.wait_idle()
+        self.assertTrue(any(event["method"] == "POST" for event in server.events))
+        self.assertTrue(all(event["status"] == 200 for event in server.events))
+        self.assertTrue(any(event["request_bytes"] > 0 for event in server.events))
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            urllib.request.urlopen(
+                server.url + "/git/example.git/info/refs?service=git-receive-pack"
+            )
+        self.assertEqual(raised.exception.code, 404)
+        raised.exception.close()
 
     def test_simple_index_alias_keeps_original_request_path(self) -> None:
         self.fixtures.simple["example"] = b'{"name":"example","files":[]}'
@@ -317,6 +364,7 @@ class ReplayTests(unittest.TestCase):
             timeout=10,
             verify_tree=None,
             http2_proxy=None,
+            git_root=None,
             templates={},
             setup_commands=[],
             env={},
@@ -346,6 +394,7 @@ class ReplayTests(unittest.TestCase):
             timeout=10,
             verify_tree=None,
             http2_proxy=None,
+            git_root=None,
             templates={
                 "uv.toml": 'sources = { example = { index = "fixture" } }\n',
                 "pyproject.toml": '[project]\nname = "fixture"\n',

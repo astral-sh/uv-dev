@@ -243,13 +243,19 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(
-        self, fixtures: Fixtures, profile: dict, socket_path: Path | None = None
+        self,
+        fixtures: Fixtures,
+        profile: dict,
+        socket_path: Path | None = None,
+        *,
+        git_root: Path | None = None,
     ) -> None:
         self.public_url: str | None = None
         if socket_path is not None:
             self.address_family = socket.AF_UNIX
         super().__init__(str(socket_path) if socket_path else ("127.0.0.1", 0), Handler)
         self.fixtures = fixtures
+        self.git_root = git_root.resolve() if git_root else None
         self.profile = profile
         self.limiter = Limiter(profile.get("bytes_per_second", 0))
         self.lock = threading.Lock()
@@ -334,6 +340,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         self.respond(head=False)
 
+    def do_POST(self) -> None:
+        if self.server.git_root and urlsplit(self.path).path.startswith("/git/"):
+            self.respond(head=False)
+        else:
+            self.send_error(405)
+
     def respond(self, *, head: bool) -> None:
         path = unquote(urlsplit(self.path).path)
         event = self.server.begin(self.command, path)
@@ -348,6 +360,9 @@ class Handler(BaseHTTPRequestHandler):
         )
         time.sleep(max(0, latency + jitter) / 1000)
         try:
+            if self.server.git_root and path.startswith("/git/"):
+                self.respond_git(path, event, head=head)
+                return
             route = profile.get("path_aliases", {}).get(path, path)
             parts = route.strip("/").split("/")
             body: bytes | Path = b"Not found"
@@ -452,6 +467,73 @@ class Handler(BaseHTTPRequestHandler):
             event["client_disconnect"] = type(error).__name__
         finally:
             self.server.end(event)
+
+    def respond_git(self, path: str, event: dict, *, head: bool) -> None:
+        """Serve the read-only smart HTTP protocol through Git's own CGI backend."""
+        query = urlsplit(self.path).query
+        match = re.fullmatch(
+            r"/git/([A-Za-z0-9_-]+\.git)/(info/refs|git-upload-pack)", path
+        )
+        if not match or (self.command, match[2], query) not in {
+            ("GET", "info/refs", "service=git-upload-pack"),
+            ("HEAD", "info/refs", "service=git-upload-pack"),
+            ("POST", "git-upload-pack", ""),
+        }:
+            event["status"] = 404
+            self.send_error(404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        if self.headers.get("Transfer-Encoding") or not 0 <= length <= 10 * 1024**2:
+            event["status"] = 413
+            self.send_error(413, "Git replay requires a bounded request body")
+            return
+        request = self.rfile.read(length)
+        event.update(
+            request_bytes=len(request),
+            request_sha256=hashlib.sha256(request).hexdigest(),
+            git_protocol=self.headers.get("Git-Protocol"),
+        )
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("GIT_")
+        }
+        env.update(
+            GIT_PROJECT_ROOT=str(self.server.git_root),
+            GIT_HTTP_EXPORT_ALL="1",
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_CONFIG_GLOBAL=os.devnull,
+            PATH_INFO=f"/{match[1]}/{match[2]}",
+            QUERY_STRING=query,
+            REQUEST_METHOD=self.command,
+            CONTENT_TYPE=self.headers.get("Content-Type", ""),
+            CONTENT_LENGTH=str(length),
+            HTTP_CONTENT_ENCODING=self.headers.get("Content-Encoding", ""),
+            HTTP_GIT_PROTOCOL=self.headers.get("Git-Protocol", ""),
+            REMOTE_ADDR="127.0.0.1",
+        )
+        response = subprocess.run(
+            ["git", "-c", "http.receivepack=false", "http-backend"],
+            input=request,
+            env=env,
+            capture_output=True,
+            timeout=60,
+            check=True,
+        ).stdout
+        headers, separator, body = response.partition(b"\r\n\r\n")
+        if not separator:
+            raise ValueError("Git HTTP backend returned invalid CGI headers")
+        headers = email.parser.BytesParser().parsebytes(headers, headersonly=True)
+        status = int(headers.get("Status", "200").split()[0])
+        event.update(status=status, response_length=len(body))
+        self.send_response(status)
+        for key, value in headers.items():
+            if key.lower() not in {"status", "content-length"}:
+                self.send_header(key, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if not head:
+            self.send_body(io.BytesIO(body).read, len(body), 0, event)
 
     def send_body(self, read, length: int, cut: int, event: dict) -> None:
         while length:
@@ -832,7 +914,10 @@ def run_one(
     with tempfile.TemporaryDirectory(prefix="trial-", dir=args.work_dir) as directory:
         work = Path(directory)
         server = Server(
-            fixtures, profile, work / "origin.sock" if args.http2_proxy else None
+            fixtures,
+            profile,
+            work / "origin.sock" if args.http2_proxy else None,
+            git_root=args.git_root,
         )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -865,7 +950,7 @@ def run_one(
             env = {
                 key: value
                 for key, value in os.environ.items()
-                if not key.startswith("UV_")
+                if not key.startswith(("UV_", "GIT_"))
                 and key
                 not in {"VIRTUAL_ENV", "CONDA_PREFIX", "PYTHONPATH", "PYTHONHOME"}
             }
@@ -873,6 +958,9 @@ def run_one(
                 UV_CACHE_DIR=str(work / "cache"),
                 UV_PYTHON=args.python,
                 UV_PYTHON_DOWNLOADS="never",
+                GIT_CONFIG_NOSYSTEM="1",
+                GIT_CONFIG_GLOBAL=os.devnull,
+                GIT_TERMINAL_PROMPT="0",
                 NO_PROXY="127.0.0.1,localhost",
                 no_proxy="127.0.0.1,localhost",
             )
@@ -993,6 +1081,7 @@ def main() -> None:
     run.add_argument("--verify-file", action="append", default=[])
     run.add_argument("--config-template", type=Path)
     run.add_argument("--project-template", type=Path)
+    run.add_argument("--git-root", type=Path, help="Directory of bare Git fixtures")
     run.add_argument(
         "--setup-commands", type=Path, help="JSON array of uv argument arrays"
     )
@@ -1096,6 +1185,21 @@ def main() -> None:
             for name, path in binaries.items()
         },
         "manifest_sha256": digest(args.manifest),
+        "git_repositories": (
+            {
+                path.name: subprocess.check_output(
+                    ["git", "--git-dir", str(path), "show-ref", "--head"], text=True
+                ).splitlines()
+                for path in sorted(args.git_root.resolve().glob("*.git"))
+            }
+            if args.git_root
+            else None
+        ),
+        "git_version": (
+            subprocess.check_output(["git", "--version"], text=True).strip()
+            if args.git_root
+            else None
+        ),
         "profile": profile,
         "netem": netem_profile(),
         "command": args.command,
