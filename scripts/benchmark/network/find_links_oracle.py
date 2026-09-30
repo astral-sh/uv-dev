@@ -6,6 +6,7 @@ import argparse
 import concurrent.futures
 import importlib.util
 import json
+import math
 import threading
 import time
 import urllib.error
@@ -29,8 +30,12 @@ def main() -> None:
     parser.add_argument("--filename", required=True)
     parser.add_argument("--route", choices=["metadata", "versions"], default="metadata")
     parser.add_argument("--index-path", action="append", required=True)
+    parser.add_argument("--concurrency", type=int)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.concurrency is not None and args.concurrency < 1:
+        parser.error("--concurrency must be positive")
+    concurrency = min(args.concurrency or len(args.index_path), len(args.index_path))
     profile = json.loads(args.profiles.read_text())[args.profile]
     if args.route == "metadata" and not profile.get("pep658", True):
         parser.error("the metadata oracle requires PEP 658")
@@ -58,9 +63,7 @@ def main() -> None:
 
     start = time.perf_counter()
     try:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=len(args.index_path)
-        ) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
             futures = [
                 pool.submit(read, path, fixtures.flat) for path in args.index_path
             ]
@@ -84,11 +87,16 @@ def main() -> None:
 
     metadata_bytes = len(metadata) if args.route == "metadata" else 0
     metadata_latency = minimum_latency(metadata_path) if args.route == "metadata" else 0
-    waves = 2 if args.route == "metadata" else 1
+    index_latencies = list(map(minimum_latency, args.index_path))
+    index_waves = math.ceil(len(args.index_path) / concurrency)
+    all_waves = index_waves + (1 if args.route == "metadata" else 0)
+    waves = 2 if args.route == "metadata" else all_waves
     selected_bytes = len(fixtures.flat) + metadata_bytes
     selected_latency = min(map(minimum_latency, args.index_path)) + metadata_latency
     all_bytes = len(fixtures.flat) * len(args.index_path) + metadata_bytes
-    all_latency = max(map(minimum_latency, args.index_path)) + metadata_latency
+    all_latency = (
+        max(max(index_latencies), sum(index_latencies) / concurrency) + metadata_latency
+    )
     required_bytes = all_bytes if args.route == "versions" else selected_bytes
     required_latency = all_latency if args.route == "versions" else selected_latency
     data = {
@@ -96,6 +104,7 @@ def main() -> None:
         "netem": bench.netem_profile(),
         "manifest_sha256": bench.digest(args.manifest),
         "index_paths": args.index_path,
+        "concurrency": concurrency,
         "filename": args.filename,
         "route": args.route,
         "seconds": seconds,
@@ -109,14 +118,14 @@ def main() -> None:
         "all_index_bytes": all_bytes,
         "all_index_latency_ms": all_latency,
         "optimistic_all_index_floor_seconds": bench.network_floor(
-            profile, all_bytes, waves, all_latency
+            profile, all_bytes, all_waves, all_latency
         ),
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
         "retry_scope": "Transient HTTP responses are retried up to three times per URL with zero oracle backoff. The optimistic floor excludes retries.",
         "scope": (
-            "Read all configured find-links pages with unlimited concurrency to discover available versions. The all-index floor includes every response; wheel metadata is unnecessary."
+            "Read all configured find-links pages at the recorded concurrency to discover available versions. The all-index floor includes every response; wheel metadata is unnecessary."
             if args.route == "versions"
             else "Known selected package with unlimited concurrent index requests, followed by its metadata. The optimistic selected-package floor assumes the fastest index suffices; the all-index reference retains every configured location."
         ),
