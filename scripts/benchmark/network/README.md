@@ -181,7 +181,7 @@ when the operation must check an archive hash.
 advertised strong hash matches an already validated local source revision. Its
 one-response bound applies to an unchanged index that requires revalidation.
 Use `--identity metadata` for a cached PEP 658 sidecar whose advertised hash is
-unchanged.
+unchanged, or `--identity wheel` for metadata in a fully verified cached wheel.
 `zip_metadata_oracle.py` reads a known wheel metadata entry by its ZIP offset,
 verifies the received archive bytes, and reports its compressed-byte lower bound.
 With ranges disabled, it reads the necessary archive prefix instead.

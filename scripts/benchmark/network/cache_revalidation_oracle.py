@@ -27,7 +27,9 @@ def main() -> None:
     parser.add_argument("--profiles", type=Path, required=True)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--filename", required=True)
-    parser.add_argument("--identity", choices=["source", "metadata"], default="source")
+    parser.add_argument(
+        "--identity", choices=["source", "wheel", "metadata"], default="source"
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     profile = json.loads(args.profiles.read_text())[args.profile]
@@ -92,11 +94,11 @@ def main() -> None:
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
-        "scope": (
-            "An index requiring revalidation is unchanged, and the advertised strong PEP 658 hash matches a previously verified metadata sidecar. Only conditional index validation is required; fresh index caches can need no network requests."
-            if args.identity == "metadata"
-            else "An index requiring revalidation is unchanged, and the advertised strong archive hash matches a previously validated local source revision. Only conditional index validation is required; fresh index caches can need no network requests."
-        ),
+        "scope": {
+            "metadata": "An index requiring revalidation is unchanged, and the advertised strong PEP 658 hash matches a previously verified metadata sidecar. Only conditional index validation is required; fresh index caches can need no network requests.",
+            "source": "An index requiring revalidation is unchanged, and the advertised strong archive hash matches a previously validated local source revision. Only conditional index validation is required; fresh index caches can need no network requests.",
+            "wheel": "An index requiring revalidation is unchanged, and the advertised strong archive hash matches a previously verified local wheel. Its metadata can be read locally. Only conditional index validation is required; fresh index caches can need no network requests.",
+        }[args.identity],
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(data, indent=2) + "\n")
