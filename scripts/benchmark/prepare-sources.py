@@ -6,12 +6,57 @@ import argparse
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 from pathlib import Path
+
+
+def complete_git_snapshot(
+    source: dict[str, str], directory: Path, environment: dict[str, str]
+) -> bytes:
+    """Export every tracked file without downloading the repository's history."""
+    commit = source["commit"]
+    if re.fullmatch("[0-9a-f]{40}", commit) is None:
+        raise ValueError(f"Invalid source commit: {commit}")
+    repository = directory / "repository.git"
+    subprocess.run(
+        ["git", "-c", "init.templateDir=", "init", "--bare", "--quiet", repository],
+        check=True,
+        env=environment,
+    )
+    command = ["git", "-C", str(repository)]
+    subprocess.run(
+        [
+            *command,
+            "-c",
+            "fetch.fsckObjects=true",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--depth=1",
+            source["repository"],
+            commit,
+        ],
+        check=True,
+        env=environment,
+    )
+    actual = subprocess.check_output(
+        [*command, "rev-parse", "FETCH_HEAD^{commit}"],
+        text=True,
+        env=environment,
+    ).strip()
+    if actual != commit:
+        raise ValueError(f"Unexpected source commit: {actual}")
+    # Release archives may omit development packages that remain workspace members.
+    # The repository-local attributes take precedence over tracked attributes.
+    (repository / "info/attributes").write_text("* -export-ignore -export-subst\n")
+    return subprocess.check_output(
+        [*command, "archive", "--format=tar", commit], env=environment
+    )
 
 
 def main() -> None:
@@ -40,18 +85,22 @@ def main() -> None:
         "GIT_COMMON_DIR",
     ):
         environment.pop(name, None)
-    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    environment.update(
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_TERMINAL_PROMPT="0",
+    )
     for source in json.loads(Path(__file__).with_name("sources.json").read_text()):
         name = source["name"]
         if Path(name).name != name:
             raise ValueError(f"Invalid source fixture: {name}")
         destination = args.directory / name
         marker = args.directory / f".{name}.json"
-        provenance = source | {
-            "input": git_fixtures[source["git"]]
-            if "git" in source
-            else archives[source["archive"]]
-        }
+        provenance = source
+        if "git" in source:
+            provenance = source | {"input": git_fixtures[source["git"]]}
+        elif "archive" in source:
+            provenance = source | {"input": archives[source["archive"]]}
         if (
             destination.is_dir()
             and marker.is_file()
@@ -61,7 +110,12 @@ def main() -> None:
         with tempfile.TemporaryDirectory(dir=args.directory) as temporary:
             extracted = Path(temporary) / "source"
             extracted.mkdir()
-            if "git" in source:
+            if "repository" in source:
+                archive = complete_git_snapshot(source, Path(temporary), environment)
+                with tarfile.open(fileobj=io.BytesIO(archive)) as archive:
+                    archive.extractall(extracted, filter="data")
+                tree = extracted
+            elif "git" in source:
                 fixture = git_fixtures[source["git"]]
                 archive = subprocess.check_output(
                     [

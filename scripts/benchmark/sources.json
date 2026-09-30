@@ -1,4 +1,9 @@
 [
+  {
+    "name": "airflow",
+    "repository": "https://github.com/apache/airflow",
+    "commit": "7fa400745ac7aebc7cc4ec21d3a047e9fb258310"
+  },
   { "name": "sampleproject", "git": "sampleproject" },
   { "name": "flask", "git": "flask" },
   { "name": "django", "git": "django" },
