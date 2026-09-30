@@ -902,11 +902,20 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let archive = self
             .client
             .managed(|client| {
-                client.cached_client().get_serde_with_retry(
+                client.cached_client().get_serde_with_retry_if(
                     req,
                     &http_entry,
                     cache_control.clone(),
                     download,
+                    |err| {
+                        // The file-download fallback can resume interrupted bodies. Repeating the
+                        // streaming extraction would discard the bytes already transferred.
+                        if let Error::Extract(_, err) = err {
+                            !err.is_http_streaming_failed()
+                        } else {
+                            true
+                        }
+                    },
                 )
             })
             .await
