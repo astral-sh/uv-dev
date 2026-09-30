@@ -203,7 +203,8 @@ def verify(
             require(
                 case["role"] == "primary", f"{label}: qualifying case must be primary"
             )
-            if data["summary"]["ratio_95ci"][1] > 0.95:
+            meets_threshold = data["summary"]["ratio_95ci"][1] <= 0.95
+            if not meets_threshold:
                 failed_qualification_cases.append(label)
                 require(
                     not require_qualification,
