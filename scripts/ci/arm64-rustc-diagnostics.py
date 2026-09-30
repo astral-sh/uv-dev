@@ -118,7 +118,10 @@ def rustc(arguments: list[str]) -> int:
     before = memory_snapshot()
     started = time.monotonic()
     completed = subprocess.run(
-        [os.environ["UV_DIAGNOSTIC_REAL_RUSTC"], *arguments], check=False
+        [os.environ["UV_DIAGNOSTIC_REAL_RUSTC"], *arguments],
+        check=False,
+        # Cargo's jobserver descriptors must reach rustc to retain its concurrency.
+        close_fds=False,
     )
     usage = resource.getrusage(resource.RUSAGE_CHILDREN)
     record = {
@@ -186,7 +189,7 @@ def observe_build(label: str, command: list[str]) -> int:
     before = memory_snapshot()
     started = time.monotonic()
     with (root / f"{label}-memory.jsonl").open("w") as samples:
-        process = subprocess.Popen(command)
+        process = subprocess.Popen(command, close_fds=False)
         while True:
             samples.write(json.dumps(memory_snapshot(), sort_keys=True) + "\n")
             samples.flush()

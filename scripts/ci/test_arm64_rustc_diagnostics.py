@@ -90,6 +90,33 @@ class CompilerDiagnosticsTest(unittest.TestCase):
         self.assertTrue((self.root / "test-memory.jsonl").read_text())
         self.assertIn("COMPILER_REPORT", result.stdout)
 
+    def test_preserves_inherited_jobserver_descriptors(self):
+        read_fd, write_fd = os.pipe()
+        self.addCleanup(os.close, read_fd)
+        self.addCleanup(os.close, write_fd)
+        os.write(write_fd, b"token")
+        self.environment["CARGO_MAKEFLAGS"] = (
+            f"-j --jobserver-fds={read_fd},{write_fd} "
+            f"--jobserver-auth={read_fd},{write_fd}"
+        )
+        command = [str(WRAPPER)]
+        if binary := os.environ.get("AUDITABLE_TEST_BINARY"):
+            command.insert(0, binary)
+        result = subprocess.run(
+            [
+                *command,
+                "-c",
+                f"import os; assert os.read({read_fd}, 5) == b'token'",
+            ],
+            env=self.environment,
+            text=True,
+            capture_output=True,
+            check=False,
+            pass_fds=(read_fd, write_fd),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.record()["returncode"], 0)
+
     @unittest.skipUnless(
         os.environ.get("AUDITABLE_TEST_BINARY"),
         "set AUDITABLE_TEST_BINARY to test cargo-auditable",
