@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -108,6 +109,21 @@ class ReplayTests(unittest.TestCase):
         status, rest = self.get(server, f"bytes={len(partial)}-")
         self.assertEqual(status, 206)
         self.assertEqual(partial + rest, self.body)
+
+    def test_resumable_oracle(self) -> None:
+        server = self.server({"cut_after_bytes": 65536, "cut_count": 3})
+        loopback = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        body = bench.read_resumable(
+            loopback, server.url + "/files/example.whl", len(self.body)
+        )
+        self.assertEqual(body, self.body)
+        deadline = time.monotonic() + 5
+        while server.active and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(
+            [event["range"] for event in server.events],
+            [None, "bytes=65536-", "bytes=131072-", "bytes=196608-"],
+        )
 
     def test_bandwidth_is_shared(self) -> None:
         server = self.server({"bytes_per_second": len(self.body) * 2})

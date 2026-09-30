@@ -83,8 +83,10 @@ fixture directory and network namespace as the actual benchmark.
 
 The `oracle` subcommand takes one or more `--filename` arguments and fetches the
 known package graph with unlimited concurrency. `--route metadata` uses PEP 658;
-`--route wheel` downloads whole wheels. It reports a realizable reference time,
-actual traffic, and an optimistic metadata-byte/request-wave lower bound. The
+`--route wheel` downloads whole wheels; `--route resume` immediately retries
+interrupted bodies using byte ranges and checks the completed artifact. It reports
+a realizable reference time, actual traffic, and optimistic metadata and
+full-artifact transfer bounds. The
 oracle assumes all selected versions and dependencies are already known, so its
 advantage includes dependency-discovery work that a cold resolver may need to do.
 

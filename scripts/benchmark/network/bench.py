@@ -6,6 +6,7 @@ import argparse
 import concurrent.futures
 import email.parser
 import hashlib
+import http.client
 import io
 import json
 import math
@@ -460,6 +461,52 @@ def calibrate(fixtures: Fixtures, profile: dict, output: Path) -> None:
     )
 
 
+def read_resumable(loopback, url: str, size: int) -> bytes:
+    """Immediately resume a pinned artifact after up to 32 interrupted responses."""
+    body = bytearray()
+    etag = None
+    for _ in range(33):
+        headers = {"Range": f"bytes={len(body)}-"} if body else {}
+        if body and etag:
+            headers["If-Range"] = etag
+        try:
+            with loopback.open(
+                urllib.request.Request(url, headers=headers), timeout=60
+            ) as response:
+                if response.status == 200:
+                    body.clear()
+                elif response.status == 206:
+                    content_range = re.fullmatch(
+                        r"bytes (\d+)-(\d+)/(\d+)",
+                        response.headers.get("Content-Range", ""),
+                    )
+                    if (
+                        content_range is None
+                        or int(content_range[1]) != len(body)
+                        or not int(content_range[1]) <= int(content_range[2]) < size
+                        or int(content_range[3]) != size
+                    ):
+                        raise ValueError("Oracle received an inconsistent range")
+                else:
+                    raise ValueError(f"Unexpected oracle response: {response.status}")
+                new_etag = response.headers.get("ETag")
+                if etag is not None and new_etag != etag:
+                    raise ValueError("Oracle artifact changed while resuming")
+                etag = new_etag
+                try:
+                    body.extend(response.read())
+                except http.client.IncompleteRead as error:
+                    body.extend(error.partial)
+        except urllib.error.HTTPError as error:
+            if error.code not in {429, 500, 502, 503, 504}:
+                raise
+        if len(body) == size:
+            return bytes(body)
+        if len(body) > size:
+            raise ValueError("Oracle received too many bytes")
+    raise RuntimeError("Oracle exhausted its interruption limit")
+
+
 def oracle(
     fixtures: Fixtures, profile: dict, filenames: list[str], route: str, output: Path
 ) -> None:
@@ -486,7 +533,11 @@ def oracle(
         index = json.loads(read(f"/simple/{names[filename]}/"))
         artifact = next(file for file in index["files"] if file["filename"] == filename)
         suffix = ".metadata" if route == "metadata" else ""
-        body = read(artifact["url"] + suffix)
+        body = (
+            read_resumable(loopback, server.url + artifact["url"], artifact["size"])
+            if route == "resume"
+            else read(artifact["url"] + suffix)
+        )
         expected = (
             fixtures.metadata[filename + ".metadata"]
             if suffix
@@ -510,6 +561,9 @@ def oracle(
         len(fixtures.simple[name]) for name in set(names.values())
     ) + sum(len(fixtures.metadata[filename + ".metadata"]) for filename in filenames)
     floor = network_floor(profile, required_bytes, 2)
+    artifact_bytes = sum(
+        len(fixtures.simple[name]) for name in set(names.values())
+    ) + sum(fixtures.files[filename].stat().st_size for filename in filenames)
     data = {
         "profile": profile,
         "netem": netem_profile(),
@@ -518,10 +572,14 @@ def oracle(
         "seconds": seconds,
         "required_metadata_and_index_bytes": required_bytes,
         "optimistic_network_floor_seconds": floor,
+        "required_artifact_and_index_bytes": artifact_bytes,
+        "optimistic_artifact_transfer_floor_seconds": network_floor(
+            profile, artifact_bytes, 2
+        ),
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
-        "scope": "A known dependency graph with unlimited request concurrency. Full-wheel transfer is a realizable strategy, not a minimum-byte claim.",
+        "scope": "A known dependency graph with unlimited request concurrency. Full-wheel transfer is a realizable strategy, not a minimum-byte metadata claim. The resume route retries immediately and verifies the complete artifact; it excludes resolution and installation.",
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(data, indent=2) + "\n")
@@ -735,7 +793,9 @@ def main() -> None:
     reference.add_argument("--profile", default="slow")
     reference.add_argument("--profiles", type=Path, default=HERE / "profiles.json")
     reference.add_argument("--filename", action="append", required=True)
-    reference.add_argument("--route", choices=["metadata", "wheel"], default="metadata")
+    reference.add_argument(
+        "--route", choices=["metadata", "wheel", "resume"], default="metadata"
+    )
     reference.add_argument("--output", type=Path, required=True)
     run = subparsers.add_parser("run")
     run.add_argument("--parent", type=Path, required=True)
