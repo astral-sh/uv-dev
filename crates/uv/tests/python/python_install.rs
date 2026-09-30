@@ -1432,7 +1432,13 @@ fn python_uninstall_prerelease_build_name() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn python_reinstall_build_name() -> anyhow::Result<()> {
-    for target in [Some("3.13+custom"), None] {
+    for (targets, pin) in [
+        (vec!["3.13+custom"], None),
+        (vec!["any"], None),
+        (vec!["any", "--upgrade"], None),
+        (vec![], None),
+        (vec![], Some("any")),
+    ] {
         let context = uv_test::test_context_with_versions!(&[])
             .with_managed_python_dirs()
             .with_http_retries("0");
@@ -1444,6 +1450,9 @@ async fn python_reinstall_build_name() -> anyhow::Result<()> {
             .child("managed")
             .child(&installed_key)
             .create_dir_all()?;
+        if let Some(pin) = pin {
+            context.temp_dir.child(".python-version").write_str(pin)?;
+        }
 
         let server = MockServer::start().await;
         let entry = |build_name: &str, archive: &str| {
@@ -1481,7 +1490,7 @@ async fn python_reinstall_build_name() -> anyhow::Result<()> {
         context
             .python_install()
             .arg("--reinstall")
-            .args(target)
+            .args(targets)
             .arg("--python-downloads-json-url")
             .arg(format!("{}/metadata", server.uri()))
             .assert()

@@ -415,16 +415,14 @@ async fn perform_install(
         ) {
             is_unspecified_upgrade = true;
             // On upgrade, derive requests for all of the existing installations
-            let mut minor_version_requests = IndexSet::<InstallRequest>::default();
+            let mut minor_version_requests = IndexSet::<PythonRequest>::default();
             for installation in &existing_installations {
                 let mut request = PythonDownloadRequest::from(installation);
                 // We should always have a version in the request from an existing installation
                 let version = request.take_version().unwrap();
                 // Drop the patch and prerelease parts from the request
                 request = request.with_version(version.only_minor());
-                let install_request =
-                    InstallRequest::new(PythonRequest::Key(request), python_arch, &download_list)?;
-                minor_version_requests.insert(install_request);
+                minor_version_requests.insert(PythonRequest::Key(request));
             }
             minor_version_requests.into_iter().collect::<Vec<_>>()
         } else {
@@ -442,50 +440,53 @@ async fn perform_install(
                 );
                 is_from_python_version_file = true;
             })
-            .map(|file| {
-                file.into_versions()
-                    .into_iter()
-                    .map(|request| InstallRequest::new(request, python_arch, &download_list))
-                    .collect::<Result<Vec<_>>>()
-            })
+            .map(PythonVersionFile::into_versions)
             .unwrap_or_else(|| {
                 // If no version file is found and no requests were made
                 // TODO(zanieb): We should consider differentiating between a global Python version
                 // file here, allowing a request from there to enable `is_default_install`.
                 is_default_install = true;
                 if reinstall && !existing_installations.is_empty() {
-                    // On bare `--reinstall`, reinstall all Python versions
-                    let mut requests = Vec::with_capacity(existing_installations.len());
-                    for installation in &existing_installations {
-                        match InstallRequest::from_installation(installation, &download_list) {
-                            Ok(request) => requests.push(request),
-                            Err(err @ downloads::Error::NoDownloadFound(_)) => {
-                                // An installed build may no longer be in the download catalog.
-                                warn_user!(
-                                    "Failed to create reinstall request for existing installation `{}`: {err}",
-                                    installation.key().green()
-                                );
-                            }
-                            Err(err) => return Err(err.into()),
-                        }
-                    }
-                    Ok(requests)
+                    vec![PythonRequest::Any]
                 } else {
-                    Ok(vec![InstallRequest::new(
-                        PythonRequest::Default,
-                        python_arch,
-                        &download_list,
-                    )?])
+                    vec![PythonRequest::Default]
                 }
-            })?
+            })
         }
     } else {
         targets
             .iter()
             .map(|target| PythonRequest::parse(target.as_str()))
-            .map(|request| InstallRequest::new(request, python_arch, &download_list))
-            .collect::<Result<Vec<_>>>()?
+            .collect()
     };
+
+    let mut install_requests = Vec::with_capacity(requests.len());
+    for request in requests {
+        if reinstall && request == PythonRequest::Any && !existing_installations.is_empty() {
+            // Expand wildcard reinstalls before looking up downloads: the catalog may contain
+            // only named builds, while resolving `any` normally requires an unnamed build.
+            for installation in &existing_installations {
+                match InstallRequest::from_installation(installation, &download_list) {
+                    Ok(mut request) => {
+                        // Keep the wildcard for upgrade validation; it does not pin a patch.
+                        request.request = PythonRequest::Any;
+                        install_requests.push(request);
+                    }
+                    Err(err @ downloads::Error::NoDownloadFound(_)) => {
+                        // An installed build may no longer be in the download catalog.
+                        warn_user!(
+                            "Failed to create reinstall request for existing installation `{}`: {err}",
+                            installation.key().green()
+                        );
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        } else {
+            install_requests.push(InstallRequest::new(request, python_arch, &download_list)?);
+        }
+    }
+    let requests = install_requests;
 
     if requests.is_empty() {
         match upgrade {
@@ -539,9 +540,9 @@ async fn perform_install(
             Vec::with_capacity(existing_installations.len() + requests.len());
 
         for request in &requests {
-            if is_default_install {
-                // A bare reinstall identifies existing builds exactly, or installs Python if
-                // the managed installation directory is empty.
+            if is_default_install || request.python_request() == &PythonRequest::Any {
+                // Wildcard reinstalls already identify existing builds exactly, or install
+                // Python if the managed installation directory is empty.
                 if existing_installations
                     .iter()
                     .any(|installation| installation.key() == request.download.key())
@@ -573,9 +574,7 @@ async fn perform_install(
             for installation in matching_installations {
                 changelog.existing.insert(installation.key().clone());
 
-                if matches!(upgrade, PythonUpgrade::Enabled(_))
-                    && !matches!(&request.request, &PythonRequest::Any)
-                {
+                if let PythonUpgrade::Enabled(_) = upgrade {
                     // An upgrade must reinstall the latest patch, not every matching patch.
                     debug!("Will reinstall the latest patch for `{}`", request);
                     unsatisfied.push(Cow::Borrowed(request));
