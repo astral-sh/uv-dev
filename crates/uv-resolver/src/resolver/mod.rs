@@ -2280,9 +2280,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                 // Without advertised metadata, a source candidate can require downloading the
                 // entire archive and running a build backend. Leave that work to the solver's
-                // selected candidate.
+                // selected candidate unless the version is already pinned.
                 if let CompatibleDist::SourceDist { sdist, .. } = dist
                     && sdist.file.dist_info_metadata.is_none()
+                    && !(range.is_singleton_constraint() && range.iter().nth(1).is_none())
                 {
                     debug!("Skipping source archive prefetch for: {package_name}");
                     return Ok(None);

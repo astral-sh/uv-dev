@@ -2,7 +2,7 @@ use std::convert::Infallible;
 use std::future::ready;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -250,11 +250,14 @@ where
     (server, shutdown_tx)
 }
 
-async fn check_source_prefetch(advertised: bool) -> Result<()> {
+async fn check_source_prefetch(advertised: bool, pinned: bool) -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
-    let gate_metadata =
-        "Metadata-Version: 2.3\nName: gate\nVersion: 1.0\nRequires-Dist: choice==1.0\n";
+    let choice_requested = Arc::new(AtomicBool::new(false));
+    let selected = if pinned { 2 } else { 1 };
+    let gate_metadata = format!(
+        "Metadata-Version: 2.3\nName: gate\nVersion: 1.0\nRequires-Dist: choice=={selected}.0\n"
+    );
     Mock::given(method("GET"))
         .and(wiremock::matchers::path("/simple/gate/"))
         .respond_with(
@@ -275,15 +278,21 @@ async fn check_source_prefetch(advertised: bool) -> Result<()> {
         )
         .mount(&server)
         .await;
+    let requested = choice_requested.clone();
     Mock::given(method("GET"))
         .and(wiremock::matchers::path(
             "/files/gate-1.0-py3-none-any.whl.metadata",
         ))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_millis(300))
-                .set_body_raw(gate_metadata, "text/plain"),
-        )
+        .respond_with(move |_: &Request| {
+            // The exact source must start downloading while the gate is unresolved.
+            if pinned && !requested.load(Ordering::Relaxed) {
+                ResponseTemplate::new(503)
+            } else {
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(300))
+                    .set_body_raw(gate_metadata.clone(), "text/plain")
+            }
+        })
         .mount(&server)
         .await;
     let mut files = Vec::new();
@@ -313,9 +322,15 @@ async fn check_source_prefetch(advertised: bool) -> Result<()> {
             "core-metadata": advertised,
             "upload-time": "2024-01-01T00:00:00Z",
         }));
+        let requested = choice_requested.clone();
         Mock::given(method("GET"))
             .and(wiremock::matchers::path(format!("/files/{filename}")))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(archive))
+            .respond_with(move |_: &Request| {
+                if version == 2 {
+                    requested.store(true, Ordering::Relaxed);
+                }
+                ResponseTemplate::new(200).set_body_bytes(archive.clone())
+            })
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -337,7 +352,11 @@ async fn check_source_prefetch(advertised: bool) -> Result<()> {
     context
         .temp_dir
         .child("requirements.in")
-        .write_str("gate==1.0\nchoice\n")?;
+        .write_str(if pinned {
+            "gate==1.0\nchoice==2.0\n"
+        } else {
+            "gate==1.0\nchoice\n"
+        })?;
     let output = context
         .pip_compile()
         .arg("--no-header")
@@ -353,13 +372,14 @@ async fn check_source_prefetch(advertised: bool) -> Result<()> {
     );
     assert_eq!(
         String::from_utf8(output.stdout)?,
-        "choice==1.0\ngate==1.0\n"
+        format!("choice=={selected}.0\ngate==1.0\n")
     );
     let requests = server.received_requests().await.unwrap();
-    assert!(
-        !requests
+    assert_eq!(
+        requests
             .iter()
-            .any(|request| request.url.path() == "/files/choice-2.0.tar.gz")
+            .any(|request| request.url.path() == "/files/choice-2.0.tar.gz"),
+        pinned
     );
     assert_eq!(
         requests
@@ -367,25 +387,34 @@ async fn check_source_prefetch(advertised: bool) -> Result<()> {
             .any(|request| request.url.path() == "/files/choice-2.0.tar.gz.metadata"),
         advertised
     );
-    assert!(requests.iter().any(|request| request.url.path()
-        == if advertised {
-            "/files/choice-1.0.tar.gz.metadata"
-        } else {
-            "/files/choice-1.0.tar.gz"
-        }));
+    let selected_path = format!(
+        "/files/choice-{selected}.0.tar.gz{}",
+        if advertised { ".metadata" } else { "" }
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.url.path() == selected_path)
+    );
     Ok(())
 }
 
 /// The resolver only downloads a source archive once it selects that version.
 #[tokio::test]
 async fn resolver_does_not_prefetch_source_archives() -> Result<()> {
-    check_source_prefetch(false).await
+    check_source_prefetch(false, false).await
 }
 
 /// Advertised static source metadata can still be prefetched cheaply.
 #[tokio::test]
 async fn resolver_prefetches_source_sidecars() -> Result<()> {
-    check_source_prefetch(true).await
+    check_source_prefetch(true, false).await
+}
+
+/// An exact source requirement can start downloading before other metadata resolves.
+#[tokio::test]
+async fn resolver_prefetches_pinned_source_archives() -> Result<()> {
+    check_source_prefetch(false, true).await
 }
 
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
