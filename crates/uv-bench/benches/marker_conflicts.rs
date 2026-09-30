@@ -52,6 +52,29 @@ fn marker_conflicts(criterion: &mut Criterion<WallTime>) {
         // directly so changes to `imbibe` do not change the input to this benchmark.
         let world = UniversalMarker::new(MarkerTree::TRUE, conflicts).combined();
         let expanded = world.implies(environment);
+        let dependency =
+            UniversalMarker::new(environment, ConflictMarker::from_conflict_item(&items[0]))
+                .combined();
+        for (name, original) in [
+            ("environment", expanded),
+            ("dependency", world.implies(dependency)),
+            ("impossible", world.negate()),
+        ] {
+            let compact = original.and(world).restrict(world);
+            assert_eq!(original.and(world), compact.and(world));
+            group.bench_with_input(
+                BenchmarkId::new(format!("restrict_and_format_{name}"), count),
+                &original,
+                |benchmark, original| {
+                    benchmark.iter(|| {
+                        black_box(*original)
+                            .and(black_box(world))
+                            .restrict(black_box(world))
+                            .try_to_string()
+                    });
+                },
+            );
+        }
         let known_conflicts = FxHashMap::from_iter([
             (items[0].clone(), darwin),
             (items[1].clone(), darwin.negate()),
