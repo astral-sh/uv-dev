@@ -754,7 +754,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             return None;
         }
         let metadata =
-            uv_metadata::read_flat_wheel_metadata(&wheel.filename, &cache.archive(&archive.id))
+            uv_metadata::read_flat_wheel_metadata(&wheel.filename, cache.archive(&archive.id))
                 .ok()?;
         (metadata.name == *dist.name()).then_some(metadata)
     }
