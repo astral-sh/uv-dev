@@ -577,7 +577,10 @@ mod tests {
             .body("")
             .unwrap()
             .into();
-        assert_eq!(strategy.handle(&Ok(response)), Some(Retryable::Transient));
+        assert!(matches!(
+            strategy.handle(&Ok(response)),
+            Some(Retryable::Transient)
+        ));
         assert!(retry_after.lock().unwrap().is_none());
         assert!(
             matches!(policy.should_retry(now, 0), RetryDecision::Retry { execute_after } if execute_after.duration_since(now).unwrap() >= Duration::from_secs(2))
