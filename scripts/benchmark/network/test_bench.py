@@ -361,6 +361,31 @@ class ReplayTests(unittest.TestCase):
         file.chmod(file.stat().st_mode | 0o111)
         self.assertNotEqual(original, bench.tree_digest(root))
 
+    def test_tree_normalization_is_limited_to_selected_files(self) -> None:
+        roots = [Path(self.directory.name) / variant for variant in ("parent", "head")]
+        results = []
+        for root in roots:
+            root.mkdir()
+            (root / "_sysconfigdata_test.py").write_text(f"prefix = {str(root)!r}\n")
+            (root / "module.py").write_text("answer = 42\n")
+            results.append(
+                bench.tree_digest(
+                    root,
+                    ["_sysconfigdata_*.py"],
+                    {"work": root, "base": "http://127.0.0.1"},
+                )
+            )
+        self.assertEqual(*results)
+        (roots[1] / "module.py").write_text("answer = 43\n")
+        self.assertNotEqual(
+            results[0],
+            bench.tree_digest(
+                roots[1],
+                ["_sysconfigdata_*.py"],
+                {"work": roots[1], "base": "http://127.0.0.1"},
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

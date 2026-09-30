@@ -55,6 +55,9 @@ change. A successful command is required, and normalized standard output must
 match within each pair. Installation workloads should pass `--verify-tree
 '{work}/site'` (and install into that directory) to compare every installed file,
 executable bit, directory, and symlink after the timed command.
+For installation files that embed their destination, `--normalize-tree-file GLOB`
+replaces the trial URL and directory before hashing only matching relative paths.
+Managed Python workloads use this for `**/_sysconfigdata_*.py`.
 
 For commands that require an installed environment or project files, pass
 `--setup-commands PATH` with a JSON array of uv argument arrays. Those commands

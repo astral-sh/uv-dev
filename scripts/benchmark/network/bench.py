@@ -72,7 +72,11 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(file, "sha256").hexdigest()
 
 
-def tree_digest(root: Path) -> dict:
+def tree_digest(
+    root: Path,
+    normalized_files: tuple[str, ...] | list[str] = (),
+    context: dict | None = None,
+) -> dict:
     if not root.is_dir():
         raise ValueError(f"Verification directory does not exist: {root}")
     entries = []
@@ -81,7 +85,14 @@ def tree_digest(root: Path) -> dict:
         if path.is_symlink():
             entries.append((name, "symlink", os.readlink(path)))
         elif path.is_file():
-            entries.append((name, "file", path.stat().st_mode & 0o111, digest(path)))
+            if any(Path(name).match(pattern) for pattern in normalized_files):
+                if context is None:
+                    raise ValueError("Tree normalization requires a trial context")
+                contents = normalize_output(path.read_bytes(), context)
+                file_digest = hashlib.sha256(contents).hexdigest()
+            else:
+                file_digest = digest(path)
+            entries.append((name, "file", path.stat().st_mode & 0o111, file_digest))
         elif path.is_dir():
             entries.append((name, "directory"))
         else:
@@ -919,7 +930,11 @@ def run_one(
             "max_active": max((event["active"] for event in server.events), default=0),
             "frontend_protocols": proxy.protocols() if proxy else None,
             "verified_tree": (
-                tree_digest(Path(args.verify_tree.format(work=work)))
+                tree_digest(
+                    Path(args.verify_tree.format(work=work)),
+                    args.normalize_tree_file,
+                    context,
+                )
                 if args.verify_tree
                 else None
             ),
@@ -964,6 +979,12 @@ def main() -> None:
     run.add_argument("--python", default="3.12")
     run.add_argument("--requirement", action="append", default=[])
     run.add_argument("--verify-tree", help="Directory to compare after each command")
+    run.add_argument(
+        "--normalize-tree-file",
+        action="append",
+        default=[],
+        help="Glob of files whose trial URL and directory are normalized before hashing",
+    )
     run.add_argument("--verify-file", action="append", default=[])
     run.add_argument("--config-template", type=Path)
     run.add_argument("--project-template", type=Path)
@@ -1082,6 +1103,7 @@ def main() -> None:
         "setup_commands": args.setup_commands,
         "environment_overrides": args.env,
         "verify_tree": args.verify_tree,
+        "normalize_tree_file": args.normalize_tree_file,
         "verify_file": args.verify_file,
         "http2_proxy": (
             {
