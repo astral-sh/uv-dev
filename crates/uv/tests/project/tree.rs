@@ -263,6 +263,109 @@ fn root_owned_dependencies_respect_depth() -> Result<()> {
     ----- stderr -----
     ");
 
+    let member = context.temp_dir.child("member");
+    member.create_dir_all()?;
+    member.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "member"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["child @ {child_url}"]
+    "#})?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [dependency-groups]
+        dev = ["member"]
+
+        [tool.uv.sources]
+        member = { workspace = true }
+    "#})?;
+    context.lock().assert().success();
+
+    // The member also appears under the workspace group. Its shorter root path must still be
+    // expanded after a depth-limited group path, without a premature deduplication marker.
+    uv_snapshot!(context.filters(), context.tree().arg("--frozen").arg("--universal").arg("--depth").arg("2"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    member v1.0.0 (group: dev)
+    └── child v1.0.0
+    member v1.0.0
+    └── child v1.0.0
+        └── leaf v1.0.0
+
+    ----- stderr -----
+    ");
+
+    let mut projections = Vec::new();
+    for depth in 0..=2 {
+        let output = context
+            .tree()
+            .arg("--frozen")
+            .arg("--universal")
+            .arg("--quiet")
+            .arg("--preview-features")
+            .arg("json-output")
+            .arg("--format")
+            .arg("json")
+            .arg("--depth")
+            .arg(depth.to_string())
+            .output()?;
+        output.clone().assert().success();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        let resolution = report["resolution"]
+            .as_object()
+            .context("dependency graph resolution should be an object")?;
+        let mut packages = resolution
+            .values()
+            .filter(|node| node["kind"] == "package")
+            .map(|node| {
+                node["name"]
+                    .as_str()
+                    .context("package node should have a name")
+                    .map(ToOwned::to_owned)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        packages.sort();
+        let dependencies: usize = resolution
+            .values()
+            .map(|node| node["dependencies"].as_array().map_or(0, Vec::len))
+            .sum();
+        projections.push((depth, packages, dependencies));
+    }
+    assert_json_snapshot!(projections, @r#"
+    [
+      [
+        0,
+        [
+          "member"
+        ],
+        0
+      ],
+      [
+        1,
+        [
+          "child",
+          "member"
+        ],
+        2
+      ],
+      [
+        2,
+        [
+          "child",
+          "leaf",
+          "member"
+        ],
+        3
+      ]
+    ]
+    "#);
+
     Ok(())
 }
 
