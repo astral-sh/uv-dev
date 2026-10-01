@@ -95,6 +95,34 @@ class AuthenticationOracleTests(unittest.TestCase):
             )
             self.assertEqual(result["optimistic_network_floor_seconds"], 0.003)
             self.assertEqual(result["preauthenticated_network_floor_seconds"], 0.002)
+            with patch(
+                "sys.argv",
+                [
+                    "auth_challenge_oracle.py",
+                    "--manifest",
+                    str(manifest),
+                    "--directory",
+                    str(root),
+                    "--profiles",
+                    str(profiles),
+                    "--profile",
+                    "test",
+                    "--filename",
+                    filename,
+                    "--preauthenticated",
+                    "--output",
+                    str(output),
+                ],
+            ):
+                oracle.main()
+            result = json.loads(output.read_text())
+            self.assertTrue(result["preauthenticated"])
+            self.assertEqual(result["required_waves"], 2)
+            self.assertEqual(result["required_latency_ms"], 2)
+            self.assertEqual(result["challenge_paths"], [])
+            self.assertEqual(result["requests"], 2)
+            self.assertEqual(result["origin_connections"], 1)
+            self.assertEqual(result["optimistic_network_floor_seconds"], 0.002)
 
 
 if __name__ == "__main__":

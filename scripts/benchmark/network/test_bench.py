@@ -163,8 +163,15 @@ class ReplayTests(unittest.TestCase):
 
     def test_authentication_challenge_body_and_retry(self) -> None:
         authorization = "Basic dXNlcjpwYXNzd29yZA=="
-        for status in (401, 403, 404):
-            with self.subTest(status=status):
+        for status, chunked in (
+            (401, False),
+            (403, False),
+            (404, False),
+            (401, True),
+            (403, True),
+            (404, True),
+        ):
+            with self.subTest(status=status, chunked=chunked):
                 server = self.server(
                     {
                         "auth_challenges": {
@@ -172,6 +179,7 @@ class ReplayTests(unittest.TestCase):
                                 "authorization": authorization,
                                 "status": status,
                                 "body_bytes": 17,
+                                "chunked": chunked,
                             }
                         }
                     }
@@ -181,6 +189,13 @@ class ReplayTests(unittest.TestCase):
                     connection.request("GET", "/files/example.whl")
                     response = connection.getresponse()
                     self.assertEqual(response.status, status)
+                    self.assertEqual(
+                        response.getheader("Transfer-Encoding"),
+                        "chunked" if chunked else None,
+                    )
+                    self.assertEqual(
+                        response.getheader("Content-Length"), None if chunked else "17"
+                    )
                     self.assertEqual(response.read(), b"!" * 17)
                     if status == 401:
                         self.assertEqual(
@@ -205,6 +220,12 @@ class ReplayTests(unittest.TestCase):
                     ["challenge", "accepted"],
                 )
                 self.assertEqual([event["bytes"] for event in events], [17, 4])
+                self.assertEqual(
+                    events[0].get("transfer_encoding"), "chunked" if chunked else None
+                )
+                self.assertEqual(
+                    events[0]["origin_connection"], events[1]["origin_connection"]
+                )
                 self.assertTrue(
                     all(authorization not in json.dumps(event) for event in events)
                 )

@@ -494,6 +494,16 @@ class Server(ThreadingHTTPServer):
     ) -> None:
         if profile.get("artifact_origins"):
             raise ValueError("Use Replay to configure multiple artifact origins")
+        for path, challenge in profile.get("auth_challenges", {}).items():
+            if (
+                not path.startswith("/")
+                or not isinstance(challenge.get("authorization"), str)
+                or challenge.get("status", 401) not in {401, 403, 404}
+                or type(challenge.get("body_bytes", 0)) is not int
+                or challenge.get("body_bytes", 0) < 0
+                or type(challenge.get("chunked", False)) is not bool
+            ):
+                raise ValueError(f"Invalid authentication challenge: {path}")
         self.public_url: str | None = None
         if socket_path is not None:
             self.address_family = socket.AF_UNIX
@@ -790,6 +800,7 @@ class Handler(BaseHTTPRequestHandler):
                 body, status = value, 200
                 content_type = "application/octet-stream"
             is_artifact = isinstance(body, Path)
+            chunked = False
             challenge = profile.get("auth_challenges", {}).get(path)
             if challenge is not None:
                 authenticated = (
@@ -798,11 +809,10 @@ class Handler(BaseHTTPRequestHandler):
                 event["authentication"] = "accepted" if authenticated else "challenge"
                 if not authenticated:
                     status = challenge.get("status", 401)
-                    if status not in {401, 403, 404}:
-                        raise ValueError("Unsupported authentication challenge status")
                     body = b"!" * challenge.get("body_bytes", 0)
                     content_type = "text/plain"
                     is_artifact = False
+                    chunked = challenge.get("chunked", False)
             failure = profile.get("path_failures", {}).get(
                 path,
                 {
@@ -880,7 +890,11 @@ class Handler(BaseHTTPRequestHandler):
             event.update(status=status, response_start=start, response_length=length)
             self.send_response(status)
             self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(length if status != 304 else 0))
+            if chunked:
+                self.send_header("Transfer-Encoding", "chunked")
+                event["transfer_encoding"] = "chunked"
+            else:
+                self.send_header("Content-Length", str(length if status != 304 else 0))
             if event.get("authentication") == "challenge" and status == 401:
                 self.send_header("WWW-Authenticate", 'Basic realm="network-replay"')
             self.send_header(
@@ -916,10 +930,10 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(body, Path):
                 with body.open("rb") as source:
                     source.seek(start)
-                    self.send_body(source.read, length, cut, event)
+                    self.send_body(source.read, length, cut, event, chunked=chunked)
             else:
                 source = io.BytesIO(body[start : end + 1])
-                self.send_body(source.read, length, cut, event)
+                self.send_body(source.read, length, cut, event, chunked=chunked)
         except (BrokenPipeError, ConnectionResetError) as error:
             event["client_disconnect"] = type(error).__name__
         finally:
@@ -992,7 +1006,9 @@ class Handler(BaseHTTPRequestHandler):
         if not head:
             self.send_body(io.BytesIO(body).read, len(body), 0, event)
 
-    def send_body(self, read, length: int, cut: int, event: dict) -> None:
+    def send_body(
+        self, read, length: int, cut: int, event: dict, *, chunked: bool = False
+    ) -> None:
         while length:
             remaining = min(length, 8192)
             if cut:
@@ -1001,7 +1017,9 @@ class Handler(BaseHTTPRequestHandler):
             if not chunk:
                 raise EOFError("Fixture body ended early")
             self.server.limiter.wait(len(chunk))
-            self.wfile.write(chunk)
+            self.wfile.write(
+                f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n" if chunked else chunk
+            )
             event.setdefault("first_body", time.perf_counter() - self.server.epoch)
             event["bytes"] += len(chunk)
             length -= len(chunk)
@@ -1010,6 +1028,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.close_connection = True
                 self.connection.shutdown(socket.SHUT_RDWR)
                 return
+        if chunked:
+            self.wfile.write(b"0\r\n\r\n")
 
 
 def percentile(values: list[float], fraction: float) -> float:

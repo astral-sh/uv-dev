@@ -27,6 +27,7 @@ def main() -> None:
     parser.add_argument("--filename", required=True)
     parser.add_argument("--route", choices=["metadata", "wheel"], default="metadata")
     parser.add_argument("--requirements-path")
+    parser.add_argument("--preauthenticated", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     profile = json.loads(args.profiles.read_text())[args.profile]
@@ -61,11 +62,19 @@ def main() -> None:
                 fixtures.routes[args.requirements_path].read_bytes(),
             ),
         )
+    authorization = None
+    if args.preauthenticated:
+        credentials = {
+            challenge["authorization"]
+            for challenge in profile.get("auth_challenges", {}).values()
+        }
+        if len(credentials) != 1:
+            parser.error("preauthentication requires one replay credential")
+        authorization = credentials.pop()
     server = bench.Server(fixtures, profile)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=60)
-    authorization = None
     challenges = []
     started = time.perf_counter()
     try:
@@ -118,6 +127,7 @@ def main() -> None:
         "filename": args.filename,
         "route": args.route,
         "requirements_path": args.requirements_path,
+        "preauthenticated": args.preauthenticated,
         "seconds": seconds,
         "required_bytes": required_bytes,
         "required_waves": required_waves,
@@ -135,7 +145,7 @@ def main() -> None:
         ),
         "challenge_paths": challenges,
         "events": sorted(server.events, key=lambda event: event["start"]),
-        "scope": "One known distribution over HTTP/1.1. The reference starts without credentials, cancels each unfamiliar authentication challenge after its headers, and reuses the resulting credentials within the replay origin. It verifies all selected response bodies. The primary bound includes those mandatory challenge waves but no error-body bytes; the additional preauthenticated bound permits credentials on the first request. Both omit HTTP headers, TCP/TLS startup, and CPU work.",
+        "scope": "One known distribution over HTTP/1.1. Unless preauthentication is selected, the reference starts without credentials, cancels each unfamiliar authentication challenge after its headers, and reuses the resulting credentials within the replay origin. It verifies all selected response bodies. The primary bound includes the required challenge waves but no error-body bytes; the additional preauthenticated bound permits credentials on the first request. Both omit HTTP headers, TCP/TLS startup, and CPU work.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
