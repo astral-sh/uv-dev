@@ -1351,9 +1351,7 @@ impl RegistryClient {
             && size.is_some_and(|size| size <= CENTRAL_DIRECTORY_SIZE);
 
         // Attempt to fetch via a range request.
-        if !prefer_streaming
-            && capabilities.supports_range_requests(url)
-        {
+        if !prefer_streaming && capabilities.supports_range_requests(url) {
             // An advertised size lets us fetch the ZIP tail without a separate HEAD request.
             // The response's Content-Range supplies the authoritative archive length.
             let mut initial_range = size.and_then(|size| {
