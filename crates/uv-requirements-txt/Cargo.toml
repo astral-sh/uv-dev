@@ -33,12 +33,13 @@ reqwest = { workspace = true, optional = true }
 reqwest-middleware = { workspace = true, optional = true }
 rustc-hash = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
 tracing = { workspace = true }
 unscanny = { workspace = true }
 url = { workspace = true }
 
 [features]
-http = ["reqwest", "reqwest-middleware"]
+http = ["reqwest", "reqwest-middleware", "dep:tokio"]
 
 [dev-dependencies]
 anyhow = { workspace = true }

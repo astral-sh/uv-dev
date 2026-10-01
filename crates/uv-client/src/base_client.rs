@@ -117,6 +117,8 @@ pub struct BaseClientBuilder<'a> {
     read_timeout: Duration,
     connect_timeout: Duration,
     metadata_range_request: MetadataRangeRequest,
+    /// The download limit for readers that schedule requests through this builder.
+    download_concurrency: usize,
     extra_middleware: Option<ExtraMiddleware>,
     proxies: Vec<Proxy>,
     http_proxy: Option<ProxyUrl>,
@@ -228,6 +230,7 @@ impl Default for BaseClientBuilder<'_> {
             read_timeout: DEFAULT_READ_TIMEOUT,
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             metadata_range_request: MetadataRangeRequest::default(),
+            download_concurrency: Concurrency::DEFAULT_DOWNLOADS,
             extra_middleware: None,
             proxies: vec![],
             http_proxy: None,
@@ -324,6 +327,19 @@ impl<'a> BaseClientBuilder<'a> {
     pub fn cache_read_concurrency(mut self, workers: usize) -> Self {
         self.cache_read_runtime = Arc::new(CacheReadRuntime::new(workers));
         self
+    }
+
+    /// Set the maximum number of concurrent downloads for request schedulers.
+    #[must_use]
+    pub fn download_concurrency(mut self, concurrency: usize) -> Self {
+        assert!(concurrency > 0, "Download concurrency must be non-zero");
+        self.download_concurrency = concurrency;
+        self
+    }
+
+    /// Return the configured maximum number of concurrent downloads.
+    pub fn concurrent_downloads(&self) -> usize {
+        self.download_concurrency
     }
 
     #[must_use]
