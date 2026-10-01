@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -7,9 +8,13 @@ use assert_fs::prelude::*;
 #[cfg(unix)]
 use fs_err::{metadata, set_permissions};
 use indoc::indoc;
+use predicates::prelude::predicate;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
+use uv_test::packse::generate_wheel;
 use uv_test::{uv_snapshot, venv_bin_path};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn tool_run_args() {
@@ -841,6 +846,52 @@ fn tool_run_url() {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     ");
+}
+
+/// Creating an ephemeral wheel environment only fetches the resolver's flat index.
+#[tokio::test]
+async fn tool_run_wheel_only_find_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let (filename, wheel) = generate_wheel(
+        &"network-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    let wheel_url = url::Url::from_file_path(wheel_path.path()).unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/flat"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .insert_header("cache-control", "no-store")
+                .set_body_string("<html></html>"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    context
+        .tool_run()
+        .arg("--from")
+        .arg(format!("network-tool @ {wheel_url}"))
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(format!("{}/flat", server.uri()))
+        .arg("python")
+        .arg("-c")
+        .arg("import network_tool; print(network_tool.__version__)")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1.0.0"));
+    server.verify().await;
+    Ok(())
 }
 
 /// Test running a tool with a Git requirement.

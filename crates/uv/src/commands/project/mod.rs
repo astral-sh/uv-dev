@@ -3058,19 +3058,41 @@ pub(crate) async fn sync_environment(
     let dry_run = DryRun::default();
     let workspace_cache = WorkspaceCache::default();
 
-    // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(
-        &client,
-        cache,
-        index_locations,
-        &concurrency.downloads_semaphore,
-    )
-    .await?;
-
     // Lower the extra build dependencies, if any.
     let extra_build_requires =
         LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
             .into_inner();
+
+    let installation_plan = pip::operations::InstallationPlan::build(
+        resolution,
+        site_packages,
+        InstallationStrategy::Permissive,
+        reinstall,
+        build_options,
+        &hasher,
+        index_locations,
+        config_setting,
+        config_settings_package,
+        &extra_build_requires,
+        extra_build_variables,
+        cache,
+        &venv,
+        tags,
+    )?;
+
+    // Runtime distributions are already resolved. Only source builds need indexes to resolve
+    // their build dependencies; cached and remote wheels need no further resolution.
+    let flat_index = if installation_plan.requires_source_build() {
+        FlatIndex::load(
+            &client,
+            cache,
+            index_locations,
+            &concurrency.downloads_semaphore,
+        )
+        .await?
+    } else {
+        FlatIndex::default()
+    };
 
     // Create a build dispatch.
     let build_dispatch = BuildDispatch::new(
@@ -3100,30 +3122,28 @@ pub(crate) async fn sync_environment(
     );
 
     // Sync the environment.
-    pip::operations::install(
-        resolution,
-        site_packages,
-        InstallationStrategy::Permissive,
-        modifications,
-        reinstall,
-        build_options,
-        link_mode,
-        compile_bytecode.then_some(pip::operations::BytecodeCompilation::All),
-        &hasher,
-        tags,
-        &client,
-        state.in_flight(),
-        concurrency,
-        &build_dispatch,
-        cache,
-        &venv,
-        logger,
-        installer_metadata,
-        dry_run,
-        printer,
-        preview,
-    )
-    .await?;
+    installation_plan
+        .execute(
+            resolution,
+            modifications,
+            build_options,
+            link_mode,
+            compile_bytecode.then_some(pip::operations::BytecodeCompilation::All),
+            &hasher,
+            tags,
+            &client,
+            state.in_flight(),
+            concurrency,
+            &build_dispatch,
+            cache,
+            &venv,
+            logger,
+            installer_metadata,
+            dry_run,
+            printer,
+            preview,
+        )
+        .await?;
 
     // Notify the user of any resolution diagnostics.
     pip::operations::diagnose_resolution(resolution.diagnostics(), printer)?;

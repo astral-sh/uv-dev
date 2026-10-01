@@ -13,7 +13,7 @@ use assert_fs::{
     assert::PathAssert,
     fixture::{FileTouch, FileWriteBin, FileWriteStr, PathChild, PathCreateDir},
 };
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
-use wiremock::matchers::path;
+use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::packse::{
@@ -5789,6 +5789,149 @@ fn tool_install_find_links() {
 
     hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
+}
+
+/// Installing a resolved wheel does not fetch the build index a second time.
+#[tokio::test]
+async fn tool_install_wheel_only_find_links() -> Result<()> {
+    for preview in ["--no-preview", "--preview-features=tool-install-locks"] {
+        let context = uv_test::test_context!("3.12").with_tool_dirs();
+        let (filename, wheel) = generate_wheel(
+            &"network-tool".parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &["network-tool".to_string()],
+        );
+        let wheel_path = context.temp_dir.child(filename);
+        wheel_path.write_binary(&wheel)?;
+        let wheel_url = url::Url::from_file_path(wheel_path.path()).unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/flat"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/html")
+                    .insert_header("cache-control", "no-store")
+                    .set_body_string("<html></html>"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        context
+            .tool_install()
+            .arg(format!("network-tool @ {wheel_url}"))
+            .arg(preview)
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(format!("{}/flat", server.uri()))
+            .assert()
+            .success();
+        Command::new(
+            context
+                .temp_dir
+                .child("bin")
+                .child(format!("network-tool{}", std::env::consts::EXE_SUFFIX))
+                .path(),
+        )
+        .assert()
+        .success();
+        server.verify().await;
+    }
+    Ok(())
+}
+
+/// A source build can still resolve its build dependencies from the flat index.
+#[tokio::test]
+async fn tool_install_source_build_find_links() -> Result<()> {
+    for preview in ["--no-preview", "--preview-features=tool-install-locks"] {
+        let context = uv_test::test_context!("3.12").with_tool_dirs();
+        let (build_filename, build_wheel) = generate_wheel(
+            &"build-dependency".parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        let (filename, wheel) = generate_wheel(
+            &"network-source-tool".parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &["network-source-tool".to_string()],
+        );
+        let source = context.temp_dir.child("source");
+        source.child(&filename).write_binary(&wheel)?;
+        source.child("pyproject.toml").write_str(indoc! {r#"
+            [project]
+            name = "network-source-tool"
+            version = "1.0.0"
+            [build-system]
+            requires = ["build-dependency==1.0.0"]
+            build-backend = "backend"
+            backend-path = ["."]
+        "#})?;
+        source.child("backend.py").write_str(&formatdoc! {r"
+            import shutil
+            from pathlib import Path
+            import build_dependency
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                wheel = Path(__file__).with_name({filename:?})
+                shutil.copyfile(wheel, Path(wheel_directory) / wheel.name)
+                return wheel.name
+        "})?;
+        let source_url = url::Url::from_file_path(source.path()).unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/flat"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/html")
+                    .insert_header("cache-control", "no-store")
+                    .set_body_string(format!(
+                        "<a href=\"/files/{build_filename}\">{build_filename}</a>"
+                    )),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(path(format!("/files/{build_filename}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(build_wheel))
+            .mount(&server)
+            .await;
+
+        context
+            .tool_install()
+            .arg(format!("network-source-tool @ {source_url}"))
+            .arg(preview)
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(format!("{}/flat", server.uri()))
+            .assert()
+            .success();
+        Command::new(
+            context
+                .temp_dir
+                .child("bin")
+                .child(format!(
+                    "network-source-tool{}",
+                    std::env::consts::EXE_SUFFIX
+                ))
+                .path(),
+        )
+        .assert()
+        .success();
+        server.verify().await;
+    }
+    Ok(())
 }
 
 #[test]
