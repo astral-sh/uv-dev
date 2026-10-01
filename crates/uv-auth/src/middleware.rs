@@ -464,6 +464,7 @@ impl Middleware for AuthMiddleware {
         if let Some(credentials) = credentials.as_ref() {
             if credentials.is_authenticated() {
                 trace!("Retrying request for {url} with credentials from cache {credentials:?}");
+                let _response = retain_small_authentication_response(response);
                 retry_request = credentials.authenticate(retry_request).await?;
                 return self
                     .complete_request(None, retry_request, extensions, next, auth_policy)
@@ -482,6 +483,7 @@ impl Middleware for AuthMiddleware {
             )
             .await?
         {
+            let _response = retain_small_authentication_response(response);
             retry_request = credentials.authenticate(retry_request).await?;
             trace!("Retrying request for {url} with {credentials:?}");
             return self
@@ -498,6 +500,7 @@ impl Middleware for AuthMiddleware {
         if let Some(credentials) = credentials.as_ref() {
             if !attempt_has_username {
                 trace!("Retrying request for {url} with username from cache {credentials:?}");
+                let _response = retain_small_authentication_response(response);
                 retry_request = credentials.authenticate(retry_request).await?;
                 return self
                     .complete_request(None, retry_request, extensions, next, auth_policy)
@@ -876,6 +879,19 @@ impl AuthMiddleware {
     }
 }
 
+/// Keep small error bodies alive while retrying so a completed HTTP/1.1 response can return its
+/// connection to the pool. Larger or unbounded bodies must stop competing for bandwidth as soon as
+/// the retry is known to be necessary.
+fn retain_small_authentication_response(response: Option<Response>) -> Option<Response> {
+    const MAX_RETAINED_BYTES: u64 = 8 * 1024;
+
+    response.filter(|response| {
+        response
+            .content_length()
+            .is_some_and(|length| length <= MAX_RETAINED_BYTES)
+    })
+}
+
 fn tracing_url(request: &Request, credentials: Option<&Authentication>) -> DisplaySafeUrl {
     let mut url = DisplaySafeUrl::from_url(request.url().clone());
     if let Some(Authentication::Credentials(creds)) = credentials {
@@ -960,6 +976,29 @@ mod tests {
             401
         );
 
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_authentication_error_body_without_credentials() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("credentials required"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_netrc(None)
+                    .with_text_store(None),
+            )
+            .build();
+
+        let response = client.get(format!("{}/foo", server.uri())).send().await?;
+        assert_eq!(response.status(), 401);
+        assert_eq!(response.text().await?, "credentials required");
         Ok(())
     }
 
