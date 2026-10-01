@@ -1917,7 +1917,8 @@ fn small_registry_wheel_is_reused_after_resolution() -> Result<()> {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(full.load(Ordering::Relaxed), 1);
-        assert_eq!(heads.load(Ordering::Relaxed), usize::from(require_ranges));
+        // The advertised wheel size also avoids HEAD when metadata ranges are required.
+        assert_eq!(heads.load(Ordering::Relaxed), 0);
         assert_eq!(ranges.load(Ordering::Relaxed), usize::from(require_ranges));
     }
     Ok(())
