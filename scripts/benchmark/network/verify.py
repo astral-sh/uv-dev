@@ -168,6 +168,11 @@ def verify(
             )
         pairs = data["pairs"]
         require(len(pairs) == case["pairs"] >= 20, f"{label}: sample count")
+        warmups = data.get("warmups")
+        require(
+            type(warmups) is int and warmups >= 0,
+            f"{label}: invalid warmup count",
+        )
         require(
             data.get("expected_exit_code", 0) == case.get("expected_exit_code", 0),
             f"{label}: expected exit status differs",
@@ -178,7 +183,11 @@ def verify(
             bench.summary(pairs) == data["summary"],
             f"{label}: paired bootstrap differs",
         )
-        for pair in pairs:
+        for index, pair in enumerate(pairs):
+            expected_order = (
+                ["parent", "head"] if (index + warmups) % 2 == 0 else ["head", "parent"]
+            )
+            require(list(pair) == expected_order, f"{label}: paired run order differs")
             if data.get("compare_stderr"):
                 require(
                     bool(pair["parent"].get("stderr_sha256"))

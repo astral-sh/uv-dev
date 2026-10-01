@@ -74,6 +74,7 @@ class StudyManifestTest(unittest.TestCase):
             assert harness_spec is not None and harness_spec.loader is not None
             harness = importlib.util.module_from_spec(harness_spec)
             harness_spec.loader.exec_module(harness)
+            warmups = 3
             pairs = [
                 {
                     side: {
@@ -86,9 +87,13 @@ class StudyManifestTest(unittest.TestCase):
                         "requests": 0,
                         "events": [],
                     }
-                    for side, seconds in (("parent", 1.0), ("head", 1.1))
+                    for side, seconds in (
+                        (("parent", 1.0), ("head", 1.1))
+                        if (index + warmups) % 2 == 0
+                        else (("head", 1.1), ("parent", 1.0))
+                    )
                 }
-                for _ in range(20)
+                for index in range(20)
             ]
             result = {
                 "parent_sha": parent,
@@ -98,6 +103,7 @@ class StudyManifestTest(unittest.TestCase):
                     for side, revision in (("parent", parent), ("head", head))
                 },
                 "pairs": pairs,
+                "warmups": warmups,
                 "summary": harness.summary(pairs),
                 "compare_stderr": True,
                 "profile": {},
@@ -136,6 +142,22 @@ class StudyManifestTest(unittest.TestCase):
                     "failed_cases": ["case-slow.json"],
                 },
             )
+
+            invalid = copy.deepcopy(result)
+            invalid["pairs"][0] = dict(reversed(invalid["pairs"][0].items()))
+            (evidence / "case-slow.json").write_text(json.dumps(invalid))
+            with self.assertRaisesRegex(ValueError, "paired run order differs"):
+                verify.verify(evidence, repository, study, require_qualification=False)
+            for invalid_warmups in (None, -1, True):
+                with self.subTest(warmups=invalid_warmups):
+                    invalid = copy.deepcopy(result)
+                    invalid["warmups"] = invalid_warmups
+                    (evidence / "case-slow.json").write_text(json.dumps(invalid))
+                    with self.assertRaisesRegex(ValueError, "invalid warmup count"):
+                        verify.verify(
+                            evidence, repository, study, require_qualification=False
+                        )
+            (evidence / "case-slow.json").write_text(json.dumps(result))
 
             invalid = copy.deepcopy(result)
             invalid["pairs"][0]["head"]["exit_code"] = 1
