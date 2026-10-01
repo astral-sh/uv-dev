@@ -213,6 +213,7 @@ pub(crate) async fn audit(
         )
     });
 
+    let osv_client = CachedClient::new(client_builder.clone().build()?);
     let outcome = audit_lock(
         &lock,
         target.install_path(),
@@ -220,6 +221,7 @@ pub(crate) async fn audit(
         &groups,
         &settings,
         client_builder,
+        osv_client,
         concurrency,
         &cache,
         printer,
@@ -274,6 +276,7 @@ pub(crate) async fn audit_lock(
     groups: &DependencyGroupsWithDefaults,
     settings: &ResolverSettings,
     client_builder: BaseClientBuilder<'_>,
+    osv_client: CachedClient,
     concurrency: Concurrency,
     cache: &Cache,
     printer: Printer,
@@ -298,7 +301,6 @@ pub(crate) async fn audit_lock(
         .packages()
         .map(|(name, version)| Dependency::new(name.clone(), version.clone()))
         .collect();
-    let base_client = client_builder.clone().build()?;
     let registry_client = RegistryClientBuilder::new(client_builder, cache.clone())
         .index_locations(settings.index_locations.clone())
         .keyring(settings.keyring_provider)
@@ -310,8 +312,7 @@ pub(crate) async fn audit_lock(
     let osv_future = async {
         match service {
             VulnerabilityServiceFormat::Osv => {
-                let client = CachedClient::new(base_client);
-                let service = osv::Osv::new(client, service_url, concurrency, cache.clone());
+                let service = osv::Osv::new(osv_client, service_url, concurrency, cache.clone());
                 trace!("Auditing {n} dependencies against OSV", n = auditable.len());
                 service.query_batch(&dependencies, osv::Filter::All).await
             }
