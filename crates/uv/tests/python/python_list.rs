@@ -1,19 +1,18 @@
+use std::fmt::Write;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::fmt::Write;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
-use assert_fs::fixture::FileWriteStr;
+use assert_fs::fixture::{FileWriteStr, PathChild};
 use uv_platform::{Arch, Os, Platform};
 use uv_python_managed::{downloads::ManagedPythonDownloadList, platform_key_from_env};
 use uv_python_types::{PythonDownloadRequest, PythonRequest};
 use uv_static::EnvVars;
 
 use anyhow::Result;
-use assert_fs::prelude::*;
 use indoc::indoc;
 use url::Url;
 use uv_test::uv_snapshot;
