@@ -152,6 +152,35 @@ class ReleaseSbomTest(unittest.TestCase):
         self.assertIn("missing uvx", result.stdout)
         self.assertIn("PASS 0 / FAIL 2", result.stdout)
 
+    def test_loose_unix_binaries_do_not_fill_empty_archive(self):
+        directory = self.artifact("linux", {})
+        (directory / "uv").write_bytes(b"auditable\n")
+        (directory / "uvx").write_bytes(b"auditable\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("PASS 0 / FAIL 2", result.stdout)
+        self.assertEqual(self.calls("rust-audit-info"), [])
+
+    def test_loose_windows_binaries_do_not_fill_incomplete_archive(self):
+        directory = self.artifact("windows", {"README": b"no binaries\n"}, windows=True)
+        (directory / "uv.exe").write_bytes(b"auditable\n")
+        (directory / "uvx.exe").write_bytes(b"auditable\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("PASS 0 / FAIL 2", result.stdout)
+        self.assertEqual(self.calls("rust-audit-info"), [])
+
+    def test_complete_archive_ignores_loose_binaries(self):
+        directory = self.artifact(
+            "linux", {"uv": b"auditable\n", "uvx": b"auditable\n"}
+        )
+        (directory / "uv").write_bytes(b"not auditable\n")
+        (directory / "uvx").write_bytes(b"not auditable\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("PASS 2 / FAIL 0", result.stdout)
+        self.assertEqual(len(self.calls("rust-audit-info")), 2)
+
     def test_missing_uv_fails(self):
         self.artifact("linux", {"uvx": b"auditable\n"})
         result = self.run_script()

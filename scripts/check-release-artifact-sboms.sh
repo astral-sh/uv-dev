@@ -70,15 +70,18 @@ for artifact in $ALL_ARTIFACTS; do
         continue
     fi
     archive="${archives[0]}"
+    # Only inspect binaries extracted from the selected release archive.
+    extracted="$WORKDIR/extracted-$ARTIFACTS"
+    mkdir "$extracted"
     case "$archive" in
-        *.tar.gz) tar xzf "$archive" -C "$dest" ;;
-        *.zip) unzip -qo "$archive" -d "$dest" ;;
+        *.tar.gz) tar xzf "$archive" -C "$extracted" ;;
+        *.zip) unzip -qo "$archive" -d "$extracted" ;;
     esac
     archive=$(basename "$archive")
 
     # Check uv and uvx binaries.
     for bin in uv uvx; do
-        binary=$(find "$dest" \( -name "$bin" -o -name "$bin.exe" \) -type f | head -1)
+        binary=$(find "$extracted" \( -name "$bin" -o -name "$bin.exe" \) -type f | head -1)
         if [ -n "$binary" ]; then
             check "$binary" "$archive / $(basename "$binary")"
         else
