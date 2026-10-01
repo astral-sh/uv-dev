@@ -652,7 +652,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             return Ok(Metadata::from_dependency_metadata(metadata).into());
         }
 
-        if let Some(metadata) = self.cached_registry_wheel_metadata(dist, hash_policy) {
+        if let Some(metadata) = self
+            .cached_registry_wheel_metadata(dist, hash_policy)
+            .or_else(|| self.cached_direct_wheel_metadata(dist, hash_policy))
+        {
             return Ok(ArchiveMetadata::from_metadata23(metadata));
         }
 
@@ -782,6 +785,62 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     .file
                     .size
                     .is_some_and(|size| archive.size != Some(size)))
+        {
+            return None;
+        }
+        let metadata =
+            uv_metadata::read_flat_wheel_metadata(&wheel.filename, cache.archive(&archive.id))
+                .ok()?;
+        (metadata.name == *dist.name()).then_some(metadata)
+    }
+
+    /// Read metadata from a complete cached wheel identified by a direct URL or required hash.
+    fn cached_direct_wheel_metadata(
+        &self,
+        dist: &BuiltDist,
+        hashes: ArchiveHashPolicy<'_>,
+    ) -> Option<ResolutionMetadata> {
+        let BuiltDist::DirectUrl(wheel) = dist else {
+            return None;
+        };
+        let url_hashes = parse_url_hashes(&wheel.url).unwrap_or_else(HashDigests::empty);
+        if !matches!(wheel.location.scheme(), "http" | "https")
+            || !url_hashes
+                .iter()
+                .chain(hashes.digests())
+                .any(|hash| hash.algorithm() != HashAlgorithm::Md5)
+        {
+            return None;
+        }
+
+        let cache = self.build_context.cache();
+        let pointer_entry = cache.entry(
+            CacheBucket::Wheels,
+            WheelCache::Url(&wheel.url).wheel_dir(wheel.name().as_ref()),
+            format!("{}.http", wheel.filename.cache_key()),
+        );
+        if !cache
+            .freshness(&pointer_entry, Some(wheel.name()), None)
+            .ok()?
+            .is_fresh()
+        {
+            return None;
+        }
+        let archive = HttpArchivePointer::read_from(&pointer_entry)
+            .ok()??
+            .into_archive();
+        // A strong matching digest identifies the requested bytes even after the HTTP cache
+        // policy expires. An `Any` policy satisfied only by MD5 does not establish that identity.
+        if archive.filename != wheel.filename
+            || !archive.exists(cache)
+            || !archive.satisfies(hashes)
+            || (!url_hashes.is_empty()
+                && !archive.satisfies(ArchiveHashPolicy::All(url_hashes.as_slice())))
+            || !url_hashes.iter().chain(hashes.digests()).any(|hash| {
+                hash.algorithm() != HashAlgorithm::Md5
+                    && archive.hashes.iter().any(|actual| actual == hash)
+            })
+            || wheel.size.is_some_and(|size| archive.size != Some(size))
         {
             return None;
         }
