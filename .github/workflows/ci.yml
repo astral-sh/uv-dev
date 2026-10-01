@@ -86,6 +86,7 @@ jobs:
     uses: $/.github/workflows/check-crates-policies.yml
     secrets: inherit
     permissions:
+      actions: read
       contents: read
       id-token: write
 
