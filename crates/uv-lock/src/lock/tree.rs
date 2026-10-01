@@ -532,16 +532,18 @@ impl<'env> TreeDisplay<'env> {
     fn visit(
         &'env self,
         cursor: Cursor,
-        visited: &mut FxHashMap<VisitedNode<'env>, Vec<PackageIndex>>,
+        depth: usize,
+        visited: &mut FxHashMap<VisitedNode<'env>, VisitedSubtree>,
         path: &mut Vec<VisitedNode<'env>>,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, bool) {
         // Short-circuit if the current path is longer than the provided depth.
-        if path.len() > self.depth {
-            return Vec::new();
+        if depth > self.depth {
+            return (Vec::new(), false);
         }
+        let remaining_depth = self.depth - depth;
 
         let Node::Package(package_index) = self.graph[cursor.node()] else {
-            return Vec::new();
+            return (Vec::new(), true);
         };
         let edge = cursor.edge().map(|edge_id| &self.graph[edge_id]);
         let package = self.lock.package(package_index);
@@ -600,16 +602,18 @@ impl<'env> TreeDisplay<'env> {
         // 1. The package is in the current traversal path (i.e., a dependency cycle).
         // 2. The package has been visited and de-duplication is enabled (default).
         if path.contains(&visited_node) {
-            return vec![format!("{line} (*)")];
+            return (vec![format!("{line} (*)")], true);
         }
         if !self.no_dedupe
-            && let Some(requirements) = visited.get(&visited_node)
+            && let Some(subtree) = visited.get(&visited_node)
+            && (subtree.complete || subtree.remaining_depth >= remaining_depth)
         {
-            return if requirements.is_empty() {
+            let lines = if subtree.dependencies.is_empty() {
                 vec![line]
             } else {
                 vec![format!("{line} (*)")]
             };
+            return (lines, subtree.complete);
         }
 
         // Incorporate the latest version of the package, if known.
@@ -676,20 +680,8 @@ impl<'env> TreeDisplay<'env> {
         let mut lines = vec![line];
 
         // Keep track of the dependency path to avoid cycles.
-        // Only mark as visited if we're going to expand children (not at depth limit).
-        if path.len() < self.depth {
-            visited.insert(
-                visited_node.clone(),
-                dependencies
-                    .iter()
-                    .filter_map(|node| match self.graph[node.node()] {
-                        Node::Package(package_index) => Some(package_index),
-                        Node::Root => None,
-                    })
-                    .collect(),
-            );
-        }
-        path.push(visited_node);
+        path.push(visited_node.clone());
+        let mut complete = true;
 
         for (index, dep) in dependencies.iter().enumerate() {
             // For sub-visited packages, add the prefix to make the tree display user-friendly.
@@ -716,8 +708,9 @@ impl<'env> TreeDisplay<'env> {
             } else {
                 ("├── ", "│   ")
             };
-            for (visited_index, visited_line) in self.visit(*dep, visited, path).iter().enumerate()
-            {
+            let (visited_lines, child_complete) = self.visit(*dep, depth + 1, visited, path);
+            complete &= child_complete;
+            for (visited_index, visited_line) in visited_lines.iter().enumerate() {
                 let prefix = if visited_index == 0 {
                     prefix_top
                 } else {
@@ -729,7 +722,27 @@ impl<'env> TreeDisplay<'env> {
 
         path.pop();
 
-        lines
+        // A depth-limited traversal cannot suppress a later path with more room to expand.
+        // Complete subtrees can be reused regardless of the depth of that later path.
+        // Nodes at the depth limit are not marked, since none of their children were displayed.
+        if remaining_depth > 0 {
+            visited.insert(
+                visited_node,
+                VisitedSubtree {
+                    dependencies: dependencies
+                        .iter()
+                        .filter_map(|node| match self.graph[node.node()] {
+                            Node::Package(package_index) => Some(package_index),
+                            Node::Root => None,
+                        })
+                        .collect(),
+                    remaining_depth,
+                    complete,
+                },
+            );
+        }
+
+        (lines, complete)
     }
 
     /// Depth-first traverse the nodes to render the tree.
@@ -745,20 +758,28 @@ impl<'env> TreeDisplay<'env> {
                     for edge in self.graph.edges_directed(*node, Direction::Outgoing) {
                         let node = edge.target();
                         path.clear();
-                        lines.extend(self.visit(
-                            Cursor::new(node, edge.id(), self.conflict_marker),
-                            &mut visited,
-                            &mut path,
-                        ));
+                        lines.extend(
+                            self.visit(
+                                Cursor::new(node, edge.id(), self.conflict_marker),
+                                edge.weight().root_depth(),
+                                &mut visited,
+                                &mut path,
+                            )
+                            .0,
+                        );
                     }
                 }
                 Node::Package(_) => {
                     path.clear();
-                    lines.extend(self.visit(
-                        Cursor::root(*node, self.conflict_marker),
-                        &mut visited,
-                        &mut path,
-                    ));
+                    lines.extend(
+                        self.visit(
+                            Cursor::root(*node, self.conflict_marker),
+                            0,
+                            &mut visited,
+                            &mut path,
+                        )
+                        .0,
+                    );
                 }
             }
         }
@@ -797,12 +818,9 @@ impl<'env> TreeDisplay<'env> {
     /// Return the packages and edges reachable from the displayed roots within the requested
     /// depth.
     ///
-    /// Depth follows the text tree's package-graph semantics. The targets of edges from
-    /// [`Node::Root`] start at depth zero; the synthetic root itself does not consume a level.
-    /// JSON subsequently represents a script or workspace-owned dependency group as an explicit
-    /// node, so its direct requirements remain at depth zero despite appearing one edge away from
-    /// a root in the serialized graph. Structural extra-to-package relationships likewise do not
-    /// participate in depth traversal.
+    /// Workspace members and explicitly selected packages start at depth zero. Requirements
+    /// owned by a script or virtual workspace start at depth one. Structural extra-to-package
+    /// relationships do not participate in depth traversal.
     fn json_traversal(&self) -> JsonTraversal {
         let mut distances = FxHashMap::default();
         let mut queue = VecDeque::new();
@@ -813,6 +831,10 @@ impl<'env> TreeDisplay<'env> {
             match self.graph[*root] {
                 Node::Root => {
                     for edge in self.graph.edges_directed(*root, Direction::Outgoing) {
+                        let depth = edge.weight().root_depth();
+                        if depth > self.depth {
+                            continue;
+                        }
                         let Node::Package(package_index) = self.graph[edge.target()] else {
                             continue;
                         };
@@ -826,9 +848,13 @@ impl<'env> TreeDisplay<'env> {
                             reached_via_dependency_group: false,
                         };
                         nodes.insert(state.index);
-                        if distances.insert(state.clone(), 0).is_none() {
-                            queue.push_back(state);
-                        }
+                        edges.insert(edge.id());
+                        distances
+                            .entry(state)
+                            .and_modify(|previous: &mut usize| {
+                                *previous = (*previous).min(depth);
+                            })
+                            .or_insert(depth);
                     }
                 }
                 Node::Package(package_index) => {
@@ -844,12 +870,16 @@ impl<'env> TreeDisplay<'env> {
                         reached_via_dependency_group: false,
                     };
                     nodes.insert(state.index);
-                    if distances.insert(state.clone(), 0).is_none() {
-                        queue.push_back(state);
-                    }
+                    distances.insert(state, 0);
                 }
             }
         }
+
+        // Some packages are both workspace members and direct group requirements. Seed the
+        // breadth-first traversal with their shortest depth, processing all depth-zero roots first.
+        let mut initial = distances.iter().collect::<Vec<_>>();
+        initial.sort_unstable_by_key(|(_, depth)| **depth);
+        queue.extend(initial.into_iter().map(|(state, _)| state.clone()));
 
         while let Some(source) = queue.pop_front() {
             let distance = distances[&source];
@@ -1003,10 +1033,8 @@ struct JsonTraversalNode<'env> {
 /// Now to be clear we do this "edge" analysis before lowering to the output graph,
 /// and this matters for several cases.
 ///
-/// First, scripts and workspaces aren't considered nodes before the lowering, and
-/// so script dependencies and workspace-group dependencies appear at depth 0 (another case where
-/// the JSON output respects the behaviour of the textual output):
-/// <https://github.com/astral-sh/uv/issues/19976>
+/// First, scripts and workspaces aren't considered nodes before the lowering. Their direct
+/// requirements start at depth 1, accounting for the script or group that owns those requirements.
 ///
 /// Second, the fact that `mypackage` is a dependency of `mypackage[extra]`.
 /// Specifically, in `metadata` if `foo` depends on `bar[extra1, extra2]`
@@ -1216,14 +1244,13 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
     }
 
     fn add_target_edges(&mut self, target: TreeJsonTarget<'_>, traversal: &JsonTraversal) {
-        // Forward edges from the synthetic root establish the target's depth-zero packages, so
-        // they are retained even though they are not part of `traversal.edges`. Inverted target
-        // edges must have been reached while traversing the reversed graph.
+        // Target edges, including forward edges from the synthetic root, must have been reached
+        // within the requested depth.
         let edges = self
             .tree
             .graph
             .edge_references()
-            .filter(|edge| !self.tree.invert || traversal.edges.contains(&edge.id()))
+            .filter(|edge| traversal.edges.contains(&edge.id()))
             .filter_map(|edge| {
                 let package = match (
                     &self.tree.graph[edge.source()],
@@ -1477,6 +1504,13 @@ struct VisitedNode<'env> {
     marker: Option<UniversalMarker>,
 }
 
+#[derive(Debug)]
+struct VisitedSubtree {
+    dependencies: Vec<PackageIndex>,
+    remaining_depth: usize,
+    complete: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Node {
     /// The synthetic root node.
@@ -1511,6 +1545,15 @@ enum Edge<'env> {
 }
 
 impl<'env> Edge<'env> {
+    /// The initial depth when traversing an edge from the synthetic root.
+    fn root_depth(&self) -> usize {
+        match self {
+            // Workspace members are roots, rather than dependencies of the synthetic root.
+            Self::Prod(None, _) => 0,
+            Self::Prod(Some(_), _) | Self::Optional(..) | Self::Dev(..) => 1,
+        }
+    }
+
     fn extras(&self) -> Option<RequestedExtras<'env>> {
         match self {
             Self::Prod(extras, _) => *extras,
