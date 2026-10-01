@@ -1,8 +1,8 @@
 //! Types and interfaces for interacting with [OSV] as a vulnerability service.
 //!
 //! We use OSV's `/v1/querybatch` endpoint to collect vulnerability IDs for all
-//! dependencies in batches of up to 1,000 (handling pagination as needed), then
-//! fetch full vulnerability records from `/v1/vulns/{id}` concurrently.
+//! dependencies in batches of up to 1,000 (handling pagination as needed), and
+//! fetch full vulnerability records from `/v1/vulns/{id}` as their IDs arrive.
 //!
 //! [OSV]: https://osv.dev/
 
@@ -272,6 +272,17 @@ impl Osv {
         dependencies: &'a [types::Dependency],
         filter: Filter,
     ) -> Result<IndexMap<&'a types::Dependency, FxHashSet<VulnerabilityID>>, Error> {
+        self.query_identifiers_with(dependencies, filter, |_| {})
+            .await
+    }
+
+    /// Report matching identifiers as pages arrive, retaining dependency order in the result.
+    async fn query_identifiers_with<'a>(
+        &self,
+        dependencies: &'a [types::Dependency],
+        filter: Filter,
+        mut on_identifier: impl FnMut(&VulnerabilityID),
+    ) -> Result<IndexMap<&'a types::Dependency, FxHashSet<VulnerabilityID>>, Error> {
         if dependencies.is_empty() {
             return Ok(IndexMap::default());
         }
@@ -316,13 +327,13 @@ impl Osv {
             for (batch, batch_response) in completed {
                 for ((dep, _), batch_result) in batch.into_iter().zip(batch_response.results) {
                     let ids = result_map.entry(dep).or_default();
-                    ids.extend(
-                        batch_result
-                            .vulns
-                            .iter()
-                            .filter(|v| filter.matches(&v.id))
-                            .map(|v| VulnerabilityID::new(v.id.clone())),
-                    );
+                    for vulnerability in batch_result.vulns {
+                        if filter.matches(&vulnerability.id) {
+                            let identifier = VulnerabilityID::new(vulnerability.id);
+                            on_identifier(&identifier);
+                            ids.insert(identifier);
+                        }
+                    }
                     if let Some(token) = batch_result.next_page_token {
                         pending.push_back((dep, Some(token)));
                     }
@@ -384,24 +395,37 @@ impl Osv {
         dependencies: &[types::Dependency],
         filter: Filter,
     ) -> Result<Vec<types::Finding>, Error> {
-        let dep_vuln_ids = self.query_identifiers(dependencies, filter).await?;
+        let (sender, identifiers) = futures::channel::mpsc::unbounded();
+        let identifier_queries = async move {
+            let mut unique_ids = FxHashSet::default();
+            let result = self
+                .query_identifiers_with(dependencies, filter, |id| {
+                    // Multiple dependencies and pages can identify the same vulnerability.
+                    if unique_ids.insert(id.clone()) {
+                        let _ = sender.unbounded_send(id.clone());
+                    }
+                })
+                .await;
+            drop(sender);
+            result
+        };
 
-        // Collect unique vuln IDs to minimize fetches.
-        let unique_ids: FxHashSet<_> = dep_vuln_ids
-            .values()
-            .flat_map(|ids| ids.iter())
-            .cloned()
-            .collect();
-
-        // Fetch full vulnerability records concurrently.
-        let vuln_details = futures::stream::iter(unique_ids)
+        // Fetch records while unrelated identifier pages are still in flight. Both request
+        // types use the shared download semaphore, so overlap cannot exceed the global limit.
+        let record_queries = identifiers
             .map(async |id| {
+                let _permit = self
+                    .concurrency
+                    .downloads_semaphore
+                    .acquire()
+                    .await
+                    .expect("Semaphore is open");
                 let vuln = self.fetch_vuln(id.as_str()).await?;
                 Ok::<(VulnerabilityID, Vulnerability), Error>((id, vuln))
             })
             .buffer_unordered(self.concurrency.downloads)
-            .try_collect::<FxHashMap<VulnerabilityID, Vulnerability>>()
-            .await?;
+            .try_collect::<FxHashMap<VulnerabilityID, Vulnerability>>();
+        let (dep_vuln_ids, vuln_details) = tokio::try_join!(identifier_queries, record_queries)?;
 
         // Build findings in dependency order (preserved by IndexMap).
         let findings = dep_vuln_ids

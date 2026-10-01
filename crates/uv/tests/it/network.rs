@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild};
 use bytes::Bytes;
 use http::StatusCode;
@@ -458,6 +458,151 @@ async fn audit_batches_pipeline_pagination() -> Result<()> {
         ]
     );
     tokio::time::timeout(Duration::from_secs(3), query).await???;
+    Ok(())
+}
+
+/// OSV records start before unrelated pages finish and share the global download limit.
+#[tokio::test]
+async fn audit_batches_pipeline_records() -> Result<()> {
+    let slow_release = Arc::new(tokio::sync::Semaphore::new(0));
+    let record_release = Arc::new(tokio::sync::Semaphore::new(0));
+    let response_slow_release = slow_release.clone();
+    let response_record_release = record_release.clone();
+    let (started, mut records) = tokio::sync::mpsc::unbounded_channel();
+    let (server, _guard) = streaming_server(move |request| {
+        let slow_release = response_slow_release.clone();
+        let record_release = response_record_release.clone();
+        let started = started.clone();
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        tokio::spawn(async move {
+            let response = if let Some(identifier) = request.uri().path().strip_prefix("/v1/vulns/")
+            {
+                let identifier = identifier.to_owned();
+                let _ = started.send(identifier.clone());
+                record_release
+                    .acquire()
+                    .await
+                    .expect("record response gate")
+                    .forget();
+                json!({"id": identifier, "modified": "2026-01-01T00:00:00Z"})
+            } else {
+                assert_eq!(request.uri().path(), "/v1/querybatch");
+                let body = request
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("request body")
+                    .to_bytes();
+                let body: serde_json::Value = serde_json::from_slice(&body).expect("request JSON");
+                let queries = body["queries"].as_array().expect("query array");
+                if queries[0]["package"]["name"] == "package-0" {
+                    slow_release
+                        .acquire()
+                        .await
+                        .expect("batch response gate")
+                        .forget();
+                }
+                let results = queries
+                    .iter()
+                    .map(|query| {
+                        if query["package"]["name"] == "package-1000"
+                            && query["page_token"] == "next"
+                        {
+                            json!({"vulns": [{"id": "VULN-SHARED"}, {"id": "VULN-NEXT"}]})
+                        } else if query["package"]["name"] == "package-1000" {
+                            json!({"vulns": [{"id": "VULN-SHARED"}], "next_page_token": "next"})
+                        } else if query["package"]["name"] == "package-0" {
+                            json!({"vulns": [{"id": "VULN-SHARED"}]})
+                        } else {
+                            json!({"vulns": []})
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                json!({"results": results})
+            };
+            let _ = sender
+                .send(Ok(Frame::data(Bytes::from(response.to_string()))))
+                .await;
+        });
+        hyper::Response::builder()
+            .header("Content-Type", "application/json")
+            .body(StreamBody::new(ReceiverStream::new(receiver)).boxed())
+    });
+    let service = uv_audit::osv::Osv::new(
+        uv_client::CachedClient::new(uv_client::BaseClientBuilder::default().retries(0).build()?),
+        Some(server.parse()?),
+        uv_configuration::Concurrency::new(2, 1, 1, 1),
+        uv_cache::Cache::temp()?,
+    );
+    let query = async move {
+        let dependencies = (0..=1000)
+            .map(|index| {
+                Ok(uv_audit::Dependency::new(
+                    format!("package-{index}").parse()?,
+                    "1.0".parse()?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let findings = service
+            .query_batch(&dependencies, uv_audit::osv::Filter::All)
+            .await?;
+        Ok::<_, anyhow::Error>(findings)
+    };
+    let observe = async {
+        let first = tokio::time::timeout(Duration::from_secs(3), records.recv()).await;
+        if first.is_err() {
+            slow_release.add_permits(1);
+            record_release.add_permits(2);
+        }
+        let first = first?.expect("first record request");
+        let premature = tokio::time::timeout(Duration::from_millis(100), records.recv()).await;
+        record_release.add_permits(1);
+        let second = if let Ok(second) = &premature {
+            second.clone()
+        } else {
+            tokio::time::timeout(Duration::from_secs(3), records.recv()).await?
+        };
+        record_release.add_permits(2);
+        slow_release.add_permits(1);
+        assert!(premature.is_err());
+        let mut observed = [first, second.expect("second record request")];
+        observed.sort();
+        assert_eq!(observed, ["VULN-NEXT", "VULN-SHARED"]);
+        Ok::<_, anyhow::Error>(())
+    };
+    let (findings, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::try_join!(query, observe)
+    })
+    .await??;
+    assert!(records.try_recv().is_err());
+    let mut findings = findings
+        .into_iter()
+        .map(|finding| match finding {
+            uv_audit::Finding::Vulnerability(vulnerability) => Ok((
+                vulnerability.dependency.name().to_string(),
+                vulnerability.id.as_str().to_owned(),
+            )),
+            uv_audit::Finding::ProjectStatus(_) => {
+                bail!("OSV returned a project-status finding")
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(
+        findings
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["package-0", "package-1000", "package-1000"]
+    );
+    findings.sort();
+    assert_eq!(
+        findings,
+        [
+            ("package-0".to_owned(), "VULN-SHARED".to_owned()),
+            ("package-1000".to_owned(), "VULN-NEXT".to_owned()),
+            ("package-1000".to_owned(), "VULN-SHARED".to_owned()),
+        ]
+    );
     Ok(())
 }
 
