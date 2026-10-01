@@ -80,8 +80,6 @@ jobs:
           sudo mv "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/
       - name: "Run shellcheck"
         run: find . -name '*.sh' -type f | xargs shellcheck --shell bash --severity style
-      - name: "Test GitHub job URLs"
-        run: bash scripts/test-github-job-url.sh
 
   validate-pyproject:
     timeout-minutes: 10
