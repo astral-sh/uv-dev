@@ -1,0 +1,259 @@
+{
+  "archive": {
+    "bytes": 625606,
+    "members": {
+      "aa.json": {
+        "bytes": 398985,
+        "sha256": "a5e417340982c84c1869852a2412a7b87d7e2bbde002c15f3960f8e7f83f1496"
+      },
+      "ab.json": {
+        "bytes": 282448,
+        "sha256": "7bd9b57ac43c42bd98c83747e0228ddad018ffa9ff4ee90153f2fcbcf5b4f927"
+      },
+      "analyze_pairs.py": {
+        "bytes": 8331,
+        "sha256": "b89f53f1182a22616938e566030dca6c9db226d7735a39084225e907e5b85770"
+      },
+      "analyze_pairs_guard.py": {
+        "bytes": 5706,
+        "sha256": "646ec7e07eb77b16188e145afa981b8e85a2ee9a885d8574c4072f90eae71fd5"
+      },
+      "calibration.json": {
+        "bytes": 223462,
+        "sha256": "5c568ccbff0d127f38d86467cdc530e63a07d2d3974b0e202523fb988e8a8bce"
+      },
+      "fixed-design.json": {
+        "bytes": 9716,
+        "sha256": "40222269efe2e9c46460a88403352618f6ee33a778301be5730d8c0402479c27"
+      },
+      "fixture-census.json": {
+        "bytes": 70036,
+        "sha256": "6c076d597862d33fb1d3eb57320e87c1dc2d7ba42941f68dc53f893bcad089b1"
+      },
+      "fixtures/packse.lock": {
+        "bytes": 67122,
+        "sha256": "1a52ca1f4c0a66acb04663c2995a6a03858db801661565270415910074630cae"
+      },
+      "fixtures/packse.pyproject.toml": {
+        "bytes": 1491,
+        "sha256": "869a9af0f341191c5ab1450a3aad3198826c91ac4608f30e97924ea06f0cef10"
+      },
+      "fixtures/prefect.lock": {
+        "bytes": 1277978,
+        "sha256": "840eac7e35e1d3da5a18256bd552e8c3df33d56e906f7cc8b5de93b4f68599c2"
+      },
+      "fixtures/prefect.pyproject.toml": {
+        "bytes": 14626,
+        "sha256": "29d348c3bb117122f508f0ff9623a05ca6770439a7ba15097738566b5465f123"
+      },
+      "fixtures/uv.lock": {
+        "bytes": 335735,
+        "sha256": "6dd539a1717aa9c63b7d2289ad584134d5fdf13da36804044ca0e382555dccb2"
+      },
+      "fixtures/uv.pyproject.toml": {
+        "bytes": 4872,
+        "sha256": "d273d221a95a861dec0e7ec58f505c0e2110c93f21ad5d4a43111490eab93f27"
+      },
+      "owner/environments.json": {
+        "bytes": 545,
+        "sha256": "73a09544f3b7658cfd8af13c3a234caef6efc0d0034ba489a4e01801f0614464"
+      },
+      "owner/fixtures.json": {
+        "bytes": 8645,
+        "sha256": "eef172d80db6dc0df47b55569f7a895edd43c867154bb09201772d9c83192ac2"
+      },
+      "plan.json": {
+        "bytes": 7364,
+        "sha256": "b005832f20fe9885bbc1f74732c0c7d4cdd15680ca41f56c807251d9737e98c8"
+      },
+      "prepare_fixture_census.py": {
+        "bytes": 4205,
+        "sha256": "5bac1570cc050874127cfb5d6bfe44ffbdfbab6389f0ff9b9e2ac90b60aeff5b"
+      },
+      "report.json": {
+        "bytes": 7325,
+        "sha256": "91a48d6f302aa4af02469b9a1aec2f7fd55237093e3f7621b3549854834eb9a2"
+      }
+    },
+    "path": "data.tar.gz",
+    "sha256": "efd61725767a9d29c6136cd11697191716a96c224e1e4f196aa549ae5005091e"
+  },
+  "build": {
+    "allocator": "production allocator",
+    "executables": {
+      "base": {
+        "bytes": 946864,
+        "sha256": "10287dcf608b9fbfbb8ced488c0f7fd7d81004b27cd773d28cbbfddc693e198e"
+      },
+      "head": {
+        "bytes": 946544,
+        "sha256": "8544cb27cad26266f5d1a5c363b85b90c8cfc79c7429fb5ca7c5d17289975242"
+      }
+    },
+    "identity": {
+      "base": {
+        "build_manifest_sha256": "7b05b1f7ef76b6fd8f757c9db20ccd25e24967ac89e4e52be15af7fb597134ad",
+        "executable_sha256": "10287dcf608b9fbfbb8ced488c0f7fd7d81004b27cd773d28cbbfddc693e198e",
+        "overlaid_tree": "b1fdd4959e7af04fbecf50f459eb4e2ba192b746"
+      },
+      "execution_admission_sha256": "6d46dadbefeaafc3e2c59b4b50eed3423b48c9a8a726aeaffaff656c754a6f93",
+      "head": {
+        "build_manifest_sha256": "74b8aa094b0be46dae6cec5ae42fd7a29755ec7b0fbfe6f91504b28dcc737c2c",
+        "executable_sha256": "8544cb27cad26266f5d1a5c363b85b90c8cfc79c7429fb5ca7c5d17289975242",
+        "overlaid_tree": "178ef40051cac3f1af2ba4ebf157b582caab2f33"
+      },
+      "matching_admission_bytes_sha256": "5f5842f4fac4bba073f1e93c9aab3c8e194f67b8d83404fc1d62bc21e5325c19"
+    },
+    "jobs": 1,
+    "production_artifacts_recompiled": true,
+    "profile": "release",
+    "rust": "1.97.1",
+    "separate_base_head_targets": true,
+    "target": "x86_64-unknown-linux-gnu",
+    "toolchain_binaries": {
+      "cargo": {
+        "bytes": 42839824,
+        "sha256": "828980723df339d62434390e9fb8ef8831036583343ae2316b7ab5646b5c1953"
+      },
+      "rustc": {
+        "bytes": 645000,
+        "sha256": "d3a664c970a9fd8361b64194861bebc1ae37b9054e5ee3400dc1c9e691797eea"
+      },
+      "rustdoc": {
+        "bytes": 13680928,
+        "sha256": "3b0c7aef20e0dfdfe2dd19ddb0b40d3b744f76318a44031813f501e1912934df"
+      }
+    }
+  },
+  "command_count": 1294,
+  "estimator": {
+    "calibration_source_sha256": "8b2d67e96929b70714286bc7158fbcd7ffa0665d9de63e31bf553be0cda11020",
+    "original_source_sha256": "b89f53f1182a22616938e566030dca6c9db226d7735a39084225e907e5b85770",
+    "portable_plan_bridge": "The replay supplies the original plan digest and measured normalized source trees to the unchanged estimator. Its guard checks the original raw fixed-design order. Historical observations are not rewritten.",
+    "strict_guard_sha256": "646ec7e07eb77b16188e145afa981b8e85a2ee9a885d8574c4072f90eae71fd5",
+    "unchanged_estimator": true
+  },
+  "native_process_receipts": "Only immutable hashes and relative references are included; original host/transport records remain in the private archive.",
+  "new_samples_collected": false,
+  "normalized_differences": [
+    {
+      "base": ["100644", "blob", "97b28088618048197e79bea3faa1c7ad99de840f"],
+      "head": ["100644", "blob", "18895c545d266fe1285b60f201c5c93110531487"],
+      "path": "crates/uv-configuration/src/install_options.rs"
+    }
+  ],
+  "original": {
+    "complete_readback_sha256": "83e2bc55f45182e2529e330b72415537998e508c858c80200565b092530730d6",
+    "completed_study_admission_sha256": "fba4ee54275a9d7ca1469dc2478ae4b7d7cd4df5d7acbbf5a243b4c73a1df7bf",
+    "fixture_sha256": "0eaf433596fd7ea9e09d6cb0332429c7dd362dee109ad27828531b4c34130404",
+    "overlay_sha256": "a9878a9983db45de31c667e87a33a71a7ee40d8954d52f6119f992e8482a5ba0",
+    "plan_sha256": "4d935e0fded11b083a324cdcc7e5ea255bdd5ba007bbe0697af1a8ef21419c7f",
+    "records": {
+      "aa.json": {
+        "bytes": 398985,
+        "sha256": "a5e417340982c84c1869852a2412a7b87d7e2bbde002c15f3960f8e7f83f1496"
+      },
+      "ab.json": {
+        "bytes": 282448,
+        "sha256": "7bd9b57ac43c42bd98c83747e0228ddad018ffa9ff4ee90153f2fcbcf5b4f927"
+      },
+      "calibration.json": {
+        "bytes": 223462,
+        "sha256": "5c568ccbff0d127f38d86467cdc530e63a07d2d3974b0e202523fb988e8a8bce"
+      },
+      "fixed-design.json": {
+        "bytes": 9716,
+        "sha256": "40222269efe2e9c46460a88403352618f6ee33a778301be5730d8c0402479c27"
+      },
+      "report.json": {
+        "bytes": 7325,
+        "sha256": "91a48d6f302aa4af02469b9a1aec2f7fd55237093e3f7621b3549854834eb9a2"
+      }
+    }
+  },
+  "overlays": {
+    "overlays/base.patch": {
+      "bytes": 20078,
+      "sha256": "f125535cb3e86bca66e485ace577ce20aa36aed2fa29e5f331bb72f6183e1748"
+    },
+    "overlays/head.patch": {
+      "bytes": 22389,
+      "sha256": "6eceaf5cde2609e12a640ceb86eabef391a8d96355fc2c47b384ec7a2fb034d9"
+    }
+  },
+  "portable_fixture": {
+    "bytes": 70036,
+    "case_content_and_order_unchanged": true,
+    "change": "Only the six input path strings are mapped to fixtures/<filename>. The public generator changes only input locations and output path metadata.",
+    "existing_owner": "https://github.com/astral-sh/uv-dev/pull/1559",
+    "historical_samples_rewritten": false,
+    "original_sha256": "0eaf433596fd7ea9e09d6cb0332429c7dd362dee109ad27828531b4c34130404",
+    "sha256": "6c076d597862d33fb1d3eb57320e87c1dc2d7ba42941f68dc53f893bcad089b1",
+    "source_inputs": [
+      {
+        "bytes": 67122,
+        "filename": "packse.lock",
+        "sha256": "1a52ca1f4c0a66acb04663c2995a6a03858db801661565270415910074630cae",
+        "url": "https://raw.githubusercontent.com/astral-sh/packse/18be7766b14aa3e03db37bc575959b3f4c6fbacb/uv.lock"
+      },
+      {
+        "bytes": 1491,
+        "filename": "packse.pyproject.toml",
+        "sha256": "869a9af0f341191c5ab1450a3aad3198826c91ac4608f30e97924ea06f0cef10",
+        "url": "https://raw.githubusercontent.com/astral-sh/packse/18be7766b14aa3e03db37bc575959b3f4c6fbacb/pyproject.toml"
+      },
+      {
+        "bytes": 335735,
+        "filename": "uv.lock",
+        "sha256": "6dd539a1717aa9c63b7d2289ad584134d5fdf13da36804044ca0e382555dccb2",
+        "url": "https://raw.githubusercontent.com/astral-sh/uv/c7db143b6a64b9ef73ab5cd39a3241a24c8807bc/uv.lock"
+      },
+      {
+        "bytes": 4872,
+        "filename": "uv.pyproject.toml",
+        "sha256": "d273d221a95a861dec0e7ec58f505c0e2110c93f21ad5d4a43111490eab93f27",
+        "url": "https://raw.githubusercontent.com/astral-sh/uv/c7db143b6a64b9ef73ab5cd39a3241a24c8807bc/pyproject.toml"
+      },
+      {
+        "bytes": 1277978,
+        "filename": "prefect.lock",
+        "sha256": "840eac7e35e1d3da5a18256bd552e8c3df33d56e906f7cc8b5de93b4f68599c2",
+        "url": "https://raw.githubusercontent.com/PrefectHQ/prefect/c85deeb5f305c307181bd0001972f291ea3fd465/uv.lock"
+      },
+      {
+        "bytes": 14626,
+        "filename": "prefect.pyproject.toml",
+        "sha256": "29d348c3bb117122f508f0ff9623a05ca6770439a7ba15097738566b5465f123",
+        "url": "https://raw.githubusercontent.com/PrefectHQ/prefect/c85deeb5f305c307181bd0001972f291ea3fd465/pyproject.toml"
+      }
+    ]
+  },
+  "product_pull_request": "https://github.com/astral-sh/uv-dev/pull/252",
+  "public_provenance_allowlist": [
+    "literal public commits, Git trees, product blobs, common overlay patches",
+    "toolchain version/target and cargo/rustc/rustdoc content identities",
+    "retained executable and build-manifest content identities",
+    "original ordered inner-clock samples and relative native-record hashes",
+    "public source-pinned fixtures and metadata-only portable census",
+    "unchanged estimator, strict fixed-design guard, calibration policy, and all outcomes"
+  ],
+  "recorded_on": "2026-10-01",
+  "schema": "uv-install-options-evidence-v1",
+  "source_pair": {
+    "base": {
+      "commit": "0ded765b4df49fe2dbe7e0497908edb80d9c8fbc",
+      "original_blob_count": 1614,
+      "original_tree": "f677956179b4ba260adc15f882dbd0f90bb0aea9",
+      "overlaid_tree": "b1fdd4959e7af04fbecf50f459eb4e2ba192b746",
+      "production_blob": "97b28088618048197e79bea3faa1c7ad99de840f"
+    },
+    "head": {
+      "commit": "018919a0813966ce887628b3170be0f03625e282",
+      "original_blob_count": 1615,
+      "original_tree": "aad54c2752ccc002f319e78bbe80254f5fa7319b",
+      "overlaid_tree": "178ef40051cac3f1af2ba4ebf157b582caab2f33",
+      "production_blob": "18895c545d266fe1285b60f201c5c93110531487"
+    }
+  },
+  "whole_command_claim": false
+}
