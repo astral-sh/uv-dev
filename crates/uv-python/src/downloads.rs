@@ -6,6 +6,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, SystemTimeError};
 use std::{env, io};
@@ -974,12 +975,22 @@ impl FromStr for PythonDownloadRequest {
 const BUILTIN_PYTHON_DOWNLOADS_ZSTD: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/download-metadata.json.zst"));
 
-/// Default URL for runtime Python download metadata.
-const REMOTE_PYTHON_DOWNLOAD_METADATA_URL: &str = "https://raw.githubusercontent.com/astral-sh/versions/refs/heads/main/v1/python-build-standalone.ndjson";
-const REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_URL: &str =
-    "https://releases.astral.sh/github/versions/main/v1/python-build-standalone.ndjson";
-const REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_SUFFIX: &str =
-    "/github/versions/main/v1/python-build-standalone.ndjson";
+/// Path within the `astral-sh/versions` repository for runtime Python download metadata.
+const REMOTE_PYTHON_DOWNLOAD_METADATA_PATH: &str = "v1/python-build-standalone.ndjson";
+static REMOTE_PYTHON_DOWNLOAD_METADATA_URL: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "https://raw.githubusercontent.com/astral-sh/versions/refs/heads/main/{REMOTE_PYTHON_DOWNLOAD_METADATA_PATH}"
+    )
+});
+static REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_SUFFIX: LazyLock<String> =
+    LazyLock::new(|| format!("/github/versions/main/{REMOTE_PYTHON_DOWNLOAD_METADATA_PATH}"));
+static REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_URL: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{}{}",
+        astral_mirror_base_url(None),
+        REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_SUFFIX.as_str()
+    )
+});
 
 const VERSIONS_CACHE_FILENAME: &str = "python-build-standalone.ndjson";
 const VERSIONS_CACHE_META_FILENAME: &str = "python-build-standalone.meta.json";
@@ -1086,12 +1097,13 @@ fn python_download_metadata_urls(
 ) -> Result<Vec<DisplaySafeUrl>, Error> {
     let astral_mirror_url = custom_astral_mirror_url(astral_mirror_url);
     let mirror = DisplaySafeUrl::parse(&format!(
-        "{}{REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_SUFFIX}",
-        astral_mirror_base_url(astral_mirror_url)
+        "{}{}",
+        astral_mirror_base_url(astral_mirror_url),
+        REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_SUFFIX.as_str()
     ))?;
     let mut urls = vec![mirror];
     if astral_mirror_url.is_none() {
-        urls.push(DisplaySafeUrl::parse(REMOTE_PYTHON_DOWNLOAD_METADATA_URL)?);
+        urls.push(DisplaySafeUrl::parse(&REMOTE_PYTHON_DOWNLOAD_METADATA_URL)?);
     }
     Ok(urls)
 }
@@ -1197,7 +1209,7 @@ impl DownloadListSource<'_> {
 }
 
 fn versions_cache_shard_key(url: &DisplaySafeUrl) -> String {
-    if url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_URL {
+    if url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_URL.as_str() {
         "versions/default".to_string()
     } else {
         let unredacted_url = url.as_str();
@@ -1218,8 +1230,8 @@ fn versions_cache_entries(shard: &CacheShard) -> (CacheEntry, CacheEntry) {
 
 fn supports_incremental_versions_cache(url: &DisplaySafeUrl) -> bool {
     // Only the official manifest promises to add new releases by prepending complete records.
-    url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_URL
-        || url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_URL
+    url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_URL.as_str()
+        || url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_URL.as_str()
 }
 
 async fn read_versions_cache(
@@ -3601,7 +3613,10 @@ mod tests {
             urls[0].as_str(),
             "https://releases.astral.sh/github/versions/main/v1/python-build-standalone.ndjson"
         );
-        assert_eq!(urls[1].as_str(), REMOTE_PYTHON_DOWNLOAD_METADATA_URL);
+        assert_eq!(
+            urls[1].as_str(),
+            "https://raw.githubusercontent.com/astral-sh/versions/refs/heads/main/v1/python-build-standalone.ndjson"
+        );
 
         let urls = python_download_metadata_urls(Some("https://example.com/mirror/"))?;
         assert_eq!(urls.len(), 1);
