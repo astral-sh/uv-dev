@@ -266,15 +266,14 @@ impl BatchPrefetcherRunner {
                 continue;
             };
 
-            // Avoid prefetching built distributions that don't support _either_ PEP 658 (`.metadata`)
-            // or range requests.
+            // Speculative versions need either a metadata sidecar or confirmed range support.
             if !(wheel.file.dist_info_metadata.is_some()
                 || wheel
                     .file
                     .url
                     .to_url()
                     .ok()
-                    .is_none_or(|url| self.capabilities.supports_range_requests(&url)))
+                    .is_some_and(|url| self.capabilities.has_known_range_support(&url)))
             {
                 debug!("Abandoning prefetch for {wheel} due to missing artifact capabilities");
                 return Ok(());

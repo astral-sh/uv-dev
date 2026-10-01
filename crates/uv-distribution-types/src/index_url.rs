@@ -549,12 +549,13 @@ bitflags::bitflags! {
 
 /// Capabilities observed for indexes and artifact origins.
 ///
-/// Only missing capabilities are stored, so both maps are usually empty. An index can link to
-/// several artifact origins with different range-request support.
+/// An index can link to several artifact origins with different range-request support. Required
+/// metadata requests optimistically try ranges, while speculative requests require observed support.
 #[derive(Debug, Default, Clone)]
 pub struct IndexCapabilities {
     indexes: Arc<RwLock<FxHashMap<IndexUrl, Flags>>>,
     no_range_requests: Arc<RwLock<FxHashSet<Origin>>>,
+    range_requests: Arc<RwLock<FxHashSet<Origin>>>,
 }
 
 impl IndexCapabilities {
@@ -565,6 +566,17 @@ impl IndexCapabilities {
             .read()
             .unwrap()
             .contains(&url.origin())
+    }
+
+    /// Returns `true` if range requests have succeeded for the artifact's origin.
+    pub fn has_known_range_support(&self, url: &DisplaySafeUrl) -> bool {
+        self.supports_range_requests(url)
+            && self.range_requests.read().unwrap().contains(&url.origin())
+    }
+
+    /// Mark an artifact origin as having served a successful range request.
+    pub fn set_range_requests_supported(&self, url: &DisplaySafeUrl) {
+        self.range_requests.write().unwrap().insert(url.origin());
     }
 
     /// Mark an artifact origin as not supporting range requests.
@@ -627,7 +639,17 @@ mod tests {
         let other_host = DisplaySafeUrl::parse("https://cdn.example.com/a.whl").unwrap();
         let other_port = DisplaySafeUrl::parse("https://files.example.com:8443/a.whl").unwrap();
         let other_scheme = DisplaySafeUrl::parse("http://files.example.com/a.whl").unwrap();
+        assert!(!capabilities.has_known_range_support(&first));
+        capabilities.set_range_requests_supported(&first);
+        assert!(capabilities.has_known_range_support(&first));
+        assert!(capabilities.has_known_range_support(&same_origin));
+        assert!(!capabilities.has_known_range_support(&other_host));
+        assert!(!capabilities.has_known_range_support(&other_port));
+        assert!(!capabilities.has_known_range_support(&other_scheme));
         capabilities.set_no_range_requests(&first);
+        capabilities.set_range_requests_supported(&same_origin);
+        assert!(!capabilities.has_known_range_support(&first));
+        assert!(!capabilities.has_known_range_support(&same_origin));
         assert!(!capabilities.supports_range_requests(&first));
         assert!(!capabilities.supports_range_requests(&same_origin));
         assert!(capabilities.supports_range_requests(&other_host));

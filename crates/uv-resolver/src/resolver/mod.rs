@@ -2290,6 +2290,23 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     }
                 }
 
+                // A speculative wheel without a metadata sidecar or confirmed range support can
+                // require streaming the whole archive. An exact version is already required by
+                // the current constraints, so fetching it can overlap other metadata requests.
+                if let Some(wheel) = dist.wheel()
+                    && wheel.file.dist_info_metadata.is_none()
+                    && !(range.is_singleton_constraint() && range.iter().nth(1).is_none())
+                    && !wheel
+                        .file
+                        .url
+                        .to_url()
+                        .ok()
+                        .is_some_and(|url| self.capabilities.has_known_range_support(&url))
+                {
+                    debug!("Skipping wheel archive prefetch for: {package_name}");
+                    return Ok(None);
+                }
+
                 // Without advertised metadata, a source candidate can require downloading the
                 // entire archive and running a build backend. Leave that work to the solver's
                 // selected candidate unless the version is already pinned.
