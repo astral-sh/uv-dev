@@ -1555,7 +1555,6 @@ async fn tool_upgrade_invalid_auth() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + executable-application==0.3.0
     Installed 1 executable: app

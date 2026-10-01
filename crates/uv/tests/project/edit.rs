@@ -14367,7 +14367,7 @@ async fn pip_install_redirect_with_netrc_cross_origin() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6

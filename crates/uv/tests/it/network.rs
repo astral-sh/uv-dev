@@ -1577,6 +1577,163 @@ fn wheel_server(
     Ok((server, guard, requests, hash))
 }
 
+#[test]
+fn small_registry_wheel_is_reused_after_resolution() -> Result<()> {
+    for require_ranges in [false, true] {
+        let context = uv_test::test_context!("3.12");
+        let wheel = Bytes::from(fs_err::read(
+            context
+                .workspace_root
+                .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        )?);
+        let index = Bytes::from(
+            json!({
+                "name": "ok",
+                "files": [{
+                    "filename": "ok-1.0.0-py3-none-any.whl",
+                    "url": "/ok-1.0.0-py3-none-any.whl",
+                    "hashes": {"sha256": hex::encode(Sha256::digest(&wheel))},
+                    "size": wheel.len(),
+                    "upload-time": "2024-01-01T00:00:00Z"
+                }]
+            })
+            .to_string(),
+        );
+        let full = Arc::new(AtomicUsize::new(0));
+        let ranges = Arc::new(AtomicUsize::new(0));
+        let heads = Arc::new(AtomicUsize::new(0));
+        let (server_full, server_ranges, server_heads) =
+            (full.clone(), ranges.clone(), heads.clone());
+        let (server, _guard) = streaming_server(move |request| {
+            let response =
+                hyper::Response::builder().header("cache-control", "public, max-age=3600");
+            if request.uri().path() == "/simple/ok/" {
+                return response
+                    .header("content-type", "application/vnd.pypi.simple.v1+json")
+                    .body(http_body_util::Full::new(index.clone()).boxed());
+            }
+            if request.method() == hyper::Method::HEAD {
+                server_heads.fetch_add(1, Ordering::Relaxed);
+                return response
+                    .header(CONTENT_LENGTH, wheel.len())
+                    .header(ACCEPT_RANGES, "bytes")
+                    .body(http_body_util::Empty::new().boxed());
+            }
+            if let Some(range) = request.headers().get(RANGE) {
+                server_ranges.fetch_add(1, Ordering::Relaxed);
+                let (start, end) = range
+                    .to_str()
+                    .expect("ASCII range")
+                    .strip_prefix("bytes=")
+                    .expect("byte range")
+                    .split_once('-')
+                    .expect("range bounds");
+                let start: usize = start.parse().expect("range start");
+                let end: usize = end.parse().expect("range end");
+                return response
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(
+                        CONTENT_RANGE,
+                        format!("bytes {start}-{end}/{}", wheel.len()),
+                    )
+                    .body(http_body_util::Full::new(wheel.slice(start..=end)).boxed());
+            }
+            server_full.fetch_add(1, Ordering::Relaxed);
+            response.body(http_body_util::Full::new(wheel.clone()).boxed())
+        });
+        let output = context
+            .pip_install()
+            .arg("ok==1.0.0")
+            .arg("--default-index")
+            .arg(format!("{server}/simple"))
+            .env(
+                EnvVars::UV_REQUIRE_METADATA_RANGE_REQUESTS,
+                require_ranges.to_string(),
+            )
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(full.load(Ordering::Relaxed), 1);
+        assert_eq!(heads.load(Ordering::Relaxed), usize::from(require_ranges));
+        assert_eq!(ranges.load(Ordering::Relaxed), usize::from(require_ranges));
+    }
+    Ok(())
+}
+
+#[test]
+fn small_registry_wheel_retains_cached_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("ok==1.0.0\n")?;
+    let wheel = Bytes::from(fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+    )?);
+    let index = Bytes::from(
+        json!({
+            "name": "ok",
+            "files": [{
+                "filename": "ok-1.0.0-py3-none-any.whl",
+                "url": "/ok-1.0.0-py3-none-any.whl",
+                "hashes": {"sha256": hex::encode(Sha256::digest(&wheel))},
+                "size": wheel.len(),
+                "upload-time": "2024-01-01T00:00:00Z"
+            }]
+        })
+        .to_string(),
+    );
+    let full = Arc::new(AtomicUsize::new(0));
+    let server_full = full.clone();
+    let (server, _guard) = streaming_server(move |request| {
+        let response = hyper::Response::builder().header("cache-control", "public, max-age=3600");
+        if request.uri().path() == "/simple/ok/" {
+            return response
+                .header("content-type", "application/vnd.pypi.simple.v1+json")
+                .body(http_body_util::Full::new(index.clone()).boxed());
+        }
+        server_full.fetch_add(1, Ordering::Relaxed);
+        response.body(http_body_util::Full::new(wheel.clone()).boxed())
+    });
+
+    for collect_hashes in [true, false] {
+        let mut command = context.pip_compile();
+        command
+            .arg("requirements.in")
+            .arg("--default-index")
+            .arg(format!("{server}/simple"));
+        if collect_hashes {
+            command.arg("--generate-hashes");
+        }
+        let output = command.output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(full.load(Ordering::Relaxed), 1);
+    }
+
+    let output = context
+        .pip_install()
+        .arg("ok==1.0.0")
+        .arg("--default-index")
+        .arg(format!("{server}/simple"))
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(full.load(Ordering::Relaxed), 2);
+    Ok(())
+}
+
 fn assert_wheel_download(
     range_response: RangeResponse,
     retries: usize,

@@ -5274,7 +5274,6 @@ async fn tool_install_credentials() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + executable-application==0.3.0
     Installed 1 executable: app
@@ -5363,7 +5362,6 @@ async fn tool_install_default_credentials() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + executable-application==0.3.0
     Installed 1 executable: app
