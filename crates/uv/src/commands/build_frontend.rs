@@ -3,18 +3,20 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::{fmt, io, iter};
 
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use thiserror::Error;
+use tokio::sync::{Mutex, OnceCell};
 use tracing::{debug, instrument};
 
 use uv_auth::CredentialsCache;
 use uv_build_backend::check_direct_build;
 use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, CacheBucket};
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, FlatIndexError, RegistryClientBuilder};
 use uv_configuration::{
     BuildIsolation, BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints,
     DependencyGroupsWithDefaults, DependencyMode, DependencyModifiers, HashCheckingMode,
@@ -35,6 +37,8 @@ use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
+use uv_pep508::MarkerEnvironment;
+use uv_platform_tags::Platform;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{
     ConfigDiscovery, EnvironmentPreference, PythonDownloads, PythonEnvironment, PythonInstallation,
@@ -64,7 +68,7 @@ pub(crate) enum Error {
     #[error(transparent)]
     HashStrategy(#[from] uv_types::HashStrategyError),
     #[error(transparent)]
-    FlatIndex(#[from] uv_client::FlatIndexError),
+    FlatIndex(#[from] Arc<FlatIndexError>),
     #[error(transparent)]
     ClientBuild(#[from] uv_client::ClientBuildError),
     #[error(transparent)]
@@ -472,6 +476,7 @@ async fn build_impl(
         }
     }
 
+    let flat_indexes = BuildFlatIndexes::default();
     let results: Vec<_> = futures::future::join_all(packages.into_iter().map(|source| {
         let future = build_package(
             source.clone(),
@@ -487,6 +492,7 @@ async fn build_impl(
             workspace_cache,
             printer,
             index_locations,
+            &flat_indexes,
             client_builder.clone(),
             hash_checking,
             build_logs,
@@ -549,6 +555,42 @@ async fn build_impl(
     }
 }
 
+#[derive(Default)]
+struct BuildFlatIndexes(Mutex<Vec<BuildFlatIndex>>);
+
+type BuildFlatIndexResult = Result<FlatIndex, Arc<FlatIndexError>>;
+
+struct BuildFlatIndex {
+    markers: MarkerEnvironment,
+    platform: Platform,
+    index: Arc<OnceCell<BuildFlatIndexResult>>,
+}
+
+impl BuildFlatIndexes {
+    async fn for_interpreter(
+        &self,
+        markers: &MarkerEnvironment,
+        platform: &Platform,
+    ) -> Arc<OnceCell<BuildFlatIndexResult>> {
+        let mut indexes = self.0.lock().await;
+        // Index responses can depend on the interpreter data in the user agent.
+        if let Some(entry) = indexes
+            .iter()
+            .find(|entry| entry.markers == *markers && entry.platform == *platform)
+        {
+            return Arc::clone(&entry.index);
+        }
+
+        let index = Arc::new(OnceCell::new());
+        indexes.push(BuildFlatIndex {
+            markers: markers.clone(),
+            platform: platform.clone(),
+            index: Arc::clone(&index),
+        });
+        index
+    }
+}
+
 #[expect(clippy::fn_params_excessive_bools)]
 async fn build_package(
     source: AnnotatedSource<'_>,
@@ -564,6 +606,7 @@ async fn build_package(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     index_locations: &IndexLocations,
+    flat_indexes: &BuildFlatIndexes,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
     build_logs: bool,
@@ -700,8 +743,21 @@ async fn build_package(
         }
     };
 
-    // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    // Share unfiltered `--find-links` entries across builds for the same interpreter data.
+    let shared_flat_index = flat_indexes
+        .for_interpreter(interpreter.markers(), interpreter.platform())
+        .await;
+    // A completed failure applies to every build using the same index data. Retrying the
+    // initialization would serialize a new request after each exhausted client retry budget.
+    let flat_index = shared_flat_index
+        .get_or_init(|| async {
+            FlatIndex::load(&client, cache, index_locations)
+                .await
+                .map_err(Arc::new)
+        })
+        .await
+        .as_ref()
+        .map_err(Arc::clone)?;
 
     // Initialize any shared state.
     let state = SharedState::default();
@@ -717,7 +773,7 @@ async fn build_package(
         &build_constraints,
         &interpreter,
         index_locations,
-        &flat_index,
+        flat_index,
         dependency_metadata,
         state.clone(),
         index_strategy,

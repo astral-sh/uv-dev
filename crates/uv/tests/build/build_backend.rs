@@ -9,11 +9,124 @@ use insta::{allow_duplicates, assert_json_snapshot, assert_snapshot};
 use std::io::BufReader;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
 use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[tokio::test]
+async fn build_workspace_find_links_are_shared_per_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filter((r"\[(alpha|beta|delta|gamma)\]", "[PKG]"));
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["packages/*"]
+    "#})?;
+    for (name, python) in [
+        ("alpha", "3.11"),
+        ("beta", "3.11"),
+        ("gamma", "3.12"),
+        ("delta", "3.12"),
+    ] {
+        let package = context.temp_dir.child(format!("packages/{name}"));
+        package.child(".python-version").write_str(python)?;
+        package.child("pyproject.toml").write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1.0.0"
+            requires-python = ">=3.11"
+
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#})?;
+        package.child("backend.py").write_str(&formatdoc! {r#"
+            from pathlib import Path
+            from zipfile import ZipFile
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                filename = "{name}-1.0.0-py3-none-any.whl"
+                with ZipFile(Path(wheel_directory) / filename, "w") as wheel:
+                    wheel.writestr("{name}-1.0.0.dist-info/METADATA", "Metadata-Version: 2.3\nName: {name}\nVersion: 1.0.0\n")
+                    wheel.writestr("{name}-1.0.0.dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+                    wheel.writestr("{name}-1.0.0.dist-info/RECORD", "")
+                return filename
+        "#})?;
+    }
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/links"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Content-Type", "text/html")
+                .insert_header("Cache-Control", "no-store")
+                .set_body_string("<html></html>")
+                .set_delay(Duration::from_millis(25)),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--all-packages")
+        .arg("--wheel")
+        .arg("--no-index")
+        .arg("--no-build-logs")
+        .arg("--find-links")
+        .arg(format!("{}/links", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    Successfully built dist/alpha-1.0.0-py3-none-any.whl
+    Successfully built dist/beta-1.0.0-py3-none-any.whl
+    Successfully built dist/delta-1.0.0-py3-none-any.whl
+    Successfully built dist/gamma-1.0.0-py3-none-any.whl
+    ");
+
+    Mock::given(method("GET"))
+        .and(path("/forbidden"))
+        .respond_with(ResponseTemplate::new(403).set_delay(Duration::from_millis(25)))
+        .expect(2)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--all-packages")
+        .arg("--wheel")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(format!("{}/forbidden", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `alpha @ [TEMP_DIR]/packages/alpha`
+      cause: Failed to read `--find-links` URL: http://[LOCALHOST]/forbidden
+      cause: Failed to fetch: `http://[LOCALHOST]/forbidden`
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/forbidden)
+    error: Failed to build `beta @ [TEMP_DIR]/packages/beta`
+      cause: Failed to read `--find-links` URL: http://[LOCALHOST]/forbidden
+      cause: Failed to fetch: `http://[LOCALHOST]/forbidden`
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/forbidden)
+    error: Failed to build `delta @ [TEMP_DIR]/packages/delta`
+      cause: Failed to read `--find-links` URL: http://[LOCALHOST]/forbidden
+      cause: Failed to fetch: `http://[LOCALHOST]/forbidden`
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/forbidden)
+    error: Failed to build `gamma @ [TEMP_DIR]/packages/gamma`
+      cause: Failed to read `--find-links` URL: http://[LOCALHOST]/forbidden
+      cause: Failed to fetch: `http://[LOCALHOST]/forbidden`
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/forbidden)
+    ");
+    server.verify().await;
+    Ok(())
+}
 
 #[test]
 fn get_requires_for_build_returns_error() {
