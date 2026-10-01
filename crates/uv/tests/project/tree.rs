@@ -252,15 +252,11 @@ fn root_owned_dependencies_respect_depth() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     child v1.0.0
-
-    ----- stderr -----
     ");
     uv_snapshot!(context.filters(), context.tree().arg("--frozen").arg("--universal").arg("--depth").arg("0").arg("--invert"), @"
     exit_code: 0 (success)
     ----- stdout -----
     leaf v1.0.0
-
-    ----- stderr -----
     ");
 
     let member = context.temp_dir.child("member");
@@ -297,8 +293,6 @@ fn root_owned_dependencies_respect_depth() -> Result<()> {
     member v1.0.0
     └── child v1.0.0
         └── leaf v1.0.0
-
-    ----- stderr -----
     ");
 
     let mut projections = Vec::new();
@@ -3294,11 +3288,10 @@ fn cycle_depth_boundary_no_premature_dedupe() -> Result<()> {
     "#,
     )?;
 
-    // With --depth 3, packages at the depth boundary (depth 3) are shown but not
-    // marked as visited. Packages below the boundary (e.g., `fixtures` at depth 1)
-    // are correctly marked visited and show (*) on later appearances. Leaf packages
-    // like `pbr` (no children in this graph) appear without (*) even when visited,
-    // since there is nothing to deduplicate.
+    // With --depth 3, the first `testtools` path cannot display its entire subtree.
+    // Its shallower direct-dependency path must expand the remaining levels. Cycles
+    // and subtrees already shown with enough depth still use (*); leaf packages
+    // such as `pbr` have nothing to deduplicate.
     uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--depth").arg("3"), @r"
     exit_code: 0 (success)
     ----- stdout -----
@@ -3314,7 +3307,18 @@ fn cycle_depth_boundary_no_premature_dedupe() -> Result<()> {
     │       ├── six v1.16.0
     │       ├── traceback2 v1.4.0
     │       └── unittest2 v1.1.0
-    └── testtools v2.3.0 (*)
+    └── testtools v2.3.0
+        ├── extras v1.0.0
+        ├── fixtures v3.0.0 (*)
+        ├── pbr v6.0.0
+        ├── python-mimeparse v1.6.0
+        ├── six v1.16.0
+        ├── traceback2 v1.4.0
+        │   └── linecache2 v1.0.0
+        └── unittest2 v1.1.0
+            ├── argparse v1.4.0
+            ├── six v1.16.0
+            └── traceback2 v1.4.0 (*)
     (*) Package tree already displayed
 
     ----- stderr -----
