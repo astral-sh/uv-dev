@@ -29,7 +29,9 @@ use uv_distribution_types::{
     PackageConfigSettings, Requirement, Resolution, SourceDist, VersionOrUrlRef,
 };
 use uv_git::GitResolver;
-use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
+use uv_installer::{
+    InstallationStrategy, Installer, Plan, Planner, Preparer, SharedWheelDownloads, SitePackages,
+};
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
 use uv_python::{Interpreter, PythonEnvironment};
@@ -470,7 +472,8 @@ impl BuildContext for BuildDispatch<'_> {
                     self.concurrency.downloads_semaphore.clone(),
                 )
                 .with_build_stack(build_stack),
-            );
+            )
+            .with_shared_wheels(self.shared_state.wheel_downloads.as_ref());
 
             debug!(
                 "Downloading and building requirement{} for build: {}",
@@ -682,6 +685,8 @@ pub struct SharedState {
     index: InMemoryIndex,
     /// The downloaded distributions.
     in_flight: InFlight,
+    /// Policy-keyed remote wheels shared by independent builds for the same interpreter.
+    wheel_downloads: Option<SharedWheelDownloads>,
     /// Build directories for any PEP 517 builds executed during resolution or installation.
     build_arena: BuildArena<SourceBuild>,
 }
@@ -697,8 +702,16 @@ impl SharedState {
             git: self.git.clone(),
             capabilities: self.capabilities.clone(),
             build_arena: self.build_arena.clone(),
+            wheel_downloads: self.wheel_downloads.clone(),
             ..Default::default()
         }
+    }
+
+    /// Reuse remote wheel downloads without sharing resolution or source-build state.
+    #[must_use]
+    pub fn with_shared_wheel_downloads(mut self, wheels: SharedWheelDownloads) -> Self {
+        self.wheel_downloads = Some(wheels);
+        self
     }
 
     /// Return the [`GitResolver`] used by the [`SharedState`].

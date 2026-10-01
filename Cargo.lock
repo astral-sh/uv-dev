@@ -6795,6 +6795,7 @@ dependencies = [
  "uv-git-types",
  "uv-install-wheel",
  "uv-normalize",
+ "uv-once-map",
  "uv-pep440",
  "uv-pep508",
  "uv-platform-tags",

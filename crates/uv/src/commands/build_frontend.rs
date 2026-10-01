@@ -8,6 +8,7 @@ use std::{fmt, io, iter};
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tracing::{debug, instrument};
 
 use uv_auth::CredentialsCache;
@@ -32,13 +33,16 @@ use uv_distribution_types::{
 use uv_errors::{ErrorOptions, Hinted, Hints, write_error_chain_with_options};
 use uv_fs::{Simplified, normalize_path, relative_to};
 use uv_install_wheel::LinkMode;
-use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
+use uv_installer::{InstallationStrategy, SatisfiesResult, SharedWheelDownloads, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
+use uv_pep508::MarkerEnvironment;
+use uv_platform_tags::Platform;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, PythonDownloads, PythonEnvironment, PythonInstallation,
-    PythonPreference, PythonRequest, PythonVersionFile, VersionFileDiscoveryOptions,
+    ConfigDiscovery, EnvironmentPreference, Interpreter, PythonDownloads, PythonEnvironment,
+    PythonInstallation, PythonPreference, PythonRequest, PythonVersionFile,
+    VersionFileDiscoveryOptions,
 };
 use uv_requirements::RequirementsSource;
 use uv_resolver::{ExcludeNewer, FlatIndex};
@@ -472,6 +476,7 @@ async fn build_impl(
         }
     }
 
+    let wheel_downloads = WorkspaceWheelDownloads::default();
     let results: Vec<_> = futures::future::join_all(packages.into_iter().map(|source| {
         let future = build_package(
             source.clone(),
@@ -487,6 +492,7 @@ async fn build_impl(
             workspace_cache,
             printer,
             index_locations,
+            &wheel_downloads,
             client_builder.clone(),
             hash_checking,
             build_logs,
@@ -549,6 +555,38 @@ async fn build_impl(
     }
 }
 
+#[derive(Default)]
+struct WorkspaceWheelDownloads(Mutex<Vec<InterpreterWheelDownloads>>);
+
+struct InterpreterWheelDownloads {
+    executable: PathBuf,
+    markers: MarkerEnvironment,
+    platform: Platform,
+    downloads: SharedWheelDownloads,
+}
+
+impl WorkspaceWheelDownloads {
+    async fn for_interpreter(&self, interpreter: &Interpreter) -> SharedWheelDownloads {
+        let mut entries = self.0.lock().await;
+        if let Some(entry) = entries.iter().find(|entry| {
+            entry.executable == interpreter.real_executable()
+                && entry.markers == *interpreter.markers()
+                && entry.platform == *interpreter.platform()
+        }) {
+            return entry.downloads.clone();
+        }
+
+        let downloads = SharedWheelDownloads::default();
+        entries.push(InterpreterWheelDownloads {
+            executable: interpreter.real_executable().to_path_buf(),
+            markers: interpreter.markers().clone(),
+            platform: interpreter.platform().clone(),
+            downloads: downloads.clone(),
+        });
+        downloads
+    }
+}
+
 #[expect(clippy::fn_params_excessive_bools)]
 async fn build_package(
     source: AnnotatedSource<'_>,
@@ -564,6 +602,7 @@ async fn build_package(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     index_locations: &IndexLocations,
+    wheel_downloads: &WorkspaceWheelDownloads,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
     build_logs: bool,
@@ -704,7 +743,8 @@ async fn build_package(
     let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
 
     // Initialize any shared state.
-    let state = SharedState::default();
+    let state = SharedState::default()
+        .with_shared_wheel_downloads(wheel_downloads.for_interpreter(&interpreter).await);
 
     let extra_build_requires =
         LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
