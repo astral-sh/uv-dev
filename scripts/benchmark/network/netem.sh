@@ -8,9 +8,9 @@ if [[ ${1:-} != --inside ]]; then
     exit 2
   fi
   if [[ $(id -u) == 0 ]]; then
-    exec unshare --net -- "$0" --inside "$@"
+    exec unshare --net -- bash "$0" --inside "$@"
   fi
-  exec unshare --user --map-root-user --net -- "$0" --inside "$@"
+  exec unshare --user --map-root-user --net -- bash "$0" --inside "$@"
 fi
 shift
 rtt_ms=$1
