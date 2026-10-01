@@ -174,15 +174,15 @@ the advertised response length. Traces identify origin connections, including re
 specified error body through the shared bandwidth limiter. Authenticated requests use the normal
 fixture response. Traces record whether authentication was accepted without recording the header.
 `make_auth_challenge_fixtures.py` supplies a pinned wheel and a synthetic netrc file; pass
-`--env NETRC={fixtures}/auth.netrc` to isolate credential lookup. `auth_challenge_oracle.py` retrieves
-the known package after cancelling unfamiliar authentication challenges at their headers. It reports
-both the bound with those challenge waves and the more optimistic bound when credentials can be
-sent on the first request.
-Set `connection_latency_ms` to add a one-time delay after each origin connection is accepted; this
-isolates connection setup costs in application replay. Use kernel network shaping for measurements
-of actual TCP handshakes and packet loss. `multi_index_oracle.py` requests those Simple API paths
-concurrently and then reads the selected wheel's metadata. Its bound includes all configured
-indexes, which is appropriate for an `unsafe-best-match` workload.
+`--env NETRC={fixtures}/auth.netrc` to isolate credential lookup. `auth_challenge_oracle.py`
+retrieves the known package after cancelling unfamiliar authentication challenges at their headers.
+It reports both the bound with those challenge waves and the more optimistic bound when credentials
+can be sent on the first request. Set `connection_latency_ms` to add a one-time delay after each
+origin connection is accepted; this isolates connection setup costs in application replay. Use
+kernel network shaping for measurements of actual TCP handshakes and packet loss.
+`multi_index_oracle.py` requests those Simple API paths concurrently and then reads the selected
+wheel's metadata. Its bound includes all configured indexes, which is appropriate for an
+`unsafe-best-match` workload.
 
 `--required-bytes` and `--required-waves` record independently established lower bounds for a
 workload. The optimistic time floor is the maximum of required bytes divided by bottleneck bandwidth
