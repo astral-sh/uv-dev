@@ -875,6 +875,15 @@ class Handler(BaseHTTPRequestHandler):
             retry_after = None
             if failure.get("status") and event["attempt"] <= failure.get("count", 0):
                 status, body = failure["status"], b"Injected transient failure"
+                if "body_bytes" in failure:
+                    body_bytes = failure["body_bytes"]
+                    if type(body_bytes) is not int or body_bytes < 0:
+                        raise ValueError("Invalid transient response body size")
+                    body = b"!" * body_bytes
+                    is_artifact = False
+                    chunked = failure.get("chunked", False)
+                    if type(chunked) is not bool:
+                        raise ValueError("Invalid transient response transfer encoding")
                 if "retry_after" in failure:
                     retry_after = str(failure["retry_after"])
                 elif "retry_after_date_seconds" in failure:

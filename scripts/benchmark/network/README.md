@@ -190,10 +190,12 @@ entity tags. `artifact_last_modified` and `response_date` supply HTTP dates for 
 response date is at least one minute later; otherwise it restarts interrupted transfers. Matching
 dates permit ranges, while a changed validator returns the complete representation. `path_failures`
 maps exact request paths to `status` and `count` values, overriding the profile-wide transient
-failure settings for those paths. Use `{"disconnect": true, "count": 1}` instead of a status to
-close the first matching connection before response headers. The trace records status `0`, zero
-response bytes, and `injected_disconnect: "before-headers"`. Use direct HTTP/1.1 replay for this
-fault; a reverse proxy can translate a backend disconnect into an HTTP error response. Use
+failure settings for those paths. Add `body_bytes` and an optional `chunked: true` to model large or
+unknown-length error pages sharing the download bandwidth. `retry_after` supplies the server's retry
+advice. Use `{"disconnect": true, "count": 1}` instead of a status to close the first matching
+connection before response headers. The trace records status `0`, zero response bytes, and
+`injected_disconnect: "before-headers"`. Use direct HTTP/1.1 replay for this fault; a reverse proxy
+can translate a backend disconnect into an HTTP error response. Use
 `{"cut_after_bytes": 32, "count": 1}` to truncate a matching successful response after its headers
 and first 32 body bytes. This also applies to index pages and metadata sidecars, whose traces retain
 the advertised response length. Traces identify origin connections, including reuse across requests.

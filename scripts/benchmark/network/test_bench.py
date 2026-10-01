@@ -230,6 +230,55 @@ class ReplayTests(unittest.TestCase):
                     all(authorization not in json.dumps(event) for event in events)
                 )
 
+    def test_transient_error_body_and_retry(self) -> None:
+        for chunked in (False, True):
+            with self.subTest(chunked=chunked):
+                server = self.server(
+                    {
+                        "path_failures": {
+                            "/files/example.whl": {
+                                "status": 503,
+                                "count": 1,
+                                "body_bytes": 12345,
+                                "chunked": chunked,
+                                "retry_after": "2",
+                            }
+                        }
+                    }
+                )
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+                try:
+                    connection.request("GET", "/files/example.whl")
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 503)
+                    self.assertEqual(response.getheader("Retry-After"), "2")
+                    self.assertEqual(
+                        response.getheader("Transfer-Encoding"),
+                        "chunked" if chunked else None,
+                    )
+                    self.assertEqual(
+                        response.getheader("Content-Length"),
+                        None if chunked else "12345",
+                    )
+                    self.assertEqual(response.read(), b"!" * 12345)
+                    connection.request(
+                        "GET", "/files/example.whl", headers={"Range": "bytes=0-3"}
+                    )
+                    response = connection.getresponse()
+                    self.assertIsNone(response.getheader("Retry-After"))
+                    self.assertEqual(
+                        (response.status, response.read()), (206, self.body[:4])
+                    )
+                finally:
+                    connection.close()
+                server.wait_idle()
+                events = sorted(server.events, key=lambda event: event["attempt"])
+                self.assertEqual([event["status"] for event in events], [503, 206])
+                self.assertEqual([event["bytes"] for event in events], [12345, 4])
+                self.assertEqual(
+                    events[0]["origin_connection"], events[1]["origin_connection"]
+                )
+
     def test_disconnect_before_headers_is_recorded(self) -> None:
         server = self.server(
             {"path_failures": {"/files/example.whl": {"disconnect": True, "count": 1}}}
