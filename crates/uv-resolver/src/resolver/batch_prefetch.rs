@@ -272,8 +272,7 @@ impl BatchPrefetcherRunner {
                     .file
                     .url
                     .to_url()
-                    .ok()
-                    .is_some_and(|url| self.capabilities.has_known_range_support(&url)))
+                    .is_ok_and(|url| self.capabilities.has_known_range_support(&url)))
             {
                 debug!("Abandoning prefetch for {wheel} due to missing artifact capabilities");
                 return Ok(());

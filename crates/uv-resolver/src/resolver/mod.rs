@@ -2300,8 +2300,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         .file
                         .url
                         .to_url()
-                        .ok()
-                        .is_some_and(|url| self.capabilities.has_known_range_support(&url))
+                        .is_ok_and(|url| self.capabilities.has_known_range_support(&url))
                 {
                     debug!("Skipping wheel archive prefetch for: {package_name}");
                     return Ok(None);
