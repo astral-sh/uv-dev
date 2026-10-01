@@ -3,19 +3,20 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, SystemTimeError};
 use std::{io, iter};
 
+use anyhow::anyhow;
 use http::header::RETRY_AFTER;
 use http::status::StatusCode;
-use http::{Extensions, HeaderMap};
+use http::{Extensions, HeaderMap, Version};
 use itertools::Itertools;
 use reqwest::{Request, Response};
-use reqwest_middleware::{Middleware, Next};
+use reqwest_middleware::{Error as MiddlewareError, Middleware, Next};
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{
-    RetryDecision, RetryPolicy, RetryTransientMiddleware, Retryable, RetryableStrategy,
+    RetryCount, RetryDecision, RetryError, RetryPolicy, Retryable, RetryableStrategy,
     default_on_request_error, default_on_request_success,
 };
 use rustls::{AlertDescription, Error as RustlsError};
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 use url::Url;
 
 use uv_redacted::DisplaySafeUrl;
@@ -81,22 +82,101 @@ impl Middleware for UvRetryMiddleware {
         extensions: &mut Extensions,
         next: Next<'_>,
     ) -> reqwest_middleware::Result<Response> {
-        // The retry library passes responses to its strategy and timing decisions to its policy.
-        // Keep their shared state local to this request, including all of its retry attempts.
+        // Keep server advice local to this request, including all of its retry attempts.
         let retry_after = Arc::new(Mutex::new(None));
-        RetryTransientMiddleware::new_with_policy_and_strategy(
-            RetryAfterPolicy {
-                policy: self.policy,
-                retry_after: retry_after.clone(),
-            },
-            RetryAfterStrategy {
-                max_delay: self.policy.max_retry_interval,
-                retry_after,
-            },
-        )
-        .handle(request, extensions, next)
-        .await
+        let policy = RetryAfterPolicy {
+            policy: self.policy,
+            retry_after: retry_after.clone(),
+        };
+        let strategy = RetryAfterStrategy {
+            max_delay: self.policy.max_retry_interval,
+            retry_after,
+        };
+        let start = SystemTime::now();
+        let mut past_retries = 0;
+        loop {
+            let duplicate = request.try_clone().ok_or_else(|| {
+                MiddlewareError::Middleware(anyhow!(
+                    "Request object is not cloneable. Are you passing a streaming body?"
+                ))
+            })?;
+            let result = next.clone().run(duplicate, extensions).await;
+            if strategy.handle(&result) == Some(Retryable::Transient)
+                && let RetryDecision::Retry { execute_after } =
+                    policy.should_retry(start, past_retries)
+            {
+                // Small HTTP/1 responses can return their connection to the pool. Bound that
+                // work by both the scheduled retry and a short drain window, so larger bodies
+                // stop competing with other requests while this request backs off.
+                if let Ok(response) = result {
+                    release_retry_response(
+                        response,
+                        execute_after
+                            .duration_since(SystemTime::now())
+                            .unwrap_or_default(),
+                    )
+                    .await;
+                }
+                let delay = execute_after
+                    .duration_since(SystemTime::now())
+                    .unwrap_or_default();
+                warn!(
+                    "Retry attempt #{}. Sleeping {:?} before the next attempt",
+                    past_retries, delay
+                );
+                tokio::time::sleep(delay).await;
+                past_retries += 1;
+                continue;
+            }
+
+            return match result {
+                Ok(mut response) => {
+                    if past_retries > 0 {
+                        response
+                            .extensions_mut()
+                            .insert(RetryCount::new(past_retries));
+                    }
+                    Ok(response)
+                }
+                Err(error) => {
+                    let error = if past_retries == 0 {
+                        RetryError::Error(error)
+                    } else {
+                        RetryError::WithRetries {
+                            retries: past_retries,
+                            err: error,
+                        }
+                    };
+                    Err(MiddlewareError::Middleware(error.into()))
+                }
+            };
+        }
     }
+}
+
+/// Release a response that will not be returned to the caller.
+async fn release_retry_response(mut response: Response, retry_delay: Duration) {
+    const MAX_DRAIN_BYTES: u64 = 8 * 1024;
+    const MAX_DRAIN_TIME: Duration = Duration::from_millis(100);
+
+    if (response.version() != Version::HTTP_10 && response.version() != Version::HTTP_11)
+        || response
+            .content_length()
+            .is_some_and(|length| length > MAX_DRAIN_BYTES)
+    {
+        return;
+    }
+
+    let _ = tokio::time::timeout(retry_delay.min(MAX_DRAIN_TIME), async {
+        let mut remaining = MAX_DRAIN_BYTES;
+        while let Ok(Some(chunk)) = response.chunk().await {
+            let Some(next) = remaining.checked_sub(chunk.len() as u64) else {
+                break;
+            };
+            remaining = next;
+        }
+    })
+    .await;
 }
 
 struct RetryAfterPolicy {
@@ -500,15 +580,272 @@ fn find_source<E: Error + 'static>(orig: &dyn Error) -> Option<&E> {
 mod tests {
     use super::*;
 
-    use anyhow::Result;
+    use std::collections::VecDeque;
+    use std::future::pending;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll};
+
+    use anyhow::{Result, anyhow};
+    use futures::{StreamExt, stream};
+    use hyper::body::{Body as HttpBody, Bytes, Frame, SizeHint};
     use insta::assert_debug_snapshot;
-    use reqwest::Client;
+    use reqwest::{Body, Client};
     use reqwest_middleware::ClientWithMiddleware;
+    use tokio::sync::oneshot;
     use tracing_test::traced_test;
     use wiremock::matchers::path;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::retryable_on_request_failure;
+
+    struct ResponseDropGuard(Option<oneshot::Sender<()>>);
+
+    impl Drop for ResponseDropGuard {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    struct ResponseQueue(Mutex<VecDeque<reqwest_middleware::Result<Response>>>);
+
+    struct PendingResponseBody {
+        polled: Arc<AtomicBool>,
+        length: Option<u64>,
+    }
+
+    impl HttpBody for PendingResponseBody {
+        type Data = Bytes;
+        type Error = io::Error;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Option<std::result::Result<Frame<Self::Data>, Self::Error>>> {
+            self.polled.store(true, Ordering::SeqCst);
+            Poll::Pending
+        }
+
+        fn size_hint(&self) -> SizeHint {
+            let mut hint = SizeHint::new();
+            if let Some(length) = self.length {
+                hint.set_exact(length);
+            }
+            hint
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("Injected transport failure")]
+    struct InjectedTransportError(#[source] io::Error);
+
+    #[async_trait::async_trait]
+    impl Middleware for ResponseQueue {
+        async fn handle(
+            &self,
+            _request: Request,
+            _extensions: &mut Extensions,
+            _next: Next<'_>,
+        ) -> reqwest_middleware::Result<Response> {
+            self.0
+                .lock()
+                .expect("Response queue poisoned")
+                .pop_front()
+                .ok_or_else(|| {
+                    reqwest_middleware::Error::Middleware(anyhow!("No response queued"))
+                })?
+        }
+    }
+
+    fn unfinished_response(status: StatusCode) -> (Response, oneshot::Receiver<()>) {
+        let (sender, receiver) = oneshot::channel();
+        let guard = ResponseDropGuard(Some(sender));
+        let body = Body::wrap_stream(stream::once(async move {
+            let _guard = guard;
+            pending::<std::result::Result<Vec<u8>, io::Error>>().await
+        }));
+        let mut response = http::Response::new(body);
+        *response.status_mut() = status;
+        (response.into(), receiver)
+    }
+
+    #[tokio::test]
+    async fn retry_releases_response_before_backoff() -> Result<()> {
+        let (response, released) = unfinished_response(StatusCode::SERVICE_UNAVAILABLE);
+        let client = reqwest_middleware::ClientBuilder::new(Client::new())
+            .with(UvRetryMiddleware::new(
+                ExponentialBackoff::builder()
+                    .jitter(reqwest_retry::Jitter::None)
+                    .retry_bounds(Duration::from_secs(60), Duration::from_secs(60))
+                    .build_with_max_retries(1),
+            ))
+            .with(ResponseQueue(Mutex::new(VecDeque::from([Ok(response)]))))
+            .build();
+        let request =
+            tokio::spawn(async move { client.get("http://127.0.0.1/retry").send().await });
+        let released = tokio::time::timeout(Duration::from_secs(2), released).await;
+        let waiting = !request.is_finished();
+        request.abort();
+        let _ = request.await;
+        assert!(waiting, "The retry did not honor its backoff");
+        released??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retry_does_not_drain_large_or_multiplexed_responses() -> Result<()> {
+        for (version, length) in [(Version::HTTP_11, Some(8193)), (Version::HTTP_2, None)] {
+            let polled = Arc::new(AtomicBool::new(false));
+            let body = Body::wrap(PendingResponseBody {
+                polled: Arc::clone(&polled),
+                length,
+            });
+            let response: Response = http::Response::builder()
+                .version(version)
+                .body(body)?
+                .into();
+            assert_eq!(response.content_length(), length);
+            release_retry_response(response, Duration::from_secs(60)).await;
+            assert!(!polled.load(Ordering::SeqCst));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retry_bounds_unknown_length_response_draining() -> Result<()> {
+        let polled_after_limit = Arc::new(AtomicBool::new(false));
+        let body = Body::wrap_stream(stream::iter([Ok::<_, io::Error>(vec![0; 8193])]).chain(
+            stream::once({
+                let polled_after_limit = Arc::clone(&polled_after_limit);
+                async move {
+                    polled_after_limit.store(true, Ordering::SeqCst);
+                    pending::<std::result::Result<Vec<u8>, io::Error>>().await
+                }
+            }),
+        ));
+        let response = http::Response::builder()
+            .version(Version::HTTP_11)
+            .body(body)?;
+        release_retry_response(response.into(), Duration::from_secs(60)).await;
+        assert!(!polled_after_limit.load(Ordering::SeqCst));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retry_retains_the_terminal_response_body() -> Result<()> {
+        let (first, first_released) = unfinished_response(StatusCode::SERVICE_UNAVAILABLE);
+        let (last, mut last_released) = unfinished_response(StatusCode::SERVICE_UNAVAILABLE);
+        let client = reqwest_middleware::ClientBuilder::new(Client::new())
+            .with(UvRetryMiddleware::new(
+                ExponentialBackoff::builder()
+                    .retry_bounds(Duration::ZERO, Duration::ZERO)
+                    .build_with_max_retries(1),
+            ))
+            .with(ResponseQueue(Mutex::new(VecDeque::from([
+                Ok(first),
+                Ok(last),
+            ]))))
+            .build();
+        let response = client.get("http://127.0.0.1/retry").send().await?;
+        first_released.await?;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .extensions()
+                .get::<reqwest_retry::RetryCount>()
+                .map(|count| count.value()),
+            Some(1)
+        );
+        assert_eq!(
+            last_released.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        );
+        drop(response);
+        last_released.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retry_preserves_transport_error_counts() -> Result<()> {
+        for retries in [0, 2] {
+            let responses = Arc::new(ResponseQueue(Mutex::new(
+                (0..=retries)
+                    .map(|_| {
+                        Err(MiddlewareError::middleware(InjectedTransportError(
+                            io::Error::from(io::ErrorKind::ConnectionReset),
+                        )))
+                    })
+                    .collect(),
+            )));
+            let client = reqwest_middleware::ClientBuilder::new(Client::new())
+                .with(UvRetryMiddleware::new(
+                    ExponentialBackoff::builder()
+                        .retry_bounds(Duration::ZERO, Duration::ZERO)
+                        .build_with_max_retries(retries),
+                ))
+                .with_arc(responses.clone())
+                .build();
+            let error = client
+                .get("http://127.0.0.1/retry")
+                .send()
+                .await
+                .expect_err("The transport error should exhaust its retry budget");
+            let error = match error {
+                MiddlewareError::Middleware(error) => error.downcast::<RetryError>()?,
+                MiddlewareError::Reqwest(error) => return Err(error.into()),
+            };
+            let (observed, error) = match error {
+                RetryError::Error(error) => (0, error),
+                RetryError::WithRetries { retries, err } => (retries, err),
+            };
+            assert_eq!(observed, retries);
+            assert_eq!(
+                find_source::<io::Error>(&error).map(io::Error::kind),
+                Some(io::ErrorKind::ConnectionReset)
+            );
+            assert!(
+                responses
+                    .0
+                    .lock()
+                    .expect("Response queue poisoned")
+                    .is_empty()
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retry_rejects_streaming_request_bodies_before_sending() -> Result<()> {
+        let responses = Arc::new(ResponseQueue(Mutex::new(VecDeque::new())));
+        let client = reqwest_middleware::ClientBuilder::new(Client::new())
+            .with(UvRetryMiddleware::new(
+                ExponentialBackoff::builder().build_with_max_retries(1),
+            ))
+            .with_arc(responses.clone())
+            .build();
+        let error = client
+            .post("http://127.0.0.1/retry")
+            .body(Body::wrap_stream(stream::pending::<
+                std::result::Result<Vec<u8>, io::Error>,
+            >()))
+            .send()
+            .await
+            .expect_err("A streaming request cannot be retried");
+        assert_eq!(
+            error.to_string(),
+            "Request object is not cloneable. Are you passing a streaming body?"
+        );
+        assert!(
+            responses
+                .0
+                .lock()
+                .expect("Response queue poisoned")
+                .is_empty()
+        );
+        Ok(())
+    }
 
     #[test]
     fn retry_after_values() {
