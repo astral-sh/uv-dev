@@ -55,6 +55,11 @@ arbitrary batching and overlap after each pagination token becomes available. Re
 synthetic audit workload. The pagination control exercises the API contract with deliberately small
 response pages.
 
+`make_osv_pagination_fixtures.py --directory DIR` adds dense and sparse page graphs plus a page
+chain independent of a slow initial batch. These fixtures record each query's package and page
+alongside the request digest, so studies can verify complete pagination when request grouping
+changes. The `flaky-page` profile returns one transient failure during that independent chain.
+
 `make_tool_list_fixtures.py --directory DIR --packages N` creates two releases of each of `N`
 console-script packages and commands that install the older releases locally. Set
 `UV_TOOL_DIR={work}/tools` and `UV_TOOL_BIN_DIR={work}/bin` with `--env` to isolate each trial. The

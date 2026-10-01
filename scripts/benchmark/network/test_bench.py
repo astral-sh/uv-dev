@@ -361,6 +361,14 @@ class ReplayTests(unittest.TestCase):
             {"results": [{"vulns": []}, {"vulns": [], "next_page_token": "first:1"}]},
         )
         self.assertEqual(identity["first_query"], "second:0")
+        self.assertNotIn("query_keys", identity)
+        traced_body, traced_identity = bench.osv_query_response(
+            dict(configuration, record_query_keys=True),
+            json.dumps({"queries": [second, first]}).encode(),
+        )
+        self.assertEqual(traced_body, body)
+        self.assertEqual(traced_identity["query_sha256"], identity["query_sha256"])
+        self.assertEqual(traced_identity["query_keys"], ["second:0", "first:0"])
         for queries in ([], [first] * 1001):
             with self.assertRaisesRegex(ValueError, "between 1 and 1000"):
                 bench.osv_query_response(

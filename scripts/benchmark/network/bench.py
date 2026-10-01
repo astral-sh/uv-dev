@@ -423,6 +423,7 @@ def osv_query_response(configuration: dict, request: bytes) -> tuple[bytes, dict
     if not isinstance(queries, list) or not 1 <= len(queries) <= 1000:
         raise ValueError("OSV query batches require between 1 and 1000 queries")
     results = []
+    query_keys = []
     first = None
     for query in queries:
         if not isinstance(query, dict) or set(query) not in (
@@ -447,17 +448,22 @@ def osv_query_response(configuration: dict, request: bytes) -> tuple[bytes, dict
             token is not None and (page == 0 or token != f"{name}:{page}")
         ):
             raise ValueError("Unexpected OSV page token")
-        first = first or f"{name}:{page}"
+        key = f"{name}:{page}"
+        first = first or key
+        query_keys.append(key)
         result = {"vulns": []}
         if page + 1 < dependency["pages"]:
             result["next_page_token"] = f"{name}:{page + 1}"
         results.append(result)
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return json.dumps({"results": results}, separators=(",", ":")).encode(), {
+    identity = {
         "query_sha256": hashlib.sha256(canonical).hexdigest(),
         "query_count": len(queries),
         "first_query": first,
     }
+    if configuration.get("record_query_keys", False):
+        identity["query_keys"] = query_keys
+    return json.dumps({"results": results}, separators=(",", ":")).encode(), identity
 
 
 class Limiter:
