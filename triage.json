@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 5594,
+        "title": "RFC: Handling diverging requires-python in workspaces with forking on the python version",
+        "url": "https://github.com/astral-sh/uv/issues/5594",
+        "state": "open",
+        "reason": "Canonical match: it proposes environment-dependent workspace roots, automatic omission of incompatible members, and an error when an incompatible member is explicitly selected. Its concrete dimension is Python version; the new issue generalizes the same model to arbitrary PEP 508 markers."
+      },
+      {
+        "kind": "issue",
+        "number": 19576,
+        "title": "support workspaces with different `requires-python` versions",
+        "url": "https://github.com/astral-sh/uv/issues/19576",
+        "state": "open",
+        "reason": "A current reproduction of the same limitation: uv intersects every member’s supported Python range even when markers make a member relevant only in another environment. A maintainer identifies the behavior as difficult new functionality."
+      },
+      {
+        "kind": "issue",
+        "number": 14012,
+        "title": "In a monorepo, can I do `uv sync` and build *all but one* package?",
+        "url": "https://github.com/astral-sh/uv/issues/14012",
+        "state": "closed",
+        "reason": "This covers the `--all-packages` half of the request on architecture-specific hosts. The documented workaround is to add a root dependency with a platform marker; it does not supply per-member eligibility or strict incompatible-member errors."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13735,
+        "title": "Add `[tool.uv.dependency-groups].mygroup.requires-python`",
+        "url": "https://github.com/astral-sh/uv/pull/13735",
+        "state": "merged",
+        "reason": "This implements the analogous capability for dependency groups: one group-level constraint replaces markers on every dependency, affects resolution, and produces an error when selected with an incompatible interpreter. It does not apply to workspace members or non-Python markers."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14906,
+        "title": "Add support for `package`-level conflicts in workspaces",
+        "url": "https://github.com/astral-sh/uv/pull/14906",
+        "state": "merged",
+        "reason": "This partial adjacent mechanism lets mutually incompatible workspace members share one lock, but it neither ties each member to PEP 508 environments nor filters `--all-packages` by the current platform."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms from the report (`supported-environments`, workspace members, platform-specific packages, `--package`, and `--all-packages`) and conceptual repository vocabulary (limited/required environments, diverging `requires-python`, conditional members, incompatible requirements, package-level conflicts, universal resolution, and per-member locks). Followed astral-sh/uv#5594 through astral-sh/uv#5398, astral-sh/uv#5578, astral-sh/uv#5583, and astral-sh/uv#5644, and inspected the comments and linked fixes for the strongest candidates. astral-sh/uv#11463 was ruled out because it concerns lock-wide platform filtering and wheel metadata fetches, not member eligibility; astral-sh/uv#9150 was ruled out as a separate-lockfile/virtual-environment design; astral-sh/uv#21670 was ruled out because it concerns concurrent hardware-specific virtual environments rather than workspace resolution."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#5594 already tracks the same underlying capability: resolve a workspace with environment-dependent member roots, install only members compatible with the active environment, and reject explicit selection of an incompatible member. The new report adds a valuable operating-system example and proposes general PEP 508 markers, but that is a generalization of the open design rather than a separate correctness regression.",
+  "summary": "astral-sh/uv#5594 is the canonical open design for environment-dependent workspace membership. astral-sh/uv#19576 confirms the current limitation, astral-sh/uv#14012 covers platform-aware `--all-packages` selection, and astral-sh/uv#13735 plus astral-sh/uv#14906 are adjacent partial implementations rather than complete solutions.",
+  "draft_response": "Thanks for the detailed proposal. This is the same underlying workspace-resolution model tracked in astral-sh/uv#5594: fork the workspace roots by environment, omit incompatible members for the active environment, and reject explicitly selecting an incompatible member. That discussion is currently framed around Python versions; your example shows why the design should extend to general PEP 508 markers such as operating-system constraints.\n\nPackage-level conflicts from astral-sh/uv#14906 can make mutually incompatible members jointly lockable today, but they do not declare platform eligibility or make `uv sync --all-packages` select only compatible members. Let’s centralize the design discussion in astral-sh/uv#5594."
+}
