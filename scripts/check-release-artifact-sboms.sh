@@ -29,6 +29,7 @@ trap 'rm -rf "$WORKDIR"' EXIT
 
 PASS=0
 FAIL=0
+ARTIFACTS=0
 
 pass() { echo "PASS $1"; PASS=$((PASS + 1)); }
 fail() { echo "FAIL $1"; FAIL=$((FAIL + 1)); }
@@ -54,34 +55,42 @@ for artifact in $ALL_ARTIFACTS; do
         build-github-archives-*) ;;
         *) continue ;;
     esac
+    ARTIFACTS=$((ARTIFACTS + 1))
 
     dest="$WORKDIR/$artifact"
     gh run download "$RUN_ID" -n "$artifact" -D "$dest"
 
-    # Extract the archive.
-    for tarball in "$dest"/*.tar.gz; do
-        [ -f "$tarball" ] || continue
-        tar xzf "$tarball" -C "$dest"
-    done
-    for zip in "$dest"/*.zip; do
-        [ -f "$zip" ] || continue
-        unzip -qo "$zip" -d "$dest"
-    done
-
-    # Find the archive name for labeling.
-    archive=""
+    # Each target contributes exactly one GitHub release archive.
+    archives=()
     for f in "$dest"/*.tar.gz "$dest"/*.zip; do
-        [ -f "$f" ] && archive=$(basename "$f") && break
+        [ -f "$f" ] && archives+=("$f")
     done
+    if [ "${#archives[@]}" -ne 1 ]; then
+        fail "$artifact / expected one release archive, found ${#archives[@]}"
+        continue
+    fi
+    archive="${archives[0]}"
+    case "$archive" in
+        *.tar.gz) tar xzf "$archive" -C "$dest" ;;
+        *.zip) unzip -qo "$archive" -d "$dest" ;;
+    esac
+    archive=$(basename "$archive")
 
     # Check uv and uvx binaries.
     for bin in uv uvx; do
         binary=$(find "$dest" \( -name "$bin" -o -name "$bin.exe" \) -type f | head -1)
         if [ -n "$binary" ]; then
-            check "$binary" "${archive:-$artifact} / $(basename "$binary")"
+            check "$binary" "$archive / $(basename "$binary")"
+        else
+            fail "$archive / missing $bin"
         fi
     done
 done
+
+if [ "$ARTIFACTS" -eq 0 ]; then
+    echo "error: No GitHub release archive artifacts found in run $RUN_ID" >&2
+    exit 1
+fi
 
 echo ""
 echo "PASS $PASS / FAIL $FAIL"
