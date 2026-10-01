@@ -33,6 +33,15 @@ delays metadata for older, unused releases to expose speculative requests that o
 Report this workload as synthetic; it measures request scheduling rather than a representative
 package installation. Replay waits for outstanding fixture handlers after timing ends, so cancelled
 responses are recorded and cannot overlap the next trial.
+`make_build_constraint_fixtures.py --directory DIR --constraints FILE` creates a 16-package
+workspace whose local build backends emit deterministic wheels. Pass the Python 3.12 constraints
+from
+[Airflow 3.1.0 at its pinned commit](https://raw.githubusercontent.com/apache/airflow/3675eaba7aaedde3eb68bc947a8ec8958fbb0050/constraints-3.12.txt).
+The generator checks the public file's hash and records every expected wheel hash. Use
+`build --wheel --all-packages --no-index --out-dir '{work}/dist' --build-constraint '{base}/files/airflow-3.1.0-constraints-3.12.txt' '{fixtures}/workspace'`
+with `--verify-tree '{work}/dist'` to measure repeated constraint reads. The workspace is synthetic;
+the 17,974-byte constraints file is unmodified public data. A single selected package and a local
+constraint path provide controls for work that cannot benefit from sharing remote reads.
 `make_source_prefetch_fixtures.py --directory DIR` creates a source-only package with a large newer
 release and a wheel that constrains it to a small older release. The generated manifests cover both
 absent and advertised source sidecars. `source_graph_oracle.py` accepts selected filenames and
