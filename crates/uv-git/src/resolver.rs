@@ -6,6 +6,7 @@ use std::sync::Arc;
 use fs_err::tokio as fs;
 use papaya::{HashMap, ResizeMode};
 use reqwest_middleware::ClientWithMiddleware;
+use tokio::sync::Mutex;
 use tracing::debug;
 
 use uv_cache_key::{RepositoryUrl, cache_digest};
@@ -84,25 +85,31 @@ impl GitHttpSettings {
 
 /// A resolver for Git repositories.
 #[derive(Clone)]
-pub struct GitResolver(Arc<HashMap<RepositoryReference, GitOid>>);
+pub struct GitResolver(Arc<GitResolverState>);
+
+struct GitResolverState {
+    resolved: HashMap<RepositoryReference, GitOid>,
+    github_requests: HashMap<RepositoryReference, Arc<Mutex<()>>>,
+}
 
 impl Default for GitResolver {
     fn default() -> Self {
-        Self(Arc::new(
-            HashMap::builder().resize_mode(ResizeMode::Blocking).build(),
-        ))
+        Self(Arc::new(GitResolverState {
+            resolved: HashMap::builder().resize_mode(ResizeMode::Blocking).build(),
+            github_requests: HashMap::builder().resize_mode(ResizeMode::Blocking).build(),
+        }))
     }
 }
 
 impl GitResolver {
     /// Inserts a new [`GitOid`] for the given [`RepositoryReference`].
     pub fn insert(&self, reference: RepositoryReference, sha: GitOid) {
-        self.0.pin().insert(reference, sha);
+        self.0.resolved.pin().insert(reference, sha);
     }
 
     /// Returns the [`GitOid`] for the given [`RepositoryReference`], if it exists.
     fn get(&self, reference: &RepositoryReference) -> Option<GitOid> {
-        self.0.pin().get(reference).copied()
+        self.0.resolved.pin().get(reference).copied()
     }
 
     /// Return the [`GitOid`] for the given [`GitUrl`], if it is already known.
@@ -144,6 +151,19 @@ impl GitResolver {
         else {
             return Ok(None);
         };
+
+        // Different distributions can request the same repository reference concurrently.
+        // Share successful lookups while allowing failed or cancelled attempts to be retried.
+        let pending = self
+            .0
+            .github_requests
+            .pin()
+            .get_or_insert_with(RepositoryReference::from(url), || Arc::new(Mutex::new(())))
+            .clone();
+        let _pending = pending.lock().await;
+        if let Some(precise) = self.get_precise(url) {
+            return Ok(Some(precise));
+        }
 
         // Check if we're rate-limited by GitHub, before determining the Git reference
         if GITHUB_RATE_LIMIT_STATUS.is_active() {
