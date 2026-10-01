@@ -66,7 +66,14 @@ vulnerabilities; both the measured command and any cache warmup must return that
 `osv_record_oracle.py` starts each distinct full record once an identifying page completes and uses
 one concurrency limit for pages and records. Pass `--records-cached` for a warm record-cache
 reference. Its optimistic bound includes the required response bodies and identifier-to-record
-dependencies.
+dependencies. Set `osv_path_prefixes` in a network profile, such as `["/first", "/second"]`, to
+serve the pinned API at multiple service URLs. The replay retains each actual request path and
+tracks failures independently for each prefix.
+
+`make_osv_service_fixtures.py --directory DIR` creates two service prefixes with shared advisory IDs
+and setup commands that warm one service, alternate between services, or return to the first
+service. The setup commands ignore the fixture advisories so they complete successfully; the
+measured audit still reports the full findings.
 
 `make_tool_list_fixtures.py --directory DIR --packages N` creates two releases of each of `N`
 console-script packages and commands that install the older releases locally. Set

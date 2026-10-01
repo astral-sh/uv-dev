@@ -715,12 +715,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         self.respond(head=False)
 
+    def osv_path(self, path: str) -> str:
+        """Resolve explicitly configured API prefixes without changing traced URLs."""
+        for prefix in self.server.profile.get("osv_path_prefixes", []):
+            if path.startswith(prefix + "/v1/"):
+                return path[len(prefix) :]
+        return path
+
     def do_POST(self) -> None:
         if self.server.git_root and urlsplit(self.path).path.startswith("/git/"):
             self.respond(head=False)
         elif (
             getattr(self.server.fixtures, "osv", None) is not None
-            and urlsplit(self.path).path == "/v1/querybatch"
+            and self.osv_path(urlsplit(self.path).path) == "/v1/querybatch"
         ):
             self.respond_osv()
         else:
@@ -739,8 +746,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400, "Request does not match the pinned OSV fixture")
             return
         profile = self.server.profile
+        path = urlsplit(self.path).path
         event = self.server.begin(
-            "POST", "/v1/querybatch", attempt_key=query["query_sha256"]
+            "POST", path, attempt_key=f"{path}:{query['query_sha256']}"
         )
         event.update(
             query,
@@ -791,6 +799,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             route = profile.get("path_aliases", {}).get(path, path)
             parts = route.strip("/").split("/")
+            osv_parts = self.osv_path(route).strip("/").split("/")
             body: bytes | Path = b"Not found"
             status = 404
             content_type = "text/plain"
@@ -812,11 +821,13 @@ class Handler(BaseHTTPRequestHandler):
                     body, status = value, 200
                 content_type = "application/octet-stream"
             elif (
-                len(parts) == 3
-                and parts[:2] == ["v1", "vulns"]
+                len(osv_parts) == 3
+                and osv_parts[:2] == ["v1", "vulns"]
                 and (osv := getattr(self.server.fixtures, "osv", None)) is not None
             ):
-                if (value := osv.get("vulnerabilities", {}).get(parts[2])) is not None:
+                if (
+                    value := osv.get("vulnerabilities", {}).get(osv_parts[2])
+                ) is not None:
                     body = json.dumps(value, separators=(",", ":")).encode()
                     status = 200
                     content_type = "application/json"

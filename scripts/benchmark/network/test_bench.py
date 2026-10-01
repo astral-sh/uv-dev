@@ -422,6 +422,68 @@ class ReplayTests(unittest.TestCase):
         events = sorted(server.events, key=lambda event: event["start"])
         self.assertEqual([event["status"] for event in events], [503, 200, 304, 404])
 
+    def test_osv_service_prefixes_retain_distinct_request_paths(self) -> None:
+        record = {"id": "OSV-BENCH-1", "modified": "2026-01-01T00:00:00Z"}
+        self.fixtures.osv = {
+            "dependencies": {
+                "first": {
+                    "version": "1.0",
+                    "pages": 1,
+                    "vulns_by_page": [[record["id"]]],
+                }
+            },
+            "vulnerabilities": {record["id"]: record},
+        }
+        left = "/left/v1/vulns/" + record["id"]
+        right = "/right/v1/vulns/" + record["id"]
+        server = self.server(
+            {
+                "osv_path_prefixes": ["/left", "/right"],
+                "path_failures": {left: {"status": 503, "count": 1}},
+            }
+        )
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        query = {"package": {"name": "first", "ecosystem": "PyPI"}, "version": "1.0"}
+        try:
+            for prefix in ("left", "right"):
+                connection.request(
+                    "POST",
+                    f"/{prefix}/v1/querybatch",
+                    json.dumps({"queries": [query]}),
+                    {"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(
+                    json.loads(response.read()), {"results": [{"vulns": [record]}]}
+                )
+            for route, status in ((left, 503), (right, 200), (left, 200)):
+                connection.request("GET", route)
+                response = connection.getresponse()
+                self.assertEqual(response.status, status)
+                body = response.read()
+                if status == 200:
+                    self.assertEqual(json.loads(body), record)
+            connection.request("GET", "/unknown/v1/vulns/" + record["id"])
+            response = connection.getresponse()
+            self.assertEqual(response.status, 404)
+            response.read()
+        finally:
+            connection.close()
+        server.wait_idle()
+        events = sorted(server.events, key=lambda event: event["start"])
+        self.assertEqual(
+            [(event["path"], event["attempt"], event["status"]) for event in events],
+            [
+                ("/left/v1/querybatch", 1, 200),
+                ("/right/v1/querybatch", 1, 200),
+                (left, 1, 503),
+                (right, 1, 200),
+                (left, 2, 200),
+                ("/unknown/v1/vulns/" + record["id"], 1, 404),
+            ],
+        )
+
     def test_artifact_alias_supports_resumption(self) -> None:
         server = self.server({})
         connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
