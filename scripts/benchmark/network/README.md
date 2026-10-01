@@ -115,6 +115,10 @@ batching the OSV queries across tools. It records an optimistic bound that permi
 to overlap. The `cached` profile keeps registry responses fresh; pair it with `--cached-registry` on
 the oracle to exclude already available pages from the required network bytes.
 
+If a pair fails output-equivalence checks, the runner stops and writes the complete rejected pair
+and any earlier measured pairs to a sibling `*.failure.json` file. This includes rejected warmups.
+Retain that file with the partial result before changing the workload or retrying the study.
+
 Compare optimized binaries built from an exact parent and candidate commit:
 
 ```sh

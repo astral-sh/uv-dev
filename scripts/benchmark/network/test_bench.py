@@ -47,6 +47,105 @@ class NetworkFloorTests(unittest.TestCase):
             self.assertEqual(bench.network_floor({}, 0, waves, latency), 0.2)
 
 
+class RejectedPairTests(unittest.TestCase):
+    def test_rejected_pair_retains_raw_samples_and_accepted_results(self) -> None:
+        for accepted_pairs in (0, 1):
+            with (
+                self.subTest(accepted_pairs=accepted_pairs),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                manifest = root / "fixtures.json"
+                manifest.write_text("[]")
+                profiles = root / "profiles.json"
+                profiles.write_text('{"fast":{}}')
+                binary = root / "uv"
+                binary.write_bytes(b"binary")
+                output = root / "result.json"
+                sample = {
+                    "seconds": 1.0,
+                    "stdout_sha256": "same-output",
+                    "stderr_sha256": "same-error",
+                    "stderr": "original diagnostic",
+                    "verified_tree": None,
+                    "verified_files": {},
+                }
+                # Reject the initial warmup, or retain one accepted pair before
+                # rejecting the next measured pair.
+                successful_iterations = 2 if accepted_pairs else 0
+                observations = [dict(sample) for _ in range(2 * successful_iterations)]
+                observations.extend(
+                    [
+                        dict(sample),
+                        dict(
+                            sample,
+                            stderr_sha256="different-error",
+                            stderr="changed diagnostic",
+                        ),
+                    ]
+                )
+                argv = [
+                    "bench.py",
+                    "--manifest",
+                    str(manifest),
+                    "--directory",
+                    str(root),
+                    "run",
+                    "--parent",
+                    str(binary),
+                    "--head",
+                    str(binary),
+                    "--parent-sha",
+                    "parent",
+                    "--head-sha",
+                    "head",
+                    "--profile",
+                    "fast",
+                    "--profiles",
+                    str(profiles),
+                    "--work-dir",
+                    str(root / "trials"),
+                    "--output",
+                    str(output),
+                    "--pairs",
+                    "2",
+                    "--warmups",
+                    "1",
+                    "--compare-stderr",
+                    "--",
+                    "pip",
+                    "compile",
+                ]
+                with (
+                    patch("sys.argv", argv),
+                    patch.object(
+                        bench.subprocess, "check_output", return_value="uv test"
+                    ),
+                    patch.object(bench, "netem_profile", return_value={}),
+                    patch.object(bench, "run_one", side_effect=observations),
+                    self.assertRaisesRegex(ValueError, "diagnostic outputs differ"),
+                ):
+                    bench.main()
+                rejected = json.loads(output.with_suffix(".failure.json").read_text())
+                self.assertEqual(len(rejected["pairs"]), accepted_pairs)
+                self.assertNotIn("summary", rejected)
+                failure = rejected["failure"]
+                self.assertEqual(failure["iteration"], successful_iterations)
+                self.assertEqual(failure["warmup"], accepted_pairs == 0)
+                self.assertEqual(
+                    failure["pair"]["parent"]["stderr"], "original diagnostic"
+                )
+                self.assertEqual(
+                    failure["pair"]["head"]["stderr"], "changed diagnostic"
+                )
+                if accepted_pairs:
+                    self.assertEqual(
+                        json.loads(output.read_text())["pairs"], rejected["pairs"]
+                    )
+                else:
+                    self.assertFalse(output.exists())
+
+
 class KernelCounterTests(unittest.TestCase):
     def test_tcp_table_omits_gauges(self) -> None:
         self.assertEqual(

@@ -1909,17 +1909,31 @@ def main() -> None:
         pair = {
             name: run_one(binaries[name], fixtures, profile, args) for name in order
         }
-        if pair["parent"]["stdout_sha256"] != pair["head"]["stdout_sha256"]:
-            raise ValueError("Parent and head command outputs differ")
-        if (
-            args.compare_stderr
-            and pair["parent"]["stderr_sha256"] != pair["head"]["stderr_sha256"]
-        ):
-            raise ValueError("Parent and head diagnostic outputs differ")
-        if pair["parent"]["verified_tree"] != pair["head"]["verified_tree"]:
-            raise ValueError("Parent and head installed file contents differ")
-        if pair["parent"]["verified_files"] != pair["head"]["verified_files"]:
-            raise ValueError("Parent and head result files differ")
+        try:
+            if pair["parent"]["stdout_sha256"] != pair["head"]["stdout_sha256"]:
+                raise ValueError("Parent and head command outputs differ")
+            if (
+                args.compare_stderr
+                and pair["parent"]["stderr_sha256"] != pair["head"]["stderr_sha256"]
+            ):
+                raise ValueError("Parent and head diagnostic outputs differ")
+            if pair["parent"]["verified_tree"] != pair["head"]["verified_tree"]:
+                raise ValueError("Parent and head installed file contents differ")
+            if pair["parent"]["verified_files"] != pair["head"]["verified_files"]:
+                raise ValueError("Parent and head result files differ")
+        except ValueError as error:
+            rejected = {
+                **data,
+                "failure": {
+                    "reason": str(error),
+                    "iteration": index,
+                    "warmup": index < args.warmups,
+                    "pair": pair,
+                },
+            }
+            with args.output.with_suffix(".failure.json").open("x") as output:
+                output.write(json.dumps(rejected, indent=2) + "\n")
+            raise
         if index >= args.warmups:
             data["pairs"].append(pair)
             args.output.write_text(json.dumps(data, indent=2) + "\n")
