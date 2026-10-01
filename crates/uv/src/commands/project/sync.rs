@@ -952,7 +952,13 @@ pub(crate) async fn do_sync<'a>(
     // The lockfile fixes runtime distributions. Find-links indexes are needed only when a source
     // build may resolve build dependencies; cached or remote wheels need no further resolution.
     let flat_index = if !dry_run.enabled() && installation_plan.requires_source_build() {
-        FlatIndex::load(&client, cache, index_locations).await?
+        FlatIndex::load(
+            &client,
+            cache,
+            index_locations,
+            &concurrency.downloads_semaphore,
+        )
+        .await?
     } else {
         FlatIndex::default()
     };

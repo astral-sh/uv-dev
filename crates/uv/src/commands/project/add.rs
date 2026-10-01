@@ -455,8 +455,13 @@ pub(crate) async fn add(
             };
 
             // Resolve the flat indexes from `--find-links`.
-            let flat_index =
-                FlatIndex::load(&client, cache, &settings.resolver.index_locations).await?;
+            let flat_index = FlatIndex::load(
+                &client,
+                cache,
+                &settings.resolver.index_locations,
+                &concurrency.downloads_semaphore,
+            )
+            .await?;
 
             // Lower the extra build dependencies, if any.
             let extra_build_requires = if let AddTarget::Project(project, _) = &target {

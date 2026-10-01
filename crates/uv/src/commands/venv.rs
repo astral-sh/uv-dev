@@ -300,9 +300,14 @@ pub(crate) async fn venv(
             .build()?;
 
         // Resolve the flat indexes from `--find-links`.
-        let flat_index = FlatIndex::load(&client, cache, index_locations)
-            .await
-            .map_err(VenvError::FlatIndex)?;
+        let flat_index = FlatIndex::load(
+            &client,
+            cache,
+            index_locations,
+            &concurrency.downloads_semaphore,
+        )
+        .await
+        .map_err(VenvError::FlatIndex)?;
 
         // Initialize any shared state.
         let state = SharedState::default();

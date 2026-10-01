@@ -701,7 +701,13 @@ async fn build_package(
     };
 
     // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    let flat_index = FlatIndex::load(
+        &client,
+        cache,
+        index_locations,
+        &concurrency.downloads_semaphore,
+    )
+    .await?;
 
     // Initialize any shared state.
     let state = SharedState::default();
