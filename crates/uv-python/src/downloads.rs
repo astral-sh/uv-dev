@@ -4029,17 +4029,31 @@ mod tests {
 "#;
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            for _ in 0..2 {
-                let (mut stream, _) = listener.accept().unwrap();
-                let _request = read_http_request(&mut stream);
-                write!(
-                    stream,
-                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
-                )
-                .unwrap();
+        let server = std::thread::spawn(move || -> io::Result<usize> {
+            let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
+            let mut requests = 0;
+            while std::time::Instant::now() < deadline && requests < 2 {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_read_timeout(Some(StdDuration::from_secs(5)))?;
+                        let request = read_http_request(&mut stream);
+                        assert!(request.starts_with(["HEAD ", "GET "][requests]));
+                        requests += 1;
+                        // Each response closes its connection, so the client must not reuse it.
+                        write!(
+                            stream,
+                            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )?;
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(StdDuration::from_millis(10));
+                    }
+                    Err(err) => return Err(err),
+                }
             }
+            Ok(requests)
         });
 
         let cache = Cache::temp().unwrap().init().await.unwrap();
@@ -4070,7 +4084,13 @@ mod tests {
             downloads[0].url().as_ref(),
             "https://example.com/token-a.tar.gz"
         );
-        server.join().unwrap();
+        assert_eq!(
+            server
+                .join()
+                .expect("mock server should not panic")
+                .expect("mock requests should succeed"),
+            2
+        );
     }
 
     #[tokio::test]

@@ -64,7 +64,7 @@ impl Libc {
     /// Parse the environment component of a `cargo-dist` target triple.
     ///
     /// Environments without a supported Linux libc use [`Self::None`].
-    pub fn from_cargo_dist(environment: &str) -> Self {
+    pub(crate) fn from_cargo_dist(environment: &str) -> Self {
         match environment {
             "gnu" | "gnuabi64" => Self::Some(target_lexicon::Environment::Gnu),
             "gnueabi" => Self::Some(target_lexicon::Environment::Gnueabi),
