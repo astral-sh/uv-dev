@@ -183,6 +183,147 @@ async fn resolution_reuses_verified_cached_wheel_metadata() -> Result<()> {
     Ok(())
 }
 
+/// Direct wheel URLs may reuse a complete cached archive only when a strong expected digest
+/// identifies it. Explicit refreshes still contact the origin.
+#[tokio::test]
+async fn resolution_reuses_verified_cached_direct_wheel_metadata() -> Result<()> {
+    const FILENAME: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
+    for algorithm in [Some("sha256"), Some("md5"), None] {
+        let context = uv_test::test_context!("3.12");
+        let archive = fs_err::read(context.workspace_root.join("test/links").join(FILENAME))?;
+        let sha256 = hex::encode(Sha256::digest(&archive));
+        let mut hasher = uv_extract::hash::Hasher::from(uv_pypi_types::HashAlgorithm::Md5);
+        hasher.update(&archive);
+        let md5 = uv_pypi_types::HashDigest::from(hasher).to_string();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let download_requests = requests.clone();
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .and(path(format!("/files/{FILENAME}")))
+            .respond_with(move |_: &Request| {
+                download_requests.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .set_body_bytes(archive.clone())
+            })
+            .mount(&server)
+            .await;
+        let base_url = format!("{}/files/{FILENAME}", server.uri());
+        let url = if algorithm == Some("sha256") {
+            format!("{base_url}#sha256={sha256}")
+        } else if algorithm == Some("md5") {
+            format!("{base_url}#{}", md5.replace(':', "="))
+        } else {
+            base_url
+        };
+        context
+            .temp_dir
+            .child("requirements.in")
+            .write_str(&format!("build-tag @ {url}\n"))?;
+        let mut install = context.pip_install();
+        install
+            .arg("--no-index")
+            .arg("--no-deps")
+            .arg("--target")
+            .arg(context.temp_dir.child("seed").path())
+            .arg(&url);
+        let output = tokio::task::spawn_blocking(move || install.output()).await??;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let seeded_requests = requests.load(Ordering::SeqCst);
+        assert!(seeded_requests > 0);
+
+        let run = async |refresh| -> Result<Vec<u8>> {
+            let mut command = context.pip_compile();
+            command
+                .arg("requirements.in")
+                .arg("--no-header")
+                .arg("--no-annotate")
+                .arg("--no-index");
+            if refresh {
+                command.arg("--refresh");
+            }
+            let output = tokio::task::spawn_blocking(move || command.output()).await??;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(output.stdout)
+        };
+        let first = run(false).await?;
+        if algorithm == Some("sha256") {
+            assert_eq!(requests.load(Ordering::SeqCst), seeded_requests);
+        } else {
+            assert!(requests.load(Ordering::SeqCst) > seeded_requests);
+        }
+        let before = requests.load(Ordering::SeqCst);
+        assert_eq!(run(true).await?, first);
+        assert!(requests.load(Ordering::SeqCst) > before);
+    }
+    Ok(())
+}
+
+/// Required hashes can identify a previously downloaded URL even without a URL fragment.
+#[tokio::test]
+async fn required_hashes_identify_cached_direct_wheel_metadata() -> Result<()> {
+    const FILENAME: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
+    let context = uv_test::test_context!("3.12");
+    let archive = fs_err::read(context.workspace_root.join("test/links").join(FILENAME))?;
+    let sha256 = hex::encode(Sha256::digest(&archive));
+    let requests = Arc::new(AtomicUsize::new(0));
+    let download_requests = requests.clone();
+    let server = MockServer::start().await;
+    Mock::given(any())
+        .and(path(format!("/files/{FILENAME}")))
+        .respond_with(move |_: &Request| {
+            download_requests.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "public, max-age=0")
+                .set_body_bytes(archive.clone())
+        })
+        .mount(&server)
+        .await;
+    let url = format!("{}/files/{FILENAME}", server.uri());
+    let mut install = context.pip_install();
+    install
+        .arg("--no-index")
+        .arg("--no-deps")
+        .arg("--target")
+        .arg(context.temp_dir.child("seed").path())
+        .arg(&url);
+    let output = tokio::task::spawn_blocking(move || install.output()).await??;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let seeded_requests = requests.load(Ordering::SeqCst);
+    assert!(seeded_requests > 0);
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!("build-tag @ {url} --hash=sha256:{sha256}\n"))?;
+    let mut command = context.pip_install();
+    command
+        .arg("--dry-run")
+        .arg("--require-hashes")
+        .arg("--no-index")
+        .arg("-r")
+        .arg("requirements.in");
+    let output = tokio::task::spawn_blocking(move || command.output()).await??;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), seeded_requests);
+    Ok(())
+}
+
 /// Creates a CONNECT tunnel proxy that forwards connections to the target.
 ///
 /// Returns the proxy address. The proxy runs in a background thread.
