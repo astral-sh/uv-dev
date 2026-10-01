@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::future::ready;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -758,6 +758,173 @@ async fn audit_batches_refill_download_slots() -> Result<()> {
     );
     tokio::time::timeout(Duration::from_secs(3), query).await???;
     Ok(())
+}
+
+async fn check_source_prefetch(advertised: bool, pinned: bool) -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let choice_requested = Arc::new(AtomicBool::new(false));
+    let selected = if pinned { 2 } else { 1 };
+    let gate_metadata = format!(
+        "Metadata-Version: 2.3\nName: gate\nVersion: 1.0\nRequires-Dist: choice=={selected}.0\n"
+    );
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/simple/gate/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(
+                json!({
+                    "name": "gate",
+                    "files": [{
+                        "filename": "gate-1.0-py3-none-any.whl",
+                        "url": "/files/gate-1.0-py3-none-any.whl",
+                        "hashes": {},
+                        "core-metadata": true,
+                        "upload-time": "2024-01-01T00:00:00Z",
+                    }],
+                })
+                .to_string(),
+                "application/vnd.pypi.simple.v1+json",
+            ),
+        )
+        .mount(&server)
+        .await;
+    let requested = choice_requested.clone();
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path(
+            "/files/gate-1.0-py3-none-any.whl.metadata",
+        ))
+        .respond_with(move |_: &Request| {
+            // The exact source must start downloading while the gate is unresolved.
+            if pinned && !requested.load(Ordering::Relaxed) {
+                ResponseTemplate::new(503)
+            } else {
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_millis(300))
+                    .set_body_raw(gate_metadata.clone(), "text/plain")
+            }
+        })
+        .mount(&server)
+        .await;
+    let mut files = Vec::new();
+    for version in [1, 2] {
+        let filename = format!("choice-{version}.0.tar.gz");
+        let metadata = format!("Metadata-Version: 2.3\nName: choice\nVersion: {version}.0\n");
+        let pyproject = format!("[project]\nname = \"choice\"\nversion = \"{version}.0\"\n");
+        let mut archive = Vec::new();
+        uv_test::archive::write_tar_gz(
+            &mut archive,
+            &[
+                (
+                    format!("choice-{version}.0/PKG-INFO").as_str(),
+                    metadata.as_bytes(),
+                ),
+                (
+                    format!("choice-{version}.0/pyproject.toml").as_str(),
+                    pyproject.as_bytes(),
+                ),
+            ],
+        )?;
+        files.push(json!({
+            "filename": filename,
+            "url": format!("/files/{filename}"),
+            "hashes": {"sha256": hex::encode(Sha256::digest(&archive))},
+            "size": archive.len(),
+            "core-metadata": advertised,
+            "upload-time": "2024-01-01T00:00:00Z",
+        }));
+        let requested = choice_requested.clone();
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path(format!("/files/{filename}")))
+            .respond_with(move |_: &Request| {
+                if version == 2 {
+                    requested.store(true, Ordering::Relaxed);
+                }
+                ResponseTemplate::new(200).set_body_bytes(archive.clone())
+            })
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path(format!(
+                "/files/{filename}.metadata"
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(metadata, "text/plain"))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/simple/choice/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            json!({"name": "choice", "files": files}).to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(if pinned {
+            "gate==1.0\nchoice==2.0\n"
+        } else {
+            "gate==1.0\nchoice\n"
+        })?;
+    let output = context
+        .pip_compile()
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .arg("--default-index")
+        .arg(format!("{}/simple", server.uri()))
+        .arg("requirements.in")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        format!("choice=={selected}.0\ngate==1.0\n")
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .any(|request| request.url.path() == "/files/choice-2.0.tar.gz"),
+        pinned
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .any(|request| request.url.path() == "/files/choice-2.0.tar.gz.metadata"),
+        advertised
+    );
+    let selected_path = format!(
+        "/files/choice-{selected}.0.tar.gz{}",
+        if advertised { ".metadata" } else { "" }
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.url.path() == selected_path)
+    );
+    Ok(())
+}
+
+/// The resolver only downloads a source archive once it selects that version.
+#[tokio::test]
+async fn resolver_does_not_prefetch_source_archives() -> Result<()> {
+    check_source_prefetch(false, false).await
+}
+
+/// Advertised static source metadata can still be prefetched cheaply.
+#[tokio::test]
+async fn resolver_prefetches_source_sidecars() -> Result<()> {
+    check_source_prefetch(true, false).await
+}
+
+/// An exact source requirement can start downloading before other metadata resolves.
+#[tokio::test]
+async fn resolver_prefetches_pinned_source_archives() -> Result<()> {
+    check_source_prefetch(false, true).await
 }
 
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
