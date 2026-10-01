@@ -171,23 +171,28 @@ async def download_file(
         progress_bar.update(1)
         return False
 
-    if dest.exists() and expected_sha256 and sha256_checksum(dest) == expected_sha256:
-        logger.debug(
-            f"File {dest} already exists and SHA-256 matches. Skipping download."
-        )
-        progress_bar.update(1)
-        return True  # Success, even though skipped
-    elif dest.exists() and expected_sha256 is None:
-        logger.debug(
-            f"File {dest} already exists no SHA-256 provided. Skipping download."
-        )
-        progress_bar.update(1)
-        return True  # Success, even though skipped
-
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    logger.debug(f"Downloading {url} to {dest}")
-
     try:
+        if dest.exists():
+            if not dest.is_file():
+                raise OSError(
+                    f"Mirror archive destination is not a regular file: {dest}"
+                )
+            if expected_sha256 and sha256_checksum(dest) == expected_sha256:
+                logger.debug(
+                    f"File {dest} already exists and SHA-256 matches. Skipping download."
+                )
+                progress_bar.update(1)
+                return True  # Success, even though skipped
+            elif expected_sha256 is None:
+                logger.debug(
+                    f"File {dest} already exists no SHA-256 provided. Skipping download."
+                )
+                progress_bar.update(1)
+                return True  # Success, even though skipped
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"Downloading {url} to {dest}")
+
         # Only complete, verified archives may occupy the final mirror path.
         # A sibling staging directory keeps replacement on the same filesystem.
         with TemporaryDirectory(prefix=".uv-python-mirror-", dir=dest.parent) as temp:

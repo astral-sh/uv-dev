@@ -295,6 +295,68 @@ class PythonMirrorDestinationsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.progress.completed, 2)
         self.assertFalse(self.destination.exists())
 
+    async def test_non_file_destination_does_not_block_other_downloads(self):
+        other_url = URL.replace("/20220502/", "/20220503/")
+        self.destination.mkdir(parents=True)
+        marker = self.destination / "keep"
+        marker.write_bytes(CONTENT)
+
+        for checksum in (None, CHECKSUM):
+            with self.subTest(checksum=checksum):
+                successful, errors = await self.download(
+                    {(URL, checksum), (other_url, CHECKSUM)}, max_concurrent=1
+                )
+                self.assertEqual(successful, 1)
+                self.assertEqual([url for url, _ in errors], [URL])
+                self.assertNotIn(URL, self.requests)
+                self.assertEqual(marker.read_bytes(), CONTENT)
+                self.assertEqual(
+                    (self.target / MIRROR.sanitize_url(other_url)).read_bytes(),
+                    CONTENT,
+                )
+                self.assertEqual(self.progress.completed, 2)
+
+    async def test_parent_file_does_not_block_other_downloads(self):
+        other_url = URL.replace("/20220502/", "/20220503/")
+        self.target.mkdir(parents=True)
+        self.destination.parent.write_bytes(CONTENT)
+
+        successful, errors = await self.download(
+            {(URL, CHECKSUM), (other_url, CHECKSUM)}, max_concurrent=1
+        )
+        self.assertEqual(successful, 1)
+        self.assertEqual([url for url, _ in errors], [URL])
+        self.assertEqual(self.requests, [other_url])
+        self.assertEqual(self.destination.parent.read_bytes(), CONTENT)
+        self.assertEqual(
+            (self.target / MIRROR.sanitize_url(other_url)).read_bytes(), CONTENT
+        )
+        self.assertEqual(self.progress.completed, 2)
+
+    async def test_checksum_read_error_does_not_block_other_downloads(self):
+        other_url = URL.replace("/20220502/", "/20220503/")
+        self.destination.parent.mkdir(parents=True)
+        self.destination.write_bytes(CONTENT)
+        original_checksum = MIRROR.sha256_checksum
+
+        def checksum(path):
+            if path == self.destination:
+                raise PermissionError("archive is unreadable")
+            return original_checksum(path)
+
+        with patch.object(MIRROR, "sha256_checksum", checksum):
+            successful, errors = await self.download(
+                {(URL, CHECKSUM), (other_url, CHECKSUM)}, max_concurrent=1
+            )
+        self.assertEqual(successful, 1)
+        self.assertEqual(errors, [(URL, "archive is unreadable")])
+        self.assertEqual(self.requests, [other_url])
+        self.assertEqual(self.destination.read_bytes(), CONTENT)
+        self.assertEqual(
+            (self.target / MIRROR.sanitize_url(other_url)).read_bytes(), CONTENT
+        )
+        self.assertEqual(self.progress.completed, 2)
+
     async def test_symlinked_ancestor_cannot_read_or_replace_outside_archive(self):
         other_url = MIRROR.PREFIXES[0] + "safe/python.tar.gz"
         for index, prefix in enumerate(("20220502", "releases/20220502")):
@@ -867,6 +929,23 @@ class PythonMirrorCliTest(unittest.TestCase):
         self.assertIn("Successfully downloaded: 1 files.", output)
         self.assertNotIn("Failed downloads:", output)
         self.assertEqual((self.target / MIRROR.sanitize_url(URL)).read_bytes(), CONTENT)
+
+    def test_local_file_error_keeps_independent_downloads(self):
+        other_url = URL.replace("/20220502/", "/20220503/")
+        destination = self.target / MIRROR.sanitize_url(URL)
+        self.target.mkdir(parents=True)
+        destination.parent.write_bytes(CONTENT)
+
+        code, output = self.run_cli({URL: 200, other_url: 200})
+        self.assertEqual(code, 1)
+        self.assertEqual(self.requests, [other_url])
+        self.assertIn("Successfully downloaded: 1 files.", output)
+        self.assertIn("Failed downloads:", output)
+        self.assertIn(URL, output)
+        self.assertEqual(destination.parent.read_bytes(), CONTENT)
+        self.assertEqual(
+            (self.target / MIRROR.sanitize_url(other_url)).read_bytes(), CONTENT
+        )
 
     def test_download_exception_exits_nonzero(self):
         code, output = self.run_cli({URL: 200}, OSError("client unavailable"))
