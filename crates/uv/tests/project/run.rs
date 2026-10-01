@@ -7,7 +7,13 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+#[cfg(unix)]
+use std::os::fd::OwnedFd;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 use std::path::Path;
+#[cfg(unix)]
+use std::process::Stdio;
 use uv_fs::copy_dir_all;
 use uv_python::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
@@ -5694,6 +5700,66 @@ fn exit_status_signal() -> Result<()> {
     let status = context.run().arg(script.path()).status()?;
     assert_eq!(status.code().expect("a status code"), 139);
     Ok(())
+}
+
+/// Test that SIGPIPE received by uv is not forwarded to the child process.
+#[cfg(unix)]
+#[test]
+fn sigpipe_not_forwarded_to_child() -> Result<()> {
+    let context = uv_test::test_context!("3.11");
+
+    let (stderr, peer) = UnixStream::pair()?;
+    drop(peer);
+
+    // SIGWINCH is ignored until uv registers its handler. Wait for uv to forward a
+    // notification before checking whether its broken stderr terminates the child.
+    let mut command = context.command();
+    command
+        .arg("-vv")
+        .arg("run")
+        .arg("--no-project")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(indoc! {r#"
+            trap - PIPE
+            received=
+            trap 'received=1' WINCH
+            attempts=0
+            while [ -z "$received" ] && [ "$attempts" -lt 100 ]; do
+                kill -WINCH "$PPID"
+                sleep 0.1
+                attempts=$((attempts + 1))
+            done
+            test -n "$received" || exit 1
+            sleep 1
+            echo survived
+        "#})
+        .stderr(Stdio::from(OwnedFd::from(stderr)));
+
+    uv_snapshot!(context.filters(), command, @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    survived
+    ");
+    Ok(())
+}
+
+/// A child that receives SIGPIPE still determines the command's exit status.
+#[cfg(unix)]
+#[test]
+fn exit_status_sigpipe() {
+    let context = uv_test::test_context!("3.11");
+
+    uv_snapshot!(context.filters(), context.command()
+        .arg("run")
+        .arg("--no-project")
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg("trap - PIPE; kill -PIPE $$"), @r"
+    exit_code: 141 (failure)
+    ");
 }
 
 #[test]
