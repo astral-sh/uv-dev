@@ -5711,6 +5711,8 @@ fn sigpipe_not_forwarded_to_child() -> Result<()> {
     let (stderr, peer) = UnixStream::pair()?;
     drop(peer);
 
+    // SIGWINCH is ignored until uv registers its handler. Wait for uv to forward a
+    // notification before checking whether its broken stderr terminates the child.
     let mut command = context.command();
     command
         .arg("-vv")
@@ -5719,7 +5721,20 @@ fn sigpipe_not_forwarded_to_child() -> Result<()> {
         .arg("--")
         .arg("sh")
         .arg("-c")
-        .arg("trap - PIPE; kill -WINCH \"$PPID\"; sleep 1; echo survived")
+        .arg(indoc! {r#"
+            trap - PIPE
+            received=
+            trap 'received=1' WINCH
+            attempts=0
+            while [ -z "$received" ] && [ "$attempts" -lt 100 ]; do
+                kill -WINCH "$PPID"
+                sleep 0.1
+                attempts=$((attempts + 1))
+            done
+            test -n "$received" || exit 1
+            sleep 1
+            echo survived
+        "#})
         .stderr(Stdio::from(OwnedFd::from(stderr)));
 
     uv_snapshot!(context.filters(), command, @r"
