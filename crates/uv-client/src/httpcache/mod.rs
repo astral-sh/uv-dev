@@ -276,6 +276,17 @@ impl CachePolicy {
 }
 
 impl ArchivedCachePolicy {
+    /// Whether the stored representation belongs to this request, ignoring freshness.
+    ///
+    /// Callers that validate freshness through another protocol still need to match the
+    /// target URI, request method, and response's `Vary` fields.
+    pub(crate) fn matches_request(&self, request: &reqwest::Request) -> bool {
+        self.is_storable()
+            && self.request.uri == request.url().as_str()
+            && (request.method() == http::Method::GET || request.method() == http::Method::HEAD)
+            && self.vary.matches(request.headers())
+    }
+
     /// Determines what caching behavior is correct given an existing
     /// `CachePolicy` and a new HTTP request for the resource managed by this
     /// cache policy. This is done as per [RFC 9111 S4].

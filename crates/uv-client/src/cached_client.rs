@@ -217,6 +217,22 @@ impl CachedClient {
         &self.0
     }
 
+    /// Read a matching cached representation without sending a request.
+    ///
+    /// This does not check the representation's age. The caller must validate its freshness
+    /// independently before using it. The stored URI, request method, and `Vary` fields must match.
+    pub async fn read_cached_serde<Payload: Serialize + DeserializeOwned + Send + 'static>(
+        &self,
+        req: &Request,
+        cache_entry: &CacheEntry,
+    ) -> Option<Payload> {
+        let cached = Self::read_cache(cache_entry).await?;
+        if !cached.cache_policy.matches_request(req) {
+            return None;
+        }
+        SerdeCacheable::<Payload>::from_aligned_bytes(cached.data).ok()
+    }
+
     /// Make a cached request with a custom response transformation while using
     /// the `Cacheable` trait to (de)serialize cached responses.
     ///

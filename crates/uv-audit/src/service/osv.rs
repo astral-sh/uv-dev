@@ -16,8 +16,9 @@ use tracing::trace;
 use crate::types::{self, VulnerabilityID};
 use futures::{StreamExt as _, TryStreamExt as _};
 use jiff::Timestamp;
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
-use uv_cache::{Cache, CacheBucket, CacheEntry};
+use uv_cache::{Cache, CacheBucket, CacheEntry, Freshness};
 use uv_cache_key::cache_digest;
 use uv_client::{CacheControl, CachedClient, CachedClientError};
 use uv_configuration::Concurrency;
@@ -184,6 +185,25 @@ struct QueryBatchRequest {
 #[derive(Debug, Clone, Deserialize)]
 struct VulnSummary {
     id: String,
+    modified: Option<ModificationTime>,
+}
+
+/// The modification time is an optional cache validator. An unusable value does not
+/// invalidate the advisory identifier returned by a custom service.
+#[derive(Debug, Copy, Clone, Deserialize)]
+#[serde(untagged)]
+enum ModificationTime {
+    Timestamp(Timestamp),
+    Unusable(IgnoredAny),
+}
+
+impl ModificationTime {
+    fn timestamp(self) -> Option<Timestamp> {
+        match self {
+            Self::Timestamp(timestamp) => Some(timestamp),
+            Self::Unusable(_) => None,
+        }
+    }
 }
 
 /// One result entry in a batch query response, corresponding to one input query.
@@ -276,12 +296,29 @@ impl Osv {
         dependencies: &'a [types::Dependency],
         filter: Filter,
     ) -> Result<IndexMap<&'a types::Dependency, FxHashSet<VulnerabilityID>>, Error> {
+        Ok(self
+            .query_summaries(dependencies, filter)
+            .await?
+            .into_iter()
+            .map(|(dependency, summaries)| (dependency, summaries.into_keys().collect()))
+            .collect())
+    }
+
+    /// Query the current advisory identifiers and modification times for each dependency.
+    async fn query_summaries<'a>(
+        &self,
+        dependencies: &'a [types::Dependency],
+        filter: Filter,
+    ) -> Result<IndexMap<&'a types::Dependency, FxHashMap<VulnerabilityID, Option<Timestamp>>>, Error>
+    {
         if dependencies.is_empty() {
             return Ok(IndexMap::default());
         }
 
-        let mut result_map: IndexMap<&types::Dependency, FxHashSet<VulnerabilityID>> =
-            IndexMap::default();
+        let mut result_map: IndexMap<
+            &types::Dependency,
+            FxHashMap<VulnerabilityID, Option<Timestamp>>,
+        > = IndexMap::default();
 
         // Pending queries: (dependency, page_token). Initially one per dependency with no token.
         let mut pending: Vec<(&types::Dependency, Option<String>)> =
@@ -327,13 +364,18 @@ impl Osv {
             let mut next_pending = Vec::new();
             for ((dep, _), batch_result) in pending.iter().zip(batch_response.results.iter()) {
                 let ids = result_map.entry(dep).or_default();
-                ids.extend(
-                    batch_result
-                        .vulns
-                        .iter()
-                        .filter(|v| filter.matches(&v.id))
-                        .map(|v| VulnerabilityID::new(v.id.clone())),
-                );
+                for vulnerability in batch_result
+                    .vulns
+                    .iter()
+                    .filter(|vulnerability| filter.matches(&vulnerability.id))
+                {
+                    let modified = vulnerability.modified.and_then(ModificationTime::timestamp);
+                    ids.entry(VulnerabilityID::new(vulnerability.id.clone()))
+                        .and_modify(|current| {
+                            *current = (*current).max(modified);
+                        })
+                        .or_insert(modified);
+                }
                 if let Some(token) = &batch_result.next_page_token {
                     next_pending.push((*dep, Some(token.clone())));
                 }
@@ -354,19 +396,21 @@ impl Osv {
         dependencies: &[types::Dependency],
         filter: Filter,
     ) -> Result<Vec<types::Finding>, Error> {
-        let dep_vuln_ids = self.query_identifiers(dependencies, filter).await?;
+        let dep_vuln_ids = self.query_summaries(dependencies, filter).await?;
 
         // Collect unique vuln IDs to minimize fetches.
-        let unique_ids: FxHashSet<_> = dep_vuln_ids
-            .values()
-            .flat_map(|ids| ids.iter())
-            .cloned()
-            .collect();
+        let mut unique_ids: FxHashMap<VulnerabilityID, Option<Timestamp>> = FxHashMap::default();
+        for (id, modified) in dep_vuln_ids.values().flat_map(|ids| ids.iter()) {
+            unique_ids
+                .entry(id.clone())
+                .and_modify(|current| *current = (*current).max(*modified))
+                .or_insert(*modified);
+        }
 
         // Fetch full vulnerability records concurrently.
         let vuln_details = futures::stream::iter(unique_ids)
-            .map(async |id| {
-                let vuln = self.fetch_vuln(id.as_str()).await?;
+            .map(async |(id, modified)| {
+                let vuln = self.fetch_vuln(id.as_str(), modified).await?;
                 Ok::<(VulnerabilityID, Vulnerability), Error>((id, vuln))
             })
             .buffer_unordered(self.concurrency.downloads)
@@ -377,7 +421,7 @@ impl Osv {
         let findings = dep_vuln_ids
             .iter()
             .flat_map(|(dep, vuln_ids)| {
-                vuln_ids.iter().filter_map(|vuln_id| {
+                vuln_ids.keys().filter_map(|vuln_id| {
                     vuln_details
                         .get(vuln_id)
                         .map(|vuln| Self::vulnerability_to_finding(dep, vuln.clone()))
@@ -393,7 +437,11 @@ impl Osv {
     /// Caching is handled transparently by the [`CachedClient`] middleware using
     /// a synthetic `Cache-Control: max-age=600` header, since OSV itself does
     /// not send caching headers.
-    async fn fetch_vuln(&self, id: &str) -> Result<Vulnerability, Error> {
+    async fn fetch_vuln(
+        &self,
+        id: &str,
+        modified: Option<Timestamp>,
+    ) -> Result<Vulnerability, Error> {
         let mut url = self
             .base_url
             .join("v1/vulns/")
@@ -414,22 +462,53 @@ impl Osv {
             .build()
             .map_err(reqwest_middleware::Error::Reqwest)?;
 
-        let vuln: Vulnerability = self
-            .client
-            .get_serde_with_retry(
-                req,
-                &cache_entry,
-                CacheControl::Override(VULN_CACHE_CONTROL.clone()),
-                async |response| response.json::<Vulnerability>().await,
-            )
-            .await
-            .map_err(|err| match err {
-                CachedClientError::Client(err) => Error::Client(err),
-                CachedClientError::Callback { err, .. } => Error::MalformedRecord {
-                    id: id.to_string(),
-                    err: reqwest_middleware::Error::Reqwest(err),
-                },
-            })?;
+        let revalidate = if let Some(modified) = modified
+            && let Some(cached) = self
+                .client
+                .read_cached_serde::<Vulnerability>(&req, &cache_entry)
+                .await
+        {
+            // A fresh query result validates this exact advisory revision even after its HTTP
+            // cache lifetime. A newer revision must bypass a still-fresh cached response.
+            if cached.modified == modified
+                && self
+                    .cache
+                    .freshness(&cache_entry, None, None)
+                    .is_ok_and(Freshness::is_fresh)
+            {
+                return Ok(cached);
+            }
+            true
+        } else {
+            false
+        };
+
+        let response = if revalidate {
+            self.client
+                .skip_cache_with_retry(
+                    req,
+                    &cache_entry,
+                    CacheControl::Override(VULN_CACHE_CONTROL.clone()),
+                    async |response| response.json::<Vulnerability>().await,
+                )
+                .await
+        } else {
+            self.client
+                .get_serde_with_retry(
+                    req,
+                    &cache_entry,
+                    CacheControl::Override(VULN_CACHE_CONTROL.clone()),
+                    async |response| response.json::<Vulnerability>().await,
+                )
+                .await
+        };
+        let vuln: Vulnerability = response.map_err(|err| match err {
+            CachedClientError::Client(err) => Error::Client(err),
+            CachedClientError::Callback { err, .. } => Error::MalformedRecord {
+                id: id.to_string(),
+                err: reqwest_middleware::Error::Reqwest(err),
+            },
+        })?;
 
         Ok(vuln)
     }
@@ -533,8 +612,7 @@ mod tests {
     use crate::service::osv::{Filter, RangeType};
     use crate::types::{Dependency, Finding};
 
-    use super::Event;
-    use super::Osv;
+    use super::{Event, ModificationTime, Osv, VulnSummary};
 
     /// Create a [`CachedClient`] suitable for tests (no retries, no cache).
     fn test_client() -> CachedClient {
@@ -851,7 +929,7 @@ mod tests {
         );
 
         let vulnerability = osv
-            .fetch_vuln(id)
+            .fetch_vuln(id, None)
             .await
             .expect("Failed to fetch vulnerability");
         assert_eq!(vulnerability.id, id);
@@ -909,7 +987,7 @@ mod tests {
         let first = service("first");
         let second = service("second");
         for (osv, summary) in [(&first, "first"), (&second, "second"), (&first, "first")] {
-            let record = osv.fetch_vuln("VULN-1").await.expect("full record");
+            let record = osv.fetch_vuln("VULN-1", None).await.expect("full record");
             assert_eq!(record.summary.as_deref(), Some(summary));
         }
 
@@ -922,6 +1000,211 @@ mod tests {
         [
             "/first/v1/vulns/VULN-1",
             "/second/v1/vulns/VULN-1",
+        ]
+        "#);
+    }
+
+    /// A live query can validate a record after its HTTP cache lifetime has expired.
+    #[tokio::test]
+    async fn test_query_batch_reuses_unchanged_record() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/querybatch"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{"vulns": [{"id": "VULN-1", "modified": "2026-01-01T00:00:00Z"}]}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/vulns/VULN-1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("age", "601")
+                    .set_body_json(json!({
+                        "id": "VULN-1",
+                        "modified": "2026-01-01T00:00:00Z",
+                    })),
+            )
+            .mount(&server)
+            .await;
+        let osv = Osv::new(
+            test_client(),
+            Some(DisplaySafeUrl::parse(&server.uri()).expect("mock URL")),
+            Concurrency::default(),
+            Cache::temp().expect("temporary cache"),
+        );
+        let dependencies = [Dependency::new(
+            PackageName::from_str("package-a").expect("package name"),
+            Version::from_str("1.0.0").expect("package version"),
+        )];
+        for _ in 0..2 {
+            assert_eq!(
+                osv.query_batch(&dependencies, Filter::All)
+                    .await
+                    .expect("audit findings")
+                    .len(),
+                1
+            );
+        }
+        let requests = server.received_requests().await.expect("recorded requests");
+        let paths = requests
+            .iter()
+            .map(|request| request.url.path())
+            .collect::<Vec<_>>();
+        insta::assert_debug_snapshot!(paths, @r#"
+        [
+            "/v1/querybatch",
+            "/v1/vulns/VULN-1",
+            "/v1/querybatch",
+        ]
+        "#);
+    }
+
+    /// A changed revision must replace a record even while its HTTP cache entry is fresh.
+    #[tokio::test]
+    async fn test_query_batch_refreshes_changed_record() {
+        let server = MockServer::start().await;
+        for (priority, date, summary) in [
+            (1, "2026-01-01T00:00:00Z", "first"),
+            (2, "2026-01-02T00:00:00Z", "second"),
+        ] {
+            Mock::given(method("POST"))
+                .and(path("/v1/querybatch"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "results": [{"vulns": [{"id": "VULN-1", "modified": date}]}]
+                })))
+                .up_to_n_times(1)
+                .with_priority(priority)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/v1/vulns/VULN-1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": "VULN-1", "modified": date, "summary": summary,
+                })))
+                .up_to_n_times(1)
+                .with_priority(priority)
+                .mount(&server)
+                .await;
+        }
+        let osv = Osv::new(
+            test_client(),
+            Some(DisplaySafeUrl::parse(&server.uri()).expect("mock URL")),
+            Concurrency::default(),
+            Cache::temp().expect("temporary cache"),
+        );
+        let dependencies = [Dependency::new(
+            PackageName::from_str("package-a").expect("package name"),
+            Version::from_str("1.0.0").expect("package version"),
+        )];
+        let mut summaries = Vec::new();
+        for _ in 0..2 {
+            let findings = osv
+                .query_batch(&dependencies, Filter::All)
+                .await
+                .expect("audit findings");
+            summaries.extend(findings.into_iter().filter_map(|finding| match finding {
+                Finding::Vulnerability(vulnerability) => vulnerability.summary,
+                Finding::ProjectStatus(_) => None,
+            }));
+        }
+        insta::assert_debug_snapshot!(summaries, @r#"
+        [
+            "first",
+            "second",
+        ]
+        "#);
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("recorded requests")
+                .len(),
+            4
+        );
+    }
+
+    /// Services that omit modification timestamps still use ordinary HTTP cache freshness.
+    #[tokio::test]
+    async fn test_query_batch_without_modified_uses_http_cache() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/querybatch"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [{"vulns": [{"id": "VULN-1"}]}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/vulns/VULN-1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("age", "601")
+                    .set_body_json(json!({"id": "VULN-1", "modified": "2026-01-01T00:00:00Z"})),
+            )
+            .mount(&server)
+            .await;
+        let osv = Osv::new(
+            test_client(),
+            Some(DisplaySafeUrl::parse(&server.uri()).expect("mock URL")),
+            Concurrency::default(),
+            Cache::temp().expect("temporary cache"),
+        );
+        let dependencies = [Dependency::new(
+            PackageName::from_str("package-a").expect("package name"),
+            Version::from_str("1.0.0").expect("package version"),
+        )];
+        for _ in 0..2 {
+            assert_eq!(
+                osv.query_batch(&dependencies, Filter::All)
+                    .await
+                    .expect("audit findings")
+                    .len(),
+                1
+            );
+        }
+        let requests = server.received_requests().await.expect("recorded requests");
+        let paths = requests
+            .iter()
+            .map(|request| request.url.path())
+            .collect::<Vec<_>>();
+        insta::assert_debug_snapshot!(paths, @r#"
+        [
+            "/v1/querybatch",
+            "/v1/vulns/VULN-1",
+            "/v1/querybatch",
+            "/v1/vulns/VULN-1",
+        ]
+        "#);
+    }
+
+    #[test]
+    fn test_deserialize_optional_modification_time() {
+        let modified = [
+            json!("2026-01-01T00:00:00Z"),
+            json!(null),
+            json!("invalid timestamp"),
+            json!(123),
+            json!({"unknown": true}),
+        ]
+        .into_iter()
+        .map(|modified| {
+            serde_json::from_value::<VulnSummary>(json!({"id": "VULN-1", "modified": modified}))
+                .expect("advisory summary")
+                .modified
+                .and_then(ModificationTime::timestamp)
+                .map(|timestamp| timestamp.to_string())
+        })
+        .collect::<Vec<_>>();
+        insta::assert_debug_snapshot!(modified, @r#"
+        [
+            Some(
+                "2026-01-01T00:00:00Z",
+            ),
+            None,
+            None,
+            None,
+            None,
         ]
         "#);
     }
