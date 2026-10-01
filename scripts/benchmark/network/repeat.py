@@ -159,6 +159,8 @@ def command(
         pilot.get("refresh_mode", "flag"),
         "--timeout",
         str(timeout),
+        "--expected-exit-code",
+        str(pilot.get("expected_exit_code", 0)),
         "--work-dir",
         str(args.work_dir),
         "--output",
@@ -233,6 +235,7 @@ def check_repeat(pilot: dict, repeated: dict) -> None:
         "refresh_mode": "flag",
         "kernel_counters": False,
         "set_python_environment": True,
+        "expected_exit_code": 0,
     }
     for key in (
         "parent_sha",
@@ -242,6 +245,7 @@ def check_repeat(pilot: dict, repeated: dict) -> None:
         "profile",
         "netem",
         "command",
+        "expected_exit_code",
         "python_request",
         "set_python_environment",
         "python_executable_sha256",

@@ -375,6 +375,53 @@ class ReplayTests(unittest.TestCase):
                     configuration, json.dumps({"queries": queries}).encode()
                 )
 
+    def test_osv_records_match_identifiers_and_support_revalidation(self) -> None:
+        record = {"id": "OSV-BENCH-1", "modified": "2026-01-01T00:00:00Z"}
+        self.fixtures.osv = {
+            "dependencies": {
+                "first": {
+                    "version": "1.0",
+                    "pages": 2,
+                    "vulns_by_page": [[record["id"]], [record["id"]]],
+                }
+            },
+            "vulnerabilities": {record["id"]: record},
+        }
+        query = {"package": {"name": "first", "ecosystem": "PyPI"}, "version": "1.0"}
+        body, _ = bench.osv_query_response(
+            self.fixtures.osv, json.dumps({"queries": [query]}).encode()
+        )
+        self.assertEqual(
+            json.loads(body),
+            {"results": [{"vulns": [record], "next_page_token": "first:1"}]},
+        )
+        route = "/v1/vulns/" + record["id"]
+        server = self.server({"path_failures": {route: {"status": 503, "count": 1}}})
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        try:
+            connection.request("GET", route)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 503)
+            response.read()
+            connection.request("GET", route)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader("Content-Type"), "application/json")
+            etag = response.getheader("ETag")
+            self.assertEqual(json.loads(response.read()), record)
+            connection.request("GET", route, headers={"If-None-Match": etag})
+            response = connection.getresponse()
+            self.assertEqual((response.status, response.read()), (304, b""))
+            connection.request("GET", "/v1/vulns/OSV-MISSING")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 404)
+            response.read()
+        finally:
+            connection.close()
+        server.wait_idle()
+        events = sorted(server.events, key=lambda event: event["start"])
+        self.assertEqual([event["status"] for event in events], [503, 200, 304, 404])
+
     def test_artifact_alias_supports_resumption(self) -> None:
         server = self.server({})
         connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
@@ -915,6 +962,27 @@ class ReplayTests(unittest.TestCase):
         warm_command, timed_command = commands
         self.assertNotIn("--refresh", warm_command)
         self.assertEqual(timed_command, warm_command)
+
+        args.expected_exit_code = 1
+        completed = subprocess.CompletedProcess([], 1, b"findings\n", b"")
+        commands.clear()
+        with patch.object(bench.subprocess, "run", side_effect=run):
+            measured = bench.run_one(Path("uv"), self.fixtures, {}, args)
+        self.assertEqual(measured["exit_code"], 1)
+        self.assertEqual(len(commands), 2)
+
+        completed = subprocess.CompletedProcess([], 0, b"", b"")
+        with (
+            patch.object(bench.subprocess, "run", side_effect=run),
+            self.assertRaisesRegex(RuntimeError, "Cache warmup returned 0"),
+        ):
+            bench.run_one(Path("uv"), self.fixtures, {}, args)
+        args.cache_mode = "cold"
+        with (
+            patch.object(bench.subprocess, "run", side_effect=run),
+            self.assertRaisesRegex(RuntimeError, "Command failed \\(0\\)"),
+        ):
+            bench.run_one(Path("uv"), self.fixtures, {}, args)
 
     def test_setup_and_result_file_verification(self) -> None:
         args = SimpleNamespace(

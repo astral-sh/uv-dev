@@ -138,6 +138,12 @@ class StudyManifestTest(unittest.TestCase):
             )
 
             invalid = copy.deepcopy(result)
+            invalid["pairs"][0]["head"]["exit_code"] = 1
+            (evidence / "case-slow.json").write_text(json.dumps(invalid))
+            with self.assertRaisesRegex(ValueError, "exit status differs"):
+                verify.verify(evidence, repository, study, require_qualification=False)
+            (evidence / "case-slow.json").write_text(json.dumps(result))
+            invalid["pairs"][0]["head"].pop("exit_code")
             invalid["pairs"][0]["head"]["stdout_sha256"] = "f" * 64
             (evidence / "case-fast.json").write_text(json.dumps(invalid))
             with self.assertRaisesRegex(ValueError, "stdout_sha256 differs"):

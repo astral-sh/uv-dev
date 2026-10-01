@@ -132,6 +132,7 @@ class RepeatTests(unittest.TestCase):
             kernel_counters=True,
             set_python_environment=False,
             refresh_mode="implicit",
+            expected_exit_code=1,
         )
         with patch.object(repeat.shutil, "which", return_value="/path/to/uv"):
             command = repeat.command(self.pilot, self.args, self.root, 300)
@@ -143,6 +144,7 @@ class RepeatTests(unittest.TestCase):
 
         self.assertEqual(value("--cache-mode"), "refresh")
         self.assertEqual(value("--refresh-mode"), "implicit")
+        self.assertEqual(value("--expected-exit-code"), "1")
         self.assertEqual(value("--requirement"), "example==1.0")
         self.assertEqual(value("--env"), "UV_CONCURRENT_DOWNLOADS=2")
         self.assertEqual(value("--verify-tree"), "{work}/site")
@@ -193,6 +195,7 @@ class RepeatTests(unittest.TestCase):
             ("command", ["pip", "sync"]),
             ("environment_overrides", {"UV_CONCURRENT_DOWNLOADS": "1"}),
             ("set_python_environment", False),
+            ("expected_exit_code", 1),
         ):
             changed = copy.deepcopy(repeated)
             changed[key] = value

@@ -451,7 +451,16 @@ def osv_query_response(configuration: dict, request: bytes) -> tuple[bytes, dict
         key = f"{name}:{page}"
         first = first or key
         query_keys.append(key)
-        result = {"vulns": []}
+        summaries = []
+        if (pages := dependency.get("vulns_by_page")) is not None:
+            if len(pages) != dependency["pages"]:
+                raise ValueError("OSV fixture page count differs")
+            for identifier in pages[page]:
+                record = configuration["vulnerabilities"][identifier]
+                if record["id"] != identifier:
+                    raise ValueError("OSV fixture vulnerability ID differs")
+                summaries.append({"id": identifier, "modified": record["modified"]})
+        result = {"vulns": summaries}
         if page + 1 < dependency["pages"]:
             result["next_page_token"] = f"{name}:{page + 1}"
         results.append(result)
@@ -802,6 +811,15 @@ class Handler(BaseHTTPRequestHandler):
                 ) is not None:
                     body, status = value, 200
                 content_type = "application/octet-stream"
+            elif (
+                len(parts) == 3
+                and parts[:2] == ["v1", "vulns"]
+                and (osv := getattr(self.server.fixtures, "osv", None)) is not None
+            ):
+                if (value := osv.get("vulnerabilities", {}).get(parts[2])) is not None:
+                    body = json.dumps(value, separators=(",", ":")).encode()
+                    status = 200
+                    content_type = "application/json"
             elif (value := self.server.fixtures.routes.get(route)) is not None:
                 body, status = value, 200
                 content_type = "application/octet-stream"
@@ -1518,14 +1536,19 @@ def run_one(
             if args.setup_commands:
                 replay.reset()
             if args.cache_mode != "cold":
-                subprocess.run(
+                warmup = subprocess.run(
                     command,
                     cwd=work,
                     env=env,
                     capture_output=True,
                     timeout=args.timeout,
-                    check=True,
+                    check=False,
                 )
+                if warmup.returncode != getattr(args, "expected_exit_code", 0):
+                    raise RuntimeError(
+                        f"Cache warmup returned {warmup.returncode}: {command}\n"
+                        + warmup.stderr.decode(errors="replace")
+                    )
                 replay.reset()
             if args.cache_mode == "refresh" and args.refresh_mode == "flag":
                 command.append("--refresh")
@@ -1555,13 +1578,14 @@ def run_one(
             replay.stop()
         output = normalize_output(result.stdout, context)
         stderr = normalize_output(result.stderr, context)
-        if result.returncode:
+        if result.returncode != getattr(args, "expected_exit_code", 0):
             raise RuntimeError(
                 f"Command failed ({result.returncode}): {command}\n{result.stderr.decode(errors='replace')}"
             )
         events = replay.events
         return {
             "seconds": seconds,
+            "exit_code": result.returncode,
             "stdout_sha256": hashlib.sha256(output).hexdigest(),
             "stdout": output.decode(errors="replace"),
             "stderr": result.stderr.decode(errors="replace"),
@@ -1675,6 +1699,12 @@ def main() -> None:
         help="Use implicit for commands that always refresh their registry cache",
     )
     run.add_argument("--timeout", type=float, default=300)
+    run.add_argument(
+        "--expected-exit-code",
+        type=int,
+        default=0,
+        help="Required status of the measured command and cache warmup",
+    )
     run.add_argument("--required-bytes", type=int, default=0)
     run.add_argument("--required-waves", type=int, default=0)
     run.add_argument("--required-latency-ms", type=float)
@@ -1788,6 +1818,7 @@ def main() -> None:
         "profile": profile,
         "netem": netem_profile(),
         "command": args.command,
+        "expected_exit_code": args.expected_exit_code,
         "python_request": args.python,
         "set_python_environment": not args.no_python_env,
         "python_executable_sha256": (

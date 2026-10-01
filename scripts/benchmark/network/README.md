@@ -60,6 +60,14 @@ chain independent of a slow initial batch. These fixtures record each query's pa
 alongside the request digest, so studies can verify complete pagination when request grouping
 changes. The `flaky-page` profile returns one transient failure during that independent chain.
 
+`make_osv_record_fixtures.py --directory DIR` adds pinned vulnerability records, shared identifiers,
+and record-specific delays and failures. Use `--expected-exit-code 1` for an audit that reports
+vulnerabilities; both the measured command and any cache warmup must return that status.
+`osv_record_oracle.py` starts each distinct full record once an identifying page completes and uses
+one concurrency limit for pages and records. Pass `--records-cached` for a warm record-cache
+reference. Its optimistic bound includes the required response bodies and identifier-to-record
+dependencies.
+
 `make_tool_list_fixtures.py --directory DIR --packages N` creates two releases of each of `N`
 console-script packages and commands that install the older releases locally. Set
 `UV_TOOL_DIR={work}/tools` and `UV_TOOL_BIN_DIR={work}/bin` with `--env` to isolate each trial. The

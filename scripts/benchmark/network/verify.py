@@ -168,6 +168,10 @@ def verify(
             )
         pairs = data["pairs"]
         require(len(pairs) == case["pairs"] >= 20, f"{label}: sample count")
+        require(
+            data.get("expected_exit_code", 0) == case.get("expected_exit_code", 0),
+            f"{label}: expected exit status differs",
+        )
         if case.get("requires_stderr"):
             require(data.get("compare_stderr"), f"{label}: missing stderr comparison")
         require(
@@ -189,6 +193,10 @@ def verify(
                 )
             for side in ("parent", "head"):
                 value = pair[side]
+                require(
+                    value.get("exit_code", 0) == data.get("expected_exit_code", 0),
+                    f"{label}: exit status differs",
+                )
                 require(
                     math.isfinite(value["seconds"]) and value["seconds"] > 0,
                     f"{label}: duration",
