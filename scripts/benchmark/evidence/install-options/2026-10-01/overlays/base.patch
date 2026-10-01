@@ -1,0 +1,564 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -6015,6 +6015,7 @@
+  "uv-distribution-types",
+  "uv-extract",
+  "uv-install-wheel",
++ "uv-normalize",
+  "uv-pep440",
+  "uv-pep508",
+  "uv-performance-memory-allocator",
+--- a/crates/uv-bench/Cargo.toml
++++ b/crates/uv-bench/Cargo.toml
+@@ -38,6 +38,15 @@
+ path = "benches/uv_pypi_types.rs"
+ harness = false
+ 
++[[bench]]
++name = "install_options"
++path = "benches/install_options.rs"
++harness = false
++
++[[example]]
++name = "install_options_study"
++path = "examples/install_options_study/main.rs"
++
+ [dev-dependencies]
+ uv = { workspace = true }
+ uv-cache = { workspace = true }
+@@ -50,6 +59,7 @@
+ uv-distribution-types = { workspace = true }
+ uv-extract = { workspace = true }
+ uv-install-wheel = { workspace = true }
++uv-normalize = { workspace = true }
+ uv-pep440 = { workspace = true }
+ uv-pep508 = { workspace = true }
+ uv-performance-memory-allocator = { workspace = true }
+--- /dev/null
++++ b/crates/uv-bench/benches/install_options.rs
+@@ -0,0 +1,37 @@
++// Keep the same allocator used by the production uv binary.
++extern crate uv_performance_memory_allocator;
++
++#[path = "../examples/install_options_study/shared.rs"]
++pub mod shared;
++
++use std::hint::black_box;
++use std::path::Path;
++
++use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime};
++
++fn install_package_filters(c: &mut Criterion<WallTime>) {
++    let census_path =
++        std::env::var("UV_PR252_CENSUS").expect("UV_PR252_CENSUS must name the admitted census");
++    let census = shared::read_census(Path::new(&census_path)).expect("admitted census");
++    let mut group = c.benchmark_group("install_package_filters_actual_api");
++    for case in shared::timed_cases(&census).expect("admitted cases") {
++        case.report().expect("complete behavior oracle");
++        let options = case.options();
++        group.bench_function(
++            BenchmarkId::new("construct_and_lookup", &case.id),
++            |benchmark| {
++                benchmark.iter(|| black_box(case.construct_and_lookup()));
++            },
++        );
++        group.bench_function(
++            BenchmarkId::new("amortized_lookup", &case.id),
++            |benchmark| {
++                benchmark.iter(|| black_box(case.lookup(&options)));
++            },
++        );
++    }
++    group.finish();
++}
++
++criterion_group!(install_options, install_package_filters);
++criterion_main!(install_options);
+--- /dev/null
++++ b/crates/uv-bench/examples/install_options_study/main.rs
+@@ -0,0 +1,69 @@
++// Keep the same allocator used by the production uv binary.
++extern crate uv_performance_memory_allocator;
++
++pub mod shared;
++
++use std::hint::black_box;
++use std::time::Instant;
++
++use anyhow::{Context, Result, bail, ensure};
++use serde_json::json;
++use sha2::{Digest, Sha256};
++
++fn main() -> Result<()> {
++    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
++    let [mode, census_path, rest @ ..] = arguments.as_slice() else {
++        bail!("expected admit CENSUS or sample CENSUS CASE CLOCK ITERATIONS");
++    };
++    let census_bytes = std::fs::read(census_path)?;
++    let census = shared::parse_census(&census_bytes)?;
++    let census_sha256 = Sha256::digest(&census_bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
++    match (mode.as_str(), rest) {
++        ("admit", []) => {
++            println!(
++                "{}",
++                json!({"census_sha256": census_sha256, "payload": shared::admit(&census)?})
++            );
++        }
++        ("sample", [case_id, clock, iterations]) => {
++            ensure!(shared::CLOCKS.contains(&clock.as_str()), "unknown clock");
++            let iterations = iterations
++                .parse::<u64>()
++                .context("invalid iteration count")?;
++            ensure!(
++                (1..=1_048_576).contains(&iterations),
++                "iteration count exceeds fixed cap"
++            );
++            let case = shared::case_for_id(&census, case_id)?;
++            let admission = case.report()?;
++            let expected = admission["decisions"]
++                .as_array()
++                .context("missing decisions")?
++                .iter()
++                .filter(|decision| decision["included"] == true)
++                .count() as u64;
++            let options = (clock == "amortized_lookup").then(|| case.options());
++            let start = Instant::now();
++            let mut included = 0_u64;
++            for _ in 0..iterations {
++                let count = if let Some(options) = &options {
++                    case.lookup(options)
++                } else {
++                    case.construct_and_lookup()
++                };
++                included = included.wrapping_add(black_box(count as u64));
++            }
++            let elapsed_ns = start.elapsed().as_nanos();
++            ensure!(
++                included == expected.wrapping_mul(iterations),
++                "sample result changed"
++            );
++            println!(
++                "{}",
++                json!({"schema": "uv-pr252-api-sample-v1", "census_sha256": census_sha256, "case": case_id, "clock": clock, "iterations": iterations, "queries_per_iteration": case.targets.len(), "included_per_iteration": expected, "included_checksum": included, "elapsed_ns": elapsed_ns})
++            );
++        }
++        _ => bail!("expected admit CENSUS or sample CENSUS CASE CLOCK ITERATIONS"),
++    }
++    Ok(())
++}
+--- /dev/null
++++ b/crates/uv-bench/examples/install_options_study/shared.rs
+@@ -0,0 +1,413 @@
++use std::collections::BTreeSet;
++use std::hint::black_box;
++use std::path::Path;
++use std::str::FromStr;
++
++use anyhow::{Context, Result, bail, ensure};
++use serde_json::{Value, json};
++use uv_configuration::{InstallOptions, InstallTarget};
++use uv_normalize::PackageName;
++
++pub const CLOCKS: [&str; 2] = ["construct_and_lookup", "amortized_lookup"];
++
++#[derive(Clone)]
++pub struct Target {
++    pub name: PackageName,
++    pub is_local: bool,
++}
++
++#[derive(Clone)]
++pub struct Case {
++    pub id: String,
++    pub flags: [bool; 6],
++    pub no_raw: Vec<String>,
++    pub only_raw: Vec<String>,
++    pub no_install: Vec<PackageName>,
++    pub only_install: Vec<PackageName>,
++    pub project: Option<PackageName>,
++    pub members: BTreeSet<PackageName>,
++    pub targets: Vec<Target>,
++}
++
++fn names(values: &[String]) -> Result<Vec<PackageName>> {
++    values
++        .iter()
++        .map(|value| PackageName::from_str(value).map_err(Into::into))
++        .collect()
++}
++
++fn strings(value: &Value) -> Result<Vec<String>> {
++    value
++        .as_array()
++        .context("expected string array")?
++        .iter()
++        .map(|item| item.as_str().map(str::to_owned).context("expected string"))
++        .collect()
++}
++
++impl Case {
++    pub fn new(
++        id: String,
++        flags: [bool; 6],
++        no_raw: Vec<String>,
++        only_raw: Vec<String>,
++        project: Option<PackageName>,
++        members: BTreeSet<PackageName>,
++        targets: Vec<Target>,
++    ) -> Result<Self> {
++        ensure!(
++            no_raw.len() <= 8_192 && only_raw.len() <= 8_192 && targets.len() <= 8_192,
++            "case exceeds fixed size cap"
++        );
++        Ok(Self {
++            id,
++            flags,
++            no_install: names(&no_raw)?,
++            only_install: names(&only_raw)?,
++            no_raw,
++            only_raw,
++            project,
++            members,
++            targets,
++        })
++    }
++
++    pub fn options(&self) -> InstallOptions {
++        InstallOptions::new(
++            self.flags[0],
++            self.flags[1],
++            self.flags[2],
++            self.flags[3],
++            self.flags[4],
++            self.flags[5],
++            black_box(self.no_install.clone()),
++            black_box(self.only_install.clone()),
++        )
++    }
++
++    pub fn lookup(&self, options: &InstallOptions) -> usize {
++        self.targets
++            .iter()
++            .filter(|target| {
++                black_box(options).include_package(
++                    InstallTarget {
++                        name: black_box(&target.name),
++                        is_local: black_box(target.is_local),
++                    },
++                    black_box(self.project.as_ref()),
++                    black_box(&self.members),
++                )
++            })
++            .count()
++    }
++
++    /// Includes owned argument-vector preparation, production construction, one lookup pass, and drop.
++    pub fn construct_and_lookup(&self) -> usize {
++        let options = self.options();
++        self.lookup(&options)
++    }
++
++    /// An untimed, declarative precedence oracle; never used as a performance comparator.
++    pub fn expected(&self, target: &Target) -> bool {
++        let is_project = self.project.as_ref() == Some(&target.name);
++        let is_member = self.members.contains(&target.name);
++        if !self.only_install.is_empty() {
++            self.only_install.contains(&target.name)
++        } else if self.flags[5] {
++            target.is_local
++        } else if self.flags[3] {
++            is_project || is_member
++        } else if self.flags[1] {
++            is_project
++        } else {
++            !(self.flags[0] && is_project
++                || self.flags[2] && (is_project || is_member)
++                || self.flags[4] && target.is_local
++                || self.no_install.contains(&target.name))
++        }
++    }
++
++    pub fn report(&self) -> Result<Value> {
++        let options = self.options();
++        let expected_debug = format!(
++            "InstallOptions {{ no_install_project: {}, only_install_project: {}, no_install_workspace: {}, only_install_workspace: {}, no_install_local: {}, only_install_local: {}, no_install_package: {:?}, only_install_package: {:?} }}",
++            self.flags[0],
++            self.flags[1],
++            self.flags[2],
++            self.flags[3],
++            self.flags[4],
++            self.flags[5],
++            self.no_install,
++            self.only_install
++        );
++        let actual_debug = format!("{options:?}");
++        ensure!(
++            actual_debug == expected_debug,
++            "settings/debug mismatch in {}",
++            self.id
++        );
++        let mut decisions = Vec::with_capacity(self.targets.len());
++        for target in &self.targets {
++            let expected = self.expected(target);
++            let actual = options.include_package(
++                InstallTarget {
++                    name: &target.name,
++                    is_local: target.is_local,
++                },
++                self.project.as_ref(),
++                &self.members,
++            );
++            ensure!(
++                actual == expected,
++                "behavior mismatch in {} for {}",
++                self.id,
++                target.name
++            );
++            decisions.push(json!({"name": target.name.to_string(), "is_local": target.is_local, "included": actual}));
++        }
++        Ok(
++            json!({"id": self.id, "flags": self.flags, "no_raw": self.no_raw, "only_raw": self.only_raw, "no_normalized": self.no_install.iter().map(ToString::to_string).collect::<Vec<_>>(), "only_normalized": self.only_install.iter().map(ToString::to_string).collect::<Vec<_>>(), "project": self.project.as_ref().map(ToString::to_string), "members": self.members.iter().map(ToString::to_string).collect::<Vec<_>>(), "debug": actual_debug, "decisions": decisions}),
++        )
++    }
++}
++
++pub fn read_census(path: &Path) -> Result<Value> {
++    parse_census(&std::fs::read(path)?)
++}
++
++pub fn parse_census(bytes: &[u8]) -> Result<Value> {
++    ensure!(bytes.len() <= 2 * 1024 * 1024, "census exceeds fixed cap");
++    let census: Value = serde_json::from_slice(bytes)?;
++    ensure!(
++        census["schema"] == "uv-pr252-fixture-census-v1",
++        "unexpected census schema"
++    );
++    let ids = census["corpora"]
++        .as_array()
++        .context("missing corpora")?
++        .iter()
++        .map(|item| item["id"].as_str().context("missing corpus id"))
++        .collect::<Result<Vec<_>>>()?;
++    ensure!(
++        ids == ["packse", "uv_docs", "prefect"],
++        "unexpected corpus order"
++    );
++    Ok(census)
++}
++
++fn selected_case(
++    id: String,
++    flags: [bool; 6],
++    only: bool,
++    selected: Vec<String>,
++    project: Option<PackageName>,
++    members: BTreeSet<PackageName>,
++    targets: Vec<Target>,
++) -> Result<Case> {
++    let (no_install, only_install) = if only {
++        (Vec::new(), selected)
++    } else {
++        (selected, Vec::new())
++    };
++    Case::new(
++        id,
++        flags,
++        no_install,
++        only_install,
++        project,
++        members,
++        targets,
++    )
++}
++
++pub fn timed_cases(census: &Value) -> Result<Vec<Case>> {
++    let mut cases = Vec::new();
++    for (filter_count, query_count, shape) in [
++        (0, 1, "miss"),
++        (1, 1, "hit"),
++        (1, 64, "miss"),
++        (2, 1, "hit"),
++        (2, 64, "mixed"),
++        (64, 1, "miss"),
++        (64, 1, "early-hit"),
++        (64, 1, "late-hit"),
++        (64, 256, "mixed"),
++        (256, 64, "miss"),
++        (1_024, 1_024, "mixed"),
++        (4_000, 64, "miss"),
++    ] {
++        let selected = (0..filter_count)
++            .map(|index| format!("package-{index:05}"))
++            .collect::<Vec<_>>();
++        let targets = (0..query_count)
++            .map(|index| {
++                let hit = filter_count > 0
++                    && (matches!(shape, "hit" | "early-hit" | "late-hit")
++                        || shape == "mixed" && index % 2 == 0);
++                let name = if hit {
++                    let selected_index = match shape {
++                        "early-hit" => 0,
++                        "late-hit" => filter_count - 1,
++                        _ => index % filter_count,
++                    };
++                    format!("package-{selected_index:05}")
++                } else {
++                    format!("missing-{index:05}")
++                };
++                Ok(Target {
++                    name: PackageName::from_str(&name)?,
++                    is_local: false,
++                })
++            })
++            .collect::<Result<Vec<_>>>()?;
++        for only in [false, true] {
++            let mode = if only { "only" } else { "no" };
++            cases.push(selected_case(
++                format!("synthetic/{mode}/{filter_count}x{query_count}/{shape}"),
++                [false; 6],
++                only,
++                selected.clone(),
++                None,
++                BTreeSet::new(),
++                targets.clone(),
++            )?);
++        }
++    }
++    for corpus in census["corpora"].as_array().context("missing corpora")? {
++        let id = corpus["id"].as_str().context("missing corpus id")?;
++        let project =
++            PackageName::from_str(corpus["project"].as_str().context("missing project")?)?;
++        let members = names(&strings(&corpus["members"])?)?
++            .into_iter()
++            .collect::<BTreeSet<_>>();
++        let registry = strings(&corpus["registry_names"])?;
++        let hit = corpus["known_hit"]
++            .as_str()
++            .context("missing known hit")?
++            .to_owned();
++        let absent = corpus["absent"]
++            .as_str()
++            .context("missing absent sentinel")?
++            .to_owned();
++        let targets = corpus["targets"]
++            .as_array()
++            .context("missing targets")?
++            .iter()
++            .map(|row| {
++                Ok(Target {
++                    name: PackageName::from_str(
++                        row["name"].as_str().context("missing target name")?,
++                    )?,
++                    is_local: row["is_local"].as_bool().context("missing local flag")?,
++                })
++            })
++            .collect::<Result<Vec<_>>>()?;
++        let duplicate = hit.to_ascii_uppercase().replace('-', "_");
++        let mut selections = vec![
++            ("empty", Vec::new()),
++            ("one-hit", vec![hit.clone()]),
++            ("one-miss", vec![absent.clone()]),
++            ("two-hit-miss", vec![hit.clone(), absent.clone()]),
++            ("normalized-duplicate", vec![duplicate, hit]),
++        ];
++        for (label, limit) in [
++            ("prefix-32", 32),
++            ("prefix-128", 128),
++            ("all-registry", usize::MAX),
++        ] {
++            let mut selected = registry.iter().take(limit).cloned().collect::<Vec<_>>();
++            selected.push(absent.clone());
++            selections.push((label, selected));
++        }
++        for (label, selected) in selections {
++            for only in [false, true] {
++                let mode = if only { "only" } else { "no" };
++                cases.push(selected_case(
++                    format!("lock-census/{id}/{mode}/{label}"),
++                    [true, false, false, false, false, false],
++                    only,
++                    selected.clone(),
++                    Some(project.clone()),
++                    members.clone(),
++                    targets.clone(),
++                )?);
++            }
++        }
++    }
++    ensure!(cases.len() == 72, "unexpected timed case count");
++    let ids = cases.iter().map(|case| &case.id).collect::<BTreeSet<_>>();
++    ensure!(ids.len() == cases.len(), "duplicate case id");
++    Ok(cases)
++}
++
++pub fn precedence_cases() -> Result<Vec<Case>> {
++    let project = PackageName::from_str("project-package")?;
++    let member = PackageName::from_str("workspace-package")?;
++    let members = BTreeSet::from([member]);
++    let raw_names = [
++        "project-package",
++        "workspace-package",
++        "selected-package",
++        "other-package",
++    ];
++    let mut targets = Vec::new();
++    for name in raw_names {
++        for is_local in [false, true] {
++            targets.push(Target {
++                name: PackageName::from_str(name)?,
++                is_local,
++            });
++        }
++    }
++    let lists = [
++        Vec::new(),
++        vec!["selected-package".to_owned()],
++        vec!["SELECTED_package".to_owned(), "selected-package".to_owned()],
++        vec!["absent-package".to_owned(), "project-package".to_owned()],
++    ];
++    let mut cases = Vec::new();
++    for bits in 0_u8..64 {
++        let flags = std::array::from_fn(|index| bits & (1 << index) != 0);
++        for (no_index, no_install) in lists.iter().enumerate() {
++            for (only_index, only_install) in lists.iter().enumerate() {
++                for include_project in [false, true] {
++                    cases.push(Case::new(
++                        format!(
++                            "precedence/{bits:02}/{no_index}/{only_index}/{}",
++                            u8::from(include_project)
++                        ),
++                        flags,
++                        no_install.clone(),
++                        only_install.clone(),
++                        include_project.then(|| project.clone()),
++                        members.clone(),
++                        targets.clone(),
++                    )?);
++                }
++            }
++        }
++    }
++    ensure!(cases.len() == 2_048, "unexpected precedence case count");
++    Ok(cases)
++}
++
++pub fn admit(census: &Value) -> Result<Value> {
++    let timed = timed_cases(census)?;
++    let precedence = precedence_cases()?;
++    let mut reports = Vec::with_capacity(timed.len() + precedence.len());
++    for case in timed.iter().chain(&precedence) {
++        reports.push(case.report()?);
++    }
++    Ok(
++        json!({"schema": "uv-pr252-api-admission-v1", "clock_names": CLOCKS, "timed_case_ids": timed.iter().map(|case| &case.id).collect::<Vec<_>>(), "precedence_case_count": precedence.len(), "cases": reports}),
++    )
++}
++
++pub fn case_for_id(census: &Value, id: &str) -> Result<Case> {
++    for case in timed_cases(census)? {
++        if case.id == id {
++            return Ok(case);
++        }
++    }
++    bail!("unknown timed case: {id}")
++}
