@@ -38,7 +38,7 @@ use uv_distribution_types::{
 };
 use uv_fs::{Simplified, rename_with_retry, write_atomic};
 use uv_git::{Fetch, GIT_LFS, GitError, GitHttpSettings, GitResolver};
-use uv_git_types::{GitHubRepository, GitOid, GitUrl};
+use uv_git_types::{GitHubRepository, GitOid, GitReference, GitUrl};
 use uv_metadata::read_archive_metadata;
 use uv_normalize::PackageName;
 use uv_pep440::{Version, release_specifiers_to_ranges};
@@ -2285,7 +2285,14 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     WheelCache::Git(resource.url, oid.as_short_str()).root(),
                 )
             });
-        if cache_shard
+        if resource.subdirectory.is_some()
+            && matches!(resource.git.reference(), GitReference::BranchOrTagOrCommit(reference) if GitOid::from_str(reference).is_ok())
+        {
+            // Subdirectory metadata requires a checkout to discover workspace sources. An exact
+            // commit does not need API resolution, and the Git fetch validates it against the
+            // repository before using its metadata.
+            debug!("Skipping GitHub fast path for: {source} (pinned subdirectory)");
+        } else if cache_shard
             .as_ref()
             .is_some_and(|cache_shard| cache_shard.is_dir())
         {
