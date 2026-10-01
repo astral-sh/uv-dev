@@ -34,7 +34,8 @@ The following Python version request formats are supported:
 - `<version>` (e.g., `3`, `3.12`, `3.12.3`)
 - `<version-specifier>` (e.g., `>=3.12,<3.13`)
 - `<version><short-variant>` (e.g., `3.13t`, `3.12.0d`)
-- `<version>+<variant>` (e.g., `3.13+freethreaded`, `3.12.0+debug`, `3.14+gil`)
+- `<version>+<python-variant-or-build-name>` (e.g., `3.13+freethreaded`, `3.13+custom`)
+- `<version>+<python-variant>+<build-name>` (e.g., `3.13+freethreaded+custom`)
 - `<implementation>` (e.g., `cpython` or `cp`)
 - `<implementation>@<version>` (e.g., `cpython@3.12`)
 - `<implementation><version>` (e.g., `cpython3.12` or `cp312`)
@@ -323,6 +324,13 @@ and the pre-release version will be used.
 
 If a pre-release Python version is available and matches the request, uv will not download a stable
 Python version instead.
+
+## Python build names
+
+Python download metadata can label artifacts with a publisher-defined build name such as `custom`.
+Select it explicitly with a request like `3.13+custom`. Python variants and build names can be
+composed, as in `3.13+freethreaded+custom`. An unqualified request, such as `3.13`, selects an
+unnamed build.
 
 ## Free-threaded Python
 
