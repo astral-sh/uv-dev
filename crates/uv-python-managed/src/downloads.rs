@@ -31,7 +31,6 @@ use url::Url;
 use zstd::stream::read::Decoder;
 
 use uv_cache::{Cache, CacheBucket, CacheEntry, CacheShard};
-use uv_cache_info::Timestamp;
 use uv_cache_key::cache_digest;
 use uv_client::{
     BaseClient, BaseClientBuilder, CacheControl, CachedClient, CachedClientError, ClientBuildError,
@@ -43,7 +42,6 @@ use uv_extract::hash::Hasher;
 use uv_fs::{Simplified, rename_with_retry, write_atomic};
 use uv_macros::DebugNoInline;
 use uv_platform::{self as platform, Arch, Libc, Os, Platform};
-use uv_preview::PreviewFeature;
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_static::{
@@ -252,7 +250,7 @@ const NDJSON_KNOWN_FLAVORS: &[&str] = &["full", "install_only", "install_only_st
 struct VersionsCacheMeta {
     content_length: u64,
     etag: Option<String>,
-    checked_at: Timestamp,
+    checked_at: SystemTime,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -352,10 +350,9 @@ fn python_download_metadata_urls(
 
 fn resolve_download_list_source(
     python_downloads_json_url: Option<&str>,
+    remote_metadata_enabled: bool,
 ) -> Result<Option<DownloadListSource<'_>>, Error> {
-    if python_downloads_json_url.is_none()
-        && !uv_preview::is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata)
-    {
+    if python_downloads_json_url.is_none() && !remote_metadata_enabled {
         return Ok(None);
     }
     let implicit = python_downloads_json_url.is_none();
@@ -506,7 +503,7 @@ fn versions_cache_is_fresh(cache: &Cache, url: &DisplaySafeUrl, meta: &VersionsC
     let Some(revalidate_after) = SystemTime::now().checked_sub(VERSIONS_CACHE_FRESHNESS) else {
         return false;
     };
-    meta.checked_at >= Timestamp::from(revalidate_after)
+    meta.checked_at >= revalidate_after
 }
 
 async fn write_versions_cache_meta(
@@ -539,7 +536,7 @@ async fn refresh_versions_cache_meta(
         return;
     }
     let meta = VersionsCacheMeta {
-        checked_at: Timestamp::now(),
+        checked_at: SystemTime::now(),
         ..current
     };
     if let Err(err) = write_versions_cache_meta(&meta_entry, &meta).await {
@@ -639,7 +636,7 @@ async fn write_streamed_versions_cache_if_valid(
     let meta = VersionsCacheMeta {
         content_length: content.len() as u64,
         etag,
-        checked_at: Timestamp::now(),
+        checked_at: SystemTime::now(),
     };
     write_versions_cache_if_valid(&content_entry, &meta_entry, source, content, &meta).await;
 }
@@ -745,7 +742,7 @@ async fn fetch_ndjson_cached(
                 let meta = VersionsCacheMeta {
                     content_length: content.len() as u64,
                     etag,
-                    checked_at: Timestamp::now(),
+                    checked_at: SystemTime::now(),
                 };
                 write_versions_cache_if_valid(
                     &content_entry,
@@ -779,7 +776,7 @@ async fn fetch_ndjson_cached(
         if current_etag.is_some() && current_etag == cached_meta.etag {
             debug!("Using cached Python downloads metadata with matching ETag");
             let meta = VersionsCacheMeta {
-                checked_at: Timestamp::now(),
+                checked_at: SystemTime::now(),
                 ..cached_meta.clone()
             };
             if let Err(err) = write_versions_cache_meta(&meta_entry, &meta).await {
@@ -830,7 +827,7 @@ async fn fetch_ndjson_cached(
                         let meta = VersionsCacheMeta {
                             content_length: current_length,
                             etag: current_etag.clone(),
-                            checked_at: Timestamp::now(),
+                            checked_at: SystemTime::now(),
                         };
                         if let Err(err) =
                             write_versions_cache(&content_entry, &meta_entry, &combined, &meta)
@@ -855,7 +852,7 @@ async fn fetch_ndjson_cached(
             let meta = VersionsCacheMeta {
                 content_length: content.len() as u64,
                 etag,
-                checked_at: Timestamp::now(),
+                checked_at: SystemTime::now(),
             };
             write_versions_cache_if_valid(&content_entry, &meta_entry, &source, &content, &meta)
                 .await;
@@ -916,7 +913,11 @@ impl ManagedPythonDownloadList {
         cache: &Cache,
         python_downloads_json_url: Option<&str>,
     ) -> Result<Self, Error> {
-        let Some(source) = resolve_download_list_source(python_downloads_json_url)? else {
+        let Some(source) = resolve_download_list_source(
+            python_downloads_json_url,
+            client_builder.remote_python_download_metadata_enabled(),
+        )?
+        else {
             return Self::new_only_embedded();
         };
 
@@ -976,7 +977,11 @@ impl ManagedPythonDownloadList {
         filter: Option<&PythonDownloadRequest>,
         limit: Option<usize>,
     ) -> Result<Self, Error> {
-        let Some(source) = resolve_download_list_source(python_downloads_json_url)? else {
+        let Some(source) = resolve_download_list_source(
+            python_downloads_json_url,
+            client_builder.remote_python_download_metadata_enabled(),
+        )?
+        else {
             return Ok(Self {
                 downloads: filter_downloads(embedded_downloads()?, filter, limit),
             });
@@ -984,7 +989,7 @@ impl ManagedPythonDownloadList {
         // Implicit metadata is merged with other implementations and deduplicated before limiting.
         let parse_limit = if source.implicit { None } else { limit };
         let predicate = |download: &ManagedPythonDownload| {
-            filter.is_none_or(|request| request.satisfied_by_download(download))
+            filter.is_none_or(|request| download.matches_request(request))
         };
         let result = match (&source.location, source.format) {
             (DownloadListLocation::Path(path), DownloadListFormat::Ndjson) => {
@@ -1063,7 +1068,11 @@ impl ManagedPythonDownloadList {
         python_downloads_json_url: Option<&str>,
         request: &PythonDownloadRequest,
     ) -> Result<Option<ManagedPythonDownload>, Error> {
-        let Some(source) = resolve_download_list_source(python_downloads_json_url)? else {
+        let Some(source) = resolve_download_list_source(
+            python_downloads_json_url,
+            client_builder.remote_python_download_metadata_enabled(),
+        )?
+        else {
             return find_in_embedded_downloads_with_prereleases(request);
         };
         if source.format == DownloadListFormat::Json {
@@ -1228,7 +1237,7 @@ fn find_in_embedded_non_cpython(
 ) -> Result<Option<ManagedPythonDownload>, Error> {
     Ok(embedded_non_cpython_downloads()?
         .into_iter()
-        .find(|download| request.satisfied_by_download(download)))
+        .find(|download| download.matches_request(request)))
 }
 
 fn find_in_embedded_downloads(
@@ -1236,7 +1245,7 @@ fn find_in_embedded_downloads(
 ) -> Result<Option<ManagedPythonDownload>, Error> {
     Ok(embedded_downloads()?
         .into_iter()
-        .find(|download| request.satisfied_by_download(download)))
+        .find(|download| download.matches_request(request)))
 }
 
 fn filter_downloads(
@@ -1245,7 +1254,7 @@ fn filter_downloads(
     limit: Option<usize>,
 ) -> Vec<ManagedPythonDownload> {
     if let Some(filter) = filter {
-        downloads.retain(|download| filter.satisfied_by_download(download));
+        downloads.retain(|download| download.matches_request(filter));
     }
 
     if let Some(limit) = limit {
@@ -1282,7 +1291,7 @@ async fn find_matching_download(
     cache: &Cache,
     request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
-    let predicate = |download: &ManagedPythonDownload| request.satisfied_by_download(download);
+    let predicate = |download: &ManagedPythonDownload| download.matches_request(request);
     let result = match &source.location {
         DownloadListLocation::Path(path) => fs_err::read(path.as_ref())
             .map_err(Error::from)
@@ -2521,8 +2530,8 @@ async fn read_url(
 mod tests {
     #[cfg(target_arch = "aarch64")]
     use uv_python_types::ArchRequest;
-    use uv_python_types::VersionRequest;
 
+    use std::assert_matches;
     use std::collections::HashSet;
     use std::io::{BufRead, Write};
     use std::sync::Arc;
@@ -2530,7 +2539,7 @@ mod tests {
     use std::time::Duration as StdDuration;
 
     use uv_platform::{Arch, Libc, Os, Platform};
-    use uv_python_types::{LenientImplementationName, PythonInstallationKey};
+    use uv_python_types::{LenientImplementationName, PythonInstallationKey, VersionRequest};
 
     use super::*;
 
@@ -2893,7 +2902,7 @@ mod tests {
         let old = VersionsCacheMeta {
             content_length: content.len() as u64,
             etag: Some("\"old\"".to_string()),
-            checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+            checked_at: SystemTime::UNIX_EPOCH,
         };
         let new = VersionsCacheMeta {
             etag: Some("\"new\"".to_string()),
@@ -2917,16 +2926,14 @@ mod tests {
         let meta = VersionsCacheMeta {
             content_length: content.len() as u64,
             etag: None,
-            checked_at: Timestamp::now(),
+            checked_at: SystemTime::now(),
         };
         write_versions_cache(&content_entry, &meta_entry, content, &meta)
             .await
             .unwrap();
         assert!(versions_cache_is_fresh(&cache, &url, &meta));
 
-        let refresh = uv_cache::Refresh::All(Timestamp::from(
-            SystemTime::now() + StdDuration::from_secs(1),
-        ));
+        let refresh = uv_cache::Refresh::from_args(Some(true), Vec::new());
         assert!(!versions_cache_is_fresh(
             &cache.with_refresh(refresh),
             &url,
@@ -3046,7 +3053,7 @@ mod tests {
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
                 etag: None,
-                checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+                checked_at: SystemTime::UNIX_EPOCH,
             },
         )
         .await
@@ -3110,7 +3117,7 @@ mod tests {
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
                 etag: Some("\"v1\"".to_string()),
-                checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+                checked_at: SystemTime::UNIX_EPOCH,
             },
         )
         .await
@@ -3187,7 +3194,7 @@ mod tests {
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
                 etag: Some("\"v1\"".to_string()),
-                checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+                checked_at: SystemTime::UNIX_EPOCH,
             },
         )
         .await
@@ -3218,17 +3225,31 @@ mod tests {
 "#;
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            for _ in 0..2 {
-                let (mut stream, _) = listener.accept().unwrap();
-                let _request = read_http_request(&mut stream);
-                write!(
-                    stream,
-                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
-                )
-                .unwrap();
+        let server = std::thread::spawn(move || -> io::Result<usize> {
+            let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
+            let mut requests = 0;
+            while std::time::Instant::now() < deadline && requests < 2 {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_read_timeout(Some(StdDuration::from_secs(5)))?;
+                        let request = read_http_request(&mut stream);
+                        assert!(request.starts_with(["HEAD ", "GET "][requests]));
+                        requests += 1;
+                        // Each response closes its connection, so the client must not reuse it.
+                        write!(
+                            stream,
+                            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )?;
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(StdDuration::from_millis(10));
+                    }
+                    Err(err) => return Err(err),
+                }
             }
+            Ok(requests)
         });
 
         let cache = Cache::temp().unwrap().init().await.unwrap();
@@ -3242,7 +3263,7 @@ mod tests {
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
                 etag: None,
-                checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+                checked_at: SystemTime::UNIX_EPOCH,
             },
         )
         .await
@@ -3259,7 +3280,13 @@ mod tests {
             downloads[0].url().as_ref(),
             "https://example.com/token-a.tar.gz"
         );
-        server.join().unwrap();
+        assert_eq!(
+            server
+                .join()
+                .expect("mock server should not panic")
+                .expect("mock requests should succeed"),
+            2
+        );
     }
 
     #[tokio::test]
@@ -3290,7 +3317,7 @@ mod tests {
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
                 etag: None,
-                checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+                checked_at: SystemTime::UNIX_EPOCH,
             },
         )
         .await
@@ -3313,7 +3340,6 @@ mod tests {
         );
         server.join().unwrap();
     }
-
 
     fn cpython_download_for_url(url: &'static str) -> ManagedPythonDownload {
         let key = PythonInstallationKey::new(

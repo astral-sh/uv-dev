@@ -30,7 +30,7 @@ use uv_distribution_types::IndexCredentialsError;
 use uv_git::GitHttpSettings;
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::DisplaySafeUrl;
 use uv_redacted::DisplaySafeUrlError;
 use uv_static::EnvVars;
@@ -244,6 +244,13 @@ impl Default for BaseClientBuilder<'_> {
 }
 
 impl<'a> BaseClientBuilder<'a> {
+    /// Return whether remote Python download metadata was enabled explicitly.
+    pub fn remote_python_download_metadata_enabled(&self) -> bool {
+        self.preview
+            .is_enabled(PreviewFeature::RemotePythonDownloadMetadata)
+            && !self.preview.all_enabled()
+    }
+
     pub fn new(
         connectivity: Connectivity,
         system_certs: bool,

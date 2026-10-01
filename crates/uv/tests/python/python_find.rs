@@ -7,8 +7,10 @@ use indoc::indoc;
 #[cfg(feature = "test-python-managed")]
 use uv_platform::Platform;
 use uv_platform::{Arch, Os};
-use uv_python::PythonRequest;
-use uv_python::downloads::{ManagedPythonDownloadList, PythonDownloadRequest};
+#[cfg(feature = "test-python-managed")]
+use uv_python_managed::downloads::ManagedPythonDownloadList;
+#[cfg(feature = "test-python-managed")]
+use uv_python_types::{PythonDownloadRequest, PythonRequest};
 use uv_static::EnvVars;
 
 use uv_test::{uv_snapshot, venv_bin_path};
