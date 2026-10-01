@@ -1388,5 +1388,7 @@ jobs:
           pattern: build-wheels-*-*
           path: wheels
           merge-multiple: true
+      - name: "Test wheel contents check"
+        run: uv run --no-project scripts/test-release-wheels-contents.py
       - name: "check wheel contents"
         run: uv run scripts/check_uv_wheel_contents.py wheels/*
