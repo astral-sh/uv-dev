@@ -1,0 +1,368 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -5974,6 +5974,7 @@
+  "fs-err",
+  "futures",
+  "jiff",
++ "serde_json",
+  "sha2 0.11.0",
+  "tempfile",
+  "tokio",
+--- a/crates/uv-bench/Cargo.toml
++++ b/crates/uv-bench/Cargo.toml
+@@ -33,6 +33,10 @@
+ path = "benches/uv_pep440.rs"
+ harness = false
+ 
++[[example]]
++name = "dependency_groups_study"
++path = "examples/dependency_groups_study/main.rs"
++
+ [dev-dependencies]
+ uv = { workspace = true }
+ uv-cache = { workspace = true }
+@@ -65,6 +69,7 @@
+ fs-err = { workspace = true }
+ futures = { workspace = true }
+ jiff = { workspace = true }
++serde_json = { workspace = true }
+ sha2 = { workspace = true }
+ tempfile = { workspace = true }
+ tokio = { workspace = true }
+--- a/crates/uv-bench/benches/workspace_discovery.rs
++++ b/crates/uv-bench/benches/workspace_discovery.rs
+@@ -15,6 +15,8 @@
+ use uv::commands::ExitStatus;
+ use uv_cache::Cache;
+ use uv_cli::Cli;
++use uv_workspace::dependency_groups::FlatDependencyGroups;
++use uv_workspace::pyproject::PyProjectToml;
+ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
+ 
+ const EXCLUDE_NEWER: &str = "2024-08-08";
+@@ -383,10 +385,40 @@
+     );
+ }
+ 
++fn flatten_dependency_group_with_python_markers(c: &mut Criterion<WallTime>) {
++    let requirements = (0..2048)
++        .map(|index| format!("\"package-{index}\""))
++        .collect::<Vec<_>>()
++        .join(", ");
++    let pyproject = PyProjectToml::from_string(
++        format!(
++            r#"
++[dependency-groups]
++dev = [{requirements}]
++
++[tool.uv.dependency-groups]
++dev = {{ requires-python = ">=3.8,!=3.9.*,!=3.10.*,!=3.11.2,<4" }}
++"#
++        ),
++        "pyproject.toml",
++    )
++    .expect("Failed to parse dependency-group benchmark pyproject.toml");
++
++    c.bench_function("flatten_dependency_group_with_python_markers", |b| {
++        b.iter(|| {
++            black_box(
++                FlatDependencyGroups::from_pyproject_toml(Path::new("pyproject.toml"), &pyproject)
++                    .expect("Failed to flatten benchmark dependency group"),
++            );
++        });
++    });
++}
++
+ criterion_group!(
+     workspace_discovery,
+     discover_workspace_from_all_members,
+     discover_workspace_from_all_members_with_excludes,
+-    run_python_version_synthetic_workspace
++    run_python_version_synthetic_workspace,
++    flatten_dependency_group_with_python_markers
+ );
+ criterion_main!(workspace_discovery);
+--- /dev/null
++++ b/crates/uv-bench/examples/dependency_groups_study/main.rs
+@@ -0,0 +1,61 @@
++// Keep the allocator used by the production uv binary.
++extern crate uv_performance_memory_allocator;
++
++pub mod shared;
++
++use std::hint::black_box;
++use std::time::Instant;
++
++use anyhow::{Context, Result, bail, ensure};
++use serde_json::json;
++use sha2::{Digest, Sha256};
++
++fn main() -> Result<()> {
++    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
++    let [mode, fixture_path, rest @ ..] = arguments.as_slice() else {
++        bail!("expected admit FIXTURE or sample FIXTURE CASE CLOCK ITERATIONS");
++    };
++    let bytes = std::fs::read(fixture_path)?;
++    let fixture_sha256 = Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
++    let cases = shared::cases(&bytes)?;
++    match (mode.as_str(), rest) {
++        ("admit", []) => println!(
++            "{}",
++            json!({"fixture_sha256": fixture_sha256, "payload": shared::admit(&cases)?})
++        ),
++        ("sample", [case_id, clock, iterations]) => {
++            ensure!(clock == shared::CLOCK, "unexpected clock");
++            let iterations = iterations
++                .parse::<u64>()
++                .context("invalid iteration count")?;
++            ensure!(
++                (1..=1_048_576).contains(&iterations),
++                "iteration count exceeds fixed cap"
++            );
++            let case = shared::timed_case(&cases, case_id)?;
++            let before = case.report()?;
++            let groups = before["outcome"]["groups"]
++                .as_array()
++                .context("timed case must succeed")?;
++            let groups_per_iteration = groups.len();
++            let requirements_per_iteration = groups
++                .iter()
++                .map(|group| group["requirements"].as_array().map_or(0, Vec::len))
++                .sum::<usize>();
++            let start = Instant::now();
++            let mut completed_iterations = 0_u64;
++            for _ in 0..iterations {
++                black_box(case.flatten()?);
++                completed_iterations += 1;
++            }
++            let elapsed_ns = start.elapsed().as_nanos();
++            ensure!(case.report()? == before, "post-clock behavior changed");
++            println!(
++                "{}",
++                json!({"schema": "uv-pr244-api-sample-v1", "fixture_sha256": fixture_sha256, "case": case_id, "clock": clock, "iterations": iterations, "groups_per_iteration": groups_per_iteration, "requirements_per_iteration": requirements_per_iteration, "completed_iterations": completed_iterations, "elapsed_ns": elapsed_ns})
++            );
++        }
++        _ => bail!("expected admit FIXTURE or sample FIXTURE CASE CLOCK ITERATIONS"),
++    }
++    Ok(())
++}
+--- /dev/null
++++ b/crates/uv-bench/examples/dependency_groups_study/shared.rs
+@@ -0,0 +1,217 @@
++use std::error::Error;
++use std::hint::black_box;
++use std::path::Path;
++use std::str::FromStr;
++
++use anyhow::{Context, Result, bail, ensure};
++use serde_json::{Value, json};
++use sha2::{Digest, Sha256};
++use uv_distribution_types::RequiresPython;
++use uv_pep440::VersionSpecifiers;
++use uv_pep508::Requirement;
++use uv_pypi_types::VerbatimParsedUrl;
++use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
++use uv_workspace::pyproject::PyProjectToml;
++
++pub const CLOCK: &str = "flatten_groups";
++const DIAGNOSTIC_PATH: &str = "pyproject.toml";
++
++pub struct Case {
++    pub id: String,
++    pub timed: bool,
++    raw_sha256: String,
++    pyproject: PyProjectToml,
++    expected: Value,
++}
++
++fn strings(value: &Value) -> Result<Vec<String>> {
++    value
++        .as_array()
++        .context("expected string array")?
++        .iter()
++        .map(|item| item.as_str().map(str::to_owned).context("expected string"))
++        .collect()
++}
++
++fn requirement_projection(requirement: &Requirement<VerbatimParsedUrl>) -> Value {
++    json!({
++        "display": requirement.to_string(),
++        "debug": format!("{requirement:?}"),
++        "name": requirement.name.to_string(),
++        "extras": requirement.extras.iter().map(ToString::to_string).collect::<Vec<_>>(),
++        "version_or_url": format!("{:?}", requirement.version_or_url),
++        "marker": requirement.marker.contents().map(|marker| marker.to_string()),
++        "marker_is_true": requirement.marker.is_true(),
++        "marker_is_false": requirement.marker.is_false(),
++        "origin": format!("{:?}", requirement.origin),
++    })
++}
++
++fn requires_python_projection(requires_python: Option<&VersionSpecifiers>) -> Value {
++    requires_python.map_or(
++        Value::Null,
++        |specifiers| json!({"display": specifiers.to_string(), "debug": format!("{specifiers:?}")}),
++    )
++}
++
++fn actual_groups(groups: FlatDependencyGroups) -> Value {
++    Value::Array(
++        groups
++            .into_iter()
++            .map(|(name, group)| {
++                json!({
++                    "name": name.to_string(),
++                    "requires_python": requires_python_projection(group.requires_python.as_ref()),
++                    "requirements": group.requirements.iter().map(requirement_projection).collect::<Vec<_>>(),
++                })
++            })
++            .collect(),
++    )
++}
++
++/// Expand only the already-declared expected rows; this does not flatten include graphs.
++fn expected_groups(value: &Value) -> Result<Value> {
++    let mut result = Vec::new();
++    for group in value.as_array().context("missing expected groups")? {
++        let mut requirements = Vec::new();
++        for row in group["requirements"]
++            .as_array()
++            .context("missing expected requirements")?
++        {
++            let mut requirement = Requirement::<VerbatimParsedUrl>::from_str(
++                row["raw"].as_str().context("missing raw requirement")?,
++            )?;
++            for bound in strings(&row["bounds"])? {
++                let marker = RequiresPython::from_specifiers(VersionSpecifiers::from_str(&bound)?)
++                    .to_marker_tree();
++                requirement.marker = requirement.marker.and(marker);
++            }
++            requirements.push(requirement_projection(&requirement));
++        }
++        let requires_python = strings(&group["requires_python_bounds"])?
++            .iter()
++            .map(|bound| VersionSpecifiers::from_str(bound))
++            .collect::<std::result::Result<Vec<_>, _>>()?
++            .into_iter()
++            .flatten()
++            .collect::<VersionSpecifiers>();
++        result.push(json!({
++            "name": group["name"],
++            "requires_python": requires_python_projection((!requires_python.is_empty()).then_some(&requires_python)),
++            "requirements": requirements,
++        }));
++    }
++    Ok(Value::Array(result))
++}
++
++fn error_chain(error: &(dyn Error + 'static)) -> Result<Vec<String>> {
++    let mut chain = Vec::new();
++    let mut current = Some(error);
++    while let Some(error) = current {
++        ensure!(chain.len() < 16, "unexpected error-chain depth");
++        chain.push(error.to_string());
++        current = error.source();
++    }
++    Ok(chain)
++}
++
++impl Case {
++    pub fn flatten(&self) -> std::result::Result<FlatDependencyGroups, DependencyGroupError> {
++        FlatDependencyGroups::from_pyproject_toml(
++            black_box(Path::new(DIAGNOSTIC_PATH)),
++            black_box(&self.pyproject),
++        )
++    }
++
++    pub fn report(&self) -> Result<Value> {
++        let outcome = match self.flatten() {
++            Ok(groups) => {
++                ensure!(
++                    self.expected["expected_error_chain_prefix"].is_null(),
++                    "expected error in {}",
++                    self.id
++                );
++                let actual = actual_groups(groups);
++                ensure!(
++                    actual == expected_groups(&self.expected["expected_groups"])?,
++                    "complete ordered group/requirement/marker/requires-python mismatch in {}",
++                    self.id
++                );
++                json!({"status": "ok", "groups": actual})
++            }
++            Err(error) => {
++                let chain = error_chain(&error)?;
++                let expected = strings(&self.expected["expected_error_chain_prefix"])?;
++                ensure!(
++                    chain.starts_with(&expected),
++                    "error mismatch in {}",
++                    self.id
++                );
++                if self.expected["expected_error_chain_exact"] == true {
++                    ensure!(chain == expected, "extra error source in {}", self.id);
++                }
++                json!({"status": "error", "chain": chain, "debug": format!("{error:?}")})
++            }
++        };
++        Ok(
++            json!({"id": self.id, "raw_sha256": self.raw_sha256, "timed": self.timed, "outcome": outcome}),
++        )
++    }
++}
++
++pub fn cases(bytes: &[u8]) -> Result<Vec<Case>> {
++    ensure!(bytes.len() <= 4 * 1024 * 1024, "fixture packet exceeds cap");
++    let fixture: Value = serde_json::from_slice(bytes)?;
++    ensure!(
++        fixture["schema"] == "uv-pr244-fixture-cases-v1",
++        "unexpected fixture schema"
++    );
++    let mut cases = Vec::new();
++    for expected in fixture["cases"].as_array().context("missing cases")? {
++        let id = expected["id"]
++            .as_str()
++            .context("missing case id")?
++            .to_owned();
++        let raw = expected["raw"].as_str().context("missing raw manifest")?;
++        let raw_sha256 = Sha256::digest(raw.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
++        ensure!(
++            expected["raw_sha256"] == raw_sha256,
++            "raw source mismatch in {id}"
++        );
++        let pyproject = PyProjectToml::from_string(raw.to_owned(), DIAGNOSTIC_PATH)
++            .with_context(|| format!("parse fixture {id}"))?;
++        cases.push(Case {
++            id,
++            timed: expected["timed"].as_bool().context("missing timing flag")?,
++            raw_sha256,
++            pyproject,
++            expected: expected.clone(),
++        });
++    }
++    ensure!(cases.len() == 23, "unexpected complete case count");
++    let timed = cases
++        .iter()
++        .filter(|case| case.timed)
++        .map(|case| case.id.clone())
++        .collect::<Vec<_>>();
++    ensure!(
++        timed == strings(&fixture["timed_case_ids"])? && timed.len() == 12,
++        "unexpected timed case set"
++    );
++    Ok(cases)
++}
++
++pub fn admit(cases: &[Case]) -> Result<Value> {
++    Ok(
++        json!({"schema": "uv-pr244-api-admission-v1", "clock": CLOCK, "cases": cases.iter().map(Case::report).collect::<Result<Vec<_>>>()?}),
++    )
++}
++
++pub fn timed_case<'a>(cases: &'a [Case], id: &str) -> Result<&'a Case> {
++    for case in cases {
++        if case.timed && case.id == id {
++            return Ok(case);
++        }
++    }
++    bail!("unknown timed case: {id}")
++}

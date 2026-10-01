@@ -1,0 +1,158 @@
+{
+  "archive": {
+    "bytes": 79429,
+    "members": {
+      "aa.json": {
+        "bytes": 198396,
+        "sha256": "13e082a80d8a708fce1467b704882c223bce550df45e1fe45f069277ba817f9f"
+      },
+      "ab.json": {
+        "bytes": 116409,
+        "sha256": "c5efb46909ab6f0a5d52d764e25cd2c7e0d6ad42cc85654d881a0dce9242d109"
+      },
+      "analyze_pairs.py": {
+        "bytes": 8313,
+        "sha256": "c8d76aad41b5aaa097eb5570bdef984250cc4216f5f16f7c8d95713cbc3952d2"
+      },
+      "analyze_pairs_preflight_v2.py": {
+        "bytes": 4956,
+        "sha256": "231298b9e961bc7d5879dd460e7fd1f5f72ec2362fa325d3aed9a18910535ccd"
+      },
+      "calibration.json": {
+        "bytes": 208813,
+        "sha256": "71bb6cdca8efba6ae3831d6ed3df234c77ec06ccc90a227b32130f3bd0fc44ba"
+      },
+      "fixed-design.json": {
+        "bytes": 5239,
+        "sha256": "d1d76f2dd9eed4629d3dd761d2b05d0b6677714b29a813f1636e2cfe128f0f51"
+      },
+      "fixture-cases.json": {
+        "bytes": 542565,
+        "sha256": "d7aece7c6e17872052cb52409941882b69b4e15d10bbc9612917a31172ba8420"
+      },
+      "plan.json": {
+        "bytes": 6922,
+        "sha256": "233378e599fe910440d9c7da8f908cc77e5ab7cb29815dacaff635810614071c"
+      },
+      "report.json": {
+        "bytes": 3690,
+        "sha256": "2bd9ec15086e5809a0f623ac2929cec406a21a8e20c6d34cbb452e79f028899b"
+      }
+    },
+    "path": "data.tar.gz",
+    "sha256": "911f33dbf170d936a2c89e5b42c9fd105d08d056dc03af897f7528473e8f521a"
+  },
+  "build": {
+    "allocator": "production allocator",
+    "identity": {
+      "base": {
+        "build_manifest_sha256": "23241502880055f71eb4c97053cee9328d9a913ec39ee03aa4889195d2c2b4ed",
+        "executable_sha256": "a72b60ee2b57d90087354fdf5dabb957b624897738bacf13ad2e35d841dade6c",
+        "overlaid_tree": "9add73709ec2f021a132ecb2f5ed8166dfd1fb56"
+      },
+      "execution_admission_sha256": "0b8d7fd7f55a8ba9441d58b27c35890cfab9665f8222dc03f4d510ed9144803b",
+      "head": {
+        "build_manifest_sha256": "c3b80d5edbde10dd4c60a59eddef2dcf981ea1090a010b65a362bc5134d6816a",
+        "executable_sha256": "5ea0cbef6a51993d54e3278a048c4b807e7790474baa1ff45514cdde758a972e",
+        "overlaid_tree": "68723c442ea963a4b8a598bb1be7bf5d19cde87f"
+      },
+      "matching_admission_bytes_sha256": "106e9b7625dd91bdf89b4825436d2f7a7226487fd9fc0e6cc17de00d0906c1c7"
+    },
+    "jobs": 1,
+    "production_artifacts_recompiled": true,
+    "profile": "release",
+    "rust": "1.97.1",
+    "separate_base_head_targets": true,
+    "target": "x86_64-unknown-linux-gnu"
+  },
+  "estimator": {
+    "original_source_sha256": "c8d76aad41b5aaa097eb5570bdef984250cc4216f5f16f7c8d95713cbc3952d2",
+    "portable_plan_bridge": "The replay authenticates plan.json, then supplies the original plan digest and measured normalized source trees to the unchanged estimator.",
+    "strict_preflight_sha256": "231298b9e961bc7d5879dd460e7fd1f5f72ec2362fa325d3aed9a18910535ccd",
+    "unchanged_estimator": true
+  },
+  "native_process_receipts": "Only immutable hashes and relative references are included; execution-host logs are retained separately.",
+  "new_samples_collected": false,
+  "normalized_differences": [
+    {
+      "base": [
+        "100644",
+        "blob",
+        "94690535f0208b530a5a7e6cb14349fbc156bf75"
+      ],
+      "head": [
+        "100644",
+        "blob",
+        "db5f202c9aafaac2c1844e5859ee64e1bdc817a3"
+      ],
+      "path": "crates/uv-workspace/src/dependency_groups.rs"
+    }
+  ],
+  "original": {
+    "complete_readback_sha256": "efcc8711aa0e21c018f91c1c2fcf6b5663f200dd607fcfad97cdef527c2525ca",
+    "completed_study_admission_sha256": "1e9485e57523b3a04b48e6b1a28f5326a0733fa99d67bb72310628051554ec63",
+    "fixture_sha256": "c6b82a50910023fff58827934ed780cb3a1d56fce9d51d0725852a42fd5cc437",
+    "overlay_sha256": "5c2560702ac3127e24699d8da454be0f4a75e10080201571194a5c7085c0e721",
+    "plan_sha256": "410e4cab65a3752dfc76ab3ce240d04a2acd8b07e61684011df7ba8eea9ac41f",
+    "records": {
+      "aa.json": {
+        "bytes": 198396,
+        "sha256": "13e082a80d8a708fce1467b704882c223bce550df45e1fe45f069277ba817f9f"
+      },
+      "ab.json": {
+        "bytes": 116409,
+        "sha256": "c5efb46909ab6f0a5d52d764e25cd2c7e0d6ad42cc85654d881a0dce9242d109"
+      },
+      "calibration.json": {
+        "bytes": 208813,
+        "sha256": "71bb6cdca8efba6ae3831d6ed3df234c77ec06ccc90a227b32130f3bd0fc44ba"
+      },
+      "fixed-design.json": {
+        "bytes": 5239,
+        "sha256": "d1d76f2dd9eed4629d3dd761d2b05d0b6677714b29a813f1636e2cfe128f0f51"
+      },
+      "report.json": {
+        "bytes": 3690,
+        "sha256": "2bd9ec15086e5809a0f623ac2929cec406a21a8e20c6d34cbb452e79f028899b"
+      }
+    }
+  },
+  "overlays": {
+    "overlays/base.patch": {
+      "bytes": 13396,
+      "sha256": "43438cff2a30bead0c128ae7d5948902d9941079f102727dcb84fc9448f306f9"
+    },
+    "overlays/head.patch": {
+      "bytes": 11708,
+      "sha256": "a1d93ecfdb8cfb966e1c893bd2f5dcaf3116ec8990db412124d8c9a6a33bc863"
+    }
+  },
+  "portable_fixture": {
+    "bytes": 542565,
+    "case_content_and_order_unchanged": true,
+    "change": "Only authentic_manifest.path is replaced with the public repository-relative pyproject.toml path.",
+    "historical_samples_rewritten": false,
+    "original_sha256": "c6b82a50910023fff58827934ed780cb3a1d56fce9d51d0725852a42fd5cc437",
+    "sha256": "d7aece7c6e17872052cb52409941882b69b4e15d10bbc9612917a31172ba8420"
+  },
+  "product_pull_request": "https://github.com/astral-sh/uv-dev/pull/244",
+  "recorded_on": "2026-10-01",
+  "schema": "uv-dependency-groups-evidence-v1",
+  "source_pair": {
+    "base": {
+      "commit": "c8d39cb1f6fca5a00a5d727d2181a479a13f5d29",
+      "original_blob_count": 1608,
+      "original_tree": "238a09f0d1a1540c200889042393a57de4c3f90a",
+      "overlaid_tree": "9add73709ec2f021a132ecb2f5ed8166dfd1fb56",
+      "production_blob": "94690535f0208b530a5a7e6cb14349fbc156bf75"
+    },
+    "head": {
+      "commit": "a58f5c416fc5049577acc68b694f75fc0569e65d",
+      "original_blob_count": 1608,
+      "original_tree": "106ed97da1bd656e963799229fadc22adf48e4ea",
+      "overlaid_tree": "68723c442ea963a4b8a598bb1be7bf5d19cde87f",
+      "production_blob": "db5f202c9aafaac2c1844e5859ee64e1bdc817a3"
+    }
+  },
+  "whole_command_claim": false
+}
