@@ -13,7 +13,7 @@ use http::header::{CONTENT_TYPE, USER_AGENT};
 use http_body_util::Full;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use insta::assert_snapshot;
+use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -351,6 +351,87 @@ fn tool_list_outdated_reuses_connections_per_interpreter() -> Result<()> {
                 .as_str()
                 .is_some_and(|value| value.starts_with(version))
         );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_list_outdated_reuses_matching_index_cache() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let server = MockServer::start().await;
+    let shared = ['a', 'b', 'c']
+        .map(|suffix| format!(
+            r#"<a href="tool_{suffix}-2.0.0-py3-none-any.whl" data-upload-time="2024-03-24T00:00:00Z">tool-{suffix}</a>"#
+        ))
+        .join("\n");
+    let separate = r#"<a href="tool_c-3.0.0-py3-none-any.whl" data-upload-time="2024-03-24T00:00:00Z">tool-c</a>"#;
+    for (route, body) in [("/shared", shared.as_str()), ("/separate", separate)] {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/html"))
+            .mount(&server)
+            .await;
+    }
+
+    for name in ["tool-a", "tool-b", "tool-c"] {
+        let (filename, wheel) = generate_wheel(
+            &PackageName::from_str(name)?,
+            &Version::from_str("1.0.0")?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[name.to_owned()],
+        );
+        let path = context.temp_dir.child(filename);
+        fs::write(&path, wheel)?;
+        let mut command = context.tool_install();
+        command
+            .arg(path.as_os_str())
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(format!(
+                "{}/{}",
+                server.uri(),
+                if name == "tool-c" {
+                    "separate"
+                } else {
+                    "shared"
+                }
+            ));
+        command.assert().success();
+    }
+    server.reset().await;
+
+    for concurrency in [1, 50] {
+        for (route, body, requests) in [("/shared", shared.as_str(), 1), ("/separate", separate, 1)]
+        {
+            Mock::given(method("GET"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/html"))
+                .expect(requests)
+                .mount(&server)
+                .await;
+        }
+
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.tool_list()
+                .arg("--outdated")
+                .env(EnvVars::UV_CONCURRENT_DOWNLOADS, concurrency.to_string()), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            tool-a v1.0.0 [latest: 2.0.0]
+            - tool-a
+            tool-b v1.0.0 [latest: 2.0.0]
+            - tool-b
+            tool-c v1.0.0 [latest: 3.0.0]
+            - tool-c
+            ");
+        }
+        server.verify().await;
+        server.reset().await;
     }
     Ok(())
 }
