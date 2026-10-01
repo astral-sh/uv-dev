@@ -47,6 +47,7 @@ URL = "https://github.com/astral-sh/python-build-standalone/releases/download/20
 CONTENT = b"complete archive"
 CHECKSUM = hashlib.sha256(CONTENT).hexdigest()
 ALIAS_URL = "https://downloads.python.org/pypy/20220502/python.tar.gz"
+LEGACY_URL = URL.replace("/astral-sh/", "/indygreg/")
 
 
 class Progress:
@@ -67,6 +68,22 @@ class InterruptedStream(httpx.AsyncByteStream):
 
 
 class PythonMirrorPathsTest(unittest.IsolatedAsyncioTestCase):
+    def test_legacy_cpython_paths_use_the_same_archive_layout(self):
+        self.assertEqual(
+            MIRROR.sanitize_url(
+                LEGACY_URL.replace("python.tar.gz", "python%2Bdebug.tar.gz")
+            ),
+            Path("20220502") / "python+debug.tar.gz",
+        )
+        for url in (
+            LEGACY_URL.replace("20220502/", "../"),
+            LEGACY_URL.replace("20220502/", "%2e%2e/"),
+            LEGACY_URL.replace("20220502/", "/"),
+            LEGACY_URL.replace("github.com/", "github.com.example/"),
+        ):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                MIRROR.sanitize_url(url)
+
     def test_supported_paths_are_decoded(self):
         self.assertEqual(
             MIRROR.sanitize_url(URL.replace("python.tar.gz", "python%2Bdebug.tar.gz")),
@@ -728,6 +745,77 @@ class PythonMirrorHistoryTest(unittest.TestCase):
         self.assertIn(f"- {URL}: Checksum mismatch", output)
         target = self.root / "mirror"
         self.assertFalse((target / MIRROR.sanitize_url(URL)).exists())
+        self.assertEqual(
+            (target / MIRROR.sanitize_url(other_url)).read_bytes(), CONTENT
+        )
+
+    def test_history_downloads_legacy_cpython_releases(self):
+        other_url = URL.replace("python.tar.gz", "other-python.tar.gz")
+        self.commit(json.dumps({"python": {"url": LEGACY_URL, "sha256": CHECKSUM}}))
+        self.commit(json.dumps({"python": {"url": other_url, "sha256": CHECKSUM}}))
+
+        code, output, requests, completed = self.run_cli(
+            {LEGACY_URL: CONTENT, other_url: CONTENT}
+        )
+
+        self.assertEqual(code, 0)
+        self.assertCountEqual(requests, [LEGACY_URL, other_url])
+        self.assertEqual(completed, 2)
+        self.assertIn("Successfully downloaded: 2 files.", output)
+        self.assertNotIn("Failed downloads:", output)
+        target = self.root / "mirror"
+        self.assertEqual((target / MIRROR.sanitize_url(URL)).read_bytes(), CONTENT)
+        self.assertEqual(
+            (target / MIRROR.sanitize_url(other_url)).read_bytes(), CONTENT
+        )
+
+    def test_legacy_and_current_cpython_urls_share_verified_archive(self):
+        self.commit(json.dumps({"python": {"url": LEGACY_URL, "sha256": CHECKSUM}}))
+        self.commit(json.dumps({"python": {"url": URL, "sha256": CHECKSUM}}))
+
+        code, output, requests, completed = self.run_cli({URL: CONTENT})
+
+        self.assertEqual(code, 0)
+        self.assertEqual(requests, [URL])
+        self.assertEqual(completed, 2)
+        self.assertIn("Successfully downloaded: 2 files.", output)
+        self.assertNotIn("Failed downloads:", output)
+        destination = self.root / "mirror" / MIRROR.sanitize_url(URL)
+        self.assertEqual(destination.read_bytes(), CONTENT)
+
+    def test_conflicting_legacy_and_current_cpython_checksums_are_rejected(self):
+        other_url = URL.replace("python.tar.gz", "other-python.tar.gz")
+        earlier_checksum = hashlib.sha256(b"earlier archive").hexdigest()
+        self.commit(
+            json.dumps({"python": {"url": LEGACY_URL, "sha256": earlier_checksum}})
+        )
+        self.commit(
+            json.dumps(
+                {
+                    "python": {"url": URL, "sha256": CHECKSUM},
+                    "other": {"url": other_url, "sha256": CHECKSUM},
+                }
+            )
+        )
+        target = self.root / "mirror"
+        destination = target / MIRROR.sanitize_url(URL)
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"previous archive")
+
+        code, output, requests, completed = self.run_cli(
+            {URL: CONTENT, other_url: CONTENT}
+        )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(requests, [other_url])
+        self.assertEqual(completed, 3)
+        self.assertIn("Successfully downloaded: 1 files.", output)
+        for url in (LEGACY_URL, URL):
+            self.assertIn(
+                f"- {url}: Conflicting mirror archive entries for {MIRROR.sanitize_url(URL)}",
+                output,
+            )
+        self.assertEqual(destination.read_bytes(), b"previous archive")
         self.assertEqual(
             (target / MIRROR.sanitize_url(other_url)).read_bytes(), CONTENT
         )
