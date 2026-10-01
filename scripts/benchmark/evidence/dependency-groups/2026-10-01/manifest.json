@@ -75,16 +75,8 @@
   "new_samples_collected": false,
   "normalized_differences": [
     {
-      "base": [
-        "100644",
-        "blob",
-        "94690535f0208b530a5a7e6cb14349fbc156bf75"
-      ],
-      "head": [
-        "100644",
-        "blob",
-        "db5f202c9aafaac2c1844e5859ee64e1bdc817a3"
-      ],
+      "base": ["100644", "blob", "94690535f0208b530a5a7e6cb14349fbc156bf75"],
+      "head": ["100644", "blob", "db5f202c9aafaac2c1844e5859ee64e1bdc817a3"],
       "path": "crates/uv-workspace/src/dependency_groups.rs"
     }
   ],
