@@ -2278,6 +2278,17 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     }
                 }
 
+                // Without advertised metadata, a source candidate can require downloading the
+                // entire archive and running a build backend. Leave that work to the solver's
+                // selected candidate unless the version is already pinned.
+                if let CompatibleDist::SourceDist { sdist, .. } = dist
+                    && sdist.file.dist_info_metadata.is_none()
+                    && !(range.is_singleton_constraint() && range.iter().nth(1).is_none())
+                {
+                    debug!("Skipping source archive prefetch for: {package_name}");
+                    return Ok(None);
+                }
+
                 // Avoid prefetching source distributions with unbounded lower-bound ranges. This
                 // often leads to failed attempts to build legacy versions of packages that are
                 // incompatible with modern build tools.
