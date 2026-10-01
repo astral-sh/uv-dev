@@ -353,6 +353,114 @@ async fn audit_batches_refill_download_slots() -> Result<()> {
     Ok(())
 }
 
+/// An available OSV page token can be used while an unrelated batch is still pending.
+#[tokio::test]
+async fn audit_batches_pipeline_pagination() -> Result<()> {
+    let slow_release = Arc::new(tokio::sync::Semaphore::new(0));
+    let response_release = slow_release.clone();
+    let (started, mut requests) = tokio::sync::mpsc::unbounded_channel();
+    let (server, _guard) = streaming_server(move |request| {
+        let slow_release = response_release.clone();
+        let started = started.clone();
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        tokio::spawn(async move {
+            let body = request
+                .into_body()
+                .collect()
+                .await
+                .expect("request body")
+                .to_bytes();
+            let body: serde_json::Value = serde_json::from_slice(&body).expect("request JSON");
+            let queries = body["queries"].as_array().expect("query array");
+            assert!((1..=1000).contains(&queries.len()));
+            let first = queries[0]["package"]["name"]
+                .as_str()
+                .expect("package name");
+            let token = queries[0]["page_token"].as_str();
+            let _ = started.send(format!("{first}:{}", token.unwrap_or("initial")));
+            if first == "package-0" {
+                slow_release
+                    .acquire()
+                    .await
+                    .expect("response gate")
+                    .forget();
+            }
+            let results = queries
+                .iter()
+                .map(|query| {
+                    if query["package"]["name"] == "package-1000" && query["page_token"] == "next" {
+                        json!({"vulns": [{"id": "VULN-NEXT"}]})
+                    } else if query["package"]["name"] == "package-1000" {
+                        json!({"vulns": [], "next_page_token": "next"})
+                    } else {
+                        json!({"vulns": []})
+                    }
+                })
+                .collect::<Vec<_>>();
+            let response = json!({"results": results});
+            let _ = sender
+                .send(Ok(Frame::data(Bytes::from(response.to_string()))))
+                .await;
+        });
+        hyper::Response::builder()
+            .header("Content-Type", "application/json")
+            .body(StreamBody::new(ReceiverStream::new(receiver)).boxed())
+    });
+    let service = uv_audit::osv::Osv::new(
+        uv_client::CachedClient::new(uv_client::BaseClientBuilder::default().retries(0).build()?),
+        Some(server.parse()?),
+        uv_configuration::Concurrency::new(2, 1, 1, 1),
+        uv_cache::Cache::temp()?,
+    );
+    let query = tokio::spawn(async move {
+        let dependencies = (0..=1000)
+            .map(|index| {
+                Ok(uv_audit::Dependency::new(
+                    format!("package-{index}").parse()?,
+                    "1.0".parse()?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let identifiers = service
+            .query_identifiers(&dependencies, uv_audit::osv::Filter::All)
+            .await?;
+        assert_eq!(
+            identifiers.keys().copied().collect::<Vec<_>>(),
+            dependencies.iter().collect::<Vec<_>>()
+        );
+        assert!(identifiers.values().take(1000).all(HashSet::is_empty));
+        assert_eq!(
+            identifiers[&dependencies[1000]]
+                .iter()
+                .map(uv_audit::VulnerabilityID::as_str)
+                .collect::<Vec<_>>(),
+            ["VULN-NEXT"]
+        );
+        Ok::<_, anyhow::Error>(())
+    });
+    let observed = tokio::time::timeout(Duration::from_secs(3), async {
+        let mut observed = Vec::new();
+        for _ in 0..3 {
+            observed.push(requests.recv().await.expect("batch request"));
+        }
+        observed
+    })
+    .await;
+    slow_release.add_permits(1);
+    let mut observed = observed?;
+    observed.sort();
+    assert_eq!(
+        observed,
+        [
+            "package-0:initial",
+            "package-1000:initial",
+            "package-1000:next"
+        ]
+    );
+    tokio::time::timeout(Duration::from_secs(3), query).await???;
+    Ok(())
+}
+
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
 #[tokio::test]
 async fn invalid_ssl_cert_file_warns_default_roots_are_disabled() {

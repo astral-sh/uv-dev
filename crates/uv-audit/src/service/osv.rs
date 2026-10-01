@@ -6,6 +6,7 @@
 //!
 //! [OSV]: https://osv.dev/
 
+use std::collections::VecDeque;
 use std::str::FromStr as _;
 use std::sync::LazyLock;
 
@@ -14,7 +15,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::trace;
 
 use crate::types::{self, VulnerabilityID};
-use futures::{StreamExt as _, TryStreamExt as _};
+use futures::stream::FuturesUnordered;
+use futures::{FutureExt as _, StreamExt as _, TryStreamExt as _};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uv_cache::{Cache, CacheBucket, CacheEntry};
@@ -274,11 +276,11 @@ impl Osv {
             return Ok(IndexMap::default());
         }
 
-        let mut result_map: IndexMap<&types::Dependency, FxHashSet<VulnerabilityID>> =
-            IndexMap::default();
+        let mut result_map: FxHashMap<&types::Dependency, FxHashSet<VulnerabilityID>> =
+            FxHashMap::default();
 
         // Pending queries: (dependency, page_token). Initially one per dependency with no token.
-        let mut pending: Vec<(&types::Dependency, Option<String>)> =
+        let mut pending: VecDeque<(&types::Dependency, Option<String>)> =
             dependencies.iter().map(|dep| (dep, None)).collect();
 
         let url = self
@@ -286,30 +288,33 @@ impl Osv {
             .join("v1/querybatch")
             .map_err(|err| Error::Url(self.base_url.clone(), err))?;
 
+        let mut responses = FuturesUnordered::new();
         loop {
-            let mut next_pending = Vec::new();
-            let batches = (0..pending.len())
-                .step_by(OSV_QUERY_BATCH_SIZE)
-                .map(|start| start..(start + OSV_QUERY_BATCH_SIZE).min(pending.len()));
-            let mut responses = futures::stream::iter(batches)
-                .map(|range| {
-                    let pending = &pending;
-                    let url = &url;
-                    async move {
-                        let response = self.query_page(url, &pending[range.clone()]).await?;
-                        Ok::<_, Error>((range, response))
-                    }
-                })
-                .buffer_unordered(self.concurrency.downloads)
-                .try_collect::<Vec<_>>()
-                .await?;
-            // A slow response must not hold an available request slot. Apply the completed
-            // batches in input order so findings and the next pagination round are deterministic.
-            responses.sort_unstable_by_key(|(range, _)| range.start);
-            for (range, batch_response) in responses {
-                for ((dep, _), batch_result) in
-                    pending[range].iter().zip(batch_response.results.iter())
-                {
+            while responses.len() < self.concurrency.downloads && !pending.is_empty() {
+                let batch = pending
+                    .drain(..pending.len().min(OSV_QUERY_BATCH_SIZE))
+                    .collect::<Vec<_>>();
+                let url = &url;
+                responses.push(async move {
+                    let response = self.query_page(url, &batch).await?;
+                    Ok::<_, Error>((batch, response))
+                });
+            }
+
+            let Some(response) = responses.try_next().await? else {
+                break;
+            };
+            // Coalesce pagination tokens from responses that are already ready, without
+            // waiting for unrelated slow batches before using an available request slot.
+            let mut completed = vec![response];
+            while let Some(response) = responses.try_next().now_or_never() {
+                let Some(response) = response? else {
+                    break;
+                };
+                completed.push(response);
+            }
+            for (batch, batch_response) in completed {
+                for ((dep, _), batch_result) in batch.into_iter().zip(batch_response.results) {
                     let ids = result_map.entry(dep).or_default();
                     ids.extend(
                         batch_result
@@ -318,19 +323,18 @@ impl Osv {
                             .filter(|v| filter.matches(&v.id))
                             .map(|v| VulnerabilityID::new(v.id.clone())),
                     );
-                    if let Some(token) = &batch_result.next_page_token {
-                        next_pending.push((*dep, Some(token.clone())));
+                    if let Some(token) = batch_result.next_page_token {
+                        pending.push_back((dep, Some(token)));
                     }
                 }
             }
-
-            if next_pending.is_empty() {
-                break;
-            }
-            pending = next_pending;
         }
 
-        Ok(result_map)
+        // Request completion order must not determine the order of reported dependencies.
+        Ok(dependencies
+            .iter()
+            .filter_map(|dependency| result_map.remove(dependency).map(|ids| (dependency, ids)))
+            .collect())
     }
 
     async fn query_page(
