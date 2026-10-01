@@ -260,7 +260,10 @@ impl Osv {
     fn vuln_cache_entry(&self, id: &str) -> CacheEntry {
         let bucket = self.cache.bucket(CacheBucket::Osv);
         CacheEntry::new(
-            bucket.join("vulnerability"),
+            // Records with the same ID can differ between configured OSV services.
+            bucket
+                .join("vulnerability")
+                .join(cache_digest(&self.base_url.as_str())),
             format!("{}.msgpack", cache_digest(&id)),
         )
     }
@@ -865,11 +868,62 @@ mod tests {
         let cache_entry = osv.vuln_cache_entry(id);
         assert_eq!(
             cache_entry.dir(),
-            cache.bucket(CacheBucket::Osv).join("vulnerability")
+            cache
+                .bucket(CacheBucket::Osv)
+                .join("vulnerability")
+                .join(cache_digest(&osv.base_url.as_str()))
         );
         let filename = format!("{}.msgpack", cache_digest(&id));
         assert_eq!(cache_entry.path().file_name(), Some(OsStr::new(&filename)));
         assert!(cache_entry.path().is_file());
+    }
+
+    /// Records from one configured OSV service must not evict another service's records.
+    #[tokio::test]
+    async fn test_fetch_vuln_cache_by_service() {
+        let server = MockServer::start().await;
+        for service in ["first", "second"] {
+            Mock::given(method("GET"))
+                .and(path(format!("/{service}/v1/vulns/VULN-1")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": "VULN-1",
+                    "modified": "2026-01-01T00:00:00Z",
+                    "summary": service,
+                })))
+                .mount(&server)
+                .await;
+        }
+
+        let cache = Cache::temp().expect("temporary cache");
+        let service = |name| {
+            Osv::new(
+                test_client(),
+                Some(
+                    DisplaySafeUrl::parse(&format!("{}/{name}/", server.uri()))
+                        .expect("mock service URL"),
+                ),
+                Concurrency::default(),
+                cache.clone(),
+            )
+        };
+        let first = service("first");
+        let second = service("second");
+        for (osv, summary) in [(&first, "first"), (&second, "second"), (&first, "first")] {
+            let record = osv.fetch_vuln("VULN-1").await.expect("full record");
+            assert_eq!(record.summary.as_deref(), Some(summary));
+        }
+
+        let requests = server.received_requests().await.expect("recorded requests");
+        let paths = requests
+            .iter()
+            .map(|request| request.url.path())
+            .collect::<Vec<_>>();
+        insta::assert_debug_snapshot!(paths, @r#"
+        [
+            "/first/v1/vulns/VULN-1",
+            "/second/v1/vulns/VULN-1",
+        ]
+        "#);
     }
 
     /// Ensure that `query_batch` correctly handles pagination: only the deps whose results
