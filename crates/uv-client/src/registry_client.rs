@@ -300,6 +300,14 @@ impl RegistryClient {
         self.read_timeout
     }
 
+    /// Whether reading wheel metadata already requires transferring the complete archive.
+    ///
+    /// The advertised size is only a hint for selecting a request strategy.
+    pub fn prefer_streaming_wheel_metadata(&self, size: Option<u64>) -> bool {
+        self.metadata_range_request == MetadataRangeRequest::Fallback
+            && size.is_some_and(|size| size <= CENTRAL_DIRECTORY_SIZE)
+    }
+
     pub fn credentials_cache(&self) -> &CredentialsCache {
         self.client.uncached().credentials_cache()
     }
@@ -1204,8 +1212,7 @@ impl RegistryClient {
         // The initial ZIP prefetch already reads a small wheel in full. Streaming it directly
         // avoids an extra HEAD request without increasing the number of bytes required.
         // The size is only a hint for choosing the request strategy.
-        let prefer_streaming = self.metadata_range_request == MetadataRangeRequest::Fallback
-            && size.is_some_and(|size| size <= CENTRAL_DIRECTORY_SIZE);
+        let prefer_streaming = self.prefer_streaming_wheel_metadata(size);
 
         // Attempt to fetch via a range request.
         if !prefer_streaming
