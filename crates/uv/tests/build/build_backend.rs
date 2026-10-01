@@ -14,6 +14,61 @@ use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[tokio::test]
+async fn direct_build_skips_find_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/links"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--wheel")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(format!("{}/links", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/project-1.0.0-py3-none-any.whl
+    ");
+
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--wheel")
+        .arg("--force-pep517")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(format!("{}/links", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Failed to read `--find-links` URL: http://[LOCALHOST]/links
+      cause: Failed to fetch: `http://[LOCALHOST]/links`
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/links)
+    ");
+    server.verify().await;
+    Ok(())
+}
 
 #[test]
 fn get_requires_for_build_returns_error() {

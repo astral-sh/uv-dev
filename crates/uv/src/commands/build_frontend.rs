@@ -700,8 +700,59 @@ async fn build_package(
         }
     };
 
-    // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+    // Check if the build backend is matching uv version that allows calling in the uv build backend
+    // directly.
+    let build_action = if list {
+        if force_pep517 {
+            return Err(Error::ListForcePep517);
+        }
+
+        if let Err(reason) = check_direct_build(
+            source.path(),
+            uv_version::version(),
+            &interpreter.to_resolver_marker_environment(),
+            build_constraints.requirements().cloned().map(Into::into),
+        ) {
+            return Err(Error::ListNonUv {
+                name: source.path().user_display().to_string(),
+                reason: reason.to_string(),
+            });
+        }
+
+        BuildAction::List
+    } else if force_pep517 {
+        BuildAction::Pep517
+    } else {
+        match check_direct_build(
+            source.path(),
+            uv_version::version(),
+            &interpreter.to_resolver_marker_environment(),
+            build_constraints.requirements().cloned().map(Into::into),
+        ) {
+            Ok(()) => BuildAction::DirectBuild,
+            Err(reason) => {
+                debug!(
+                    "Not using `uv_build` direct build for `{}` because {}",
+                    source.path().user_display(),
+                    reason
+                );
+                BuildAction::Pep517
+            }
+        }
+    };
+
+    if matches!(build_action, BuildAction::DirectBuild | BuildAction::List) {
+        debug!(
+            "Using bundled `uv_build` backend for `{}`",
+            source.path().user_display()
+        );
+    }
+
+    // Only PEP 517 builds resolve build dependencies through the configured indexes.
+    let flat_index = match build_action {
+        BuildAction::Pep517 => FlatIndex::load(&client, cache, index_locations).await?,
+        BuildAction::DirectBuild | BuildAction::List => FlatIndex::default(),
+    };
 
     // Initialize any shared state.
     let state = SharedState::default();
@@ -752,54 +803,6 @@ async fn build_package(
 
     // Determine the build plan.
     let plan = BuildPlan::determine(&source, sdist, wheel).map_err(Error::BuildPlan)?;
-
-    // Check if the build backend is matching uv version that allows calling in the uv build backend
-    // directly.
-    let build_action = if list {
-        if force_pep517 {
-            return Err(Error::ListForcePep517);
-        }
-
-        if let Err(reason) = check_direct_build(
-            source.path(),
-            uv_version::version(),
-            &interpreter.to_resolver_marker_environment(),
-            build_constraints.requirements().cloned().map(Into::into),
-        ) {
-            return Err(Error::ListNonUv {
-                name: source.path().user_display().to_string(),
-                reason: reason.to_string(),
-            });
-        }
-
-        BuildAction::List
-    } else if force_pep517 {
-        BuildAction::Pep517
-    } else {
-        match check_direct_build(
-            source.path(),
-            uv_version::version(),
-            &interpreter.to_resolver_marker_environment(),
-            build_constraints.requirements().cloned().map(Into::into),
-        ) {
-            Ok(()) => BuildAction::DirectBuild,
-            Err(reason) => {
-                debug!(
-                    "Not using `uv_build` direct build for `{}` because {}",
-                    source.path().user_display(),
-                    reason
-                );
-                BuildAction::Pep517
-            }
-        }
-    };
-
-    if matches!(build_action, BuildAction::DirectBuild | BuildAction::List) {
-        debug!(
-            "Using bundled `uv_build` backend for `{}`",
-            source.path().user_display()
-        );
-    }
 
     // Prepare some common arguments for the build.
     let dist = None;
