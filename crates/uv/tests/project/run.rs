@@ -5748,7 +5748,7 @@ fn sigpipe_not_forwarded_to_child() -> Result<()> {
 /// A child that receives SIGPIPE still determines the command's exit status.
 #[cfg(unix)]
 #[test]
-fn exit_status_sigpipe() -> Result<()> {
+fn exit_status_sigpipe() {
     let context = uv_test::test_context!("3.11");
 
     uv_snapshot!(context.filters(), context.command()
@@ -5760,7 +5760,6 @@ fn exit_status_sigpipe() -> Result<()> {
         .arg("trap - PIPE; kill -PIPE $$"), @r"
     exit_code: 141 (failure)
     ");
-    Ok(())
 }
 
 #[test]
