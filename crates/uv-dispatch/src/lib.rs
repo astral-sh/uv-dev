@@ -687,6 +687,13 @@ pub struct SharedState {
 }
 
 impl SharedState {
+    /// Use the given index and artifact-origin capabilities for this resolution.
+    #[must_use]
+    pub fn with_index_capabilities(mut self, capabilities: IndexCapabilities) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
     /// Fork the [`SharedState`], creating a new in-memory index and in-flight cache.
     ///
     /// State that is universally applicable (like the Git resolver and index capabilities)
