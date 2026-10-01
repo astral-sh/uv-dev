@@ -9,11 +9,87 @@ use insta::{allow_duplicates, assert_json_snapshot, assert_snapshot};
 use std::io::BufReader;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
 use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[tokio::test]
+async fn build_workspace_remote_constraints_are_shared() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"\[(alpha|beta)\]", "[PKG]"));
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["packages/*"]
+    "#})?;
+    for name in ["alpha", "beta"] {
+        let package = context.temp_dir.child(format!("packages/{name}"));
+        package.child("pyproject.toml").write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1.0.0"
+            requires-python = ">=3.12"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+        "#})?;
+        package.child(format!("src/{name}/__init__.py")).touch()?;
+    }
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/constraints.txt"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("uv_build>=0.7\n")
+                .set_delay(Duration::from_millis(25)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--all-packages")
+        .arg("--wheel")
+        .arg("--no-index")
+        .arg("--no-build-logs")
+        .arg("--build-constraint")
+        .arg(format!("{}/constraints.txt", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    Successfully built dist/alpha-1.0.0-py3-none-any.whl
+    Successfully built dist/beta-1.0.0-py3-none-any.whl
+    ");
+
+    Mock::given(method("GET"))
+        .and(path("/forbidden.txt"))
+        .respond_with(ResponseTemplate::new(403).set_delay(Duration::from_millis(25)))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--all-packages")
+        .arg("--wheel")
+        .arg("--no-index")
+        .arg("--build-constraint")
+        .arg(format!("{}/forbidden.txt", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `alpha @ [TEMP_DIR]/packages/alpha`
+      cause: Error while accessing remote requirements file: `http://[LOCALHOST]/forbidden.txt`
+    error: Failed to build `beta @ [TEMP_DIR]/packages/beta`
+      cause: Error while accessing remote requirements file: `http://[LOCALHOST]/forbidden.txt`
+    ");
+    server.verify().await;
+    Ok(())
+}
 
 #[test]
 fn get_requires_for_build_returns_error() {

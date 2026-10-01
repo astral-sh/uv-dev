@@ -3,11 +3,13 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::{fmt, io, iter};
 
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use thiserror::Error;
+use tokio::sync::OnceCell;
 use tracing::{debug, instrument};
 
 use uv_auth::CredentialsCache;
@@ -72,7 +74,7 @@ pub(crate) enum Error {
     #[error(transparent)]
     Extract(#[from] uv_extract::Error),
     #[error(transparent)]
-    Operations(#[from] operations::Error),
+    Operations(#[from] Arc<operations::Error>),
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
     #[error(transparent)]
@@ -472,6 +474,7 @@ async fn build_impl(
         }
     }
 
+    let command_line_constraints = OnceCell::new();
     let results: Vec<_> = futures::future::join_all(packages.into_iter().map(|source| {
         let future = build_package(
             source.clone(),
@@ -494,6 +497,7 @@ async fn build_impl(
             force_pep517,
             clear,
             build_constraints,
+            &command_line_constraints,
             build_constraints_from_workspace,
             build_isolation,
             extra_build_dependencies,
@@ -549,6 +553,8 @@ async fn build_impl(
     }
 }
 
+type BuildConstraintsResult = Result<Vec<NameRequirementSpecification>, Arc<operations::Error>>;
+
 #[expect(clippy::fn_params_excessive_bools)]
 async fn build_package(
     source: AnnotatedSource<'_>,
@@ -571,6 +577,7 @@ async fn build_package(
     force_pep517: bool,
     clear: bool,
     build_constraints: &[RequirementsSource],
+    command_line_constraints: &OnceCell<BuildConstraintsResult>,
     build_constraints_from_workspace: &[NameRequirementSpecification],
     build_isolation: &BuildIsolation,
     extra_build_dependencies: &ExtraBuildDependencies,
@@ -647,9 +654,17 @@ async fn build_package(
     .await?
     .into_interpreter();
 
-    // Read build constraints.
-    let command_line_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+    // Workspace packages share the completed read, including any failure after the client's
+    // retries. Hash requirements are still evaluated for each package's interpreter.
+    let command_line_constraints = command_line_constraints
+        .get_or_init(|| async {
+            operations::read_constraints(build_constraints, &client_builder)
+                .await
+                .map_err(Arc::new)
+        })
+        .await
+        .as_ref()
+        .map_err(Arc::clone)?;
     let build_constraints = Constraints::from_specifications(
         command_line_constraints
             .iter()
