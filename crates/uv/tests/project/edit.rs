@@ -4320,6 +4320,81 @@ fn add_frozen() -> Result<()> {
     Ok(())
 }
 
+/// Warn when frozen mode cannot apply an explicit bounds preference.
+#[test]
+fn add_frozen_warns_when_bounds_ignored() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    fs_err::remove_dir_all(&context.venv)?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--bounds").arg("exact").arg("--frozen").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    warning: Bounds preference `exact` is ignored when `--frozen` is provided; dependencies are added without constraints
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "anyio",
+    ]
+    "#);
+    assert!(!context.temp_dir.join("uv.lock").exists());
+    assert!(!context.venv.exists());
+    Ok(())
+}
+
+/// Frozen mode does not warn for bounds that would not be applied during resolution.
+#[test]
+fn add_frozen_bounds_not_applicable() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    let empty = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#};
+
+    pyproject_toml.write_str(empty)?;
+    uv_snapshot!(context.filters(), context.add().arg("anyio==3.7.0").arg("--bounds").arg("exact").arg("--frozen").arg("--offline"), @"
+    exit_code: 0 (success)
+    ");
+
+    // Replacing a requirement does not derive a new bound.
+    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--bounds").arg("exact").arg("--frozen").arg("--offline"), @"
+    exit_code: 0 (success)
+    ");
+
+    pyproject_toml.write_str(empty)?;
+    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--raw").arg("--bounds").arg("exact").arg("--frozen").arg("--offline"), @"
+    exit_code: 0 (success)
+    ");
+
+    pyproject_toml.write_str(empty)?;
+    uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--frozen").arg("--offline"), @"
+    exit_code: 0 (success)
+    ");
+
+    assert!(!context.temp_dir.join("uv.lock").exists());
+    Ok(())
+}
+
 /// Add a requirement without updating the environment.
 #[test]
 fn add_no_sync() -> Result<()> {
