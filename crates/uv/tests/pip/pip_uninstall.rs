@@ -136,6 +136,186 @@ fn missing_record() -> Result<()> {
     Ok(())
 }
 
+/// Uninstalling one distribution must not remove bytecode owned by another distribution in a
+/// shared package directory.
+#[test]
+fn uninstall_preserves_shared_pycache() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+
+    let package = site_packages.child("shared");
+    package.create_dir_all()?;
+    package.child("remove.py").write_str("removed = True\n")?;
+    package.child("keep.py").write_str("kept = True\n")?;
+    let pycache = package.child("__pycache__");
+    pycache.create_dir_all()?;
+    pycache
+        .child("remove.cpython-312.pyc")
+        .write_str("removed bytecode")?;
+    pycache
+        .child("remove.cpython-312.opt-1.pyc")
+        .write_str("removed optimized bytecode")?;
+    pycache
+        .child("keep.cpython-312.pyc")
+        .write_str("unrelated bytecode")?;
+    pycache
+        .child("keep.cpython-312.opt-1.pyc")
+        .write_str("unrelated optimized bytecode")?;
+
+    let dist_info = site_packages.child("remove-1.0.0.dist-info");
+    dist_info.create_dir_all()?;
+    dist_info
+        .child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: remove\nVersion: 1.0.0\n")?;
+    dist_info.child("RECORD").write_str(
+        "shared/remove.py,,\nremove-1.0.0.dist-info/METADATA,,\nremove-1.0.0.dist-info/RECORD,,\n",
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("remove"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - remove==1.0.0
+    ");
+
+    assert!(!package.child("remove.py").exists());
+    assert!(package.child("keep.py").exists());
+    assert!(!pycache.child("remove.cpython-312.pyc").exists());
+    assert!(!pycache.child("remove.cpython-312.opt-1.pyc").exists());
+    assert!(pycache.child("keep.cpython-312.pyc").exists());
+    assert!(pycache.child("keep.cpython-312.opt-1.pyc").exists());
+
+    Ok(())
+}
+
+/// Real bytecode for retained modules survives uninstall, while all optimization levels for
+/// removed sources and empty package directories are cleaned up.
+#[test]
+fn uninstall_preserves_compiled_shared_modules() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+
+    let shared = site_packages.child("shared");
+    shared.child("remove.py").write_str("VALUE = 'removed'\n")?;
+    shared.child("keep.py").write_str("VALUE = 'retained'\n")?;
+    let exclusive = site_packages.child("exclusive");
+    exclusive
+        .child("module.py")
+        .write_str("VALUE = 'exclusive'\n")?;
+
+    let remove = site_packages.child("remove-1.0.0.dist-info");
+    remove
+        .child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: remove\nVersion: 1.0.0\n")?;
+    remove.child("RECORD").write_str(
+        "shared/remove.py,,\nexclusive/module.py,,\nremove-1.0.0.dist-info/METADATA,,\nremove-1.0.0.dist-info/RECORD,,\n",
+    )?;
+    let keep = site_packages.child("keep-1.0.0.dist-info");
+    keep.child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: keep\nVersion: 1.0.0\n")?;
+    keep.child("RECORD").write_str(
+        "shared/keep.py,,\nkeep-1.0.0.dist-info/METADATA,,\nkeep-1.0.0.dist-info/RECORD,,\n",
+    )?;
+
+    context
+        .assert_command(
+            "import py_compile, shared.remove, shared.keep, exclusive.module; \
+             [py_compile.compile(module.__file__, doraise=True, optimize=optimization) \
+             for module in (shared.remove, shared.keep, exclusive.module) \
+             for optimization in (0, 1, 2)]",
+        )
+        .success();
+
+    let pycache = shared.child("__pycache__");
+    let retained = ["", ".opt-1", ".opt-2"]
+        .map(|optimization| pycache.child(format!("keep.cpython-312{optimization}.pyc")));
+    let retained_contents = retained
+        .iter()
+        .map(fs_err::read)
+        .collect::<std::io::Result<Vec<_>>>()?;
+    for optimization in ["", ".opt-1", ".opt-2"] {
+        assert!(
+            pycache
+                .child(format!("remove.cpython-312{optimization}.pyc"))
+                .exists()
+        );
+        assert!(
+            exclusive
+                .child(format!("__pycache__/module.cpython-312{optimization}.pyc"))
+                .exists()
+        );
+    }
+
+    uv_snapshot!(context.pip_uninstall().arg("remove"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - remove==1.0.0
+    ");
+
+    assert!(!remove.exists());
+    assert!(!shared.child("remove.py").exists());
+    assert!(!exclusive.exists());
+    assert!(keep.child("METADATA").exists());
+    assert!(keep.child("RECORD").exists());
+    for optimization in ["", ".opt-1", ".opt-2"] {
+        assert!(
+            !pycache
+                .child(format!("remove.cpython-312{optimization}.pyc"))
+                .exists()
+        );
+    }
+    for (path, contents) in retained.iter().zip(retained_contents) {
+        assert_eq!(fs_err::read(path)?, contents);
+    }
+    context
+        .assert_command(
+            "import importlib.util, shared.keep; \
+             assert shared.keep.VALUE == 'retained'; \
+             assert importlib.util.find_spec('shared.remove') is None; \
+             assert importlib.util.find_spec('exclusive') is None",
+        )
+        .success();
+
+    Ok(())
+}
+
+/// Uninstalling from a shared package directory must not follow a symlinked bytecode cache.
+#[cfg(unix)]
+#[test]
+fn uninstall_preserves_symlinked_shared_pycache() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+
+    let package = site_packages.child("shared");
+    package.create_dir_all()?;
+    package.child("remove.py").write_str("removed = True\n")?;
+    package.child("keep.py").write_str("kept = True\n")?;
+
+    let external_pycache = context.temp_dir.child("external-pycache");
+    external_pycache.create_dir_all()?;
+    let bytecode = external_pycache.child("remove.cpython-312.pyc");
+    bytecode.write_str("external bytecode")?;
+    fs_err::os::unix::fs::symlink(external_pycache.path(), package.child("__pycache__").path())?;
+
+    let dist_info = site_packages.child("remove-1.0.0.dist-info");
+    dist_info.create_dir_all()?;
+    dist_info
+        .child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: remove\nVersion: 1.0.0\n")?;
+    dist_info.child("RECORD").write_str(
+        "shared/remove.py,,\nremove-1.0.0.dist-info/METADATA,,\nremove-1.0.0.dist-info/RECORD,,\n",
+    )?;
+
+    context.pip_uninstall().arg("remove").assert().success();
+
+    assert!(!package.child("remove.py").exists());
+    assert!(package.child("keep.py").exists());
+    assert!(bytecode.exists());
+
+    Ok(())
+}
+
 #[test]
 #[cfg(feature = "test-pypi")]
 fn uninstall_editable_by_name() -> Result<()> {
