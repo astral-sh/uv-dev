@@ -81,6 +81,8 @@ jobs:
           path: dist
 
       # uv-build
+      - name: "Test sdist repair"
+        run: python scripts/test-release-sdist-repair.py
       - name: "Build sdist uv-build"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
