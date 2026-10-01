@@ -1865,6 +1865,71 @@ impl ManagedPythonDownloadList {
         .await
     }
 
+    /// Load the newest matching download for each filled request.
+    ///
+    /// NDJSON sources can stop once every request has a match. A complete catalog is still
+    /// needed when a request has no stable match, including before accepting a prerelease.
+    pub async fn new_for_requests(
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        python_downloads_json_url: Option<&str>,
+        requests: &[PythonDownloadRequest],
+    ) -> Result<Self, Error> {
+        if requests.is_empty() {
+            return Ok(Self {
+                downloads: Vec::new(),
+            });
+        }
+        let Some(source) = resolve_download_list_source(python_downloads_json_url)? else {
+            return Self::new_only_embedded();
+        };
+        if source.format == DownloadListFormat::Json {
+            return Self::new(client_builder, cache, python_downloads_json_url).await;
+        }
+        let requests = requests
+            .iter()
+            .filter(|request| !source.uses_embedded_downloads(request))
+            .cloned()
+            .unique()
+            .collect::<Vec<_>>();
+        if requests.is_empty() {
+            return Ok(Self {
+                downloads: embedded_non_cpython_downloads()?,
+            });
+        }
+
+        let result = match &source.location {
+            DownloadListLocation::Path(path) => fs_err::read(path.as_ref())
+                .map_err(Error::from)
+                .and_then(|bytes| {
+                    NdjsonRequestSelection::parse(&path.to_string_lossy(), &bytes, &requests)
+                        .map(NdjsonRequestSelection::into_downloads)
+                }),
+            DownloadListLocation::Http(urls) => {
+                let client = client_builder
+                    .clone()
+                    .retries(0)
+                    .build()
+                    .map_err(|err| Error::ClientBuild(Box::new(err)))?;
+                fetch_with_url_fallback(
+                    urls,
+                    client_builder.retry_policy(),
+                    "Python download metadata",
+                    async |url| {
+                        fetch_ndjson_requests_streaming_cached(&client, &url, cache, &requests)
+                            .await
+                    },
+                )
+                .await
+            }
+        };
+        let downloads = match result {
+            Ok(downloads) => source.merge_downloads(downloads, None, None)?,
+            Err(err) => source.on_error(err, embedded_downloads)?,
+        };
+        Ok(Self { downloads })
+    }
+
     /// Load available Python distributions from the compiled-in list only.
     /// for testing purposes.
     pub fn new_only_embedded() -> Result<Self, Error> {
@@ -2894,37 +2959,129 @@ fn parse_ndjson_bytes_find(
     })
 }
 
-async fn fetch_ndjson_find_cached(
-    client: &BaseClient,
-    url: &DisplaySafeUrl,
-    cache: &Cache,
-    predicate: impl Fn(&ManagedPythonDownload) -> bool,
-) -> Result<Option<ManagedPythonDownload>, Error> {
-    Ok(
-        fetch_ndjson_collect_streaming_cached(client, url, cache, predicate, Some(1))
-            .await?
-            .pop(),
-    )
+trait NdjsonSelection: Sized {
+    fn visit(&mut self, download: ManagedPythonDownload) -> ControlFlow<()>;
+    fn has_all_matches(&self) -> bool;
+    fn into_downloads(self) -> Vec<ManagedPythonDownload>;
 }
 
-async fn fetch_ndjson_collect_streaming_cached(
+fn parse_ndjson_selection<S: NdjsonSelection>(
+    source: &str,
+    content: &[u8],
+    mut selection: S,
+) -> Result<S, Error> {
+    parse_ndjson_bytes_with(source, content, |download| selection.visit(download))?;
+    Ok(selection)
+}
+
+struct NdjsonFilteredSelection<'a, F> {
+    predicate: &'a F,
+    limit: Option<usize>,
+    downloads: Vec<ManagedPythonDownload>,
+}
+
+impl<F: Fn(&ManagedPythonDownload) -> bool> NdjsonSelection for NdjsonFilteredSelection<'_, F> {
+    fn visit(&mut self, download: ManagedPythonDownload) -> ControlFlow<()> {
+        if (self.predicate)(&download) {
+            self.downloads.push(download);
+            if self.has_all_matches() {
+                return ControlFlow::Break(());
+            }
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn has_all_matches(&self) -> bool {
+        self.limit
+            .is_some_and(|limit| self.downloads.len() >= limit)
+    }
+
+    fn into_downloads(mut self) -> Vec<ManagedPythonDownload> {
+        self.downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+        self.downloads
+    }
+}
+
+struct NdjsonRequestSelection<'a> {
+    requests: &'a [PythonDownloadRequest],
+    downloads: Vec<Option<ManagedPythonDownload>>,
+    prerelease_requests: Vec<Option<PythonDownloadRequest>>,
+    prereleases: Vec<Option<ManagedPythonDownload>>,
+}
+
+impl<'a> NdjsonRequestSelection<'a> {
+    fn new(requests: &'a [PythonDownloadRequest]) -> Self {
+        Self {
+            requests,
+            downloads: vec![None; requests.len()],
+            prerelease_requests: requests
+                .iter()
+                .map(|request| {
+                    (!request.allows_prereleases()).then(|| request.clone().with_prereleases(true))
+                })
+                .collect(),
+            prereleases: vec![None; requests.len()],
+        }
+    }
+
+    fn parse(
+        source: &str,
+        content: &[u8],
+        requests: &'a [PythonDownloadRequest],
+    ) -> Result<Self, Error> {
+        parse_ndjson_selection(source, content, Self::new(requests))
+    }
+}
+
+impl NdjsonSelection for NdjsonRequestSelection<'_> {
+    fn visit(&mut self, download: ManagedPythonDownload) -> ControlFlow<()> {
+        for (index, request) in self.requests.iter().enumerate() {
+            if self.downloads[index].is_none() && request.satisfied_by_download(&download) {
+                self.downloads[index] = Some(download.clone());
+            }
+            if self.prereleases[index].is_none()
+                && self.prerelease_requests[index]
+                    .as_ref()
+                    .is_some_and(|request| request.satisfied_by_download(&download))
+            {
+                self.prereleases[index] = Some(download.clone());
+            }
+        }
+        if self.has_all_matches() {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+
+    fn has_all_matches(&self) -> bool {
+        self.downloads.iter().all(Option::is_some)
+    }
+
+    fn into_downloads(self) -> Vec<ManagedPythonDownload> {
+        self.downloads
+            .into_iter()
+            .zip(self.prereleases)
+            .filter_map(|(download, prerelease)| download.or(prerelease))
+            .sorted_by(|a, b| Ord::cmp(&b.key, &a.key))
+            .dedup_by(|a, b| a.key == b.key)
+            .collect()
+    }
+}
+
+async fn fetch_ndjson_streaming_cached<S: NdjsonSelection>(
     client: &BaseClient,
     url: &DisplaySafeUrl,
     cache: &Cache,
-    predicate: impl Fn(&ManagedPythonDownload) -> bool,
-    limit: Option<usize>,
+    make_selection: impl Fn() -> S,
 ) -> Result<Vec<ManagedPythonDownload>, Error> {
-    if limit == Some(0) {
-        return Ok(Vec::new());
-    }
-
     let source = url.to_string();
     let cached = read_versions_cache_content(cache, url).await;
-    // An incomplete prefix can prove that a match exists, but cannot prove that there are no
-    // further matches. Unbounded requests always require the complete representation.
+    // A prefix is usable only when it satisfies the whole query. A complete catalog can also
+    // establish that a requested version is absent or has only a prerelease available.
     let cached_downloads = cached.as_ref().and_then(|(content, meta)| {
-        let downloads = parse_ndjson_bytes_filtered(&source, content, &predicate, limit).ok()?;
-        (meta.complete || limit.is_some_and(|limit| downloads.len() >= limit)).then_some(downloads)
+        let selection = parse_ndjson_selection(&source, content, make_selection()).ok()?;
+        (meta.complete || selection.has_all_matches()).then(|| selection.into_downloads())
     });
     if let Some(downloads) = &cached_downloads
         && cached.as_ref().is_some_and(|(_, meta)| {
@@ -2960,18 +3117,8 @@ async fn fetch_ndjson_collect_streaming_cached(
         let mut reader = BufReader::new(reader);
         let mut line = Vec::new();
         let mut content = Vec::new();
-        let mut downloads = Vec::new();
+        let mut selection = make_selection();
         let mut complete = true;
-        let mut visitor = |download| {
-            if predicate(&download) {
-                downloads.push(download);
-                if limit.is_some_and(|limit| downloads.len() >= limit) {
-                    return ControlFlow::Break(());
-                }
-            }
-            ControlFlow::Continue(())
-        };
-
         loop {
             line.clear();
             if reader.read_until(b'\n', &mut line).await? == 0 {
@@ -2979,15 +3126,15 @@ async fn fetch_ndjson_collect_streaming_cached(
             }
             content.extend_from_slice(&line);
             let reached_eof = line.last() != Some(&b'\n');
-            if visit_ndjson_line(&source, &line, &mut visitor)?.is_some() {
+            if visit_ndjson_line(&source, &line, &mut |download| selection.visit(download))?
+                .is_some()
+            {
                 complete = reached_eof || content_length == Some(content.len() as u64);
                 break;
             }
         }
-
         write_streamed_versions_cache_if_valid(cache, url, &source, &content, etag, complete).await;
-        downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
-        Ok(downloads)
+        Ok(selection.into_downloads())
     }
     .await;
 
@@ -3003,6 +3150,47 @@ async fn fetch_ndjson_collect_streaming_cached(
         }
         Ok(downloads) => Ok(downloads),
     }
+}
+
+async fn fetch_ndjson_find_cached(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    cache: &Cache,
+    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+) -> Result<Option<ManagedPythonDownload>, Error> {
+    Ok(
+        fetch_ndjson_collect_streaming_cached(client, url, cache, predicate, Some(1))
+            .await?
+            .pop(),
+    )
+}
+
+async fn fetch_ndjson_requests_streaming_cached(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    cache: &Cache,
+    requests: &[PythonDownloadRequest],
+) -> Result<Vec<ManagedPythonDownload>, Error> {
+    fetch_ndjson_streaming_cached(client, url, cache, || NdjsonRequestSelection::new(requests))
+        .await
+}
+
+async fn fetch_ndjson_collect_streaming_cached(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    cache: &Cache,
+    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+    limit: Option<usize>,
+) -> Result<Vec<ManagedPythonDownload>, Error> {
+    if limit == Some(0) {
+        return Ok(Vec::new());
+    }
+    fetch_ndjson_streaming_cached(client, url, cache, || NdjsonFilteredSelection {
+        predicate: &predicate,
+        limit,
+        downloads: Vec::new(),
+    })
+    .await
 }
 
 impl Error {
@@ -3747,6 +3935,110 @@ mod tests {
 
         assert_eq!(download.key().version().to_string(), "3.14.1");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn ndjson_request_selection_handles_overlapping_requests()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let content = br#"{"version":"3.15.0rc1","artifacts":[{"url":"https://example.com/3.15.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+{"version":"3.14.1","artifacts":[{"url":"https://example.com/3.14.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+{"version":"3.13.2","artifacts":[{"url":"https://example.com/3.13.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+{"#;
+        let requests = ["3", "3.13", "3.14", "3.13"]
+            .map(|version| {
+                PythonDownloadRequest::from_str(&format!("cpython-{version}-linux-x86_64-gnu"))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        let selection = NdjsonRequestSelection::parse("versions.ndjson", content, &requests)?;
+        assert!(selection.has_all_matches());
+        assert_eq!(
+            selection
+                .into_downloads()
+                .iter()
+                .map(|download| download.key().version().to_string())
+                .collect::<Vec<_>>(),
+            ["3.14.1", "3.13.2"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ndjson_request_selection_requires_eof_for_prerelease_fallback()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let content = br#"{"version":"3.15.0rc1","artifacts":[{"url":"https://example.com/3.15.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+{"version":"3.14.1","artifacts":[{"url":"https://example.com/3.14.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+"#;
+        let requests = ["3.15", "3.13"]
+            .map(|version| {
+                PythonDownloadRequest::from_str(&format!("cpython-{version}-linux-x86_64-gnu"))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        let selection = NdjsonRequestSelection::parse("versions.ndjson", content, &requests)?;
+        assert!(!selection.has_all_matches());
+        assert_eq!(
+            selection
+                .into_downloads()
+                .iter()
+                .map(|download| download.key().version().to_string())
+                .collect::<Vec<_>>(),
+            ["3.15.0rc1"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn multiple_streaming_requests_reuse_a_complete_prefix()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let content = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/3.14.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+{"version":"3.13.2","artifacts":[{"url":"https://example.com/3.13.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+"#;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let server = std::thread::spawn(move || -> io::Result<()> {
+            let (mut stream, _) = listener.accept()?;
+            let _request = read_http_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nETag: \"prefix\"\r\n\r\n{:X}\r\n",
+                content.len()
+            )?;
+            stream.write_all(content)?;
+            stream.write_all(b"\r\nZZZ\r\n")
+        });
+        let cache = Cache::temp()?.init().await?;
+        let url = format!("http://{address}/versions.ndjson");
+        let requests = ["3.13", "3.14", "3.13"]
+            .map(|version| {
+                PythonDownloadRequest::from_str(&format!("cpython-{version}-linux-x86_64-gnu"))
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        for _ in 0..2 {
+            let downloads = ManagedPythonDownloadList::new_for_requests(
+                &BaseClientBuilder::default().retries(0),
+                &cache,
+                Some(&url),
+                &requests,
+            )
+            .await?;
+            assert_eq!(
+                downloads
+                    .iter_all()
+                    .map(|download| download.key().version().to_string())
+                    .collect::<Vec<_>>(),
+                ["3.14.1", "3.13.2"]
+            );
+        }
+        let (_, metadata) = read_versions_cache_content(&cache, &DisplaySafeUrl::parse(&url)?)
+            .await
+            .ok_or_else(|| io::Error::other("streamed prefix was not cached"))?;
+        assert!(!metadata.complete);
+        server
+            .join()
+            .map_err(|_| io::Error::other("metadata server panicked"))??;
+        Ok(())
     }
 
     #[tokio::test]

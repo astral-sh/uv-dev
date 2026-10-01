@@ -55,16 +55,19 @@ struct InstallRequest<'a> {
 }
 
 impl<'a> InstallRequest<'a> {
-    fn new(request: PythonRequest, download_list: &'a ManagedPythonDownloadList) -> Result<Self> {
-        // Make sure the request is a valid download request and fill platform information
-        let download_request = PythonDownloadRequest::from_request(&request)
+    fn download_request(request: &PythonRequest) -> Result<PythonDownloadRequest> {
+        Ok(PythonDownloadRequest::from_request(request)
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "`{}` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions",
                     request.to_canonical_string()
                 )
             })?
-            .fill()?;
+            .fill()?)
+    }
+
+    fn new(request: PythonRequest, download_list: &'a ManagedPythonDownloadList) -> Result<Self> {
+        let download_request = Self::download_request(&request)?;
 
         // Find a matching download
         let download = match download_list.find(&download_request) {
@@ -95,14 +98,7 @@ impl<'a> InstallRequest<'a> {
         cache: &Cache,
         python_downloads_json_url: Option<&str>,
     ) -> Result<InstallRequest<'static>> {
-        let download_request = PythonDownloadRequest::from_request(&request)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "`{}` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions",
-                    request.to_canonical_string()
-                )
-            })?
-            .fill()?;
+        let download_request = Self::download_request(&request)?;
 
         let download = match ManagedPythonDownloadList::find_streaming(
             client_builder,
@@ -502,12 +498,21 @@ async fn perform_install(
             .await?,
         ]
     } else {
+        let requests = targets
+            .iter()
+            .map(|target| PythonRequest::parse(target.as_str()))
+            .collect::<Vec<_>>();
+        let download_requests = requests
+            .iter()
+            .map(InstallRequest::download_request)
+            .collect::<Result<Vec<_>>>()?;
         if download_list.is_none() {
             download_list = Some(
-                ManagedPythonDownloadList::new(
+                ManagedPythonDownloadList::new_for_requests(
                     &client_builder,
                     cache,
                     python_downloads_json_url.as_deref(),
+                    &download_requests,
                 )
                 .await?,
             );
@@ -515,9 +520,8 @@ async fn perform_install(
         let download_list = download_list
             .as_ref()
             .expect("download list should be loaded before resolving requests");
-        targets
-            .iter()
-            .map(|target| PythonRequest::parse(target.as_str()))
+        requests
+            .into_iter()
             .map(|request| InstallRequest::new(request, download_list))
             .collect::<Result<Vec<_>>>()?
     };

@@ -4223,6 +4223,24 @@ fn python_install_with_ndjson_manifest() {
     Installed Python 3.14.[LATEST] in [TIME]
      + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
     ");
+
+    let contents = fs_err::read_to_string(manifest.path()).expect("manifest should exist");
+    manifest
+        .write_str(&format!("{contents}{{\n"))
+        .expect("manifest should be writable");
+    insta::allow_duplicates! {
+        for requests in [["3.14", "3"], ["3", "3.14"]] {
+            uv_snapshot!(context.filters(), context
+                .python_install()
+                .args(requests)
+                .arg("--python-downloads-json-url")
+                .arg(manifest.path()), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            All requested versions already installed
+            ");
+        }
+    }
 }
 
 #[cfg(unix)]
