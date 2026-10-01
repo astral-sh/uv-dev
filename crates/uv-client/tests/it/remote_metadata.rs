@@ -72,7 +72,7 @@ async fn remote_metadata_small_wheel_request_strategy() -> Result<()> {
             0,
             1,
         ),
-        (None, MetadataRangeRequest::Fallback, 1, 1, 0),
+        (None, MetadataRangeRequest::Fallback, 0, 2, 0),
         (Some(16_385), MetadataRangeRequest::Fallback, 0, 2, 0),
         (Some(u64::MAX), MetadataRangeRequest::Fallback, 1, 2, 0),
         (
@@ -262,7 +262,7 @@ async fn remote_metadata_range_support_follows_artifact_origin() -> Result<()> {
         .respond_with(
             ResponseTemplate::new(200).insert_header(CONTENT_LENGTH, first_wheel.len().to_string()),
         )
-        .expect(1)
+        .expect(0)
         .mount(&unsupported)
         .await;
     Mock::given(method("GET"))
@@ -289,14 +289,14 @@ async fn remote_metadata_range_support_follows_artifact_origin() -> Result<()> {
                 .insert_header(ACCEPT_RANGES, "bytes")
                 .insert_header(CONTENT_LENGTH, second_wheel.len().to_string()),
         )
-        .expect(1)
+        .expect(0)
         .mount(&supported)
         .await;
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(header_exists(RANGE.as_str()))
         .respond_with(move |request: &Request| wheel_range_response(request, &second_wheel))
-        .expect(1)
+        .expect(2)
         .mount(&supported)
         .await;
     Mock::given(method("GET"))
@@ -339,6 +339,39 @@ async fn remote_metadata_range_support_follows_artifact_origin() -> Result<()> {
             .await?;
         assert_eq!(metadata.version.to_string(), version);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_metadata_probes_range_support_without_head() -> Result<()> {
+    let server = MockServer::start().await;
+    let wheel = wheel()?;
+    Mock::given(method("HEAD"))
+        .and(path("/artifact"))
+        .respond_with(
+            ResponseTemplate::new(200).insert_header(CONTENT_LENGTH, wheel.len().to_string()),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/artifact"))
+        .and(header_exists(RANGE.as_str()))
+        .respond_with(move |request: &Request| wheel_range_response(request, &wheel))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    assert_wheel_metadata_readable(&server).await?;
+    let requests = server
+        .received_requests()
+        .await
+        .context("request recording disabled")?;
+    assert_eq!(
+        requests[0].headers.get(RANGE).context("missing range")?,
+        "bytes=0-0"
+    );
+    server.verify().await;
     Ok(())
 }
 
@@ -391,7 +424,7 @@ async fn remote_metadata_redirect_same_origin() -> Result<()> {
     let wheel = wheel()?;
     let wheel_len = wheel.len();
 
-    // The initial metadata probe should authenticate to the source and receive a redirect.
+    // The bounded GET probe makes the HEAD endpoint unnecessary.
     Mock::given(method("HEAD"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
@@ -399,11 +432,11 @@ async fn remote_metadata_redirect_same_origin() -> Result<()> {
             ResponseTemplate::new(303)
                 .insert_header(LOCATION, format!("{}/head-wheel", server.uri())),
         )
-        .expect(1)
+        .expect(0)
         .named("HEAD request to the redirecting wheel URL")
         .mount(&server)
         .await;
-    // The range reader should retry the source with an authenticated range request.
+    // The initial bounded GET should authenticate to the source and stop at its redirect.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
@@ -429,7 +462,7 @@ async fn remote_metadata_redirect_same_origin() -> Result<()> {
         .named("streaming fallback GET request to the redirecting wheel URL")
         .mount(&server)
         .await;
-    // The redirected `HEAD` request should retain credentials on the same origin.
+    // The same-origin HEAD target is unused.
     Mock::given(method("HEAD"))
         .and(path("/head-wheel"))
         .and(basic_auth("source-user", "source-password"))
@@ -438,7 +471,7 @@ async fn remote_metadata_redirect_same_origin() -> Result<()> {
                 .insert_header(ACCEPT_RANGES, "bytes")
                 .insert_header(CONTENT_LENGTH, wheel_len.to_string()),
         )
-        .expect(1)
+        .expect(0)
         .named("HEAD request to the same-origin redirect target")
         .mount(&server)
         .await;
@@ -480,16 +513,16 @@ async fn remote_metadata_redirect_cross_origin() -> Result<()> {
     let wheel_len = wheel.len();
     let target = format!("{}/head-wheel", target_server.uri());
 
-    // The initial metadata probe should authenticate to the source and receive a redirect.
+    // The bounded GET probe makes the HEAD endpoint unnecessary.
     Mock::given(method("HEAD"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
         .respond_with(ResponseTemplate::new(303).insert_header(LOCATION, target.clone()))
-        .expect(1)
+        .expect(0)
         .named("HEAD request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
-    // The range reader should retry the source with an authenticated range request.
+    // The initial bounded GET should authenticate to the source and stop at its redirect.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
@@ -509,7 +542,7 @@ async fn remote_metadata_redirect_cross_origin() -> Result<()> {
         .named("streaming fallback GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
-    // The redirected `HEAD` request should omit the source credentials on the new origin.
+    // The cross-origin HEAD target is unused.
     Mock::given(method("HEAD"))
         .and(path("/head-wheel"))
         .and(header_missing(AUTHORIZATION))
@@ -518,7 +551,7 @@ async fn remote_metadata_redirect_cross_origin() -> Result<()> {
                 .insert_header(ACCEPT_RANGES, "bytes")
                 .insert_header(CONTENT_LENGTH, wheel_len.to_string()),
         )
-        .expect(1)
+        .expect(0)
         .named("unauthenticated HEAD request to the cross-origin redirect target")
         .mount(&target_server)
         .await;
@@ -585,12 +618,12 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
         "get-password",
     )?;
 
-    // The initial authenticated probe should receive the signed `HEAD` target.
+    // The bounded GET probe makes the signed HEAD endpoint unnecessary.
     Mock::given(method("HEAD"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
         .respond_with(ResponseTemplate::new(303).insert_header(LOCATION, head_target))
-        .expect(1)
+        .expect(0)
         .named("HEAD request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
@@ -614,7 +647,7 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
         .named("streaming fallback GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
-    // The redirected probe should use the credentials embedded in the signed `HEAD` target.
+    // The signed HEAD target is unused.
     Mock::given(method("HEAD"))
         .and(path("/head-wheel"))
         .and(basic_auth("head-user", "head-password"))
@@ -623,7 +656,7 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
                 .insert_header(ACCEPT_RANGES, "bytes")
                 .insert_header(CONTENT_LENGTH, wheel_len.to_string()),
         )
-        .expect(1)
+        .expect(0)
         .named("HEAD request to the method-specific HEAD redirect target")
         .mount(&target_server)
         .await;
@@ -676,7 +709,7 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
 async fn remote_metadata_bounded_ranges() -> Result<()> {
     let server = MockServer::start().await;
     let wheel = wheel()?;
-    // The initial `HEAD` response should advertise bounded range support and the artifact length.
+    // Bounded GET responses provide range support and the artifact length.
     Mock::given(method("HEAD"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
@@ -685,7 +718,7 @@ async fn remote_metadata_bounded_ranges() -> Result<()> {
                 .insert_header(ACCEPT_RANGES, "bytes")
                 .insert_header(CONTENT_LENGTH, wheel.len().to_string()),
         )
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
     // The metadata should be read with a bounded range request.
@@ -694,7 +727,7 @@ async fn remote_metadata_bounded_ranges() -> Result<()> {
         .and(basic_auth("source-user", "source-password"))
         .and(header_regex(RANGE.as_str(), "^bytes=[0-9]+-[0-9]+$"))
         .respond_with(move |request: &Request| wheel_range_response(request, &wheel))
-        .expect(1)
+        .expect(2)
         .named("bounded range request")
         .mount(&server)
         .await;
@@ -762,14 +795,14 @@ async fn remote_metadata_rejects_overflowing_zip64_size() -> Result<()> {
                 .insert_header(ACCEPT_RANGES, "bytes")
                 .insert_header(CONTENT_LENGTH, wheel.len().to_string()),
         )
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(header_exists(RANGE.as_str()))
         .respond_with(move |request: &Request| wheel_range_response(request, &wheel))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
 
@@ -805,17 +838,16 @@ async fn remote_metadata_redirect_range_forbidden_with_size(known_size: bool) ->
     wheel[end - 2..].copy_from_slice(&16_384_u16.to_le_bytes());
     wheel.resize(end + 16_384, 0);
     let size = known_size.then_some(wheel.len() as u64);
-    let head_requests = u64::from(!known_size);
     let target = format!("{}/wheel", target_server.uri());
-    // The initial metadata probe should authenticate to the source and receive a redirect.
+    // The bounded GET probe makes the HEAD endpoint unnecessary.
     Mock::given(method("HEAD"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
         .respond_with(ResponseTemplate::new(303).insert_header(LOCATION, target.clone()))
-        .expect(head_requests)
+        .expect(0)
         .mount(&source_server)
         .await;
-    // The range reader should retry the source with an authenticated range request.
+    // The initial bounded GET should authenticate to the source and stop at its redirect.
     Mock::given(method("GET"))
         .and(path("/artifact"))
         .and(basic_auth("source-user", "source-password"))
@@ -835,8 +867,7 @@ async fn remote_metadata_redirect_range_forbidden_with_size(known_size: bool) ->
         .named("streaming fallback GET request to the redirecting wheel URL")
         .mount(&source_server)
         .await;
-    // The redirected `HEAD` request should omit the source credentials, and its response should
-    // advertise range support.
+    // The redirected HEAD target is unused.
     Mock::given(method("HEAD"))
         .and(path("/wheel"))
         .and(header_missing(AUTHORIZATION))
@@ -845,7 +876,7 @@ async fn remote_metadata_redirect_range_forbidden_with_size(known_size: bool) ->
                 .insert_header(ACCEPT_RANGES, "bytes")
                 .insert_header(CONTENT_LENGTH, wheel.len().to_string()),
         )
-        .expect(head_requests)
+        .expect(0)
         .mount(&target_server)
         .await;
     // The range request should not be sent to the redirect target.

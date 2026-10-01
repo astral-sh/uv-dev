@@ -5562,25 +5562,28 @@ async fn generate_hashes_url_fragment() -> Result<()> {
     let wheel = read(context.workspace_root.join("test/links").join(filename))?;
     let size = wheel.len();
 
-    Mock::given(method("HEAD"))
-        .and(path(format!("/{filename}")))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-length", size.to_string())
-                .insert_header("cache-control", "max-age=3600")
-                .insert_header("accept-ranges", "bytes"),
-        )
-        .mount(&server)
-        .await;
-    // The fixture fits in the initial metadata range. Full GET requests are not served until
-    // installation, so resolution cannot download the wheel to compute its hash.
     Mock::given(method("GET"))
         .and(path(format!("/{filename}")))
-        .and(header("range", format!("bytes=0-{}", size - 1)))
+        .and(header("range", "bytes=0-0"))
         .respond_with(
             ResponseTemplate::new(206)
-                .insert_header("content-range", format!("bytes 0-{}/{size}", size - 1))
-                .set_body_bytes(wheel.clone()),
+                .insert_header("content-range", format!("bytes 0-0/{size}"))
+                .insert_header("cache-control", "max-age=3600")
+                .set_body_bytes(&wheel[..1]),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    // The first byte is already cached, and the rest of the fixture fits in the metadata range.
+    // Full GET requests are not served until installation, so resolution cannot download the
+    // wheel to compute its hash.
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .and(header("range", format!("bytes=1-{}", size - 1)))
+        .respond_with(
+            ResponseTemplate::new(206)
+                .insert_header("content-range", format!("bytes 1-{}/{size}", size - 1))
+                .set_body_bytes(&wheel[1..]),
         )
         .expect(1)
         .mount(&server)
@@ -5650,12 +5653,6 @@ async fn generate_hashes_url_fragment_no_range_requests() -> Result<()> {
     let filename = "ok-1.0.0-py3-none-any.whl";
     let wheel = read(context.workspace_root.join("test/links").join(filename))?;
 
-    Mock::given(method("HEAD"))
-        .and(path(format!("/{filename}")))
-        .respond_with(ResponseTemplate::new(405))
-        .expect(1)
-        .mount(&server)
-        .await;
     Mock::given(method("GET"))
         .and(path(format!("/{filename}")))
         .respond_with(
