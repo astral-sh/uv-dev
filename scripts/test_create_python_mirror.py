@@ -182,10 +182,13 @@ class PythonMirrorDestinationsTest(unittest.IsolatedAsyncioTestCase):
         status: int = 200,
         max_concurrent: int = 2,
         target: Path | None = None,
+        watched_reads: set[Path] | None = None,
     ):
         self.requests = []
+        self.reads = []
         self.progress = Progress()
         original_client = httpx.AsyncClient
+        original_open = builtins.open
 
         def respond(request: httpx.Request) -> httpx.Response:
             url = str(request.url)
@@ -197,11 +200,23 @@ class PythonMirrorDestinationsTest(unittest.IsolatedAsyncioTestCase):
                 *args, transport=httpx.MockTransport(respond), **kwargs
             )
 
+        def open_file(path, mode="r", *args, **kwargs):
+            if (
+                watched_reads is not None
+                and isinstance(path, (str, Path))
+                and mode.startswith("r")
+                and Path(path).resolve() in watched_reads
+            ):
+                self.reads.append(Path(path).resolve())
+            return original_open(path, mode, *args, **kwargs)
+
         with ExitStack() as stack:
             stack.enter_context(patch.object(MIRROR.httpx, "AsyncClient", client))
             stack.enter_context(
                 patch.object(MIRROR, "tqdm", return_value=self.progress)
             )
+            if watched_reads is not None:
+                stack.enter_context(patch.object(builtins, "open", open_file))
             return await MIRROR.download_files(
                 urls, target or self.target, max_concurrent
             )
@@ -279,6 +294,122 @@ class PythonMirrorDestinationsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.requests, [min(URL, ALIAS_URL)])
         self.assertEqual(self.progress.completed, 2)
         self.assertFalse(self.destination.exists())
+
+    async def test_symlinked_ancestor_cannot_read_or_replace_outside_archive(self):
+        other_url = MIRROR.PREFIXES[0] + "safe/python.tar.gz"
+        for index, prefix in enumerate(("20220502", "releases/20220502")):
+            with self.subTest(prefix=prefix):
+                target = self.root / f"mirror-{index}"
+                outside = self.root / f"outside-{index}"
+                outside.mkdir()
+                sentinel = outside / "python.tar.gz"
+                sentinel.write_bytes(b"outside mirror")
+                link = target / prefix
+                link.parent.mkdir(parents=True)
+                link.symlink_to(outside, target_is_directory=True)
+                url = MIRROR.PREFIXES[0] + prefix + "/python.tar.gz"
+
+                successful, errors = await self.download(
+                    {(url, CHECKSUM), (other_url, CHECKSUM)},
+                    target=target,
+                    watched_reads={sentinel},
+                )
+
+                with self.subTest(check="outside reads"):
+                    self.assertEqual(self.reads, [])
+                with self.subTest(check="outside bytes"):
+                    self.assertEqual(sentinel.read_bytes(), b"outside mirror")
+                self.assertTrue(link.is_symlink())
+                self.assertEqual(successful, 1)
+                self.assertEqual(
+                    errors,
+                    [(url, f"Symbolic link in mirror archive path: {Path(prefix)}")],
+                )
+                self.assertEqual(self.requests, [other_url])
+                self.assertEqual(self.progress.completed, 2)
+                self.assertEqual(
+                    (target / MIRROR.sanitize_url(other_url)).read_bytes(), CONTENT
+                )
+
+    async def test_symlinked_destination_is_not_reused_or_replaced(self):
+        other_url = MIRROR.PREFIXES[0] + "safe/python.tar.gz"
+        for index, checksum in enumerate((None, CHECKSUM, "0" * 64)):
+            with self.subTest(checksum=checksum):
+                target = self.root / f"mirror-{index}"
+                sentinel = self.root / f"outside-{index}.tar.gz"
+                sentinel.write_bytes(CONTENT)
+                destination = target / MIRROR.sanitize_url(URL)
+                destination.parent.mkdir(parents=True)
+                destination.symlink_to(sentinel)
+
+                successful, errors = await self.download(
+                    {(URL, checksum), (other_url, CHECKSUM)},
+                    target=target,
+                    watched_reads={sentinel},
+                )
+
+                with self.subTest(check="outside reads"):
+                    self.assertEqual(self.reads, [])
+                self.assertEqual(sentinel.read_bytes(), CONTENT)
+                self.assertTrue(destination.is_symlink())
+                self.assertEqual(successful, 1)
+                self.assertEqual(
+                    errors,
+                    [
+                        (
+                            URL,
+                            f"Symbolic link in mirror archive path: {MIRROR.sanitize_url(URL)}",
+                        )
+                    ],
+                )
+                self.assertEqual(self.requests, [other_url])
+                self.assertEqual(self.progress.completed, 2)
+                self.assertEqual(
+                    (target / MIRROR.sanitize_url(other_url)).read_bytes(), CONTENT
+                )
+
+    async def test_dangling_destination_symlink_is_not_replaced(self):
+        sentinel = self.root / "missing-outside.tar.gz"
+        self.destination.parent.mkdir(parents=True)
+        self.destination.symlink_to(sentinel)
+        successful, errors = await self.download({(URL, CHECKSUM)})
+        self.assertEqual(successful, 0)
+        self.assertEqual(
+            errors,
+            [
+                (
+                    URL,
+                    f"Symbolic link in mirror archive path: {MIRROR.sanitize_url(URL)}",
+                )
+            ],
+        )
+        self.assertEqual(self.requests, [])
+        self.assertEqual(self.progress.completed, 1)
+        self.assertTrue(self.destination.is_symlink())
+        self.assertFalse(sentinel.exists())
+
+    async def test_descendant_symlink_inside_mirror_is_rejected(self):
+        actual = self.target / "actual"
+        actual.mkdir(parents=True)
+        self.destination.parent.symlink_to(actual, target_is_directory=True)
+        successful, errors = await self.download({(URL, CHECKSUM)})
+        self.assertEqual(successful, 0)
+        self.assertEqual(
+            errors, [(URL, "Symbolic link in mirror archive path: 20220502")]
+        )
+        self.assertEqual(self.requests, [])
+        self.assertEqual(list(actual.iterdir()), [])
+
+    async def test_selected_root_may_be_a_symlink(self):
+        actual = self.root / "selected-mirror"
+        actual.mkdir()
+        self.target.symlink_to(actual, target_is_directory=True)
+        successful, errors = await self.download({(URL, CHECKSUM)})
+        self.assertEqual(successful, 1)
+        self.assertEqual(errors, [])
+        self.assertEqual(self.requests, [URL])
+        self.assertTrue(self.target.is_symlink())
+        self.assertEqual((actual / MIRROR.sanitize_url(URL)).read_bytes(), CONTENT)
 
 
 class PythonMirrorDownloadsTest(unittest.IsolatedAsyncioTestCase):

@@ -237,11 +237,33 @@ def plan_downloads(
     return downloads, errors
 
 
+def validate_destination(target: Path, path: Path) -> None:
+    """Reject existing symbolic links below the selected mirror directory."""
+    current = target
+    for part in path.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(
+                f"Symbolic link in mirror archive path: {current.relative_to(target)}"
+            )
+
+
 async def download_files(
     urls: set[tuple[str, str | None]], target: Path, max_concurrent: int
 ):
     """Download files with a limit on concurrent downloads using httpx."""
     downloads, errors = plan_downloads(urls)
+    # The selected directory may itself be a symlink, but archive paths beneath
+    # it must not redirect checksum reads or downloads through existing links.
+    target = target.resolve()
+    safe_downloads = []
+    for path, entries in downloads:
+        try:
+            validate_destination(target, path)
+        except (OSError, ValueError) as error:
+            errors.extend((url, str(error)) for url, _ in entries)
+        else:
+            safe_downloads.append((path, entries))
     progress_bar = tqdm(total=len(urls), desc="Downloading", unit="file")
     for _, error in errors:
         logger.warning(error)
@@ -249,7 +271,7 @@ async def download_files(
     success_count = 0
 
     try:
-        if not downloads:
+        if not safe_downloads:
             return success_count, errors
 
         async with httpx.AsyncClient(follow_redirects=True) as client:
@@ -277,7 +299,7 @@ async def download_files(
                         for _, error in download_errors:
                             errors.extend((alias, error) for alias, _ in entries)
 
-            tasks = [sem_download(path, entries) for path, entries in downloads]
+            tasks = [sem_download(path, entries) for path, entries in safe_downloads]
             await asyncio.gather(*tasks)
     finally:
         progress_bar.close()
