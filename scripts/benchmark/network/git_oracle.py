@@ -29,7 +29,17 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--warm", action="store_true")
     parser.add_argument("--revision", help="Fetch the fixture's known commit directly")
+    parser.add_argument("--http2-proxy", type=Path, help="Path to the Caddy binary")
+    parser.add_argument("--tls-certificate", type=Path)
+    parser.add_argument("--tls-key", type=Path)
     args = parser.parse_args()
+    transport = (args.http2_proxy, args.tls_certificate, args.tls_key)
+    if any(transport) and not all(transport):
+        parser.error("HTTP/2 requires the proxy binary, certificate, and key")
+    if args.http2_proxy:
+        args.http2_proxy = args.http2_proxy.resolve()
+        args.tls_certificate = args.tls_certificate.resolve()
+        args.tls_key = args.tls_key.resolve()
     profile = json.loads(args.profiles.read_text())[args.profile]
     descriptor = json.loads((args.directory / "git-descriptor.json").read_text())
     if args.revision is not None and args.revision != descriptor["commit"]:
@@ -37,9 +47,6 @@ def main() -> None:
     fixtures = bench.Fixtures(
         args.directory / "git-fixtures.json", args.directory, True
     )
-    server = bench.Server(fixtures, profile, git_root=args.directory / "git")
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
     env = {
         key: value for key, value in os.environ.items() if not key.startswith("GIT_")
     }
@@ -51,11 +58,34 @@ def main() -> None:
         no_proxy="127.0.0.1,localhost",
     )
     args.work_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        with tempfile.TemporaryDirectory(
-            prefix="git-oracle-", dir=args.work_dir
-        ) as temporary:
-            repository = Path(temporary) / "checkout.git"
+    with tempfile.TemporaryDirectory(
+        prefix="git-oracle-", dir=args.work_dir
+    ) as temporary:
+        work = Path(temporary)
+        server = bench.Server(
+            fixtures,
+            profile,
+            work / "origin.sock" if args.http2_proxy else None,
+            git_root=args.directory / "git",
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        proxy = None
+        warm_requests = 0
+        protocols = None
+        try:
+            if args.http2_proxy:
+                proxy = bench.Http2Proxy(
+                    work, args.http2_proxy, args.tls_certificate, args.tls_key
+                )
+                server.public_url = proxy.url
+                env.update(
+                    GIT_CONFIG_COUNT="1",
+                    GIT_CONFIG_KEY_0="http.version",
+                    GIT_CONFIG_VALUE_0="HTTP/2",
+                    GIT_SSL_CAINFO=str(args.tls_certificate),
+                )
+            repository = work / "checkout.git"
             subprocess.run(
                 ["git", "init", "--bare", str(repository)],
                 env=env,
@@ -78,6 +108,8 @@ def main() -> None:
                 subprocess.run(
                     command, env=env, capture_output=True, check=True, timeout=60
                 )
+                server.wait_idle()
+                warm_requests = len(server.events)
                 server.reset()
             start = time.perf_counter()
             subprocess.run(
@@ -91,12 +123,19 @@ def main() -> None:
             ).strip()
             if commit != descriptor["commit"]:
                 raise ValueError("Fetched Git commit differs from the pinned fixture")
-    finally:
-        server.shutdown()
-        server.wait_idle()
-        server.server_close()
-        thread.join()
-    waves = 1 if args.warm else 2
+        finally:
+            if proxy:
+                proxy.stop()
+            server.shutdown()
+            server.wait_idle()
+            server.server_close()
+            thread.join()
+        if proxy:
+            protocols = proxy.protocols()
+            if protocols["HTTP/2.0"] != warm_requests + len(server.events):
+                raise ValueError("Git HTTP/2 and replay request counts differ")
+            protocols["HTTP/2.0"] -= warm_requests
+    waves = (0 if args.revision else 1) if args.warm else 2
     data = {
         "profile": profile,
         "netem": bench.netem_profile(),
@@ -105,6 +144,19 @@ def main() -> None:
         "git_version": subprocess.check_output(["git", "--version"], text=True).strip(),
         "warm": args.warm,
         "revision": args.revision,
+        "http2_proxy": (
+            {
+                "binary": str(args.http2_proxy),
+                "version": subprocess.check_output(
+                    [args.http2_proxy, "version"], text=True
+                ).strip(),
+                "sha256": bench.digest(args.http2_proxy),
+                "certificate_sha256": bench.digest(args.tls_certificate),
+            }
+            if args.http2_proxy
+            else None
+        ),
+        "frontend_protocols": protocols,
         "seconds": seconds,
         "requests": len(server.events),
         "actual_bytes": sum(event["bytes"] for event in server.events),
@@ -112,7 +164,7 @@ def main() -> None:
         "required_waves": waves,
         "optimistic_network_floor_seconds": bench.network_floor(profile, 0, waves),
         "events": sorted(server.events, key=lambda event: event["start"]),
-        "scope": "A single Git CLI fetch of the known reference, verified against the pinned commit. The optimistic floor charges reference discovery and, for a cold fetch, one dependent pack response. Git pack compression and negotiation prevent treating the observed bytes as a strict minimum, so the byte floor is zero. The single-fetch bytes and time are a realizable reference.",
+        "scope": "A single Git CLI fetch of the known reference, verified against the pinned commit. The optimistic floor charges reference discovery and, for a cold fetch, one dependent pack response. A cached exact commit needs no network request; a named reference must be checked for updates. Git pack compression and negotiation prevent treating the observed bytes as a strict minimum, so the byte floor is zero. The single-fetch bytes and time are a realizable reference.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(data, indent=2) + "\n")
