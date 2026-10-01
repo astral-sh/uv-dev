@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use std::env::current_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
 use wiremock::matchers::{basic_auth, body_json, method, path};
@@ -36,6 +37,33 @@ fn basic_package_sdist() -> PathBuf {
 
 fn basic_package_wheel() -> PathBuf {
     test_link("basic_package-0.1.0-py3-none-any.whl")
+}
+
+fn check_url_index(server: &MockServer, files: &[PathBuf]) -> ResponseTemplate {
+    let files = files
+        .iter()
+        .map(|file| {
+            let filename = file
+                .file_name()
+                .expect("distribution has a filename")
+                .to_str()
+                .expect("distribution filename is UTF-8");
+            let sha256 = hex::encode(Sha256::digest(
+                fs_err::read(file).expect("distribution should be readable"),
+            ));
+            json!({
+                "filename": filename,
+                "hashes": {"sha256": sha256},
+                "url": format!("{}/files/{filename}", server.uri()),
+            })
+        })
+        .collect::<Vec<_>>();
+    ResponseTemplate::new(200)
+        .insert_header("Cache-Control", "public, max-age=600")
+        .set_body_raw(
+            json!({"files": files}).to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        )
 }
 
 /// Read the JSON attestations field from a recorded multipart upload.
@@ -555,6 +583,118 @@ async fn read_index_credential_env_vars_for_check_url() {
     File astral_test_private-0.1.0-py3-none-any.whl already exists, skipping
     "
     );
+}
+
+#[tokio::test]
+async fn check_url_reuses_package_snapshot() {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+    let files = [basic_package_wheel(), basic_package_sdist()];
+
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-package/"))
+        .respond_with(check_url_index(&server, &files))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.publish()
+        .arg("-u").arg("dummy")
+        .arg("-p").arg("dummy")
+        .arg("--check-url").arg(format!("{}/simple/", server.uri()))
+        .arg("--publish-url").arg(format!("{}/upload", server.uri()))
+        .args(&files), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 2 files to http://[LOCALHOST]/upload
+    File basic_package-0.1.0-py3-none-any.whl already exists, skipping
+    File basic_package-0.1.0.tar.gz already exists, skipping
+    ");
+}
+
+#[tokio::test]
+async fn check_url_reuses_absent_package() {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-package/"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("Not found"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.publish()
+        .arg("-u").arg("dummy")
+        .arg("-p").arg("dummy")
+        .arg("--check-url").arg(format!("{}/simple/", server.uri()))
+        .arg("--publish-url").arg(format!("{}/upload", server.uri()))
+        .arg(basic_package_wheel())
+        .arg(basic_package_sdist()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 2 files to http://[LOCALHOST]/upload
+    Hashing basic_package-0.1.0-py3-none-any.whl ([SIZE]KiB)
+    Uploading basic_package-0.1.0-py3-none-any.whl ([SIZE]KiB)
+    Hashing basic_package-0.1.0.tar.gz ([SIZE]B)
+    Uploading basic_package-0.1.0.tar.gz ([SIZE]B)
+    ");
+}
+
+#[tokio::test]
+async fn check_url_refreshes_after_raced_upload() {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+    let files = [basic_package_wheel(), basic_package_sdist()];
+    let initial = check_url_index(&server, &[]);
+    let uploaded = check_url_index(&server, &files);
+    let calls = AtomicUsize::new(0);
+
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-package/"))
+        .respond_with(move |_: &Request| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                initial.clone()
+            } else {
+                uploaded.clone()
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .respond_with(ResponseTemplate::new(409).set_body_string("File already exists"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.publish()
+        .arg("-u").arg("dummy")
+        .arg("-p").arg("dummy")
+        .arg("--check-url").arg(format!("{}/simple/", server.uri()))
+        .arg("--publish-url").arg(format!("{}/upload", server.uri()))
+        .args(&files), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 2 files to http://[LOCALHOST]/upload
+    Hashing basic_package-0.1.0-py3-none-any.whl ([SIZE]KiB)
+    Uploading basic_package-0.1.0-py3-none-any.whl ([SIZE]KiB)
+    File already exists, skipping
+    File basic_package-0.1.0.tar.gz already exists, skipping
+    ");
 }
 
 #[tokio::test]
