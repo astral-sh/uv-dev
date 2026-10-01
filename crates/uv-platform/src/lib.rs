@@ -78,35 +78,11 @@ impl Platform {
             )));
         }
 
-        let arch_str = match parts[0] {
-            "armv5tel" => "armv5te",
-            "ppc64" => "powerpc64",
-            "ppc64le" => "powerpc64le",
-            "riscv64" | "riscv64gc" => "riscv64gc",
-            arch => arch,
-        };
-        let arch = Arch::from_str(arch_str)?;
-
-        let os_str = match parts[2] {
-            "darwin" => "macos",
-            os => os,
-        };
-        let os = Os::from_str(os_str)?;
-
-        let libc_str = if parts.len() > 3 {
-            match parts[3] {
-                "gnu" | "gnuabi64" => "gnu",
-                "gnueabi" => "gnueabi",
-                "gnueabihf" => "gnueabihf",
-                "musl" | "muslabi64" => "musl",
-                "msvc" => "none",
-                "android" | "androideabi" => "none",
-                _ => "none",
-            }
-        } else {
-            "none"
-        };
-        let libc = Libc::from_str(libc_str)?;
+        let arch = Arch::from_cargo_dist(parts[0])?;
+        let os = Os::from_cargo_dist(parts[2])?;
+        let libc = parts
+            .get(3)
+            .map_or(Libc::None, |environment| Libc::from_cargo_dist(environment));
 
         Ok(Self { os, arch, libc })
     }

@@ -949,7 +949,7 @@ async fn python_list_remote_python_downloads_ndjson_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Error while fetching remote python downloads NDJSON from 'http://[LOCALHOST]/404.ndjson'
-     cause: Failed to download http://[LOCALHOST]/404.ndjson
+     cause: Failed to download `http://[LOCALHOST]/404.ndjson`
      cause: HTTP status client error (404 Not Found) for url (http://[LOCALHOST]/404.ndjson)
     ");
 

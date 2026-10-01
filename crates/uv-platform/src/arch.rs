@@ -74,6 +74,17 @@ impl Arch {
         Self { family, variant }
     }
 
+    /// Parse the architecture component of a `cargo-dist` target triple.
+    pub fn from_cargo_dist(arch: &str) -> Result<Self, Error> {
+        Self::from_str(match arch {
+            "armv5tel" => "armv5te",
+            "ppc64" => "powerpc64",
+            "ppc64le" => "powerpc64le",
+            "riscv64" | "riscv64gc" => "riscv64gc",
+            arch => arch,
+        })
+    }
+
     pub fn from_env() -> Self {
         #[cfg(test)]
         {
