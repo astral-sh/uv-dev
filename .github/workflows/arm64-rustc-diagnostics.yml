@@ -15,6 +15,7 @@ on:
           - docker-memory
           - docker-memory-proof
           - gnu-fix
+          - gnu-memory-proof
       depot-project-id:
         description: Dedicated Depot project for the Docker overlap test
         type: string
@@ -555,3 +556,141 @@ jobs:
           path: results/
           retention-days: 30
           if-no-files-found: error
+
+  gnu-memory-proof:
+    if: ${{ inputs.suite == 'gnu-memory-proof' }}
+    # Compiler failures are diagnostic results and must not trigger automatic CI retries.
+    continue-on-error: true
+    name: GNU memory proof / ${{ matrix.machine.name }}
+    runs-on: ${{ matrix.machine.runner }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        source:
+          - name: fix
+            sha: f6aad0944971859795f675d147d84bc322b036a8
+        sample: [1]
+        machine:
+          - name: 32gb
+            runner: depot-ubuntu-24.04-arm-32
+            memory: 32
+          - name: 64gb
+            runner: depot-ubuntu-24.04-arm-32
+            memory: 64
+    env:
+      CARGO_BUILD_JOBS: "8"
+      CARGO: ${{ github.workspace }}/source/scripts/cargo.sh
+    steps:
+      - name: Check out diagnostics
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: diagnostics
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /scripts/ci/arm64-rustc-diagnostics.py
+            /scripts/ci/arm64-rustc-wrapper.sh
+
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: astral-sh/uv-dev
+          ref: ${{ matrix.source.sha }}
+          path: source
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          cache: ""
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: arm64
+
+      - name: Install uv
+        id: setup-uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.13"
+          enable-cache: false
+
+      - name: Record runner resources
+        env:
+          EXPECTED_SOURCE: ${{ matrix.source.sha }}
+          UV_PATH: ${{ steps.setup-uv.outputs.uv-path }}
+        run: |
+          test "$(git -C source rev-parse HEAD)" = "$EXPECTED_SOURCE"
+          mkdir -p diagnostics/bin results "$HOME/code/tmp/uv-ci-2124"
+          cp "$UV_PATH" diagnostics/bin/uv
+          chmod +x diagnostics/scripts/ci/arm64-rustc-wrapper.sh
+          echo "TMPDIR=$HOME/code/tmp/uv-ci-2124" >> "$GITHUB_ENV"
+          { git -C source rev-parse HEAD; git -C source rev-parse 'HEAD^{tree}'; uname -sr; lscpu; free -b; swapon --show; } > results/machine.txt
+          sudo -n dmesg -T | tee results/kernel-before.log > /dev/null || true
+          uv run --no-config --no-project --python "$PYTHON_VERSION" diagnostics/scripts/ci/arm64-rustc-diagnostics.py snapshot > results/host-before.json
+          uv run --no-config --no-project --python "$PYTHON_VERSION" diagnostics/scripts/ci/arm64-rustc-diagnostics.py monitor "$PWD/results/host-memory.jsonl" "$PWD/results/stop" < /dev/null > results/monitor.log 2>&1 &
+          echo "$!" > results/monitor.pid
+
+      - name: Prepare README
+        working-directory: source
+        run: uv run --no-config --no-project --python "$PYTHON_VERSION" scripts/transform_readme.py --target pypi
+
+      - name: Build PGO wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: source
+          sccache: false
+          maturin-version: v1.15.0
+          target: aarch64-unknown-linux-gnu
+          manylinux: "2_28"
+          container: quay.io/pypa/manylinux_2_28_aarch64@sha256:acc4e63610fef1da3d687322793665205415c2b22c0d2e403f1a44eb834d63fc
+          # Keep CPU concurrency fixed while varying only the container's memory limit.
+          docker-options: --memory=${{ matrix.machine.memory }}g --memory-swap=${{ matrix.machine.memory }}g --cpuset-cpus=0-7 -e CARGO -e CARGO_BUILD_JOBS -e CARGO_INCREMENTAL -e AWS_LC_SYS_USE_SYSTEM -e JEMALLOC_SYS_WITH_LG_PAGE=16
+          args: --release --locked --out dist --features self-update --compatibility pypi
+          before-script-linux: |
+            test "$(cat /sys/fs/cgroup/memory.max)" = "$(( ${{ matrix.machine.memory }} * 1024 * 1024 * 1024 ))"
+            test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0
+            test "$(cat /sys/fs/cgroup/cpuset.cpus.effective)" = 0-7
+            mkdir -p "$HOME/code/tmp/uv-ci-2124"
+            export TMPDIR="$HOME/code/tmp/uv-ci-2124"
+            scripts/install-cargo-extensions.sh
+
+            bundled_lld_dir="$(rustc --print sysroot)/lib/rustlib/aarch64-unknown-linux-gnu/bin/gcc-ld"
+            test -x "${bundled_lld_dir}/ld.lld"
+            export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C link-arg=-B${bundled_lld_dir} -C link-arg=-fuse-ld=lld"
+            rustup component add llvm-tools-preview
+
+            export UV_DIAGNOSTIC_UV="${{ github.workspace }}/diagnostics/bin/uv"
+            export UV_DIAGNOSTIC_PYTHON="$(command -v python3.11)"
+            export UV_DIAGNOSTIC_SCRIPT="${{ github.workspace }}/diagnostics/scripts/ci/arm64-rustc-diagnostics.py"
+            export UV_DIAGNOSTIC_RESULTS="${{ github.workspace }}/results/container"
+            export UV_DIAGNOSTIC_REAL_RUSTC="$(rustup which rustc)"
+            export RUSTC="${{ github.workspace }}/diagnostics/scripts/ci/arm64-rustc-wrapper.sh"
+
+            "$UV_DIAGNOSTIC_UV" run --no-config --no-project --no-python-downloads \
+              --python "$UV_DIAGNOSTIC_PYTHON" "$UV_DIAGNOSTIC_SCRIPT" build --label pgo-training -- \
+              "$UV_DIAGNOSTIC_UV" run --no-config --no-project --no-python-downloads \
+              --python "$UV_DIAGNOSTIC_PYTHON" scripts/build_uv_pgo.py \
+              --target aarch64-unknown-linux-gnu --target-dir "$PWD/target/uv-pgo" --train-only
+
+            export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-Cprofile-use=$PWD/target/uv-pgo/uv.profdata"
+
+      - name: Collect memory diagnostics
+        if: ${{ always() }}
+        run: |
+          mkdir -p results
+          touch results/stop
+          sudo -n dmesg -T | tee results/kernel-after.log > /dev/null || true
+          if test -f diagnostics/scripts/ci/arm64-rustc-diagnostics.py && command -v uv > /dev/null; then
+            uv run --no-config --no-project --python "$PYTHON_VERSION" diagnostics/scripts/ci/arm64-rustc-diagnostics.py snapshot > results/host-after.json
+            uv run --no-config --no-project --python "$PYTHON_VERSION" diagnostics/scripts/ci/arm64-rustc-diagnostics.py report results/container > results/compiler-report.json
+          fi
+          grep -Ei 'out of memory|oom-kill|killed process' results/kernel-after.log || true
+
+      - name: Upload diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-2124-gnu-memory-proof-${{ matrix.machine.name }}
+          path: results/
+          retention-days: 30
+          if-no-files-found: error
+
