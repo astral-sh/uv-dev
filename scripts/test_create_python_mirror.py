@@ -611,6 +611,134 @@ class PythonMirrorHistoryTest(unittest.TestCase):
             )
             return MIRROR.collect_metadata_from_git_history()
 
+    def run_cli(self, contents: dict[str, bytes], *, from_all_history: bool = True):
+        target = self.root / "mirror"
+        requests = []
+        progress = Progress()
+        original_client = httpx.AsyncClient
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            requests.append(url)
+            return httpx.Response(200, content=contents[url])
+
+        def client(*args, **kwargs):
+            return original_client(
+                *args, transport=httpx.MockTransport(respond), **kwargs
+            )
+
+        arguments = [str(MIRROR.__file__), "--target", str(target)]
+        if from_all_history:
+            arguments.append("--from-all-history")
+        output = io.StringIO()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(MIRROR, "REPO_ROOT", self.root))
+            stack.enter_context(
+                patch.object(MIRROR, "VERSIONS_FILE", self.versions_file)
+            )
+            stack.enter_context(patch.object(MIRROR.httpx, "AsyncClient", client))
+            stack.enter_context(patch.object(MIRROR, "tqdm", return_value=progress))
+            stack.enter_context(patch.object(sys, "argv", arguments))
+            stack.enter_context(redirect_stdout(output))
+            code = MIRROR.main()
+        return code, output.getvalue(), requests, progress.completed
+
+    def test_history_uses_known_checksum_for_repeated_url(self):
+        other_url = URL.replace("python.tar.gz", "other-python.tar.gz")
+        self.commit(json.dumps({"python": {"url": URL, "sha256": CHECKSUM}}))
+        self.commit(
+            json.dumps(
+                {
+                    "python": {"url": URL, "sha256": None},
+                    "other": {"url": other_url, "sha256": CHECKSUM},
+                }
+            )
+        )
+
+        code, output, requests, completed = self.run_cli(
+            {URL: b"incorrect archive", other_url: CONTENT}
+        )
+
+        self.assertEqual(code, 1)
+        self.assertCountEqual(requests, [URL, other_url])
+        self.assertEqual(completed, 2)
+        self.assertIn("Successfully downloaded: 1 files.", output)
+        self.assertIn(f"- {URL}: Checksum mismatch", output)
+        target = self.root / "mirror"
+        self.assertFalse((target / MIRROR.sanitize_url(URL)).exists())
+        self.assertEqual(
+            (target / MIRROR.sanitize_url(other_url)).read_bytes(), CONTENT
+        )
+
+    def test_conflicting_history_checksums_are_rejected(self):
+        other_url = URL.replace("python.tar.gz", "other-python.tar.gz")
+        earlier_checksum = hashlib.sha256(b"earlier archive").hexdigest()
+        self.commit(json.dumps({"python": {"url": URL, "sha256": earlier_checksum}}))
+        self.commit(
+            json.dumps(
+                {
+                    "python": {"url": URL, "sha256": CHECKSUM},
+                    "other": {"url": other_url, "sha256": CHECKSUM},
+                }
+            )
+        )
+        target = self.root / "mirror"
+        destination = target / MIRROR.sanitize_url(URL)
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(b"previous archive")
+
+        code, output, requests, completed = self.run_cli(
+            {URL: CONTENT, other_url: CONTENT}
+        )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(requests, [other_url])
+        self.assertEqual(completed, 3)
+        self.assertIn("Successfully downloaded: 1 files.", output)
+        message = f"- {URL}: Conflicting mirror archive entries for {MIRROR.sanitize_url(URL)}"
+        self.assertEqual(output.count(message), 2)
+        self.assertEqual(destination.read_bytes(), b"previous archive")
+        self.assertEqual(
+            (target / MIRROR.sanitize_url(other_url)).read_bytes(), CONTENT
+        )
+
+    def test_identical_history_checksums_are_downloaded_once(self):
+        entry = {"url": URL, "sha256": CHECKSUM}
+        self.commit(json.dumps({"python": entry}))
+        self.commit(json.dumps({"python": entry, "duplicate": entry}))
+
+        code, output, requests, completed = self.run_cli({URL: CONTENT})
+
+        self.assertEqual(code, 0)
+        self.assertEqual(requests, [URL])
+        self.assertEqual(completed, 1)
+        self.assertIn("Successfully downloaded: 1 files.", output)
+        self.assertNotIn("Failed downloads:", output)
+        destination = self.root / "mirror" / MIRROR.sanitize_url(URL)
+        self.assertEqual(destination.read_bytes(), CONTENT)
+
+    def test_conflicting_current_checksums_are_rejected_in_either_order(self):
+        earlier_checksum = hashlib.sha256(b"earlier archive").hexdigest()
+        for checksums in ((CHECKSUM, earlier_checksum), (earlier_checksum, CHECKSUM)):
+            with self.subTest(checksums=checksums):
+                self.commit(
+                    json.dumps(
+                        {
+                            str(index): {"url": URL, "sha256": checksum}
+                            for index, checksum in enumerate(checksums)
+                        }
+                    )
+                )
+                code, output, requests, completed = self.run_cli(
+                    {URL: CONTENT}, from_all_history=False
+                )
+                self.assertEqual(code, 1)
+                self.assertEqual(requests, [])
+                self.assertEqual(completed, 2)
+                self.assertIn("Successfully downloaded: 0 files.", output)
+                self.assertIn("Conflicting mirror archive entries", output)
+                self.assertFalse((self.root / "mirror").exists())
+
     def test_complete_history_returns_every_revision(self):
         earlier = {"url": URL, "sha256": None}
         current = {
