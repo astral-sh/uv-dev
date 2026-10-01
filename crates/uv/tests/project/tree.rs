@@ -91,6 +91,181 @@ fn tree_centralized_environment_no_cache() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn root_owned_dependencies_respect_depth() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let leaf = context.temp_dir.child("leaf");
+    leaf.create_dir_all()?;
+    leaf.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    let leaf_url = Url::from_file_path(leaf.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert leaf path to URL"))?;
+
+    let child = context.temp_dir.child("child");
+    child.create_dir_all()?;
+    child.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "child"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["leaf @ {leaf_url}"]
+    "#})?;
+    let child_url = Url::from_file_path(child.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert child path to URL"))?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [tool.uv.workspace]
+        members = []
+
+        [dependency-groups]
+        dev = ["child @ {child_url}"]
+    "#})?;
+    let script = context.temp_dir.child("script.py");
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["child @ {child_url}"]
+        # ///
+    "#})?;
+
+    context.lock().assert().success();
+    context
+        .lock()
+        .arg("--script")
+        .arg(script.path())
+        .assert()
+        .success();
+
+    let mut projections = Vec::new();
+    for (target, is_script) in [("workspace", false), ("script", true)] {
+        for depth in 0..=2 {
+            let mut command = context.tree();
+            command
+                .arg("--frozen")
+                .arg("--universal")
+                .arg("--quiet")
+                .arg("--depth")
+                .arg(depth.to_string());
+            if is_script {
+                command.arg("--script").arg(script.path());
+            }
+            let output = command.output()?;
+            output.clone().assert().success();
+            let text = String::from_utf8(output.stdout)?;
+
+            command
+                .arg("--preview-features")
+                .arg("json-output")
+                .arg("--format")
+                .arg("json");
+            let output = command.output()?;
+            output.clone().assert().success();
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+            let resolution = report["resolution"]
+                .as_object()
+                .context("dependency graph resolution should be an object")?;
+            let mut packages = resolution
+                .values()
+                .filter(|node| node["kind"] == "package")
+                .map(|node| {
+                    node["name"]
+                        .as_str()
+                        .context("package node should have a name")
+                        .map(ToOwned::to_owned)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            packages.sort();
+            let dependencies: usize = resolution
+                .values()
+                .map(|node| node["dependencies"].as_array().map_or(0, Vec::len))
+                .sum();
+            projections.push((target, depth, text, packages, dependencies));
+        }
+    }
+
+    assert_json_snapshot!(projections, @r#"
+    [
+      [
+        "workspace",
+        0,
+        "",
+        [],
+        0
+      ],
+      [
+        "workspace",
+        1,
+        "child v1.0.0 (group: dev)\n",
+        [
+          "child"
+        ],
+        1
+      ],
+      [
+        "workspace",
+        2,
+        "child v1.0.0 (group: dev)\n└── leaf v1.0.0\n",
+        [
+          "child",
+          "leaf"
+        ],
+        2
+      ],
+      [
+        "script",
+        0,
+        "",
+        [],
+        0
+      ],
+      [
+        "script",
+        1,
+        "child v1.0.0\n",
+        [
+          "child"
+        ],
+        1
+      ],
+      [
+        "script",
+        2,
+        "child v1.0.0\n└── leaf v1.0.0\n",
+        [
+          "child",
+          "leaf"
+        ],
+        2
+      ]
+    ]
+    "#);
+
+    uv_snapshot!(context.filters(), context.tree().arg("--frozen").arg("--universal").arg("--depth").arg("0").arg("--package").arg("child"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    child v1.0.0
+
+    ----- stderr -----
+    ");
+    uv_snapshot!(context.filters(), context.tree().arg("--frozen").arg("--universal").arg("--depth").arg("0").arg("--invert"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    leaf v1.0.0
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 #[cfg(feature = "test-universal")]
 #[test]
 fn nested_dependencies() -> Result<()> {
@@ -772,10 +947,9 @@ fn json_output_virtual_root() -> Result<()> {
         .arg("--format")
         .arg("json")
         .arg("--universal")
-        // A workspace-owned group's direct requirements are at depth zero, even though the JSON
-        // graph represents the group itself as a root node.
+        // A workspace-owned group's direct requirements are one level below the group.
         .arg("--depth")
-        .arg("0")
+        .arg("1")
         .arg("--only-group")
         .arg("dev"), @r#"
     exit_code: 0 (success)
@@ -3863,10 +4037,9 @@ fn non_project_group_selection_with_extras() -> Result<()> {
         .arg("json-output")
         .arg("--format")
         .arg("json")
-        // A script's direct requirements are at depth zero, even though the JSON graph represents
-        // the script itself as a root node.
+        // A script's direct requirements are one level below the script.
         .arg("--depth")
-        .arg("0"), @r#"
+        .arg("1"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
