@@ -422,6 +422,31 @@ class ReplayTests(unittest.TestCase):
         events = sorted(server.events, key=lambda event: event["start"])
         self.assertEqual([event["status"] for event in events], [503, 200, 304, 404])
 
+    def test_osv_summary_modification_overrides_leave_records_unchanged(self) -> None:
+        record = {"id": "OSV-BENCH-1", "modified": "2026-01-01T00:00:00Z"}
+        configuration = {
+            "dependencies": {
+                "first": {
+                    "version": "1.0",
+                    "pages": 1,
+                    "vulns_by_page": [[record["id"]]],
+                }
+            },
+            "vulnerabilities": {record["id"]: record},
+        }
+        query = {"package": {"name": "first", "ecosystem": "PyPI"}, "version": "1.0"}
+        for value in (None, "invalid timestamp", 123, "2026-01-02T00:00:00Z"):
+            with self.subTest(modified=value):
+                body, _ = bench.osv_query_response(
+                    dict(configuration, summary_modified={record["id"]: value}),
+                    json.dumps({"queries": [query]}).encode(),
+                )
+                expected = {"id": record["id"]}
+                if value is not None:
+                    expected["modified"] = value
+                self.assertEqual(json.loads(body), {"results": [{"vulns": [expected]}]})
+                self.assertEqual(configuration["vulnerabilities"][record["id"]], record)
+
     def test_osv_service_prefixes_retain_distinct_request_paths(self) -> None:
         record = {"id": "OSV-BENCH-1", "modified": "2026-01-01T00:00:00Z"}
         self.fixtures.osv = {

@@ -75,6 +75,13 @@ and setup commands that warm one service, alternate between services, or return 
 service. The setup commands ignore the fixture advisories so they complete successfully; the
 measured audit still reports the full findings.
 
+`make_osv_modified_fixtures.py --directory DIR` creates matching, missing, malformed, and mismatched
+modification timestamps in query summaries while keeping the full advisory records fixed. Its
+`stale-*` profiles use a past response date to expire HTTP cache entries without a timed sleep. The
+fixture's optional `summary_modified` map overrides the timestamp for each advisory ID; a null value
+omits the field. Use the generated setup commands to populate the record cache before the measured
+audit.
+
 `make_tool_list_fixtures.py --directory DIR --packages N` creates two releases of each of `N`
 console-script packages and commands that install the older releases locally. Set
 `UV_TOOL_DIR={work}/tools` and `UV_TOOL_BIN_DIR={work}/bin` with `--env` to isolate each trial. The

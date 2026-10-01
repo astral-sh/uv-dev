@@ -459,7 +459,13 @@ def osv_query_response(configuration: dict, request: bytes) -> tuple[bytes, dict
                 record = configuration["vulnerabilities"][identifier]
                 if record["id"] != identifier:
                     raise ValueError("OSV fixture vulnerability ID differs")
-                summaries.append({"id": identifier, "modified": record["modified"]})
+                modified = configuration.get("summary_modified", {}).get(
+                    identifier, record["modified"]
+                )
+                summary = {"id": identifier}
+                if modified is not None:
+                    summary["modified"] = modified
+                summaries.append(summary)
         result = {"vulns": summaries}
         if page + 1 < dependency["pages"]:
             result["next_page_token"] = f"{name}:{page + 1}"
