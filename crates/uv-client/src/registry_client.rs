@@ -477,7 +477,8 @@ impl RegistryClient {
                     .await
                     .map(|entries| (position, entries))
             })
-            .buffer_unordered(8)
+            // Each fetch already acquires the shared download semaphore.
+            .buffer_unordered(usize::MAX)
             .try_collect::<Vec<_>>()
             .await?;
         // Retain find-links priority while allowing completed requests to free fetch slots.
@@ -1824,6 +1825,7 @@ mod tests {
     use std::convert::Infallible;
     use std::str::FromStr;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use http_body_util::Full;
@@ -1831,7 +1833,7 @@ mod tests {
     use hyper::service::service_fn;
     use hyper_util::rt::TokioIo;
     use tokio::net::TcpListener;
-    use tokio::sync::{Notify, Semaphore};
+    use tokio::sync::{Barrier, Notify, Semaphore};
     use url::Url;
     use uv_normalize::PackageName;
     use uv_pypi_types::{HashDigest, HashDigests, PypiSimpleDetail};
@@ -1852,6 +1854,95 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type Error = Box<dyn std::error::Error>;
+
+    #[tokio::test]
+    async fn find_links_entries_use_the_shared_download_limit() -> Result<(), Error> {
+        for limit in [1, 2, 9, 50] {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let expected_parallelism = limit.min(18);
+            let barrier = Arc::new(Barrier::new(expected_parallelism));
+            let active = Arc::new(AtomicUsize::new(0));
+            let peak = Arc::new(AtomicUsize::new(0));
+            let requests = Arc::new(AtomicUsize::new(0));
+            let server_peak = Arc::clone(&peak);
+            let server_requests = Arc::clone(&requests);
+            let server = tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    let barrier = Arc::clone(&barrier);
+                    let active = Arc::clone(&active);
+                    let peak = Arc::clone(&server_peak);
+                    let requests = Arc::clone(&server_requests);
+                    tokio::spawn(async move {
+                        let service = service_fn(
+                            move |_request: hyper::Request<hyper::body::Incoming>| {
+                                let barrier = Arc::clone(&barrier);
+                                let active = Arc::clone(&active);
+                                let peak = Arc::clone(&peak);
+                                let requests = Arc::clone(&requests);
+                                async move {
+                                    requests.fetch_add(1, Ordering::SeqCst);
+                                    let concurrent = active.fetch_add(1, Ordering::SeqCst) + 1;
+                                    peak.fetch_max(concurrent, Ordering::SeqCst);
+                                    barrier.wait().await;
+                                    active.fetch_sub(1, Ordering::SeqCst);
+                                    Ok::<_, Infallible>(hyper::Response::new(Full::new(
+                                        Bytes::from_static(
+                                            b"<a href='example-1.0-py3-none-any.whl'>example</a><a href='another-1.0-py3-none-any.whl'>another</a>",
+                                        ),
+                                    )))
+                                }
+                            },
+                        );
+                        hyper::server::conn::http1::Builder::new()
+                            .serve_connection(TokioIo::new(stream), service)
+                            .await
+                    });
+                }
+            });
+            let indexes = (0..18)
+                .map(|position| {
+                    Ok(Index::from_find_links(IndexUrl::from_str(&format!(
+                        "http://{address}/{position}"
+                    ))?))
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+            let expected = indexes
+                .iter()
+                .map(|index| index.url.clone())
+                .collect::<Vec<_>>();
+            let client = RegistryClientBuilder::new(
+                BaseClientBuilder::default().retries(0),
+                Cache::temp()?.init().await?,
+            )
+            .index_locations(IndexLocations::new(Vec::new(), indexes, true))
+            .build()?;
+            let semaphore = Semaphore::new(limit);
+            let first = PackageName::from_str("example")?;
+            let second = PackageName::from_str("another")?;
+            let result = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::try_join!(
+                    client.find_links_entries(&first, &semaphore),
+                    client.find_links_entries(&second, &semaphore),
+                )
+            })
+            .await;
+            server.abort();
+            let (first, second) = result??;
+            for entries in [first, second] {
+                assert_eq!(
+                    entries
+                        .into_iter()
+                        .map(|entry| entry.into_parts().2)
+                        .collect::<Vec<_>>(),
+                    expected,
+                );
+            }
+            assert_eq!(requests.load(Ordering::SeqCst), 18);
+            assert_eq!(peak.load(Ordering::SeqCst), expected_parallelism);
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn find_links_entries_refill_slots_in_priority_order() -> Result<(), Error> {
