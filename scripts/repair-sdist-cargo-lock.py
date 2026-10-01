@@ -14,6 +14,7 @@ See: https://github.com/astral-sh/uv/issues/18824
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -21,7 +22,7 @@ import tempfile
 
 
 def fix_sdist_lockfile(sdist_path: str) -> None:
-    sdist_path = os.path.abspath(sdist_path)
+    sdist_path = os.path.realpath(sdist_path)
     if not tarfile.is_tarfile(sdist_path):
         print(f"Error: {sdist_path} is not a valid tar file", file=sys.stderr)
         sys.exit(1)
@@ -78,8 +79,14 @@ def fix_sdist_lockfile(sdist_path: str) -> None:
 
         # Repack the tarball
         print(f"Repacking {sdist_path}...")
-        with tarfile.open(sdist_path, "w:gz") as tar:
-            tar.add(extracted_dir, arcname=top_level_name)
+        # Keep the input archive intact until its replacement is complete. The
+        # staging directory is adjacent so publication stays on one filesystem.
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(sdist_path)) as staging:
+            staged = os.path.join(staging, os.path.basename(sdist_path))
+            with tarfile.open(staged, "w:gz") as tar:
+                tar.add(extracted_dir, arcname=top_level_name)
+            shutil.copymode(sdist_path, staged)
+            os.replace(staged, sdist_path)
 
     print("Done.")
 
