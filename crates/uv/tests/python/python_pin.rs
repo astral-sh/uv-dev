@@ -852,7 +852,7 @@ async fn python_pin_custom_ndjson_url_does_not_fallback() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Error while fetching remote python downloads NDJSON from 'http://[LOCALHOST]/versions.ndjson'
-      cause: Failed to download http://[LOCALHOST]/versions.ndjson
+      cause: Failed to download `http://[LOCALHOST]/versions.ndjson`
       cause: HTTP status client error (404 Not Found) for url (http://[LOCALHOST]/versions.ndjson)
     ");
 

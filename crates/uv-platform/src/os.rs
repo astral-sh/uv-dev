@@ -12,6 +12,14 @@ impl Os {
         Self(os)
     }
 
+    /// Parse the operating system component of a `cargo-dist` target triple.
+    pub fn from_cargo_dist(os: &str) -> Result<Self, Error> {
+        Self::from_str(match os {
+            "darwin" => "macos",
+            os => os,
+        })
+    }
+
     pub fn from_env() -> Self {
         Self(target_lexicon::HOST.operating_system)
     }
