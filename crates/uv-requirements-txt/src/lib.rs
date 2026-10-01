@@ -46,8 +46,8 @@ use unscanny::{Pattern, Scanner};
 use url::Url;
 
 #[cfg(feature = "http")]
-use uv_client::ClientBuildError;
-use uv_client::{BaseClient, BaseClientBuilder, Connectivity};
+use uv_client::{BaseClient, ClientBuildError};
+use uv_client::{BaseClientBuilder, Connectivity};
 use uv_configuration::{
     NoBinary, NoBuild, PackageNameSpecifier, RequirementsInput, RequirementsInputError,
 };
@@ -68,6 +68,137 @@ mod shquote;
 
 /// A cache of file contents, keyed by input, to avoid re-reading local or remote files.
 pub type SourceCache = FxHashMap<RequirementsInput, String>;
+
+/// Requests shared by one recursive parse. Dropping the parse cancels unused downloads.
+struct SourceRequests {
+    #[cfg(feature = "http")]
+    client: Option<BaseClient>,
+    #[cfg(feature = "http")]
+    pending: FxHashMap<RequirementsInput, PendingSource>,
+    #[cfg(feature = "http")]
+    downloads: std::sync::Arc<tokio::sync::Semaphore>,
+    #[cfg(feature = "http")]
+    max_prefetch: usize,
+}
+
+impl SourceRequests {
+    fn new(_concurrency: usize) -> Self {
+        Self {
+            #[cfg(feature = "http")]
+            client: None,
+            #[cfg(feature = "http")]
+            pending: FxHashMap::default(),
+            #[cfg(feature = "http")]
+            downloads: std::sync::Arc::new(tokio::sync::Semaphore::new(_concurrency)),
+            #[cfg(feature = "http")]
+            max_prefetch: _concurrency,
+        }
+    }
+
+    /// Start a bounded lookahead of explicitly included remote files. The main parser still
+    /// consumes each statement and reports its errors in source order.
+    #[cfg(feature = "http")]
+    fn prefetch(
+        &mut self,
+        lookahead: &mut SourceLookahead<'_>,
+        working_dir: &Path,
+        requirements_txt: &RequirementsInput,
+        visited: &VisitedFiles<'_>,
+        cache: &SourceCache,
+    ) {
+        if lookahead.done || self.max_prefetch < 2 {
+            return;
+        }
+        // A local-only parse never constructs a client. If this is a local root, its first remote
+        // include initializes the shared client before any siblings are prefetched.
+        let Some(client) = self.client.as_ref() else {
+            return;
+        };
+        while self.pending.len() < self.max_prefetch {
+            let Ok(Some(statement)) = parse_entry(
+                &mut lookahead.scanner,
+                lookahead.content,
+                working_dir,
+                requirements_txt,
+            ) else {
+                lookahead.done = true;
+                break;
+            };
+            let (filename, constraint) = match statement {
+                RequirementsTxtStatement::Requirements { filename, .. } => (filename, false),
+                RequirementsTxtStatement::Constraint { filename, .. } => (filename, true),
+                _ => continue,
+            };
+            let filename = expand_env_vars(&filename);
+            let Ok(input) = requirements_txt.resolve(filename.as_ref(), working_dir) else {
+                lookahead.done = true;
+                break;
+            };
+            let RequirementsInput::Remote(url) = &input else {
+                continue;
+            };
+            if cache.contains_key(&input)
+                || self.pending.contains_key(&input)
+                || visited.contains(&input, constraint)
+            {
+                continue;
+            }
+            let url = url.clone();
+            let client = client.clone();
+            let downloads = self.downloads.clone();
+            let task = tokio::spawn(async move {
+                let _permit = downloads.acquire().await.expect("Semaphore is open");
+                read_url_to_string(&url, &client).await
+            });
+            self.pending.insert(input, PendingSource(task));
+        }
+    }
+}
+
+#[cfg(feature = "http")]
+struct SourceLookahead<'a> {
+    content: &'a str,
+    scanner: Scanner<'a>,
+    done: bool,
+}
+
+#[cfg(feature = "http")]
+impl<'a> SourceLookahead<'a> {
+    fn new(content: &'a str) -> Self {
+        // Most requirements files contain no includes, so avoid parsing every requirement twice.
+        let has_includes = content.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("-r")
+                || line.starts_with("-c")
+                || line.starts_with("--requirement")
+                || line.starts_with("--constraint")
+        });
+        Self {
+            content,
+            scanner: Scanner::new(content),
+            done: !has_includes,
+        }
+    }
+}
+
+#[cfg(feature = "http")]
+struct PendingSource(tokio::task::JoinHandle<Result<String, RequirementsTxtParserError>>);
+
+#[cfg(feature = "http")]
+impl PendingSource {
+    async fn resolve(mut self) -> Result<String, RequirementsTxtParserError> {
+        (&mut self.0)
+            .await
+            .map_err(|err| RequirementsTxtParserError::Io(io::Error::other(err)))?
+    }
+}
+
+#[cfg(feature = "http")]
+impl Drop for PendingSource {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 /// We emit one of those for each `requirements.txt` entry.
 enum RequirementsTxtStatement {
@@ -201,7 +332,7 @@ impl RequirementsTxt {
             &requirements_txt,
             working_dir,
             client_builder,
-            &mut None,
+            &mut SourceRequests::new(client_builder.concurrent_downloads()),
             &mut visited,
             cache,
         )
@@ -229,7 +360,7 @@ impl RequirementsTxt {
             content,
             working_dir,
             client_builder,
-            &mut None,
+            &mut SourceRequests::new(client_builder.concurrent_downloads()),
             &requirements_txt,
             &mut visited,
             source_contents,
@@ -247,7 +378,7 @@ impl RequirementsTxt {
         requirements_txt: &RequirementsInput,
         working_dir: impl AsRef<Path>,
         client_builder: &BaseClientBuilder<'_>,
-        client: &mut Option<BaseClient>,
+        requests: &mut SourceRequests,
         visited: &mut VisitedFiles<'_>,
         cache: &mut SourceCache,
     ) -> Result<Self, RequirementsTxtFileError> {
@@ -298,26 +429,42 @@ impl RequirementsTxt {
                                 )),
                             });
                         }
-                        // Nested remote files share the connection pool, while entirely local
-                        // inputs do not need to construct an HTTP client.
-                        let client = match client {
-                            Some(client) => client,
-                            None => client.insert(client_builder.build().map_err(|err| {
+                        if let Some(pending) = requests.pending.remove(requirements_txt) {
+                            pending
+                                .resolve()
+                                .await
+                                .map_err(|error| RequirementsTxtFileError {
+                                    file: Box::new(requirements_txt.clone()),
+                                    error,
+                                })?
+                        } else {
+                            // Nested remote files share the connection pool, while entirely local
+                            // inputs do not need to construct an HTTP client.
+                            let client = &mut requests.client;
+                            let client = match client {
+                                Some(client) => client,
+                                None => client.insert(client_builder.build().map_err(|err| {
+                                    RequirementsTxtFileError {
+                                        file: Box::new(requirements_txt.clone()),
+                                        error: RequirementsTxtParserError::ClientBuild(
+                                            url.clone(),
+                                            Box::new(err),
+                                        ),
+                                    }
+                                })?),
+                            };
+                            let _permit = requests
+                                .downloads
+                                .acquire()
+                                .await
+                                .expect("Semaphore is open");
+                            read_url_to_string(url, client).await.map_err(|err| {
                                 RequirementsTxtFileError {
                                     file: Box::new(requirements_txt.clone()),
-                                    error: RequirementsTxtParserError::ClientBuild(
-                                        url.clone(),
-                                        Box::new(err),
-                                    ),
+                                    error: err,
                                 }
-                            })?),
-                        };
-                        read_url_to_string(url, client).await.map_err(|err| {
-                            RequirementsTxtFileError {
-                                file: Box::new(requirements_txt.clone()),
-                                error: err,
-                            }
-                        })?
+                            })?
+                        }
                     }
                 }
             };
@@ -329,7 +476,7 @@ impl RequirementsTxt {
             &content,
             working_dir,
             client_builder,
-            client,
+            requests,
             requirements_txt,
             visited,
             cache,
@@ -353,15 +500,30 @@ impl RequirementsTxt {
         content: &str,
         working_dir: &Path,
         client_builder: &BaseClientBuilder<'_>,
-        client: &mut Option<BaseClient>,
+        requests: &mut SourceRequests,
         requirements_txt: &RequirementsInput,
         visited: &mut VisitedFiles<'_>,
         cache: &mut SourceCache,
     ) -> Result<Self, RequirementsTxtParserError> {
         let mut s = Scanner::new(content);
 
+        #[cfg(feature = "http")]
+        let mut lookahead = SourceLookahead::new(content);
+
         let mut data = Self::default();
-        while let Some(statement) = parse_entry(&mut s, content, working_dir, requirements_txt)? {
+        loop {
+            #[cfg(feature = "http")]
+            requests.prefetch(
+                &mut lookahead,
+                working_dir,
+                requirements_txt,
+                visited,
+                cache,
+            );
+            let Some(statement) = parse_entry(&mut s, content, working_dir, requirements_txt)?
+            else {
+                break;
+            };
             match statement {
                 RequirementsTxtStatement::Requirements {
                     filename,
@@ -395,7 +557,7 @@ impl RequirementsTxt {
                         &sub_file,
                         working_dir,
                         client_builder,
-                        client,
+                        requests,
                         visited,
                         cache,
                     ))
@@ -458,7 +620,7 @@ impl RequirementsTxt {
                         &sub_file,
                         working_dir,
                         client_builder,
-                        client,
+                        requests,
                         &mut visited,
                         cache,
                     ))
@@ -1456,6 +1618,18 @@ enum VisitedFiles<'a> {
     },
 }
 
+#[cfg(feature = "http")]
+impl VisitedFiles<'_> {
+    fn contains(&self, input: &RequirementsInput, constraint: bool) -> bool {
+        let input = visited_file(input);
+        match self {
+            Self::Requirements { constraints, .. } if constraint => constraints.contains(&input),
+            Self::Requirements { requirements, .. } => requirements.contains(&input),
+            Self::Constraints { constraints } => constraints.contains(&input),
+        }
+    }
+}
+
 /// Return a stable identity for a requirements input without changing the input used to read it.
 fn visited_file(input: &RequirementsInput) -> RequirementsInput {
     match input {
@@ -1510,6 +1684,8 @@ fn calculate_row_column(content: &str, position: usize) -> (usize, usize) {
 #[cfg(test)]
 mod test {
     use std::collections::BTreeSet;
+    #[cfg(feature = "http")]
+    use std::fmt::Write;
     use std::path::{Path, PathBuf};
 
     use anyhow::Result;
@@ -1546,8 +1722,8 @@ mod test {
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await?;
             for (path, body) in [
-                ("/requirements.txt", "-r child.txt\n-c constraints.txt\n"),
-                ("/child.txt", "iniconfig>=2\n"),
+                ("/requirements.txt", "-r child.txt\n"),
+                ("/child.txt", "iniconfig>=2\n-c constraints.txt\n"),
                 ("/constraints.txt", "iniconfig<3\n"),
             ] {
                 let mut request = Vec::new();
@@ -1582,6 +1758,393 @@ mod test {
         assert_eq!(parsed.requirements.len(), 1);
         assert_eq!(parsed.constraints.len(), 1);
         tokio::time::timeout(Duration::from_secs(3), server).await???;
+        Ok(())
+    }
+
+    #[cfg(feature = "http")]
+    #[derive(Clone)]
+    struct SourceResponse {
+        status: u16,
+        body: String,
+        gate: Option<std::sync::Arc<tokio::sync::Semaphore>>,
+    }
+
+    #[cfg(feature = "http")]
+    impl SourceResponse {
+        fn ok(body: impl Into<String>) -> Self {
+            Self {
+                status: 200,
+                body: body.into(),
+                gate: None,
+            }
+        }
+
+        fn held(mut self, gate: &std::sync::Arc<tokio::sync::Semaphore>) -> Self {
+            self.gate = Some(gate.clone());
+            self
+        }
+
+        fn missing(mut self) -> Self {
+            self.status = 404;
+            self
+        }
+    }
+
+    #[cfg(feature = "http")]
+    struct SourceServer {
+        url: uv_redacted::DisplaySafeUrl,
+        requests: tokio::sync::mpsc::UnboundedReceiver<String>,
+        task: tokio::task::JoinHandle<Result<()>>,
+    }
+
+    #[cfg(feature = "http")]
+    async fn source_server(
+        routes: impl IntoIterator<Item = (String, SourceResponse)>,
+        requests: usize,
+    ) -> Result<SourceServer> {
+        use std::sync::Arc;
+
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let routes = Arc::new(
+            routes
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>(),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = uv_redacted::DisplaySafeUrl::parse(&format!(
+            "http://{}/root.txt",
+            listener.local_addr()?
+        ))?;
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            let mut handlers = tokio::task::JoinSet::new();
+            for _ in 0..requests {
+                let (mut stream, _) = listener.accept().await?;
+                let routes = routes.clone();
+                let sender = sender.clone();
+                handlers.spawn(async move {
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        request.push(stream.read_u8().await?);
+                        anyhow::ensure!(request.len() < 16384, "Request headers too large");
+                    }
+                    let request = String::from_utf8(request)?;
+                    let path = request.split_whitespace().nth(1).unwrap();
+                    let response = routes.get(path).expect("Known route");
+                    sender.send(path.to_owned())?;
+                    if let Some(gate) = &response.gate {
+                        gate.acquire().await?.forget();
+                    }
+                    stream
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 {} Response\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                response.status,
+                                response.body.len(),
+                                response.body
+                            )
+                            .as_bytes(),
+                        )
+                        .await?;
+                    Ok::<_, anyhow::Error>(())
+                });
+            }
+            while let Some(result) = handlers.join_next().await {
+                result??;
+            }
+            Ok(())
+        });
+        Ok(SourceServer {
+            url,
+            requests: receiver,
+            task,
+        })
+    }
+
+    #[cfg(feature = "http")]
+    #[test_case(1)]
+    #[test_case(2)]
+    #[test_case(12)]
+    #[tokio::test]
+    async fn remote_include_prefetch_is_bounded(concurrency: usize) -> Result<()> {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use tokio::sync::Semaphore;
+
+        use uv_client::BaseClientBuilder;
+        use uv_configuration::RequirementsInput;
+
+        let gate = Arc::new(Semaphore::new(0));
+        let mut includes = String::new();
+        for index in 0..12 {
+            writeln!(includes, "-r {index}.txt")?;
+        }
+        let mut routes = vec![("/root.txt".to_owned(), SourceResponse::ok(includes))];
+        routes.extend((0..12).map(|i| {
+            (
+                format!("/{i}.txt"),
+                SourceResponse::ok(format!("package-{i}==1\n")).held(&gate),
+            )
+        }));
+        let mut server = source_server(routes, 13).await?;
+        let url = server.url.clone();
+        let parse = tokio::spawn(async move {
+            RequirementsTxt::parse_with_cache(
+                RequirementsInput::Remote(url),
+                Path::new("."),
+                &BaseClientBuilder::default()
+                    .retries(0)
+                    .download_concurrency(concurrency),
+                &mut crate::SourceCache::default(),
+            )
+            .await
+        });
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), server.requests.recv())
+                .await?
+                .as_deref(),
+            Some("/root.txt")
+        );
+        let mut seen = BTreeSet::new();
+        for _ in 0..concurrency {
+            let path = tokio::time::timeout(Duration::from_secs(3), server.requests.recv())
+                .await?
+                .unwrap();
+            assert!(seen.insert(path));
+        }
+        assert_eq!(
+            seen,
+            (0..concurrency)
+                .map(|i| format!("/{i}.txt"))
+                .collect::<BTreeSet<_>>()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), server.requests.recv())
+                .await
+                .is_err()
+        );
+        gate.add_permits(concurrency);
+        if concurrency < 12 {
+            for _ in 0..concurrency.min(12 - concurrency) {
+                let path = tokio::time::timeout(Duration::from_secs(3), server.requests.recv())
+                    .await?
+                    .unwrap();
+                assert!(seen.insert(path));
+            }
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), server.requests.recv())
+                    .await
+                    .is_err()
+            );
+            gate.add_permits(12 - concurrency);
+        }
+        let parsed = tokio::time::timeout(Duration::from_secs(3), parse).await???;
+        let names = parsed
+            .requirements
+            .iter()
+            .map(|entry| entry.requirement.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            (0..12)
+                .map(|i| format!("package-{i}==1"))
+                .collect::<Vec<_>>()
+        );
+        tokio::time::timeout(Duration::from_secs(3), server.task).await???;
+        Ok(())
+    }
+
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn remote_include_prefetch_keeps_error_order() -> Result<()> {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use tokio::sync::Semaphore;
+
+        use uv_client::BaseClientBuilder;
+        use uv_configuration::RequirementsInput;
+
+        let gate = Arc::new(Semaphore::new(0));
+        let mut server = source_server(
+            [
+                (
+                    "/root.txt".to_owned(),
+                    SourceResponse::ok("-r first.txt\n-r second.txt\n"),
+                ),
+                (
+                    "/first.txt".to_owned(),
+                    SourceResponse::ok("").missing().held(&gate),
+                ),
+                ("/second.txt".to_owned(), SourceResponse::ok("").missing()),
+            ],
+            3,
+        )
+        .await?;
+        let url = server.url.clone();
+        let parse = tokio::spawn(async move {
+            RequirementsTxt::parse_with_cache(
+                RequirementsInput::Remote(url),
+                Path::new("."),
+                &BaseClientBuilder::default().retries(0),
+                &mut crate::SourceCache::default(),
+            )
+            .await
+        });
+        let mut seen = BTreeSet::new();
+        for _ in 0..3 {
+            seen.insert(
+                tokio::time::timeout(Duration::from_secs(3), server.requests.recv())
+                    .await?
+                    .unwrap(),
+            );
+        }
+        assert!(seen.contains("/first.txt") && seen.contains("/second.txt"));
+        assert!(!parse.is_finished());
+        gate.add_permits(1);
+        let error = tokio::time::timeout(Duration::from_secs(3), parse)
+            .await??
+            .unwrap_err();
+        let crate::RequirementsTxtParserError::Subfile { source, .. } = &error.error else {
+            panic!("Expected an included-file error: {error}");
+        };
+        assert!(
+            matches!(source.file.as_ref(), RequirementsInput::Remote(url) if url.path() == "/first.txt"),
+            "{error:?}"
+        );
+        tokio::time::timeout(Duration::from_secs(3), server.task).await???;
+        Ok(())
+    }
+
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn local_root_prefetches_remote_includes() -> Result<()> {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use tokio::sync::Semaphore;
+
+        use uv_client::BaseClientBuilder;
+        use uv_configuration::RequirementsInput;
+
+        let gate = Arc::new(Semaphore::new(0));
+        let mut server = source_server(
+            [
+                ("/first.txt".to_owned(), SourceResponse::ok("one==1\n")),
+                (
+                    "/second.txt".to_owned(),
+                    SourceResponse::ok("two==1\n").held(&gate),
+                ),
+                (
+                    "/third.txt".to_owned(),
+                    SourceResponse::ok("three==1\n").held(&gate),
+                ),
+            ],
+            3,
+        )
+        .await?;
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("requirements.txt");
+        let mut content = String::new();
+        for name in ["first.txt", "second.txt", "third.txt"] {
+            writeln!(content, "-r {}", server.url.join(name)?)?;
+        }
+        fs::write(&path, content)?;
+        let parse = tokio::spawn(async move {
+            RequirementsTxt::parse_with_cache(
+                RequirementsInput::Local(path),
+                Path::new("."),
+                &BaseClientBuilder::default().retries(0),
+                &mut crate::SourceCache::default(),
+            )
+            .await
+        });
+        let mut seen = BTreeSet::new();
+        for _ in 0..3 {
+            seen.insert(
+                tokio::time::timeout(Duration::from_secs(3), server.requests.recv())
+                    .await?
+                    .unwrap(),
+            );
+        }
+        assert_eq!(
+            seen,
+            ["/first.txt", "/second.txt", "/third.txt"]
+                .map(str::to_owned)
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        );
+        assert!(!parse.is_finished());
+        gate.add_permits(2);
+        let parsed = tokio::time::timeout(Duration::from_secs(3), parse).await???;
+        assert_eq!(parsed.requirements.len(), 3);
+        tokio::time::timeout(Duration::from_secs(3), server.task).await???;
+        Ok(())
+    }
+
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn remote_include_prefetch_reuses_duplicate_content() -> Result<()> {
+        use std::time::Duration;
+
+        use uv_client::BaseClientBuilder;
+        use uv_configuration::RequirementsInput;
+
+        let server = source_server(
+            [
+                (
+                    "/root.txt".to_owned(),
+                    SourceResponse::ok("-r child.txt\n-c child.txt\n-r child.txt\n"),
+                ),
+                (
+                    "/child.txt".to_owned(),
+                    SourceResponse::ok("iniconfig>=2\n"),
+                ),
+            ],
+            2,
+        )
+        .await?;
+        let parsed = RequirementsTxt::parse_with_cache(
+            RequirementsInput::Remote(server.url),
+            Path::new("."),
+            &BaseClientBuilder::default().retries(0),
+            &mut crate::SourceCache::default(),
+        )
+        .await?;
+        assert_eq!(parsed.requirements.len(), 1);
+        assert_eq!(parsed.constraints.len(), 1);
+        tokio::time::timeout(Duration::from_secs(3), server.task).await???;
+        Ok(())
+    }
+
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn cancelling_remote_include_aborts_its_download() -> Result<()> {
+        use std::time::Duration;
+
+        struct Dropped(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (dropped, cancelled) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _dropped = Dropped(Some(dropped));
+            started.send(()).unwrap();
+            std::future::pending::<Result<String, crate::RequirementsTxtParserError>>().await
+        });
+        let parse = tokio::spawn(crate::PendingSource(task).resolve());
+        ready.await?;
+        parse.abort();
+        assert!(parse.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(3), cancelled).await??;
         Ok(())
     }
 
