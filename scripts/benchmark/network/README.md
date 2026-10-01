@@ -80,7 +80,8 @@ modification timestamps in query summaries while keeping the full advisory recor
 `stale-*` profiles use a past response date to expire HTTP cache entries without a timed sleep. The
 fixture's optional `summary_modified` map overrides the timestamp for each advisory ID; a null value
 omits the field. Use the generated setup commands to populate the record cache before the measured
-audit.
+audit. The record oracle's `--records-revalidate` mode sends conditional requests for unchanged
+cached records and counts their body-free responses in the network bound.
 
 `make_tool_list_fixtures.py --directory DIR --packages N` creates two releases of each of `N`
 console-script packages and commands that install the older releases locally. Set

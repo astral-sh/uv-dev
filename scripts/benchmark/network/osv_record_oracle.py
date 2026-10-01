@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import http.client
 import importlib.util
 import json
@@ -25,7 +26,11 @@ def compact(value: object) -> bytes:
     return json.dumps(value, separators=(",", ":")).encode()
 
 
-def requests(configuration: dict, count: int, cached: bool) -> tuple[list, list]:
+def requests(
+    configuration: dict, count: int, cached: bool, revalidate: bool = False
+) -> tuple[list, list]:
+    if cached and revalidate:
+        raise ValueError("Cached records do not need revalidation")
     queries = osv.requests(configuration, count)
     identifiers: dict[str, set[int]] = {}
     for index, task in enumerate(queries):
@@ -38,23 +43,36 @@ def requests(configuration: dict, count: int, cached: bool) -> tuple[list, list]
             record = configuration["vulnerabilities"][identifier]
             if record["id"] != identifier:
                 raise ValueError("OSV record ID differs from its lookup key")
-            records.append(
-                {
-                    "path": "/v1/vulns/" + identifier,
-                    "expected": compact(record),
-                    "any_parent": parents,
-                }
-            )
+            payload = compact(record)
+            task = {
+                "path": "/v1/vulns/" + identifier,
+                "expected": payload,
+                "any_parent": parents,
+            }
+            if revalidate:
+                task.update(
+                    expected=b"",
+                    status=304,
+                    headers={
+                        "If-None-Match": '"' + hashlib.sha256(payload).hexdigest() + '"'
+                    },
+                )
+            records.append(task)
     return queries, records
 
 
 def lower_bound(
-    configuration: dict, count: int, concurrency: int, profile: dict, cached: bool
+    configuration: dict,
+    count: int,
+    concurrency: int,
+    profile: dict,
+    cached: bool,
+    revalidate: bool = False,
 ) -> tuple[int, int, float]:
     selected = sorted(configuration["dependencies"].items())[:count]
     if len(selected) != count or concurrency < 1:
         raise ValueError("Invalid package count or concurrency")
-    queries, records = requests(configuration, count, cached)
+    queries, records = requests(configuration, count, cached, revalidate)
     results = [
         result for task in queries for result in json.loads(task["expected"])["results"]
     ]
@@ -99,15 +117,24 @@ def main() -> None:
     parser.add_argument("--profile", required=True)
     parser.add_argument("--packages", type=int, default=3001)
     parser.add_argument("--concurrency", type=int, default=50)
-    parser.add_argument("--records-cached", action="store_true")
+    record_mode = parser.add_mutually_exclusive_group()
+    record_mode.add_argument("--records-cached", action="store_true")
+    record_mode.add_argument("--records-revalidate", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     profile = json.loads(args.profiles.read_text())[args.profile]
     fixtures = bench.Fixtures(args.manifest, args.directory, True)
-    queries, records = requests(fixtures.osv, args.packages, args.records_cached)
+    queries, records = requests(
+        fixtures.osv, args.packages, args.records_cached, args.records_revalidate
+    )
     tasks = [*queries, *records]
     required_bytes, waves, latency = lower_bound(
-        fixtures.osv, args.packages, args.concurrency, profile, args.records_cached
+        fixtures.osv,
+        args.packages,
+        args.concurrency,
+        profile,
+        args.records_cached,
+        args.records_revalidate,
     )
     server = bench.Server(fixtures, profile)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -133,10 +160,10 @@ def main() -> None:
                     {"Content-Type": "application/json"},
                 )
             else:
-                connection.request("GET", task["path"])
+                connection.request("GET", task["path"], headers=task.get("headers", {}))
             response = connection.getresponse()
             body = response.read()
-            if response.status == 200 and body == task["expected"]:
+            if response.status == task.get("status", 200) and body == task["expected"]:
                 return
             if attempt == 3 or response.status not in {408, 429, 500, 502, 503, 504}:
                 raise ValueError("OSV response differs from the pinned fixture")
@@ -186,6 +213,7 @@ def main() -> None:
         "packages": args.packages,
         "concurrency": args.concurrency,
         "records_cached": args.records_cached,
+        "records_revalidate": args.records_revalidate,
         "seconds": seconds,
         "required_bytes": required_bytes,
         "required_waves": waves,
@@ -200,7 +228,7 @@ def main() -> None:
         "requests": len(server.events),
         "max_active": bench.maximum_active(server.events),
         "events": server.events,
-        "scope": "Synthetic frozen audit with known direct-URL dependencies and pinned vulnerability records. The optimistic floor permits arbitrary valid batches, overlap, global record deduplication, and full-record cache hits when selected. It excludes retries, request-body transfer, TCP/TLS, headers, and CPU. The realizable reference schedules a bounded dependency graph and retries transient HTTP failures immediately.",
+        "scope": "Synthetic frozen audit with known direct-URL dependencies and pinned vulnerability records. The optimistic floor permits arbitrary valid batches, overlap, global record deduplication, and full-record cache hits or body-free conditional revalidation when selected. It excludes retries, request-body transfer, TCP/TLS, headers, and CPU. The realizable reference schedules a bounded dependency graph and retries transient HTTP failures immediately.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")

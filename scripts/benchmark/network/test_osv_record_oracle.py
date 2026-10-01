@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import unittest
 from pathlib import Path
@@ -69,6 +70,30 @@ class OsvRecordOracleTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "Invalid package count"):
             oracle.lower_bound(self.configuration, 1002, 1, profile, False)
+
+    def test_revalidation_retains_requests_but_excludes_record_bodies(self) -> None:
+        queries, records = oracle.requests(self.configuration, 1001, False, True)
+        self.assertEqual(len(queries), 3)
+        self.assertEqual(len(records), 2)
+        for task in records:
+            identifier = task["path"].removeprefix("/v1/vulns/")
+            payload = oracle.compact(self.configuration["vulnerabilities"][identifier])
+            self.assertEqual(task["status"], 304)
+            self.assertEqual(task["expected"], b"")
+            self.assertEqual(
+                task["headers"],
+                {"If-None-Match": '"' + hashlib.sha256(payload).hexdigest() + '"'},
+            )
+        profile = {"latency_ms": 100}
+        warm_bytes, _, _ = oracle.lower_bound(
+            self.configuration, 1001, 1, profile, True
+        )
+        self.assertEqual(
+            oracle.lower_bound(self.configuration, 1001, 1, profile, False, True),
+            (warm_bytes, 4, 400),
+        )
+        with self.assertRaisesRegex(ValueError, "do not need revalidation"):
+            oracle.requests(self.configuration, 1001, True, True)
 
 
 if __name__ == "__main__":
