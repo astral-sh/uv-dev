@@ -31,6 +31,7 @@ use uv_distribution_types::{
 };
 use uv_errors::{ErrorOptions, Hinted, Hints, write_error_chain_with_options};
 use uv_fs::{Simplified, normalize_path, relative_to};
+use uv_git::GitResolver;
 use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -472,6 +473,7 @@ async fn build_impl(
         }
     }
 
+    let git = GitResolver::default();
     let results: Vec<_> = futures::future::join_all(packages.into_iter().map(|source| {
         let future = build_package(
             source.clone(),
@@ -487,6 +489,7 @@ async fn build_impl(
             workspace_cache,
             printer,
             index_locations,
+            &git,
             client_builder.clone(),
             hash_checking,
             build_logs,
@@ -564,6 +567,7 @@ async fn build_package(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     index_locations: &IndexLocations,
+    git: &GitResolver,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
     build_logs: bool,
@@ -704,7 +708,7 @@ async fn build_package(
     let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
 
     // Initialize any shared state.
-    let state = SharedState::default();
+    let state = SharedState::default().with_git_resolver(git.clone());
 
     let extra_build_requires =
         LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())

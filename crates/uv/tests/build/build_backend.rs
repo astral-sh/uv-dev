@@ -16,6 +16,137 @@ use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
+#[cfg(feature = "test-git")]
+fn workspace_build_reuses_git_references() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(args)
+            .assert()
+            .success();
+    };
+    git(&["init", "--initial-branch=main"]);
+    for (branch, version) in [("main", "1.0.0"), ("alternate", "2.0.0")] {
+        if branch == "alternate" {
+            git(&["checkout", "-b", branch]);
+        }
+        repository
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "uv-git-backend"
+            version = "{version}"
+            requires-python = ">=3.11"
+
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#})?;
+        let backend = format!("BACKEND_VERSION = {version:?}\n")
+            + indoc! {r#"
+                import pathlib
+                import tomllib
+                import zipfile
+
+                def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                    pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+                    project = pyproject["project"]
+                    if project["name"] != "uv-git-backend":
+                        assert pyproject["tool"]["test"]["backend-version"] == BACKEND_VERSION
+                    name = project["name"].replace("-", "_")
+                    version = project["version"]
+                    dist_info = f"{name}-{version}.dist-info"
+                    filename = f"{name}-{version}-py3-none-any.whl"
+                    with zipfile.ZipFile(pathlib.Path(wheel_directory) / filename, "w") as wheel:
+                        wheel.writestr("backend.py", pathlib.Path(__file__).read_bytes())
+                        wheel.writestr(f"{dist_info}/METADATA", f"Metadata-Version: 2.3\nName: {project['name']}\nVersion: {version}\n")
+                        wheel.writestr(f"{dist_info}/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+                        wheel.writestr(f"{dist_info}/RECORD", "")
+                    return filename
+            "#};
+        repository.child("backend.py").write_str(&backend)?;
+        git(&["add", "."]);
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "Create backend",
+        ]);
+    }
+    let repository_url = url::Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["packages/*"]
+    "#})?;
+    for (name, python, branch, version) in [
+        ("alpha", "3.11", "main", "1.0.0"),
+        ("beta", "3.12", "main", "1.0.0"),
+        ("gamma", "3.11", "alternate", "2.0.0"),
+        ("delta", "3.12", "alternate", "2.0.0"),
+    ] {
+        let package = context.temp_dir.child(format!("packages/{name}"));
+        package.child(".python-version").write_str(python)?;
+        package.child("pyproject.toml").write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1.0.0"
+            requires-python = ">=3.11"
+
+            [build-system]
+            requires = ["uv-git-backend @ git+{repository_url}@{branch}"]
+            build-backend = "backend"
+
+            [tool.test]
+            backend-version = "{version}"
+        "#})?;
+    }
+    let trace = context.temp_dir.child("git-trace.jsonl");
+    uv_snapshot!(context.build()
+        .args(["--all-packages", "--wheel", "--no-index", "--quiet"])
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "protocol.file.allow")
+        .env("GIT_CONFIG_VALUE_0", "always")
+        .env("GIT_TRACE2_EVENT", trace.path())
+        .env(EnvVars::UV_NO_GITHUB_FAST_PATH, "1"), @"
+    exit_code: 0 (success)
+    ");
+    for name in ["alpha", "beta", "gamma", "delta"] {
+        assert!(
+            context
+                .temp_dir
+                .child(format!("dist/{name}-1.0.0-py3-none-any.whl"))
+                .path()
+                .is_file()
+        );
+    }
+    let events = fs_err::read_to_string(trace.path())?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let fetches = events
+        .iter()
+        .filter(|event| event["event"] == "cmd_name" && event["name"] == "fetch")
+        .count();
+    assert_eq!(fetches, 2);
+    Ok(())
+}
+
+#[test]
 fn get_requires_for_build_returns_error() {
     let context = uv_test::test_context!("3.12");
 

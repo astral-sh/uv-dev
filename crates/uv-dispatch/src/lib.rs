@@ -687,6 +687,13 @@ pub struct SharedState {
 }
 
 impl SharedState {
+    /// Reuse resolved Git references across independent resolutions and builds.
+    #[must_use]
+    pub fn with_git_resolver(mut self, git: GitResolver) -> Self {
+        self.git = git;
+        self
+    }
+
     /// Fork the [`SharedState`], creating a new in-memory index and in-flight cache.
     ///
     /// State that is universally applicable (like the Git resolver and index capabilities)
