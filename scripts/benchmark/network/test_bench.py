@@ -762,6 +762,63 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 404)
         raised.exception.close()
 
+    @unittest.skipUnless(shutil.which("git"), "Git unavailable")
+    def test_smart_git_http_failures(self) -> None:
+        root = Path(self.directory.name)
+        repository = root / "example.git"
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("GIT_")
+        }
+        env.update(
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_AUTHOR_NAME="uv test",
+            GIT_AUTHOR_EMAIL="uv-test@example.com",
+            GIT_COMMITTER_NAME="uv test",
+            GIT_COMMITTER_EMAIL="uv-test@example.com",
+        )
+
+        def git(*args: str, input: bytes | None = None) -> bytes:
+            return subprocess.check_output(["git", *args], input=input, env=env)
+
+        git("init", "--bare", "--initial-branch=main", str(repository))
+        tree = git("--git-dir", str(repository), "mktree", input=b"").strip().decode()
+        commit = (
+            git("--git-dir", str(repository), "commit-tree", tree, input=b"fixture\n")
+            .strip()
+            .decode()
+        )
+        git("--git-dir", str(repository), "update-ref", "refs/heads/main", commit)
+        server = self.server(
+            {
+                "path_failures": {
+                    "/git/example.git/info/refs": {"status": 403, "count": 1},
+                    "/git/example.git/git-upload-pack": {"status": 503, "count": 1},
+                }
+            },
+            git_root=root,
+        )
+        checkout = root / "checkout"
+        for status in (403, 503):
+            with (
+                self.subTest(status=status),
+                self.assertRaises(subprocess.CalledProcessError),
+            ):
+                git("clone", "--quiet", server.url + "/git/example.git", str(checkout))
+        git("clone", "--quiet", server.url + "/git/example.git", str(checkout))
+        self.assertEqual(
+            git("-C", str(checkout), "rev-parse", "HEAD").decode().strip(), commit
+        )
+        server.wait_idle()
+        failures = [event for event in server.events if event["status"] != 200]
+        self.assertEqual([event["status"] for event in failures], [403, 503])
+        self.assertEqual([event["method"] for event in failures], ["GET", "POST"])
+        self.assertEqual(failures[0]["request_bytes"], 0)
+        self.assertGreater(failures[1]["request_bytes"], 0)
+        self.assertTrue(all(event["bytes"] == 26 for event in failures))
+
     def test_simple_index_alias_keeps_original_request_path(self) -> None:
         self.fixtures.simple["example"] = b'{"name":"example","files":[]}'
         alias = "/indexes/one/example/"

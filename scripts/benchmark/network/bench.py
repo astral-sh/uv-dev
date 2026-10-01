@@ -1014,6 +1014,17 @@ class Handler(BaseHTTPRequestHandler):
             request_sha256=hashlib.sha256(request).hexdigest(),
             git_protocol=self.headers.get("Git-Protocol"),
         )
+        failure = self.server.profile.get("path_failures", {}).get(path, {})
+        if failure.get("status") and event["attempt"] <= failure.get("count", 0):
+            body = b"Injected transient failure"
+            event.update(status=failure["status"], response_length=len(body))
+            self.send_response(failure["status"])
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if not head:
+                self.send_body(io.BytesIO(body).read, len(body), 0, event)
+            return
         env = {
             key: value
             for key, value in os.environ.items()
