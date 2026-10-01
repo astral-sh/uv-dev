@@ -977,24 +977,53 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         client: &ManagedClient<'_>,
     ) -> Result<Revision, Error> {
         let cache_entry = cache_shard.entry(HTTP_REVISION);
+        let freshness = self
+            .build_context
+            .cache()
+            .freshness(&cache_entry, source.name(), source.source_tree())
+            .map_err(Error::CacheRead)?;
+        let cache_control_override = index.and_then(|index| {
+            self.build_context
+                .locations()
+                .artifact_cache_control_for(index)
+        });
+        let expected_size = match source {
+            BuildableSource::Dist(SourceDist::Registry(dist)) if dist.size_is_authoritative => {
+                dist.size()
+            }
+            BuildableSource::Dist(SourceDist::DirectUrl(dist)) => dist.size(),
+            _ => None,
+        };
+
+        // A strong index hash identifies archive bytes that were already validated and extracted.
+        // Reuse that revision even when the artifact's HTTP freshness lifetime has expired. An
+        // explicit refresh or artifact cache policy still goes through normal revalidation.
+        if freshness.is_fresh()
+            && cache_control_override.is_none()
+            && let BuildableSource::Dist(SourceDist::Registry(dist)) = source
+            && dist
+                .file
+                .hashes
+                .iter()
+                .any(|hash| hash.algorithm() != HashAlgorithm::Md5)
+            && let Ok(Some(pointer)) = HttpRevisionPointer::read_from(cache_entry.path())
+        {
+            let revision = pointer.into_revision();
+            if revision.satisfies(ArchiveHashPolicy::All(dist.file.hashes.as_slice()))
+                && revision.satisfies(hashes)
+                && expected_size.is_none_or(|size| revision.size() == Some(size))
+            {
+                debug!("Using source revision with matching index hashes: {source}");
+                return Ok(revision);
+            }
+        }
 
         // Determine the cache control policy for the request.
         let cache_control = match client.unmanaged.connectivity() {
-            Connectivity::Online
-                if let Some(header) = index.and_then(|index| {
-                    self.build_context
-                        .locations()
-                        .artifact_cache_control_for(index)
-                }) =>
-            {
+            Connectivity::Online if let Some(header) = cache_control_override => {
                 CacheControl::Override(header)
             }
-            Connectivity::Online => CacheControl::from(
-                self.build_context
-                    .cache()
-                    .freshness(&cache_entry, source.name(), source.source_tree())
-                    .map_err(Error::CacheRead)?,
-            ),
+            Connectivity::Online => CacheControl::from(freshness),
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
@@ -1043,13 +1072,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 CachedClientError::Client(err) => Error::Client(err),
             })?;
 
-        let expected_size = match source {
-            BuildableSource::Dist(SourceDist::Registry(dist)) if dist.size_is_authoritative => {
-                dist.size()
-            }
-            BuildableSource::Dist(SourceDist::DirectUrl(dist)) => dist.size(),
-            _ => None,
-        };
         if let (Some(expected), Some(actual)) = (expected_size, revision.size())
             && expected != actual
         {
