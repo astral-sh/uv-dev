@@ -72,13 +72,24 @@ if [[ -z "$run_id" ]]; then
     echo "Found latest CI run $run_id"
 fi
 
-# Download all pending-snapshots artifacts from the run
+# Distinguish a run without pending snapshots from a failed artifact download.
+artifact_names="$(gh api --paginate \
+    "repos/$REPO/actions/runs/$run_id/artifacts?per_page=100" \
+    --jq '.artifacts[] | select(.name | startswith("pending-snapshots-")) | .name')"
+if [[ -z "$artifact_names" ]]; then
+    echo "No pending snapshot artifacts found in run $run_id."
+    echo "Either the tests passed or no snapshot mismatches occurred."
+    exit 0
+fi
+
+# Download all pending-snapshots artifacts from the run. A partial download must
+# not be applied, so let GitHub CLI failures stop the script.
 echo "Downloading pending snapshot artifacts..."
 mkdir -p "$DOWNLOAD_DIR"
 gh run download "$run_id" \
     --repo "$REPO" \
     --pattern "pending-snapshots-*" \
-    --dir "$DOWNLOAD_DIR" 2>/dev/null || true
+    --dir "$DOWNLOAD_DIR"
 
 # Check if any artifacts were downloaded
 artifact_count="$(find "$DOWNLOAD_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
