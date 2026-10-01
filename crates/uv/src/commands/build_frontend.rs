@@ -8,13 +8,16 @@ use std::{fmt, io, iter};
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tracing::{debug, instrument};
 
 use uv_auth::CredentialsCache;
 use uv_build_backend::check_direct_build;
 use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, CacheBucket};
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::{
+    BaseClient, BaseClientBuilder, ClientBuildError, RegistryClient, RegistryClientBuilder,
+};
 use uv_configuration::{
     BuildIsolation, BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints,
     DependencyGroupsWithDefaults, DependencyMode, DependencyModifiers, HashCheckingMode,
@@ -35,6 +38,8 @@ use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
+use uv_pep508::MarkerEnvironment;
+use uv_platform_tags::Platform;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{
     ConfigDiscovery, EnvironmentPreference, PythonDownloads, PythonEnvironment, PythonInstallation,
@@ -472,6 +477,7 @@ async fn build_impl(
         }
     }
 
+    let registry_clients = BuildRegistryClients::default();
     let results: Vec<_> = futures::future::join_all(packages.into_iter().map(|source| {
         let future = build_package(
             source.clone(),
@@ -487,6 +493,7 @@ async fn build_impl(
             workspace_cache,
             printer,
             index_locations,
+            &registry_clients,
             client_builder.clone(),
             hash_checking,
             build_logs,
@@ -549,6 +556,40 @@ async fn build_impl(
     }
 }
 
+#[derive(Default)]
+struct BuildRegistryClients(Mutex<Vec<BuildRegistryClient>>);
+
+struct BuildRegistryClient {
+    markers: MarkerEnvironment,
+    platform: Platform,
+    client: BaseClient,
+}
+
+impl BuildRegistryClients {
+    async fn for_interpreter(
+        &self,
+        markers: &MarkerEnvironment,
+        platform: &Platform,
+        builder: RegistryClientBuilder<'_>,
+    ) -> Result<RegistryClient, ClientBuildError> {
+        let mut clients = self.0.lock().await;
+        if let Some(client) = clients
+            .iter()
+            .find(|client| client.markers == *markers && client.platform == *platform)
+        {
+            return builder.wrap_existing(&client.client);
+        }
+
+        let client = builder.build()?;
+        clients.push(BuildRegistryClient {
+            markers: markers.clone(),
+            platform: platform.clone(),
+            client: client.cached_client().uncached().clone(),
+        });
+        Ok(client)
+    }
+}
+
 #[expect(clippy::fn_params_excessive_bools)]
 async fn build_package(
     source: AnnotatedSource<'_>,
@@ -564,6 +605,7 @@ async fn build_package(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     index_locations: &IndexLocations,
+    registry_clients: &BuildRegistryClients,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
     build_logs: bool,
@@ -677,14 +719,20 @@ async fn build_package(
         HashStrategy::default()
     };
 
-    // Initialize the registry client.
-    let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
-        .index_locations(index_locations.clone())
-        .index_strategy(index_strategy)
-        .keyring(keyring_provider)
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
+    // The transport settings are shared by the workspace invocation. Interpreter data is part
+    // of the user agent, so only matching interpreters can share the underlying connections.
+    let client = registry_clients
+        .for_interpreter(
+            interpreter.markers(),
+            interpreter.platform(),
+            RegistryClientBuilder::new(client_builder.clone(), cache.clone())
+                .index_locations(index_locations.clone())
+                .index_strategy(index_strategy)
+                .keyring(keyring_provider)
+                .markers(interpreter.markers())
+                .platform(interpreter.platform()),
+        )
+        .await?;
 
     // Determine whether to enable build isolation.
     let environment;
@@ -1597,5 +1645,133 @@ impl BuildPlan {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+
+    use anyhow::Result;
+    use bytes::Bytes;
+    use http::header::USER_AGENT;
+    use http_body_util::Full;
+    use hyper::body::Incoming;
+    use hyper::service::service_fn;
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+
+    use uv_cache::Cache;
+    use uv_client::{BaseClientBuilder, RegistryClient, RegistryClientBuilder};
+    use uv_pep440::Version;
+    use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
+    use uv_platform_tags::{Arch, Os, Platform};
+    use uv_redacted::DisplaySafeUrl;
+
+    use super::BuildRegistryClients;
+
+    async fn observe(client: &RegistryClient, url: &DisplaySafeUrl) -> Result<Value> {
+        Ok(client
+            .uncached_client(url)
+            .get(url.as_str())
+            .send()
+            .await?
+            .json()
+            .await?)
+    }
+
+    #[tokio::test]
+    async fn workspace_registry_connections_follow_interpreter_identity() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = DisplaySafeUrl::parse(&format!("http://{}", listener.local_addr()?))?;
+        let server = tokio::spawn(async move {
+            let mut connection = 0;
+            while let Ok((stream, _)) = listener.accept().await {
+                connection += 1;
+                tokio::spawn(async move {
+                    let service = service_fn(move |request: hyper::Request<Incoming>| async move {
+                        let user_agent = request
+                            .headers()
+                            .get(USER_AGENT)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default();
+                        let body = json!({"connection": connection, "user_agent": user_agent});
+                        Ok::<_, Infallible>(hyper::Response::new(Full::new(Bytes::from(
+                            body.to_string(),
+                        ))))
+                    });
+                    let _ = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+
+        let markers = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+            implementation_name: "cpython",
+            implementation_version: "3.12.0",
+            os_name: "posix",
+            platform_machine: "x86_64",
+            platform_python_implementation: "CPython",
+            platform_release: "6.0.0",
+            platform_system: "Linux",
+            platform_version: "6.0.0",
+            python_full_version: "3.12.0",
+            python_version: "3.12",
+            sys_platform: "linux",
+        })?;
+        let other_markers = markers
+            .clone()
+            .with_python_full_version(Version::new([3, 12, 1]));
+        let platform = Platform::new(
+            Os::Manylinux {
+                major: 2,
+                minor: 17,
+            },
+            Arch::X86_64,
+        );
+        let other_platform = Platform::new(
+            Os::Manylinux {
+                major: 2,
+                minor: 17,
+            },
+            Arch::Aarch64,
+        );
+        let cache = Cache::temp()?;
+        let clients = BuildRegistryClients::default();
+        let mut observations = Vec::new();
+        for (markers, platform) in [
+            (&markers, &platform),
+            (&markers, &platform),
+            (&other_markers, &platform),
+            (&markers, &other_platform),
+            (&markers, &platform),
+        ] {
+            let client = clients
+                .for_interpreter(
+                    markers,
+                    platform,
+                    RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone())
+                        .markers(markers)
+                        .platform(platform),
+                )
+                .await?;
+            observations.push(observe(&client, &url).await?);
+        }
+        let separate = RegistryClientBuilder::new(BaseClientBuilder::default(), cache)
+            .markers(&markers)
+            .platform(&other_platform)
+            .build()?;
+        let separate = observe(&separate, &url).await?;
+        server.abort();
+
+        assert_eq!(observations[0], observations[1]);
+        assert_eq!(observations[0], observations[4]);
+        assert_ne!(observations[0]["connection"], observations[2]["connection"]);
+        assert_ne!(observations[0]["user_agent"], observations[2]["user_agent"]);
+        assert_ne!(observations[0]["connection"], observations[3]["connection"]);
+        assert_eq!(observations[3]["user_agent"], separate["user_agent"]);
+        Ok(())
     }
 }
