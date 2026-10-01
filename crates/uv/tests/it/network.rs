@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::convert::Infallible;
 use std::future::ready;
 use std::io;
@@ -654,6 +655,108 @@ fn resolver_stops_unused_prefetch() -> Result<()> {
         String::from_utf8(output.stdout)?,
         "choice==15.0\npin==1.0\n"
     );
+    Ok(())
+}
+
+/// Independent OSV batches share the download limit and refill a completed request slot.
+#[tokio::test]
+async fn audit_batches_refill_download_slots() -> Result<()> {
+    let last_started = Arc::new(tokio::sync::Notify::new());
+    let later_release = Arc::new(tokio::sync::Semaphore::new(0));
+    let response_started = last_started.clone();
+    let response_release = later_release.clone();
+    let (started, mut requests) = tokio::sync::mpsc::unbounded_channel();
+    let (server, _guard) = streaming_server(move |request| {
+        let last_started = response_started.clone();
+        let later_release = response_release.clone();
+        let started = started.clone();
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        tokio::spawn(async move {
+            let body = request
+                .into_body()
+                .collect()
+                .await
+                .expect("request body")
+                .to_bytes();
+            let body: serde_json::Value = serde_json::from_slice(&body).expect("request JSON");
+            let queries = body["queries"].as_array().expect("query array");
+            let first = queries[0]["package"]["name"]
+                .as_str()
+                .expect("package name");
+            let _ = started.send(first.to_owned());
+            match first {
+                "package-0" => last_started.notified().await,
+                "package-1000" => later_release
+                    .acquire()
+                    .await
+                    .expect("response gate")
+                    .forget(),
+                "package-2000" => last_started.notify_one(),
+                _ => {}
+            }
+            let response = json!({"results": vec![json!({"vulns": []}); queries.len()]});
+            let _ = sender
+                .send(Ok(Frame::data(Bytes::from(response.to_string()))))
+                .await;
+        });
+        hyper::Response::builder()
+            .header("Content-Type", "application/json")
+            .body(StreamBody::new(ReceiverStream::new(receiver)).boxed())
+    });
+    let concurrency = uv_configuration::Concurrency::new(2, 1, 1, 1);
+    let reserved = concurrency
+        .downloads_semaphore
+        .clone()
+        .acquire_owned()
+        .await?;
+    let service = uv_audit::osv::Osv::new(
+        uv_client::CachedClient::new(uv_client::BaseClientBuilder::default().retries(0).build()?),
+        Some(server.parse()?),
+        concurrency,
+        uv_cache::Cache::temp()?,
+    );
+    let query = tokio::spawn(async move {
+        let dependencies = (0..=2000)
+            .map(|index| {
+                Ok(uv_audit::Dependency::new(
+                    format!("package-{index}").parse()?,
+                    "1.0".parse()?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let identifiers = service
+            .query_identifiers(&dependencies, uv_audit::osv::Filter::All)
+            .await?;
+        assert_eq!(
+            identifiers.keys().copied().collect::<Vec<_>>(),
+            dependencies.iter().collect::<Vec<_>>()
+        );
+        assert!(identifiers.values().all(HashSet::is_empty));
+        Ok::<_, anyhow::Error>(())
+    });
+    let first = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+        .await?
+        .expect("first batch");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), requests.recv())
+            .await
+            .is_err()
+    );
+    drop(reserved);
+    let second = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+        .await?
+        .expect("second batch");
+    let mut initial = [first, second];
+    initial.sort();
+    assert_eq!(initial, ["package-0", "package-1000"]);
+    later_release.add_permits(1);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(3), requests.recv())
+            .await?
+            .as_deref(),
+        Some("package-2000")
+    );
+    tokio::time::timeout(Duration::from_secs(3), query).await???;
     Ok(())
 }
 
