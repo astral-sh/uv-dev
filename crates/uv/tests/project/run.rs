@@ -1117,13 +1117,13 @@ fn run_pep723_script_lock_symlink() -> Result<()> {
     Resolved in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.run().arg("--offline").arg("--locked").arg("linked.py"), @"
+    uv_snapshot!(context.filters(), context.run().arg("--quiet").arg("--offline").arg("--locked").arg("linked.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
     linked.py
     ");
 
-    uv_snapshot!(context.filters(), context.run().arg("--offline").arg("--frozen").arg("linked.py"), @"
+    uv_snapshot!(context.filters(), context.run().arg("--quiet").arg("--offline").arg("--frozen").arg("linked.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
     linked.py
@@ -1170,17 +1170,12 @@ fn run_pep723_script_lock_symlink_relative_source() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
     let lock = context.read("scripts/main.py.lock");
+    assert!(lock.contains(r#"source = { path = "links/ok-1.0.0-py3-none-any.whl" }"#));
 
-    uv_snapshot!(context.filters(), context.run().current_dir(&elsewhere).arg("--offline").arg("--locked").arg("linked.py"), @"
+    uv_snapshot!(context.filters(), context.run().current_dir(&elsewhere).arg("--quiet").arg("--offline").arg("--locked").arg("linked.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
     ok
-
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + ok==1.0.0 (from file://[TEMP_DIR]/scripts/links/ok-1.0.0-py3-none-any.whl)
     ");
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&elsewhere).arg("--offline").arg("--locked").arg("--script").arg("linked.py"), @"
