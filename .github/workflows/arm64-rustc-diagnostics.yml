@@ -15,6 +15,7 @@ on:
           - docker-memory
           - docker-memory-proof
           - gnu-fix
+          - gnu-unrestricted-fix
           - gnu-memory-proof
           - gnu-historical-memory-proof
           - gnu-cpu-memory-proof
@@ -975,3 +976,164 @@ jobs:
           path: results/
           retention-days: 30
           if-no-files-found: error
+
+  gnu-release-unrestricted:
+    if: ${{ inputs.suite == 'gnu-unrestricted-fix' }}
+    continue-on-error: true
+    env:
+      ACTIONS_CACHE_MODE: none
+      # Build the AWS-LC version pinned in Cargo.lock, not a system installation.
+      AWS_LC_SYS_USE_SYSTEM: "0"
+      PACKAGE_NAME: uv
+      MODULE_NAME: uv
+      PYTHON_VERSION: "3.11"
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_TERM_COLOR: always
+      RUSTUP_MAX_RETRIES: 10
+      UV_LOCKED: 1
+
+    name: GNU unrestricted release / ${{ matrix.platform.target }}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: ${{ matrix.platform.pgo && 60 || 30 }}
+    strategy:
+      matrix:
+        platform:
+          # PGO requires a native runner; the 32-bit ARM targets are cross-compiled.
+          - target: aarch64-unknown-linux-gnu
+            arch: aarch64
+            test_image: arm64v8/ubuntu:20.04@sha256:0908a765aeb02fe4e564b543eaed1d77839b7a08de94041e24328b2cb62ac553
+            test_platform: linux/arm64
+            # The instrumented PGO build can exceed 32 GB even with eight CPUs.
+            runner: depot-ubuntu-24.04-arm-16
+            pgo: true
+            # see https://github.com/astral-sh/ruff/issues/3791
+            # and https://github.com/gnzlbg/jemallocator/issues/170#issuecomment-1503228963
+            maturin_docker_options: -e JEMALLOC_SYS_WITH_LG_PAGE=16
+            # Build fails with 2_17 container: https://github.com/astral-sh/uv/actions/runs/20850906093/job/59905482208?pr=17358
+            manylinux: 2_28
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: f6aad0944971859795f675d147d84bc322b036a8
+          persist-credentials: false
+      - name: Verify fix source
+        run: |
+          test "$(git rev-parse HEAD)" = f6aad0944971859795f675d147d84bc322b036a8
+          git rev-parse 'HEAD^{tree}'
+          nproc
+          free -b
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          cache: ""
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: "Prep README.md"
+        run: python scripts/transform_readme.py --target pypi
+
+      # uv
+      - name: "Build wheels"
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          sccache: false
+          maturin-version: v1.15.0
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          docker-options: -e CARGO -e AWS_LC_SYS_USE_SYSTEM ${{ matrix.platform.maturin_docker_options }}
+          args: --release --locked --out dist --features self-update --compatibility pypi
+          before-script-linux: |
+            test "$(nproc)" = 16
+            test -z "${CARGO_BUILD_JOBS:-}"
+            scripts/install-cargo-extensions.sh
+
+            if [[ "${{ matrix.platform.pgo }}" == "true" ]]; then
+                # GNU ld cannot resolve long-range calls in the instrumented ARM64 binary.
+                bundled_lld_dir="$(rustc --print sysroot)/lib/rustlib/${{ matrix.platform.target }}/bin/gcc-ld"
+                test -x "${bundled_lld_dir}/ld.lld"
+                export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C link-arg=-B${bundled_lld_dir} -C link-arg=-fuse-ld=lld"
+
+                rustup component add llvm-tools-preview
+                python${{ env.PYTHON_VERSION }} scripts/build_uv_pgo.py \
+                    --target "${{ matrix.platform.target }}" \
+                    --target-dir "$PWD/target/uv-pgo" \
+                    --train-only
+
+                export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-Cprofile-use=$PWD/target/uv-pgo/uv.profdata"
+            fi
+        env:
+          CARGO: ${{ github.workspace }}/scripts/cargo.sh
+      - name: "Test wheel"
+        uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
+        with:
+          image: ${{ matrix.platform.test_image }}
+          platform: ${{ matrix.platform.test_platform }}
+          artifacts: dist
+          run: |
+            apt-get update
+            apt-get install -y --no-install-recommends python3 python3-pip python-is-python3
+            pip3 install --upgrade --require-hashes -r /pip-requirements.txt
+            pip install ${PACKAGE_NAME} --no-index --find-links /dist --force-reinstall
+            ${MODULE_NAME} --help
+            # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
+            # python -m ${MODULE_NAME} --help
+            uvx --help
+      - name: "Upload wheels"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-wheels-uv-${{ matrix.platform.target }}
+          path: dist
+      - name: "Archive binary"
+        shell: bash
+        run: |
+          ARCHIVE_NAME=uv-$TARGET
+          ARCHIVE_FILE=$ARCHIVE_NAME.tar.gz
+
+          mkdir -p $ARCHIVE_NAME
+          cp target/$TARGET/release/uv $ARCHIVE_NAME/uv
+          cp target/$TARGET/release/uvx $ARCHIVE_NAME/uvx
+          tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
+          shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+        env:
+          TARGET: ${{ matrix.platform.target }}
+      - name: "Upload binary"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-github-archives-${{ matrix.platform.target }}
+          path: |
+            *.tar.gz
+            *.sha256
+
+      # uv-build
+      - name: "Build wheels uv-build"
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          sccache: false
+          maturin-version: v1.15.0
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          docker-options: -e CARGO -e AWS_LC_SYS_USE_SYSTEM ${{ matrix.platform.maturin_docker_options }}
+          args: --profile minimal-size --locked --out crates/uv-build/dist -m crates/uv-build/Cargo.toml --compatibility pypi
+          before-script-linux: |
+            scripts/install-cargo-extensions.sh
+        env:
+          CARGO: ${{ github.workspace }}/scripts/cargo.sh
+      - name: "Test wheel uv-build"
+        uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
+        with:
+          image: ${{ matrix.platform.test_image }}
+          platform: ${{ matrix.platform.test_platform }}
+          artifacts: crates/uv-build/dist
+          run: |
+            apt-get update
+            apt-get install -y --no-install-recommends python3 python3-pip python-is-python3
+            pip3 install --upgrade --require-hashes -r /pip-requirements.txt
+            pip install ${PACKAGE_NAME}_build --no-index --find-links /dist --force-reinstall
+            ${MODULE_NAME}-build --help
+            # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
+            # python -m ${MODULE_NAME}_build --help
+      - name: "Upload wheels uv-build"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-wheels-uv_build-${{ matrix.platform.target }}
+          path: crates/uv-build/dist
