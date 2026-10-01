@@ -125,7 +125,7 @@ def filter_metadata(
     os: str | None,
     version: re.Pattern | None,
 ) -> list[dict]:
-    """Filter the metadata based on name, architecture, and OS, ensuring unique URLs."""
+    """Filter the metadata while retaining distinct expected archive contents."""
     filtered = [
         entry
         for entry in metadata
@@ -134,12 +134,23 @@ def filter_metadata(
         and (not os or entry["os"] == os)
         and (not version or match_version(entry, version))
     ]
-    # Use a set to ensure unique URLs
-    unique_urls = set()
+    # An older or newer revision may omit a checksum for the same URL. Use a
+    # known content identity when available, but retain contradictory checksums
+    # so destination planning can reject them before starting any downloads.
+    known_urls = {
+        entry["url"]
+        for entry in filtered
+        if isinstance(entry["sha256"], str)
+        and re.fullmatch(r"[0-9a-f]{64}", entry["sha256"]) is not None
+    }
+    unique_identities = set()
     unique_filtered = []
     for entry in filtered:
-        if entry["url"] not in unique_urls:
-            unique_urls.add(entry["url"])
+        identity = (entry["url"], entry["sha256"])
+        if entry["sha256"] is None and entry["url"] in known_urls:
+            continue
+        if identity not in unique_identities:
+            unique_identities.add(identity)
             unique_filtered.append(entry)
     return unique_filtered
 
