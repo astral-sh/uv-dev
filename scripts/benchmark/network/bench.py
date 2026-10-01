@@ -790,6 +790,19 @@ class Handler(BaseHTTPRequestHandler):
                 body, status = value, 200
                 content_type = "application/octet-stream"
             is_artifact = isinstance(body, Path)
+            challenge = profile.get("auth_challenges", {}).get(path)
+            if challenge is not None:
+                authenticated = (
+                    self.headers.get("Authorization") == challenge["authorization"]
+                )
+                event["authentication"] = "accepted" if authenticated else "challenge"
+                if not authenticated:
+                    status = challenge.get("status", 401)
+                    if status not in {401, 403, 404}:
+                        raise ValueError("Unsupported authentication challenge status")
+                    body = b"!" * challenge.get("body_bytes", 0)
+                    content_type = "text/plain"
+                    is_artifact = False
             failure = profile.get("path_failures", {}).get(
                 path,
                 {
@@ -868,6 +881,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(length if status != 304 else 0))
+            if event.get("authentication") == "challenge" and status == 401:
+                self.send_header("WWW-Authenticate", 'Basic realm="network-replay"')
             self.send_header(
                 "Cache-Control", profile.get("cache_control", "public, max-age=3600")
             )

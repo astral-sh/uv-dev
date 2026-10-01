@@ -169,6 +169,15 @@ fault; a reverse proxy can translate a backend disconnect into an HTTP error res
 `{"cut_after_bytes": 32, "count": 1}` to truncate a matching successful response after its headers
 and first 32 body bytes. This also applies to index pages and metadata sidecars, whose traces retain
 the advertised response length. Traces identify origin connections, including reuse across requests.
+`auth_challenges` maps exact paths to an expected synthetic `authorization` header, an optional
+`status` of `401`, `403`, or `404`, and `body_bytes`. Requests without that header receive the
+specified error body through the shared bandwidth limiter. Authenticated requests use the normal
+fixture response. Traces record whether authentication was accepted without recording the header.
+`make_auth_challenge_fixtures.py` supplies a pinned wheel and a synthetic netrc file; pass
+`--env NETRC={fixtures}/auth.netrc` to isolate credential lookup. `auth_challenge_oracle.py` retrieves
+the known package after cancelling unfamiliar authentication challenges at their headers. It reports
+both the bound with those challenge waves and the more optimistic bound when credentials can be
+sent on the first request.
 Set `connection_latency_ms` to add a one-time delay after each origin connection is accepted; this
 isolates connection setup costs in application replay. Use kernel network shaping for measurements
 of actual TCP handshakes and packet loss. `multi_index_oracle.py` requests those Simple API paths

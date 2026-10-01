@@ -161,6 +161,54 @@ class ReplayTests(unittest.TestCase):
                 self.assertEqual(self.get(server, header), (206, expected))
         self.assertEqual(self.get(server, "bytes=999999-"), (416, b""))
 
+    def test_authentication_challenge_body_and_retry(self) -> None:
+        authorization = "Basic dXNlcjpwYXNzd29yZA=="
+        for status in (401, 403, 404):
+            with self.subTest(status=status):
+                server = self.server(
+                    {
+                        "auth_challenges": {
+                            "/files/example.whl": {
+                                "authorization": authorization,
+                                "status": status,
+                                "body_bytes": 17,
+                            }
+                        }
+                    }
+                )
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+                try:
+                    connection.request("GET", "/files/example.whl")
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, status)
+                    self.assertEqual(response.read(), b"!" * 17)
+                    if status == 401:
+                        self.assertEqual(
+                            response.getheader("WWW-Authenticate"),
+                            'Basic realm="network-replay"',
+                        )
+                    connection.request(
+                        "GET",
+                        "/files/example.whl",
+                        headers={"Authorization": authorization, "Range": "bytes=0-3"},
+                    )
+                    response = connection.getresponse()
+                    self.assertEqual(
+                        (response.status, response.read()), (206, self.body[:4])
+                    )
+                finally:
+                    connection.close()
+                server.wait_idle()
+                events = sorted(server.events, key=lambda event: event["attempt"])
+                self.assertEqual(
+                    [event["authentication"] for event in events],
+                    ["challenge", "accepted"],
+                )
+                self.assertEqual([event["bytes"] for event in events], [17, 4])
+                self.assertTrue(
+                    all(authorization not in json.dumps(event) for event in events)
+                )
+
     def test_disconnect_before_headers_is_recorded(self) -> None:
         server = self.server(
             {"path_failures": {"/files/example.whl": {"disconnect": True, "count": 1}}}
