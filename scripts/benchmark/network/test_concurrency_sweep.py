@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.util
 import tempfile
 import unittest
@@ -110,8 +111,8 @@ class ConcurrencySweepTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "More than one wheel"):
             sweep.selections(fixtures)
 
-    def test_verifier_uses_recorded_network_and_rejects_drift(self) -> None:
-        data = self.data([1, 50])
+    def verified_data(self, *, warmups=0):
+        data = self.data([1, 16, 50, 100], warmups=warmups)
         data.update(
             kind="download-concurrency-calibration",
             revision="a" * 40,
@@ -134,10 +135,39 @@ class ConcurrencySweepTests(unittest.TestCase):
                 self.binary, None, {}, self.trial, data, self.root / "result.json"
             )
         data["complete"] = True
+        return data
+
+    def test_verifier_uses_recorded_network_and_rejects_drift(self) -> None:
+        data = self.verified_data()
         sweep.verify_calibration(data)
         data["results"]["1"]["pairs"][0]["candidate"]["seconds"] = 2
         with self.assertRaisesRegex(ValueError, "measurements differ"):
             sweep.verify_calibration(data)
+
+    def test_verifier_checks_shuffled_pair_order_after_warmups(self) -> None:
+        for warmups in (0, 1, 3):
+            with self.subTest(warmups=warmups):
+                data = self.verified_data(warmups=warmups)
+                sweep.verify_calibration(data)
+                pair = data["results"]["16"]["pairs"][1]
+                data["results"]["16"]["pairs"][1] = dict(reversed(pair.items()))
+                with self.assertRaisesRegex(ValueError, "run order differs"):
+                    sweep.verify_calibration(data)
+
+    def test_verifier_requires_valid_order_parameters(self) -> None:
+        original = self.verified_data()
+        for key, value in (
+            ("warmups", None),
+            ("warmups", -1),
+            ("warmups", True),
+            ("pairs_per_limit", True),
+            ("order_seed", "42"),
+        ):
+            with self.subTest(key=key, value=value):
+                data = copy.deepcopy(original)
+                data[key] = value
+                with self.assertRaisesRegex(ValueError, "identities or limits differ"):
+                    sweep.verify_calibration(data)
 
 
 if __name__ == "__main__":

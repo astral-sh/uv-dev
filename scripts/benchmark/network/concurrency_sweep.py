@@ -95,12 +95,30 @@ def verify_calibration(data: dict) -> None:
         not re.fullmatch(r"[0-9a-f]{40}", data["revision"])
         or not re.fullmatch(r"[0-9a-f]{64}", data["binary"]["sha256"])
         or data["revision"][:9] not in data["binary"]["version"]
+        or type(data["pairs_per_limit"]) is not int
         or data["pairs_per_limit"] < 2
+        or type(data["warmups"]) is not int
+        or data["warmups"] < 0
+        or type(data["order_seed"]) is not int
         or len(set(data["limits"])) != len(data["limits"])
         or min([data["reference_limit"], *data["limits"]]) < 1
         or set(data["results"]) != {str(limit) for limit in data["limits"]}
     ):
         raise ValueError("Calibration identities or limits differ")
+    order = random.Random(data["order_seed"])
+    for round_number in range(data["warmups"] + data["pairs_per_limit"]):
+        limits = data["limits"].copy()
+        order.shuffle(limits)
+        if round_number < data["warmups"]:
+            continue
+        for position, limit in enumerate(limits):
+            pair_index = round_number - data["warmups"]
+            expected = ["reference", "candidate"]
+            if (round_number + position) % 2:
+                expected.reverse()
+            pairs = data["results"][str(limit)]["pairs"]
+            if pair_index >= len(pairs) or list(pairs[pair_index]) != expected:
+                raise ValueError(f"Calibration run order differs for limit {limit}")
     for limit, result in data["results"].items():
         if (
             len(result["pairs"]) != data["pairs_per_limit"]

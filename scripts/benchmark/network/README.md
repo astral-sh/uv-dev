@@ -176,8 +176,9 @@ retaining each requested path in the trace.
 `concurrency_sweep.py` compares download limits with one pinned source and binary. Give it a
 manifest containing one wheel per selected package, a concrete Python executable, and either the
 `resolve` or `install` workload. Each setting is paired with a fresh reference run, and setting
-order is shuffled from a recorded seed. The results retain byte counts, request traces, output or
-installed-tree equivalence, and an optimistic network bound for the selected protocol strategy.
+order is shuffled from a recorded seed. Verification reconstructs that order, including warmups, and
+checks the recorded order within each pair. The results retain byte counts, request traces, output
+or installed-tree equivalence, and an optimistic network bound for the selected protocol strategy.
 These are exploratory configuration comparisons; selecting a promising limit requires fresh
 confirmation and does not qualify a source optimization. `make_concurrency_fixtures.py` supplies a
 deterministic set of independent wheels for exploring limits above the package count of a smaller
