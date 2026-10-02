@@ -47,7 +47,7 @@ ARTIFACTS = {mode: f"codspeed-profiles-{mode}" for mode in EXECUTORS}
 REQUIRED_MODES = {"simulation", "walltime"}
 SOURCE_JOBS = {
     "simulation": "bench / simulated",
-    "walltime": "bench / walltime on aarch64 linux",
+    "walltime": "bench / walltime on x86_64 linux",
 }
 
 
@@ -58,7 +58,7 @@ def expected_source_jobs(present: set[str]) -> dict[str, str] | None:
     totals = set()
     for name in present:
         if match := re.fullmatch(
-            r"bench / walltime on aarch64 linux \((\d+)/(\d+)\)", name
+            r"bench / walltime on x86_64 linux \((\d+)/(\d+)\)", name
         ):
             index, total = map(int, match.groups())
             shards[index] = name
