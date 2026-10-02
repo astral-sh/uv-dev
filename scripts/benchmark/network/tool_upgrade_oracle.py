@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import http.client
 import importlib.util
 import json
@@ -127,7 +128,7 @@ def main() -> None:
     connections = []
     connection_lock = threading.Lock()
 
-    def fetch(task: dict) -> None:
+    def fetch(task: dict) -> dict:
         if not hasattr(local, "connection"):
             local.connection = http.client.HTTPConnection(
                 "127.0.0.1", server.server_port, timeout=60
@@ -135,15 +136,22 @@ def main() -> None:
             with connection_lock:
                 connections.append(local.connection)
         connection = local.connection
+        started = time.perf_counter() - server.epoch
         for attempt in range(5):
             connection.request("GET", task["path"])
             response = connection.getresponse()
             body = response.read()
             if response.status == 200 and body == task["expected"]:
-                return
+                return {
+                    "started": started,
+                    "completed": time.perf_counter() - server.epoch,
+                    "bytes": len(body),
+                    "sha256": hashlib.sha256(body).hexdigest(),
+                }
             if response.status not in {408, 429, 500, 502, 503, 504} or attempt == 4:
                 raise ValueError(f"Tool-upgrade reference differs: {task['path']}")
 
+    client_transfers = {}
     started = time.perf_counter()
     try:
         waiting, finished, active = set(range(len(tasks))), set(), {}
@@ -164,8 +172,10 @@ def main() -> None:
                     active, return_when=concurrent.futures.FIRST_COMPLETED
                 )
                 for future in completed:
-                    future.result()
-                    finished.add(active.pop(future))
+                    transfer = future.result()
+                    index = active.pop(future)
+                    client_transfers[tasks[index]["path"]] = transfer
+                    finished.add(index)
         seconds = time.perf_counter() - started
     finally:
         for connection in connections:
@@ -187,6 +197,8 @@ def main() -> None:
         "origin_connections": len(
             {event["origin_connection"] for event in server.events}
         ),
+        "client_transfers": dict(sorted(client_transfers.items())),
+        "client_timing_reference": "Seconds from the replay origin's monotonic epoch; completion follows full response-body verification.",
         "events": sorted(server.events, key=lambda event: event["start"]),
         "scope": "Known dependency graph, distinct registry project/index pairs, and full selected wheels. Artifact bodies are fetched once after a referring project page. Metadata sidecars are unnecessary when the full wheel is required. The bound omits connection setup, failures, installation, and local processing; pinned and local-source scenarios use a conservative zero bound.",
     }

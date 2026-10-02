@@ -113,7 +113,14 @@ projects and verify their installed versions.
 distinct known project/index pages and full selected wheels through persistent HTTP/1.1 connections.
 Its optimistic bound includes request-specific latency, dependency paths, and request capacity. It
 excludes connection setup and installation, and does not count optional metadata sidecars when full
-wheels are required. Pinned and local-source scenarios use a conservative zero network bound.
+wheels are required. Pinned and local-source scenarios use a conservative zero network bound. For
+HTTP/2, `tool_upgrade_http2_oracle.py` accepts the same request-graph arguments plus the
+`--http2-proxy`, `--tls-certificate`, `--tls-key`, and `--work-dir` paths. It fetches each
+dependency-ready wave with bounded parallel `curl` transfers and records the negotiated protocol,
+complete-body hashes, and connection counts. Its realizable runtime includes a new connection pool
+and scheduling barrier for each wave; the optimistic bound permits overlap. Both references record
+client-side completion after body verification, so dependency ordering does not rely on origin
+accounting timestamps.
 
 `make_tool_filename_fixtures.py --directory DIR` creates an executable wheel, the equivalent
 normalized source archive, and source-directory and unnamed-archive controls. Its setup commands
