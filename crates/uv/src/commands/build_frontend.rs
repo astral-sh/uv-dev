@@ -8,13 +8,14 @@ use std::{fmt, io, iter};
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tracing::{debug, instrument};
 
 use uv_auth::CredentialsCache;
 use uv_build_backend::check_direct_build;
 use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, CacheBucket};
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, RegistryClientBuilder, SharedSimpleMetadata};
 use uv_configuration::{
     BuildIsolation, BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints,
     DependencyGroupsWithDefaults, DependencyMode, DependencyModifiers, HashCheckingMode,
@@ -35,10 +36,13 @@ use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
+use uv_pep508::MarkerEnvironment;
+use uv_platform_tags::Platform;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, PythonDownloads, PythonEnvironment, PythonInstallation,
-    PythonPreference, PythonRequest, PythonVersionFile, VersionFileDiscoveryOptions,
+    ConfigDiscovery, EnvironmentPreference, Interpreter, PythonDownloads, PythonEnvironment,
+    PythonInstallation, PythonPreference, PythonRequest, PythonVersionFile,
+    VersionFileDiscoveryOptions,
 };
 use uv_requirements::RequirementsSource;
 use uv_resolver::{ExcludeNewer, FlatIndex};
@@ -472,6 +476,7 @@ async fn build_impl(
         }
     }
 
+    let simple_metadata = WorkspaceSimpleMetadata::default();
     let results: Vec<_> = futures::future::join_all(packages.into_iter().map(|source| {
         let future = build_package(
             source.clone(),
@@ -487,6 +492,7 @@ async fn build_impl(
             workspace_cache,
             printer,
             index_locations,
+            &simple_metadata,
             client_builder.clone(),
             hash_checking,
             build_logs,
@@ -549,6 +555,40 @@ async fn build_impl(
     }
 }
 
+/// Raw index metadata for one build command. All request configuration except the interpreter
+/// is fixed by the command; each resolver still applies its own distribution policy.
+#[derive(Default)]
+struct WorkspaceSimpleMetadata(Mutex<Vec<InterpreterSimpleMetadata>>);
+
+struct InterpreterSimpleMetadata {
+    executable: PathBuf,
+    markers: MarkerEnvironment,
+    platform: Platform,
+    metadata: SharedSimpleMetadata,
+}
+
+impl WorkspaceSimpleMetadata {
+    async fn for_interpreter(&self, interpreter: &Interpreter) -> SharedSimpleMetadata {
+        let mut entries = self.0.lock().await;
+        if let Some(entry) = entries.iter().find(|entry| {
+            entry.executable == interpreter.real_executable()
+                && entry.markers == *interpreter.markers()
+                && entry.platform == *interpreter.platform()
+        }) {
+            return entry.metadata.clone();
+        }
+
+        let metadata = SharedSimpleMetadata::default();
+        entries.push(InterpreterSimpleMetadata {
+            executable: interpreter.real_executable().to_path_buf(),
+            markers: interpreter.markers().clone(),
+            platform: interpreter.platform().clone(),
+            metadata: metadata.clone(),
+        });
+        metadata
+    }
+}
+
 #[expect(clippy::fn_params_excessive_bools)]
 async fn build_package(
     source: AnnotatedSource<'_>,
@@ -564,6 +604,7 @@ async fn build_package(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     index_locations: &IndexLocations,
+    simple_metadata: &WorkspaceSimpleMetadata,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
     build_logs: bool,
@@ -684,6 +725,7 @@ async fn build_package(
         .keyring(keyring_provider)
         .markers(interpreter.markers())
         .platform(interpreter.platform())
+        .shared_simple_metadata(simple_metadata.for_interpreter(&interpreter).await)
         .build()?;
 
     // Determine whether to enable build isolation.

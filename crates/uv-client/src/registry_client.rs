@@ -12,7 +12,7 @@ use http::{HeaderMap, StatusCode};
 use itertools::Either;
 use reqwest::{Proxy, Response};
 use rustc_hash::FxHashMap;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tracing::{Instrument, Span, debug, info_span, instrument, trace, warn};
 use url::Url;
 
@@ -59,6 +59,7 @@ pub struct RegistryClientBuilder<'a> {
     cache: Cache,
     base_client_builder: BaseClientBuilder<'a>,
     metadata_range_request: MetadataRangeRequest,
+    simple_metadata: Option<SharedSimpleMetadata>,
 }
 
 impl<'a> RegistryClientBuilder<'a> {
@@ -71,6 +72,7 @@ impl<'a> RegistryClientBuilder<'a> {
             cache,
             base_client_builder: base_client_builder.redirect(RedirectPolicy::RetriggerMiddleware),
             metadata_range_request,
+            simple_metadata: None,
         }
     }
 
@@ -107,6 +109,13 @@ impl<'a> RegistryClientBuilder<'a> {
     #[must_use]
     pub fn cache(mut self, cache: Cache) -> Self {
         self.cache = cache;
+        self
+    }
+
+    /// Share command-scoped remote Simple API results with compatible clients.
+    #[must_use]
+    pub fn shared_simple_metadata(mut self, metadata: SharedSimpleMetadata) -> Self {
+        self.simple_metadata = Some(metadata);
         self
     }
 
@@ -209,6 +218,7 @@ impl<'a> RegistryClientBuilder<'a> {
             client,
             read_timeout,
             flat_indexes: Arc::default(),
+            simple_metadata: self.simple_metadata,
             parse_concurrency: Arc::new(Semaphore::new(
                 thread::available_parallelism().map_or(1, |parallelism| parallelism.get().min(4)),
             )),
@@ -237,6 +247,8 @@ pub struct RegistryClient {
     read_timeout: Duration,
     /// The flat index entries for each `--find-links`-style index URL, with one slot per index.
     flat_indexes: Arc<Mutex<FlatIndexCache>>,
+    /// Command-scoped remote Simple API results, including completed request failures.
+    simple_metadata: Option<SharedSimpleMetadata>,
     /// Bound CPU work for large remote index responses independently of network requests.
     parse_concurrency: Arc<Semaphore>,
     /// Limit decoded input bytes held by offloaded parsers, independently of parsed output size.
@@ -551,39 +563,15 @@ impl RegistryClient {
             // ref https://github.com/servo/rust-url/issues/333
             .push("");
 
-        trace!("Fetching metadata for {package_name} from {url}");
-
-        let cache_entry = self.cache.entry(
-            CacheBucket::Simple,
-            WheelCache::Index(index).root(),
-            format!("{package_name}.rkyv"),
-        );
-        let cache_control = match self.connectivity {
-            Connectivity::Online
-                if let Some(header) = self.indexes.simple_api_cache_control_for(index) =>
-            {
-                CacheControl::Override(header)
-            }
-            Connectivity::Online => CacheControl::from(
-                self.cache
-                    .freshness(&cache_entry, Some(package_name), None)
-                    .map_err(ErrorKind::Io)?,
-            ),
-            Connectivity::Offline => CacheControl::AllowStale,
-        };
-
-        // Acquire an advisory lock, to guard against concurrent writes.
-        #[cfg(windows)]
-        let _lock = {
-            let lock_entry = cache_entry.with_file(format!("{package_name}.lock"));
-            lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
-        };
-
-        let result = if matches!(index, IndexUrl::Path(_)) {
-            self.fetch_local_simple_detail(package_name, &url).await
-        } else {
-            self.fetch_remote_simple_detail(package_name, &url, &cache_entry, cache_control)
+        let result = if let Some(cache) = &self.simple_metadata
+            && !matches!(index, IndexUrl::Path(_))
+        {
+            let slot = cache.get_or_insert(index, package_name).await;
+            slot.get_or_init(|| self.fetch_simple_detail(package_name, index, &url))
                 .await
+                .clone()
+        } else {
+            self.fetch_simple_detail(package_name, index, &url).await
         };
 
         match result {
@@ -615,6 +603,49 @@ impl RegistryClient {
 
                 _ => Err(err),
             },
+        }
+    }
+
+    /// Fetch raw Simple API metadata before applying the caller's index-status policy.
+    async fn fetch_simple_detail(
+        &self,
+        package_name: &PackageName,
+        index: &IndexUrl,
+        url: &DisplaySafeUrl,
+    ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
+        trace!("Fetching metadata for {package_name} from {url}");
+
+        let cache_entry = self.cache.entry(
+            CacheBucket::Simple,
+            WheelCache::Index(index).root(),
+            format!("{package_name}.rkyv"),
+        );
+        let cache_control = match self.connectivity {
+            Connectivity::Online
+                if let Some(header) = self.indexes.simple_api_cache_control_for(index) =>
+            {
+                CacheControl::Override(header)
+            }
+            Connectivity::Online => CacheControl::from(
+                self.cache
+                    .freshness(&cache_entry, Some(package_name), None)
+                    .map_err(ErrorKind::Io)?,
+            ),
+            Connectivity::Offline => CacheControl::AllowStale,
+        };
+
+        // Acquire an advisory lock, to guard against concurrent writes.
+        #[cfg(windows)]
+        let _lock = {
+            let lock_entry = cache_entry.with_file(format!("{package_name}.lock"));
+            lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
+        };
+
+        if matches!(index, IndexUrl::Path(_)) {
+            self.fetch_local_simple_detail(package_name, url).await
+        } else {
+            self.fetch_remote_simple_detail(package_name, url, &cache_entry, cache_control)
+                .await
         }
     }
 
@@ -1052,9 +1083,9 @@ impl RegistryClient {
         tokio::task::spawn_blocking(move || {
             let file = fs_err::File::open(path).map_err(ErrorKind::Io)?;
             let contents = read_archive_metadata(&filename, BufReader::new(file))
-                .map_err(|err| ErrorKind::Metadata(metadata_path, err))?;
+                .map_err(|err| ErrorKind::Metadata(metadata_path, Arc::new(err)))?;
             ResolutionMetadata::parse_metadata(&contents).map_err(|err| {
-                ErrorKind::MetadataParseError(filename, built_dist, Box::new(err)).into()
+                ErrorKind::MetadataParseError(filename, built_dist, Arc::new(err)).into()
             })
         })
         .await
@@ -1132,7 +1163,7 @@ impl RegistryClient {
                         Error::from(ErrorKind::MetadataParseError(
                             filename.clone(),
                             url.to_string(),
-                            Box::new(err),
+                            Arc::new(err),
                         ))
                     })
             };
@@ -1247,7 +1278,7 @@ impl RegistryClient {
                         Error::from(ErrorKind::MetadataParseError(
                             filename.clone(),
                             url.to_string(),
-                            Box::new(err),
+                            Arc::new(err),
                         ))
                     })
                 }
@@ -1319,7 +1350,7 @@ impl RegistryClient {
 
                 read_metadata_async_stream(filename, url.as_ref(), reader)
                     .await
-                    .map_err(|err| ErrorKind::Metadata(url.to_string(), err))
+                    .map_err(|err| ErrorKind::Metadata(url.to_string(), Arc::new(err)))
             }
             .instrument(info_span!("read_metadata_stream", wheel = %filename))
         };
@@ -1384,6 +1415,26 @@ impl FlatIndexCache {
 
 type FlatIndexEntriesByPackage = FxHashMap<PackageName, Vec<FlatIndexEntry>>;
 type FlatIndexSlot = Arc<Mutex<Option<FlatIndexEntriesByPackage>>>;
+
+/// A remote Simple API snapshot for one command with fixed index, credential, interpreter, and
+/// cache settings. Initial requests use the HTTP cache, and local indexes remain live.
+///
+/// Callers must only share this state between clients with identical request configuration.
+#[derive(Default, Debug, Clone)]
+pub struct SharedSimpleMetadata(Arc<Mutex<FxHashMap<(IndexUrl, PackageName), SimpleMetadataSlot>>>);
+
+impl SharedSimpleMetadata {
+    async fn get_or_insert(&self, index: &IndexUrl, package: &PackageName) -> SimpleMetadataSlot {
+        self.0
+            .lock()
+            .await
+            .entry((index.clone(), package.clone()))
+            .or_default()
+            .clone()
+    }
+}
+
+type SimpleMetadataSlot = Arc<OnceCell<Result<OwnedArchive<SimpleDetailMetadata>, Error>>>;
 
 #[derive(Default, Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
@@ -1817,8 +1868,10 @@ impl Connectivity {
 mod tests {
     use std::assert_matches;
     use std::str::FromStr;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use tokio::sync::Semaphore;
+    use tokio::sync::{Notify, Semaphore};
     use url::Url;
     use uv_normalize::PackageName;
     use uv_pypi_types::{HashDigest, HashDigests, PypiSimpleDetail};
@@ -1826,8 +1879,8 @@ mod tests {
     use uv_torch::{TorchBackend, TorchStrategy};
 
     use crate::{
-        BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder,
-        SimpleDetailMetadata, SimpleDetailMetadatum, html::SimpleDetailHTML,
+        BaseClientBuilder, Connectivity, MetadataFormat, RegistryClient, RegistryClientBuilder,
+        SharedSimpleMetadata, SimpleDetailMetadata, SimpleDetailMetadatum, html::SimpleDetailHTML,
     };
     use uv_cache::Cache;
     use uv_distribution_types::{
@@ -1835,8 +1888,8 @@ mod tests {
         IndexUrl, ToUrlError,
     };
     use uv_small_str::SmallString;
-    use wiremock::matchers::{basic_auth, method, path_regex};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::matchers::{basic_auth, method, path, path_regex};
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     type Error = Box<dyn std::error::Error>;
 
@@ -1861,6 +1914,7 @@ mod tests {
         Ok(
             RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
                 .index_locations(IndexLocations::new(vec![], flat_indexes, true))
+                .shared_simple_metadata(SharedSimpleMetadata::default())
                 .build()?,
         )
     }
@@ -1895,6 +1949,247 @@ mod tests {
                 .expect("request recording should be enabled")
                 .is_empty()
         );
+    }
+
+    fn empty_simple_response() -> ResponseTemplate {
+        ResponseTemplate::new(200)
+            .insert_header("Cache-Control", "no-store")
+            .set_body_raw(
+                r#"{"meta":{"api-version":"1.0"},"name":"validation","files":[]}"#,
+                "application/vnd.pypi.simple.v1+json",
+            )
+    }
+
+    #[tokio::test]
+    async fn simple_metadata_snapshot_respects_client_and_index_scope() -> Result<(), Error> {
+        let first = MockServer::start().await;
+        let second = MockServer::start().await;
+        for (server, requests) in [(&first, 4), (&second, 1)] {
+            Mock::given(method("GET"))
+                .and(path("/simple/validation/"))
+                .respond_with(empty_simple_response())
+                .expect(requests)
+                .mount(server)
+                .await;
+        }
+        let first_index = IndexUrl::from_str(&format!("{}/simple", first.uri()))?;
+        let second_index = IndexUrl::from_str(&format!("{}/simple", second.uri()))?;
+        let builder = RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
+            .index_locations(IndexLocations::new(
+                vec![
+                    Index::from_extra_index_url(first_index.clone()),
+                    Index::from_index_url(second_index.clone()),
+                ],
+                vec![],
+                false,
+            ));
+        let shared = SharedSimpleMetadata::default();
+        let client = builder
+            .clone()
+            .shared_simple_metadata(shared.clone())
+            .build()?;
+        let sibling = builder.clone().shared_simple_metadata(shared).build()?;
+        let package = PackageName::from_str("validation")?;
+        let capabilities = IndexCapabilities::default();
+        let concurrency = Semaphore::new(4);
+        for response in futures::future::try_join_all((0..4).map(|member| {
+            let client = if member % 2 == 0 { &client } else { &sibling };
+            client.simple_detail(&package, None, &capabilities, &concurrency)
+        }))
+        .await?
+        {
+            assert_eq!(response.len(), 1);
+            assert_eq!(response[0].0, &first_index);
+        }
+        client
+            .clone()
+            .simple_detail(&package, None, &capabilities, &concurrency)
+            .await?;
+        let explicit = Some(IndexMetadataRef {
+            url: &second_index,
+            format: IndexFormat::Simple,
+        });
+        client
+            .simple_detail(&package, explicit, &capabilities, &concurrency)
+            .await?;
+        builder
+            .clone()
+            .shared_simple_metadata(SharedSimpleMetadata::default())
+            .build()?
+            .simple_detail(&package, None, &capabilities, &concurrency)
+            .await?;
+        let ordinary_client = builder.build()?;
+        for _ in 0..2 {
+            ordinary_client
+                .simple_detail(&package, None, &capabilities, &concurrency)
+                .await?;
+        }
+        first.verify().await;
+        second.verify().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn simple_metadata_snapshot_keeps_credentials_separate() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        let cache = Cache::temp()?;
+        for username in ["alice", "bob"] {
+            Mock::given(method("GET"))
+                .and(path("/simple/validation/"))
+                .and(basic_auth(username, "password"))
+                .respond_with(empty_simple_response())
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut url = Url::parse(&format!("{}/simple", server.uri()))?;
+            assert!(url.set_username(username).is_ok());
+            assert!(url.set_password(Some("password")).is_ok());
+            let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone())
+                .index_locations(IndexLocations::new(
+                    vec![Index::from_index_url(IndexUrl::from_str(url.as_str())?)],
+                    vec![],
+                    false,
+                ))
+                .shared_simple_metadata(SharedSimpleMetadata::default())
+                .build()?;
+            for _ in 0..2 {
+                client
+                    .simple_detail(
+                        &PackageName::from_str("validation")?,
+                        None,
+                        &IndexCapabilities::default(),
+                        &Semaphore::new(1),
+                    )
+                    .await?;
+            }
+        }
+        server.verify().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn simple_metadata_snapshot_shares_terminal_request_errors() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/simple/validation/"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let client = RegistryClientBuilder::new(
+            BaseClientBuilder::default().retries(2).no_retry_delay(true),
+            Cache::temp()?,
+        )
+        .index_locations(IndexLocations::new(
+            vec![Index::from_index_url(IndexUrl::from_str(&format!(
+                "{}/simple",
+                server.uri()
+            ))?)],
+            vec![],
+            false,
+        ))
+        .shared_simple_metadata(SharedSimpleMetadata::default())
+        .build()?;
+        let package = PackageName::from_str("validation")?;
+        let capabilities = IndexCapabilities::default();
+        let concurrency = Semaphore::new(4);
+        let responses = futures::future::join_all(
+            (0..4).map(|_| client.simple_detail(&package, None, &capabilities, &concurrency)),
+        )
+        .await;
+        let errors = responses
+            .into_iter()
+            .map(|response| response.expect_err("the index is unavailable"))
+            .collect::<Vec<_>>();
+        let first = &errors[0];
+        assert_eq!(first.retries(), 2);
+        assert_matches!(first.kind(), crate::ErrorKind::WrappedReqwestError(_, error) if error.status() == Some(reqwest::StatusCode::SERVICE_UNAVAILABLE));
+        for error in &errors[1..] {
+            assert!(std::ptr::eq(first.kind(), error.kind()));
+            assert_eq!(first.to_string(), error.to_string());
+            assert_eq!(first.retries(), error.retries());
+            assert_eq!(first.duration(), error.duration());
+        }
+        server.verify().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn simple_metadata_snapshot_retries_cancelled_initialization() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        let observed = Arc::new(Notify::new());
+        let responder_observed = observed.clone();
+        Mock::given(method("GET"))
+            .and(path("/simple/validation/"))
+            .respond_with(move |_: &Request| {
+                responder_observed.notify_one();
+                empty_simple_response().set_delay(Duration::from_millis(200))
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        let client = RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
+            .shared_simple_metadata(SharedSimpleMetadata::default())
+            .build()?;
+        let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+        let explicit = Some(IndexMetadataRef {
+            url: &index,
+            format: IndexFormat::Simple,
+        });
+        let package = PackageName::from_str("validation")?;
+        let capabilities = IndexCapabilities::default();
+        let concurrency = Semaphore::new(2);
+        let mut pending =
+            Box::pin(client.simple_detail(&package, explicit, &capabilities, &concurrency));
+        let request_started = tokio::select! {
+            _ = &mut pending => false,
+            result = tokio::time::timeout(Duration::from_secs(5), observed.notified()) => {
+                result?;
+                true
+            }
+        };
+        assert!(request_started);
+        drop(pending);
+        client
+            .simple_detail(&package, explicit, &capabilities, &concurrency)
+            .await?;
+        server.verify().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn simple_metadata_snapshot_keeps_local_indexes_live() -> Result<(), Error> {
+        let directory = tempfile::tempdir()?;
+        let package_directory = directory.path().join("validation");
+        fs_err::create_dir(&package_directory)?;
+        let document = package_directory.join("index.html");
+        let index = IndexUrl::parse(directory.path().to_string_lossy().as_ref(), None)?;
+        let client = RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
+            .shared_simple_metadata(SharedSimpleMetadata::default())
+            .build()?;
+        let package = PackageName::from_str("validation")?;
+        let capabilities = IndexCapabilities::default();
+        let concurrency = Semaphore::new(1);
+        for (html, versions) in [
+            ("<html></html>", 0),
+            (r#"<a href="validation-1.0-py3-none-any.whl">wheel</a>"#, 1),
+        ] {
+            fs_err::write(&document, html)?;
+            let response = client
+                .simple_detail(
+                    &package,
+                    Some(IndexMetadataRef {
+                        url: &index,
+                        format: IndexFormat::Simple,
+                    }),
+                    &capabilities,
+                    &concurrency,
+                )
+                .await?;
+            assert_eq!(response.len(), 1);
+            assert_matches!(&response[0].1, MetadataFormat::Simple(metadata) if metadata.versions.len() == versions);
+        }
+        Ok(())
     }
 
     #[tokio::test]

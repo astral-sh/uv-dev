@@ -11,6 +11,8 @@ archive type own the buffer itself. It then provides convenient routines for
 serializing and deserializing.
 */
 
+use std::sync::Arc;
+
 use rkyv::{
     Archive, Deserialize, Portable, Serialize,
     api::high::{HighDeserializer, HighSerializer, HighValidator},
@@ -51,6 +53,7 @@ pub(crate) type Validator<'a> = HighValidator<'a, rancor::Error>;
 /// Constructing the type requires validating the bytes are a valid
 /// representation of an `Archived<A>`, but subsequent accesses (via deref) are
 /// free.
+/// Clones share the immutable, validated byte buffer.
 ///
 /// Note that this type makes a number of assumptions about the specific
 /// serializer, deserializer and validator used. This type could be made
@@ -61,8 +64,17 @@ pub(crate) type Validator<'a> = HighValidator<'a, rancor::Error>;
 /// will likely need to be copied from here.
 #[derive(Debug)]
 pub struct OwnedArchive<A> {
-    raw: AlignedVec,
+    raw: Arc<AlignedVec>,
     archive: std::marker::PhantomData<A>,
+}
+
+impl<A> Clone for OwnedArchive<A> {
+    fn clone(&self) -> Self {
+        Self {
+            raw: self.raw.clone(),
+            archive: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<A> OwnedArchive<A>
@@ -84,7 +96,7 @@ where
         let _ = rkyv::access::<A::Archived, rancor::Error>(&raw)
             .map_err(|e| ErrorKind::ArchiveRead(e.to_string()))?;
         Ok(Self {
-            raw,
+            raw: Arc::new(raw),
             archive: std::marker::PhantomData,
         })
     }
@@ -100,7 +112,7 @@ where
         let raw = rkyv::to_bytes::<rancor::Error>(unarchived)
             .map_err(|e| ErrorKind::ArchiveWrite(e.to_string()))?;
         Ok(Self {
-            raw,
+            raw: Arc::new(raw),
             archive: std::marker::PhantomData,
         })
     }
