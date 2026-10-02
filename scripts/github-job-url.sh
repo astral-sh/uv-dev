@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Print the browser URL of a GitHub Actions job by its exact display name.
+# Print the URL for a named job in the current GitHub Actions run attempt.
 #
-# Usage: bash scripts/github-job-url.sh <job-name>
-# Requires gh, jq, and the GitHub Actions variables GITHUB_SERVER_URL,
-# GITHUB_REPOSITORY, GITHUB_RUN_ID, and GITHUB_RUN_ATTEMPT. Authenticate gh with
-# Actions read access, for example through GH_TOKEN.
+# Usage:
+#   bash scripts/github-job-url.sh <job-name>
 #
-# Search all pages of the current run attempt, including in-progress jobs.
-# Print the unique match's canonical html_url to stdout. If the lookup fails or
-# is ambiguous, warn on stderr and print the run-attempt URL instead.
+# The name must match GitHub's displayed job name, including any reusable
+# workflow prefix. The lookup searches every result page and includes jobs
+# that are still running.
+#
+# Requires `gh`, `jq`, and the GitHub Actions variables `GITHUB_SERVER_URL`,
+# `GITHUB_REPOSITORY`, `GITHUB_RUN_ID`, and `GITHUB_RUN_ATTEMPT`. Authenticate
+# `gh` with Actions read access, for example through `GH_TOKEN`.
+#
+# Writes the matching job URL to stdout. If a unique URL cannot be found,
+# writes a warning to stderr and the run-attempt URL to stdout.
 
 set -euo pipefail
 
