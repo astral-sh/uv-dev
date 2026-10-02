@@ -98,6 +98,22 @@ console-script packages and commands that install the older releases locally. Se
 `latest_index_oracle.py` reference fetches the known Simple API pages through a bounded pool of
 persistent HTTP/1.1 connections. Its bound includes required response bytes and request waves, while
 its measured reference also pays the configured connection delay and records any immediate retries.
+
+`make_tool_upgrade_fixtures.py --directory DIR` creates registry tools with two releases and setup
+commands for real upgrades, current or pinned versions, local sources, and empty or single-tool
+controls. Setup uses an uncached install and transient version constraints, so the timed
+`tool upgrade --all --quiet` can upgrade the recorded unpinned requirements. Use
+`--shared-dependencies` and `--index-groups` to vary dependency overlap and saved index settings.
+The `mixed` scenario alternates Python 3.12 and 3.13; provide both interpreters and pass
+`--no-python-env` to retain each installed tool's interpreter during the measured command. For
+preview tool-lock workloads that require a version change, add explicit
+`--upgrade-package NAME==2.0` constraints for the selected projects and verify their installed
+versions. `tool_upgrade_oracle.py --directory DIR --profile PROFILE --scenario SCENARIO` retrieves
+the distinct known project/index pages and full selected wheels through persistent HTTP/1.1
+connections. Its optimistic bound excludes connection setup and installation, and does not count
+optional metadata sidecars when full wheels are required. Pinned and local-source scenarios use a
+conservative zero network bound.
+
 `make_tool_filename_fixtures.py --directory DIR` creates an executable wheel, the equivalent
 normalized source archive, and source-directory and unnamed-archive controls. Its setup commands
 install each tool with an uncached flat index. Repeating the same archive request measures whether
