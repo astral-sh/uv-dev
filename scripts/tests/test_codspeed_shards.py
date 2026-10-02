@@ -24,7 +24,7 @@ class CodspeedShards(unittest.TestCase):
         for total in (1, 2, 8):
             with self.subTest(total=total):
                 jobs = {
-                    f"bench / walltime on aarch64 linux ({index}/{total})"
+                    f"bench / walltime on x86_64 linux ({index}/{total})"
                     for index in range(1, total + 1)
                 }
                 expected = profiles.expected_source_jobs(jobs | {"bench / simulated"})
@@ -39,14 +39,14 @@ class CodspeedShards(unittest.TestCase):
     def test_partial_or_mixed_shards_are_rejected(self):
         for jobs in (
             set(),
-            {"bench / walltime on aarch64 linux (1/2)"},
+            {"bench / walltime on x86_64 linux (1/2)"},
             {
-                "bench / walltime on aarch64 linux (1/2)",
-                "bench / walltime on aarch64 linux (2/3)",
+                "bench / walltime on x86_64 linux (1/2)",
+                "bench / walltime on x86_64 linux (2/3)",
             },
-            {"bench / walltime on aarch64 linux (0/1)"},
+            {"bench / walltime on x86_64 linux (0/1)"},
             {
-                f"bench / walltime on aarch64 linux ({index}/9)"
+                f"bench / walltime on x86_64 linux ({index}/9)"
                 for index in range(1, 10)
             },
         ):
@@ -70,7 +70,7 @@ class CodspeedShards(unittest.TestCase):
             {"name": "bench / simulated", "conclusion": "success"},
             *(
                 {
-                    "name": f"bench / walltime on aarch64 linux ({index}/2)",
+                    "name": f"bench / walltime on x86_64 linux ({index}/2)",
                     "conclusion": "success",
                 }
                 for index in (1, 2)
