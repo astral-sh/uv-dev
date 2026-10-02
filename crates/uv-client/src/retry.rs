@@ -1,4 +1,6 @@
 use std::error::Error;
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, SystemTimeError};
 use std::{io, iter};
@@ -22,6 +24,36 @@ use uv_redacted::DisplaySafeUrl;
 
 use crate::{RequestBuilder, WrappedReqwestError};
 
+tokio::task_local! {
+    static METADATA_REQUEST_STATE: Arc<MetadataRequestState>;
+}
+
+/// Admission state for independent requests for one registry wheel's metadata.
+#[derive(Debug, Default)]
+pub(crate) struct MetadataRequestState {
+    server_backoff: AtomicBool,
+}
+
+impl MetadataRequestState {
+    pub(crate) async fn scope<F: Future>(self: &Arc<Self>, future: F) -> F::Output {
+        METADATA_REQUEST_STATE.scope(self.clone(), future).await
+    }
+
+    pub(crate) fn independent_allowed(&self) -> bool {
+        !self.server_backoff.load(Ordering::Acquire)
+    }
+
+    fn observe_server_backoff(&self) {
+        self.server_backoff.store(true, Ordering::Release);
+    }
+}
+
+fn observe_metadata_server_backoff() {
+    if let Ok(state) = METADATA_REQUEST_STATE.try_with(Arc::clone) {
+        state.observe_server_backoff();
+    }
+}
+
 /// An extension over [`DefaultRetryableStrategy`] that logs transient request failures and
 /// adds additional retry cases.
 struct UvRetryableStrategy;
@@ -35,6 +67,18 @@ impl RetryableStrategy for UvRetryableStrategy {
 
         // Log on transient errors
         if retryable == Some(Retryable::Transient) {
+            let server_backoff = match res {
+                Ok(response) => {
+                    response.status() == StatusCode::TOO_MANY_REQUESTS
+                        || response.headers().contains_key(RETRY_AFTER)
+                }
+                // Headers are unavailable after an HTTP response becomes an error, so retain
+                // coalescing for status errors that may carry a server-directed delay.
+                Err(error) => request_error_status(error).is_some(),
+            };
+            if server_backoff {
+                observe_metadata_server_backoff();
+            }
             match res {
                 Ok(response) => {
                     debug!(
@@ -296,6 +340,9 @@ impl RetryState {
                         .unwrap_or_else(|_| Duration::default());
 
                     self.total_retries += 1;
+                    if request_error_status(err).is_some() {
+                        observe_metadata_server_backoff();
+                    }
                     return Some(duration);
                 }
 
@@ -501,6 +548,31 @@ fn request_error_url<'a>(err: &'a (dyn Error + 'static)) -> Option<&'a Url> {
             .or_else(|| {
                 err.downcast_ref::<WrappedReqwestError>()
                     .and_then(|err| err.url())
+            })
+    })
+}
+
+/// Find an HTTP status without discarding transparent middleware and I/O wrappers.
+fn request_error_status(err: &(dyn Error + 'static)) -> Option<StatusCode> {
+    iter::successors(Some(err), |&err| {
+        if let Some(io_error) = err.downcast_ref::<io::Error>()
+            && let Some(inner) = io_error.get_ref()
+        {
+            Some(inner as &(dyn Error + 'static))
+        } else {
+            err.source()
+        }
+    })
+    .find_map(|err| {
+        err.downcast_ref::<reqwest::Error>()
+            .and_then(reqwest::Error::status)
+            .or_else(|| {
+                err.downcast_ref::<reqwest_middleware::Error>()
+                    .and_then(reqwest_middleware::Error::status)
+            })
+            .or_else(|| {
+                err.downcast_ref::<WrappedReqwestError>()
+                    .and_then(|err| err.status())
             })
     })
 }
@@ -840,6 +912,49 @@ mod tests {
         );
         regular.abort();
         let _ = regular.await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn metadata_request_admission_respects_server_backoff() -> Result<()> {
+        let server = MockServer::start().await;
+        for (endpoint, response, expected) in [
+            ("/success", ResponseTemplate::new(200), true),
+            ("/failure", ResponseTemplate::new(503), true),
+            ("/rate-limit", ResponseTemplate::new(429), false),
+            (
+                "/retry-after",
+                ResponseTemplate::new(503).insert_header("Retry-After", "1"),
+                false,
+            ),
+        ] {
+            Mock::given(path(endpoint))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let response = Client::new()
+                .get(format!("{}{endpoint}", server.uri()))
+                .send()
+                .await?;
+            let state = Arc::new(MetadataRequestState::default());
+            state
+                .scope(async {
+                    UvRetryableStrategy.handle(&Ok(response));
+                })
+                .await;
+            assert_eq!(state.independent_allowed(), expected);
+            if !expected {
+                let response = http::Response::builder().status(503).body("")?.into();
+                state
+                    .scope(async {
+                        UvRetryableStrategy.handle(&Ok(response));
+                    })
+                    .await;
+                assert!(!state.independent_allowed());
+            }
+        }
+        server.verify().await;
         Ok(())
     }
 
