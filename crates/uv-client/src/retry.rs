@@ -1002,7 +1002,10 @@ mod tests {
         let start = SystemTime::now();
         observer
             .scope(async {
-                assert_eq!(strategy.handle(&failure), Some(Retryable::Transient));
+                assert!(matches!(
+                    strategy.handle(&failure),
+                    Some(Retryable::Transient)
+                ));
                 assert!(matches!(
                     policy.should_retry(start, 0),
                     RetryDecision::Retry { execute_after }

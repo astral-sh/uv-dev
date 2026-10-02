@@ -1510,7 +1510,9 @@ impl RegistryClient {
                                 .into_async_read();
                             return read_metadata_async_stream(filename, url.as_ref(), reader)
                                 .await
-                                .map_err(|err| ErrorKind::Metadata(url.to_string(), err).into());
+                                .map_err(|err| {
+                                    ErrorKind::Metadata(url.to_string(), Arc::new(err)).into()
+                                });
                         }
                         let reader = if initial_range.is_some() {
                             AsyncHttpRangeReader::from_range_response(
