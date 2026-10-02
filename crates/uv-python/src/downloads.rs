@@ -5,6 +5,7 @@ use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, SystemTimeError};
 use std::{env, io};
@@ -15,10 +16,12 @@ use owo_colors::OwoColorize;
 use reqwest::Response;
 use reqwest_retry::RetryError;
 use reqwest_retry::policies::ExponentialBackoff;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader, BufWriter, ReadBuf};
+use tokio::sync::{Mutex, OnceCell};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
 use tracing::{debug, instrument};
@@ -1007,6 +1010,75 @@ enum DownloadListLocation<'a> {
 
 pub struct ManagedPythonDownloadList {
     downloads: Vec<ManagedPythonDownload>,
+}
+
+/// Remote Python download selections for one command with fixed client and cache settings.
+/// Local catalogs are read for each request so changes to their contents remain visible.
+pub struct SharedPythonDownloadCatalog<'a> {
+    pub(crate) client_builder: BaseClientBuilder<'a>,
+    pub(crate) cache: Cache,
+    pub(crate) url: Option<String>,
+    selections: Mutex<FxHashMap<PythonDownloadRequest, DownloadSelection>>,
+}
+
+type DownloadSelection = Arc<OnceCell<Result<Option<ManagedPythonDownload>, Arc<Error>>>>;
+
+impl<'a> SharedPythonDownloadCatalog<'a> {
+    pub fn new(client_builder: BaseClientBuilder<'a>, cache: Cache, url: Option<String>) -> Self {
+        Self {
+            client_builder,
+            cache,
+            url,
+            selections: Mutex::default(),
+        }
+    }
+
+    pub(crate) async fn find(
+        &self,
+        request: &PythonDownloadRequest,
+    ) -> Result<Option<ManagedPythonDownload>, Arc<Error>> {
+        match resolve_download_list_source(self.url.as_deref()).map_err(Arc::new)? {
+            Some(DownloadListSource {
+                location: DownloadListLocation::Http(_),
+                ..
+            }) => {}
+            None
+            | Some(DownloadListSource {
+                location: DownloadListLocation::Path(_),
+                ..
+            }) => {
+                return ManagedPythonDownloadList::find_streaming(
+                    &self.client_builder,
+                    &self.cache,
+                    self.url.as_deref(),
+                    request,
+                )
+                .await
+                .map_err(Arc::new);
+            }
+        }
+
+        let selection = self
+            .selections
+            .lock()
+            .await
+            .entry(request.clone())
+            .or_default()
+            .clone();
+        selection
+            .get_or_init(|| async {
+                ManagedPythonDownloadList::find_streaming(
+                    &self.client_builder,
+                    &self.cache,
+                    self.url.as_deref(),
+                    request,
+                )
+                .await
+                .map_err(Arc::new)
+            })
+            .await
+            .clone()
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -3193,6 +3265,70 @@ mod tests {
                 return request;
             }
         }
+    }
+
+    #[tokio::test]
+    async fn shared_catalog_reads_local_updates() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("downloads.ndjson");
+        let cache = Cache::temp()?.init().await?;
+        let catalog = SharedPythonDownloadCatalog::new(
+            BaseClientBuilder::default(),
+            cache,
+            Some(path.to_string_lossy().into_owned()),
+        );
+        let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu")?;
+        for version in ["3.14.1", "3.14.2"] {
+            fs_err::write(
+                &path,
+                format!(
+                    "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"https://example.com/python.tar.gz\",\"platform\":\"x86_64-unknown-linux-gnu\",\"variant\":\"install_only\"}}]}}\n"
+                ),
+            )?;
+            let download = catalog.find(&request).await?.expect("matching download");
+            assert_eq!(download.key().version().to_string(), version);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_catalog_retries_cancelled_selection() -> anyhow::Result<()> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let (first_requested, first_seen) = tokio::sync::oneshot::channel();
+        let (release_first, wait_for_release) = std::sync::mpsc::sync_channel(0);
+        let server = std::thread::spawn(move || -> anyhow::Result<()> {
+            let (mut first, _) = listener.accept()?;
+            assert!(read_http_request(&mut first).starts_with("GET "));
+            first_requested.send(()).expect("request receiver exists");
+            wait_for_release.recv()?;
+            drop(first);
+            let (mut second, _) = listener.accept()?;
+            assert!(read_http_request(&mut second).starts_with("GET "));
+            second.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")?;
+            Ok(())
+        });
+        let cache = Cache::temp()?.init().await?;
+        let catalog = SharedPythonDownloadCatalog::new(
+            BaseClientBuilder::default().retries(0),
+            cache,
+            Some(format!("http://{address}/downloads.json")),
+        );
+        let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu")?;
+        let mut first = Box::pin(catalog.find(&request));
+        tokio::select! {
+            result = &mut first => anyhow::bail!("selection completed before cancellation: {result:?}"),
+            result = first_seen => result?,
+        }
+        drop(first);
+        release_first.send(())?;
+        assert!(
+            tokio::time::timeout(StdDuration::from_secs(5), catalog.find(&request))
+                .await??
+                .is_none()
+        );
+        server.join().expect("catalog server should not panic")?;
+        Ok(())
     }
 
     /// Parse a request with all of its fields.

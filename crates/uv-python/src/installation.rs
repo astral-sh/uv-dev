@@ -1,8 +1,11 @@
 use std::borrow::Cow;
 use std::fmt;
+use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
+use std::sync::Arc;
 
+use futures::FutureExt;
 use indexmap::IndexMap;
 use ref_cast::RefCast;
 use reqwest_retry::policies::ExponentialBackoff;
@@ -22,7 +25,7 @@ use crate::discovery::{
 };
 use crate::downloads::{
     DownloadResult, ManagedPythonDownload, ManagedPythonDownloadList, PythonDownloadRequest,
-    Reporter,
+    Reporter, SharedPythonDownloadCatalog,
 };
 use crate::implementation::LenientImplementationName;
 use crate::managed::{ManagedPythonInstallation, ManagedPythonInstallations};
@@ -175,7 +178,7 @@ impl PythonInstallation {
     /// Find or fetch a [`PythonInstallation`].
     ///
     /// Unlike [`PythonInstallation::find`], if the required Python is not installed it will be installed automatically.
-    pub async fn find_or_download(
+    pub fn find_or_download(
         request: Option<&PythonRequest>,
         environments: EnvironmentPreference,
         preference: PythonPreference,
@@ -186,6 +189,60 @@ impl PythonInstallation {
         python_install_mirror: Option<&str>,
         pypy_install_mirror: Option<&str>,
         python_downloads_json_url: Option<&str>,
+    ) -> impl Future<Output = Result<Self, Error>> {
+        Self::find_or_download_inner(
+            request,
+            environments,
+            preference,
+            python_downloads,
+            client_builder,
+            cache,
+            reporter,
+            python_install_mirror,
+            pypy_install_mirror,
+            python_downloads_json_url,
+            None,
+        )
+    }
+
+    /// Find or fetch Python while sharing matching remote catalog selections within a command.
+    pub fn find_or_download_with_catalog(
+        request: Option<&PythonRequest>,
+        environments: EnvironmentPreference,
+        preference: PythonPreference,
+        python_downloads: PythonDownloads,
+        catalog: &SharedPythonDownloadCatalog<'_>,
+        reporter: Option<&dyn Reporter>,
+        python_install_mirror: Option<&str>,
+        pypy_install_mirror: Option<&str>,
+    ) -> impl Future<Output = Result<Self, Error>> {
+        Self::find_or_download_inner(
+            request,
+            environments,
+            preference,
+            python_downloads,
+            &catalog.client_builder,
+            &catalog.cache,
+            reporter,
+            python_install_mirror,
+            pypy_install_mirror,
+            catalog.url.as_deref(),
+            Some(catalog),
+        )
+    }
+
+    async fn find_or_download_inner(
+        request: Option<&PythonRequest>,
+        environments: EnvironmentPreference,
+        preference: PythonPreference,
+        python_downloads: PythonDownloads,
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        reporter: Option<&dyn Reporter>,
+        python_install_mirror: Option<&str>,
+        pypy_install_mirror: Option<&str>,
+        python_downloads_json_url: Option<&str>,
+        catalog: Option<&SharedPythonDownloadCatalog<'_>>,
     ) -> Result<Self, Error> {
         let request = request.unwrap_or(&PythonRequest::Default);
 
@@ -224,14 +281,19 @@ impl PythonInstallation {
 
         let download = match download_request.clone().fill() {
             Ok(download_request) => {
-                let download = match ManagedPythonDownloadList::find_streaming(
-                    client_builder,
-                    cache,
-                    python_downloads_json_url,
-                    &download_request,
-                )
-                .await
-                {
+                let selection = if let Some(catalog) = catalog {
+                    catalog.find(&download_request).boxed_local().await
+                } else {
+                    ManagedPythonDownloadList::find_streaming(
+                        client_builder,
+                        cache,
+                        python_downloads_json_url,
+                        &download_request,
+                    )
+                    .await
+                    .map_err(Arc::new)
+                };
+                let download = match selection {
                     Ok(download) => download,
                     Err(err) => {
                         if downloads_enabled || python_downloads_json_url.is_some() {

@@ -36,6 +36,7 @@ use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_preview::{Preview, PreviewFeature};
+use uv_python::downloads::SharedPythonDownloadCatalog;
 use uv_python::{
     ConfigDiscovery, EnvironmentPreference, PythonDownloads, PythonEnvironment, PythonInstallation,
     PythonPreference, PythonRequest, PythonVersionFile, VersionFileDiscoveryOptions,
@@ -472,6 +473,11 @@ async fn build_impl(
         }
     }
 
+    let python_catalog = SharedPythonDownloadCatalog::new(
+        client_builder.clone(),
+        cache.clone(),
+        install_mirrors.python_downloads_json_url.clone(),
+    );
     let results: Vec<_> = futures::future::join_all(packages.into_iter().map(|source| {
         let future = build_package(
             source.clone(),
@@ -486,6 +492,7 @@ async fn build_impl(
             cache,
             workspace_cache,
             printer,
+            &python_catalog,
             index_locations,
             client_builder.clone(),
             hash_checking,
@@ -563,6 +570,7 @@ async fn build_package(
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
+    python_catalog: &SharedPythonDownloadCatalog<'_>,
     index_locations: &IndexLocations,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
@@ -632,17 +640,15 @@ async fn build_package(
     }
 
     // Locate the Python interpreter to use in the environment.
-    let interpreter = PythonInstallation::find_or_download(
+    let interpreter = PythonInstallation::find_or_download_with_catalog(
         interpreter_request.as_ref(),
         EnvironmentPreference::Any,
         python_preference,
         python_downloads,
-        &client_builder,
-        cache,
+        python_catalog,
         Some(&PythonDownloadReporter::single(printer)),
         install_mirrors.python_install_mirror.as_deref(),
         install_mirrors.pypy_install_mirror.as_deref(),
-        install_mirrors.python_downloads_json_url.as_deref(),
     )
     .await?
     .into_interpreter();

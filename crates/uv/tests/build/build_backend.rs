@@ -14,6 +14,140 @@ use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
+
+fn python_catalog_workspace(context: &uv_test::TestContext) -> Result<()> {
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["packages/*"]
+    "#})?;
+    for name in ["first", "second", "third"] {
+        context
+            .temp_dir
+            .child(format!("packages/{name}/pyproject.toml"))
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1.0.0"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+        "#})?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn workspace_build_python_catalog_selections_are_shared() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_managed_python_dirs()
+        .without_python_download_cache();
+    python_catalog_workspace(&context)?;
+    for (name, version) in [
+        ("first", "3.99.1"),
+        ("second", "3.99.1"),
+        ("third", "3.99.2"),
+    ] {
+        context
+            .temp_dir
+            .child(format!("packages/{name}/.python-version"))
+            .write_str(version)?;
+    }
+
+    for (catalog, body, content_type) in [
+        ("downloads.json", "{}", "application/json"),
+        ("downloads.ndjson", "", "application/x-ndjson"),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/{catalog}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("cache-control", "no-store")
+                    .set_body_raw(body, content_type),
+            )
+            .expect(4)
+            .mount(&server)
+            .await;
+
+        allow_duplicates! {
+            for _ in 0..2 {
+                uv_snapshot!(context.filters(), context
+                    .build()
+                    .arg("--all-packages")
+                    .arg("--wheel")
+                    .arg("--quiet")
+                    .arg("--no-cache")
+                    .arg("--python-preference").arg("only-managed")
+                    .env(EnvVars::UV_PYTHON_DOWNLOADS, "never")
+                    .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, format!("{}/{catalog}", server.uri())), @"
+                exit_code: 2 (failure)
+                ----- stderr -----
+                error: Failed to build `first @ [TEMP_DIR]/packages/first`
+                  cause: No interpreter found for Python 3.99.1 in virtual environments or managed installations
+                error: Failed to build `second @ [TEMP_DIR]/packages/second`
+                  cause: No interpreter found for Python 3.99.1 in virtual environments or managed installations
+                error: Failed to build `third @ [TEMP_DIR]/packages/third`
+                  cause: No interpreter found for Python 3.99.2 in virtual environments or managed installations
+                ");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn workspace_build_python_catalog_errors_are_shared() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_managed_python_dirs()
+        .without_python_download_cache();
+    python_catalog_workspace(&context)?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/downloads.json"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    allow_duplicates! {
+        for _ in 0..2 {
+            uv_snapshot!(context.filters(), context
+                .build()
+                .arg("--all-packages")
+                .arg("--wheel")
+                .arg("--quiet")
+                .arg("--no-cache")
+                .arg("--python").arg("3.99.1")
+                .arg("--python-preference").arg("only-managed")
+                .env(EnvVars::UV_HTTP_RETRIES, "0")
+                .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, format!("{}/downloads.json", server.uri())), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Failed to build `first @ [TEMP_DIR]/packages/first`
+              cause: Error while fetching remote python downloads json from 'http://[LOCALHOST]/downloads.json'
+              cause: Failed to fetch: `http://[LOCALHOST]/downloads.json`
+              cause: HTTP status server error (503 Service Unavailable) for url (http://[LOCALHOST]/downloads.json)
+            error: Failed to build `second @ [TEMP_DIR]/packages/second`
+              cause: Error while fetching remote python downloads json from 'http://[LOCALHOST]/downloads.json'
+              cause: Failed to fetch: `http://[LOCALHOST]/downloads.json`
+              cause: HTTP status server error (503 Service Unavailable) for url (http://[LOCALHOST]/downloads.json)
+            error: Failed to build `third @ [TEMP_DIR]/packages/third`
+              cause: Error while fetching remote python downloads json from 'http://[LOCALHOST]/downloads.json'
+              cause: Failed to fetch: `http://[LOCALHOST]/downloads.json`
+              cause: HTTP status server error (503 Service Unavailable) for url (http://[LOCALHOST]/downloads.json)
+            ");
+        }
+    }
+    Ok(())
+}
 
 #[test]
 fn get_requires_for_build_returns_error() {

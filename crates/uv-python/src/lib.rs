@@ -1,4 +1,6 @@
 //! Find requested Python interpreters and query interpreters for information.
+use std::sync::Arc;
+
 use thiserror::Error;
 
 #[cfg(test)]
@@ -86,7 +88,7 @@ pub enum Error {
     ManagedPython(#[from] managed::Error),
 
     #[error(transparent)]
-    Download(#[from] downloads::Error),
+    Download(#[from] Arc<downloads::Error>),
 
     #[error(transparent)]
     ClientBuild(#[from] uv_client::ClientBuildError),
@@ -196,6 +198,12 @@ impl Error {
 impl From<PythonNotFound> for Error {
     fn from(err: PythonNotFound) -> Self {
         Self::MissingPython(err, None)
+    }
+}
+
+impl From<downloads::Error> for Error {
+    fn from(err: downloads::Error) -> Self {
+        Self::Download(Arc::new(err))
     }
 }
 
