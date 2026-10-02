@@ -162,7 +162,7 @@ impl<E: Into<Self> + std::error::Error + 'static> From<CachedClientError<E>> for
                 retries,
                 err,
                 duration,
-            } => Self::new(err.into().into_kind(), retries, duration),
+            } => err.into().with_retry_context(retries, duration),
         }
     }
 }

@@ -1,6 +1,7 @@
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_http_range_reader::AsyncHttpRangeReaderError;
@@ -125,9 +126,10 @@ impl ProblemDetails {
     }
 }
 
-#[derive(Debug)]
+/// A request failure whose cause can be shared without losing retry diagnostics.
+#[derive(Debug, Clone)]
 pub struct Error {
-    kind: Box<ErrorKind>,
+    kind: Arc<ErrorKind>,
     retries: u32,
     duration: Duration,
 }
@@ -151,7 +153,7 @@ impl Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         if self.retries > 0 {
-            Some(&self.kind)
+            Some(self.kind.as_ref())
         } else {
             self.kind.source()
         }
@@ -198,28 +200,24 @@ impl Error {
     }
 
     /// Create a new [`Error`] with the given [`ErrorKind`] and number of retries.
-    pub fn new(kind: ErrorKind, retries: u32, duration: Duration) -> Self {
+    pub(crate) fn new(kind: ErrorKind, retries: u32, duration: Duration) -> Self {
         Self {
-            kind: Box::new(kind),
+            kind: Arc::new(kind),
             retries,
             duration,
         }
     }
 
     /// Return the number of retries that were attempted before this error was returned.
-    pub fn retries(&self) -> u32 {
+    pub(crate) fn retries(&self) -> u32 {
         self.retries
     }
 
     /// Return the time taken for network requests, including retries, backoff and jitter,
     /// before this error was returned.
-    pub fn duration(&self) -> Duration {
+    #[cfg(test)]
+    pub(crate) fn duration(&self) -> Duration {
         self.duration
-    }
-
-    /// Convert this error into an [`ErrorKind`].
-    pub fn into_kind(self) -> ErrorKind {
-        *self.kind
     }
 
     /// Return the [`ErrorKind`] of this error.
@@ -229,6 +227,12 @@ impl Error {
 
     pub(crate) fn with_retries(mut self, retries: u32) -> Self {
         self.retries = retries;
+        self
+    }
+
+    pub(crate) fn with_retry_context(mut self, retries: u32, duration: Duration) -> Self {
+        self.retries = retries;
+        self.duration = duration;
         self
     }
 
@@ -430,7 +434,7 @@ impl Hinted for Error {
 impl From<ErrorKind> for Error {
     fn from(kind: ErrorKind) -> Self {
         Self {
-            kind: Box::new(kind),
+            kind: Arc::new(kind),
             retries: 0,
             duration: Duration::default(),
         }
@@ -458,7 +462,7 @@ pub enum ErrorKind {
     CannotBeABase(DisplaySafeUrl),
 
     #[error("Failed to read metadata: `{0}`")]
-    Metadata(String, #[source] uv_metadata::Error),
+    Metadata(String, #[source] Arc<uv_metadata::Error>),
 
     #[error("{0} isn't available locally, but making network requests to registries was banned")]
     NoIndex(String),
@@ -493,7 +497,7 @@ pub enum ErrorKind {
     MetadataParseError(
         WheelFilename,
         String,
-        #[source] Box<uv_pypi_types::MetadataError>,
+        #[source] Arc<uv_pypi_types::MetadataError>,
     ),
 
     /// An error that happened while making a request or in a reqwest middleware.

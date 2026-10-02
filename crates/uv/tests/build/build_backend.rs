@@ -16,7 +16,7 @@ use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
 use uv_test::packse::{generate_wheel, mount_mismatched_distribution};
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -171,6 +171,187 @@ async fn workspace_build_range_capabilities_are_shared() -> Result<()> {
     ");
     server.verify().await;
     range_server.verify().await;
+    Ok(())
+}
+
+async fn workspace_build_wheel_fixture(status: u16) -> Result<(TestContext, MockServer)> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filter((r"\[(alpha|beta|delta|gamma)\]", "[PKG]"));
+    let (filename, wheel) = generate_wheel(
+        &"build-dependency".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let hash = hex::encode(Sha256::digest(&wheel));
+    let context = context.with_filter((hash.clone(), "[BUILD_HASH]"));
+    let server = MockServer::start().await;
+    let wheel_url = format!("{}/files/{filename}", server.uri());
+    Mock::given(method("GET"))
+        .and(path("/simple/build-dependency/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-store")
+                .set_body_raw(
+                    serde_json::json!({
+                        "meta": { "api-version": "1.0" },
+                        "name": "build-dependency",
+                        "files": [{
+                            "filename": filename,
+                            "url": wheel_url,
+                            "hashes": { "sha256": hash },
+                            "core-metadata": true,
+                            "upload-time": "2024-03-01T00:00:00Z",
+                        }],
+                    })
+                    .to_string(),
+                    "application/vnd.pypi.simple.v1+json",
+                ),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}.metadata")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-store")
+                .set_body_string("Metadata-Version: 2.3\nName: build-dependency\nVersion: 1.0.0\n"),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/files/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(status)
+                .insert_header("Cache-Control", "no-store")
+                .set_body_bytes(wheel)
+                .set_delay(Duration::from_millis(25)),
+        )
+        // A completed wheel can also be reused through the command's temporary cache.
+        .expect(1..=2)
+        .mount(&server)
+        .await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["packages/*"]
+    "#})?;
+    for (name, python) in [
+        ("alpha", "3.11"),
+        ("beta", "3.11"),
+        ("gamma", "3.12"),
+        ("delta", "3.12"),
+    ] {
+        let package = context.temp_dir.child(format!("packages/{name}"));
+        package.child(".python-version").write_str(python)?;
+        package.child("pyproject.toml").write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1.0.0"
+            requires-python = ">=3.11"
+
+            [build-system]
+            requires = ["build-dependency==1.0.0"]
+            build-backend = "backend"
+            backend-path = ["."]
+        "#})?;
+        let (output_filename, output_wheel) = generate_wheel(
+            &name.parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        package
+            .child(&output_filename)
+            .write_binary(&output_wheel)?;
+        package.child("backend.py").write_str(&formatdoc! {r#"
+            import shutil
+            from pathlib import Path
+            import build_dependency
+
+            assert build_dependency.__version__ == "1.0.0"
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                source = Path(__file__).with_name("{output_filename}")
+                shutil.copyfile(source, Path(wheel_directory) / source.name)
+                return source.name
+        "#})?;
+    }
+
+    Ok((context, server))
+}
+
+#[tokio::test]
+async fn workspace_build_wheel_downloads_are_shared() -> Result<()> {
+    let (context, server) = workspace_build_wheel_fixture(200).await?;
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--all-packages")
+        .arg("--wheel")
+        .arg("--no-build-logs")
+        .arg("--index-url")
+        .arg(format!("{}/simple", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    Successfully built dist/alpha-1.0.0-py3-none-any.whl
+    Successfully built dist/beta-1.0.0-py3-none-any.whl
+    Successfully built dist/delta-1.0.0-py3-none-any.whl
+    Successfully built dist/gamma-1.0.0-py3-none-any.whl
+    ");
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn workspace_build_wheel_download_errors_are_shared() -> Result<()> {
+    let (context, server) = workspace_build_wheel_fixture(403).await?;
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--all-packages")
+        .arg("--wheel")
+        .arg("--no-build-logs")
+        .arg("--index-url")
+        .arg(format!("{}/simple", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    error: Failed to build `alpha @ [TEMP_DIR]/packages/alpha`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to download `build-dependency==1.0.0`
+      cause: Failed to fetch: `http://[LOCALHOST]/files/build_dependency-1.0.0-py3-none-any.whl`
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/files/build_dependency-1.0.0-py3-none-any.whl)
+    error: Failed to build `beta @ [TEMP_DIR]/packages/beta`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to download `build-dependency==1.0.0`
+      cause: Failed to fetch: `http://[LOCALHOST]/files/build_dependency-1.0.0-py3-none-any.whl`
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/files/build_dependency-1.0.0-py3-none-any.whl)
+    error: Failed to build `delta @ [TEMP_DIR]/packages/delta`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to download `build-dependency==1.0.0`
+      cause: Failed to fetch: `http://[LOCALHOST]/files/build_dependency-1.0.0-py3-none-any.whl`
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/files/build_dependency-1.0.0-py3-none-any.whl)
+    error: Failed to build `gamma @ [TEMP_DIR]/packages/gamma`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to download `build-dependency==1.0.0`
+      cause: Failed to fetch: `http://[LOCALHOST]/files/build_dependency-1.0.0-py3-none-any.whl`
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/files/build_dependency-1.0.0-py3-none-any.whl)
+    ");
+    server.verify().await;
     Ok(())
 }
 

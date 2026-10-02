@@ -3,6 +3,7 @@ pub use installer::{Installer, Reporter as InstallReporter};
 pub use plan::{IncompatibleWheelError, Plan, Planner};
 pub use preparer::{Error as PrepareError, Preparer, Reporter as PrepareReporter};
 pub use satisfies::BuildSettings;
+pub use shared_wheels::SharedWheelDownloads;
 pub use site_packages::{
     InstallationStrategy, SatisfiesResult, SitePackages, SitePackagesDiagnostic,
 };
@@ -14,5 +15,6 @@ mod preparer;
 mod installer;
 mod plan;
 mod satisfies;
+mod shared_wheels;
 mod site_packages;
 mod uninstall;

@@ -1,4 +1,6 @@
 use std::error::Error;
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, SystemTimeError};
 use std::{io, iter};
@@ -15,12 +17,52 @@ use reqwest_retry::{
     default_on_request_error, default_on_request_success,
 };
 use rustls::{AlertDescription, Error as RustlsError};
+use tokio::sync::Notify;
 use tracing::{debug, trace};
 use url::Url;
 
 use uv_redacted::DisplaySafeUrl;
 
 use crate::{RequestBuilder, WrappedReqwestError};
+
+tokio::task_local! {
+    static METADATA_RETRY_OBSERVER: Arc<MetadataRetryObserver>;
+}
+
+/// A delayed metadata retry after which independent callers may proceed.
+///
+/// Rate limits and explicit server backoff do not release waiting callers.
+#[derive(Debug, Default)]
+pub(crate) struct MetadataRetryObserver {
+    observed: AtomicBool,
+    notify: Notify,
+}
+
+impl MetadataRetryObserver {
+    pub(crate) async fn scope<F: Future>(self: &Arc<Self>, future: F) -> F::Output {
+        METADATA_RETRY_OBSERVER.scope(self.clone(), future).await
+    }
+
+    pub(crate) async fn notified(&self) {
+        let notified = self.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.observed.load(Ordering::Acquire) {
+            notified.await;
+        }
+    }
+
+    fn notify(&self) {
+        self.observed.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+}
+
+fn notify_metadata_retry() {
+    if let Ok(observer) = METADATA_RETRY_OBSERVER.try_with(Arc::clone) {
+        observer.notify();
+    }
+}
 
 /// An extension over [`DefaultRetryableStrategy`] that logs transient request failures and
 /// adds additional retry cases.
@@ -102,6 +144,7 @@ impl Middleware for UvRetryMiddleware {
 enum RetryAdvice {
     After(SystemTime),
     TransportFailure,
+    RetryableStatus,
 }
 
 struct RetryAdvicePolicy {
@@ -125,7 +168,17 @@ impl RetryPolicy for RetryAdvicePolicy {
                 Some(RetryAdvice::TransportFailure) if past_retries == 0 => RetryDecision::Retry {
                     execute_after: SystemTime::now(),
                 },
-                Some(RetryAdvice::TransportFailure) | None => decision,
+                Some(RetryAdvice::TransportFailure | RetryAdvice::RetryableStatus) => {
+                    // Independent metadata callers can help while a request backs off. An
+                    // immediate transport retry and an exhausted retry budget need no recovery.
+                    if let RetryDecision::Retry { execute_after } = &decision
+                        && *execute_after > SystemTime::now()
+                    {
+                        notify_metadata_retry();
+                    }
+                    decision
+                }
+                None => decision,
             },
         }
     }
@@ -146,6 +199,11 @@ impl RetryableStrategy for RetryAdviceStrategy {
                     retry_after(response.headers(), now, self.max_delay)
                         .and_then(|delay| now.checked_add(delay))
                         .map(RetryAdvice::After)
+                        .or_else(|| {
+                            (response.status() != StatusCode::TOO_MANY_REQUESTS
+                                && !response.headers().contains_key(RETRY_AFTER))
+                            .then_some(RetryAdvice::RetryableStatus)
+                        })
                 }
                 Err(err) if !has_status_error(err) => Some(RetryAdvice::TransportFailure),
                 Err(_) => None,
@@ -296,6 +354,9 @@ impl RetryState {
                         .unwrap_or_else(|_| Duration::default());
 
                     self.total_retries += 1;
+                    if execute_after > SystemTime::now() && request_error_status(err).is_none() {
+                        notify_metadata_retry();
+                    }
                     return Some(duration);
                 }
 
@@ -505,6 +566,31 @@ fn request_error_url<'a>(err: &'a (dyn Error + 'static)) -> Option<&'a Url> {
     })
 }
 
+/// Find an HTTP status without discarding transparent middleware and I/O wrappers.
+fn request_error_status(err: &(dyn Error + 'static)) -> Option<StatusCode> {
+    iter::successors(Some(err), |&err| {
+        if let Some(io_error) = err.downcast_ref::<io::Error>()
+            && let Some(inner) = io_error.get_ref()
+        {
+            Some(inner as &(dyn Error + 'static))
+        } else {
+            err.source()
+        }
+    })
+    .find_map(|err| {
+        err.downcast_ref::<reqwest::Error>()
+            .and_then(reqwest::Error::status)
+            .or_else(|| {
+                err.downcast_ref::<reqwest_middleware::Error>()
+                    .and_then(reqwest_middleware::Error::status)
+            })
+            .or_else(|| {
+                err.downcast_ref::<WrappedReqwestError>()
+                    .and_then(|err| err.status())
+            })
+    })
+}
+
 /// Find the first source error of a specific type, including errors wrapped by [`io::Error`].
 ///
 /// Inspired by <https://github.com/seanmonstar/reqwest/issues/1602#issuecomment-1220996681>
@@ -614,7 +700,11 @@ mod tests {
             strategy.handle(&Ok(response)),
             Some(Retryable::Transient)
         ));
-        assert!(advice.lock().unwrap().is_none());
+        assert!(
+            advice
+                .lock()
+                .is_ok_and(|advice| matches!(advice.as_ref(), Some(RetryAdvice::RetryableStatus)))
+        );
         assert!(
             matches!(policy.should_retry(now, 0), RetryDecision::Retry { execute_after } if execute_after.duration_since(now).unwrap() >= Duration::from_secs(2))
         );
@@ -840,6 +930,137 @@ mod tests {
         );
         regular.abort();
         let _ = regular.await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn metadata_retry_observer_respects_server_backoff() -> Result<()> {
+        let server = MockServer::start().await;
+        for (endpoint, response, expected) in [
+            ("/success", ResponseTemplate::new(200), false),
+            ("/failure", ResponseTemplate::new(503), true),
+            ("/rate-limit", ResponseTemplate::new(429), false),
+            (
+                "/retry-after",
+                ResponseTemplate::new(503).insert_header("Retry-After", "1"),
+                false,
+            ),
+        ] {
+            Mock::given(path(endpoint))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let response = Client::new()
+                .get(format!("{}{endpoint}", server.uri()))
+                .send()
+                .await?;
+            let observer = Arc::new(MetadataRetryObserver::default());
+            let advice = Arc::new(Mutex::new(None));
+            let policy = RetryAdvicePolicy {
+                policy: ExponentialBackoff::builder()
+                    .jitter(reqwest_retry::Jitter::None)
+                    .retry_bounds(Duration::from_secs(60), Duration::from_secs(60))
+                    .build_with_max_retries(1),
+                advice: advice.clone(),
+            };
+            let strategy = RetryAdviceStrategy {
+                max_delay: Duration::from_secs(60),
+                advice,
+            };
+            observer
+                .scope(async {
+                    if strategy.handle(&Ok(response)) == Some(Retryable::Transient) {
+                        let _ = policy.should_retry(SystemTime::now(), 0);
+                    }
+                })
+                .await;
+            assert_eq!(observer.observed.load(Ordering::Acquire), expected);
+        }
+        server.verify().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn metadata_retry_observer_waits_for_transport_backoff() -> Result<()> {
+        let observer = Arc::new(MetadataRetryObserver::default());
+        let advice = Arc::new(Mutex::new(None));
+        let policy = RetryAdvicePolicy {
+            policy: ExponentialBackoff::builder()
+                .jitter(reqwest_retry::Jitter::None)
+                .retry_bounds(Duration::from_secs(60), Duration::from_secs(60))
+                .build_with_max_retries(2),
+            advice: advice.clone(),
+        };
+        let strategy = RetryAdviceStrategy {
+            max_delay: Duration::from_secs(60),
+            advice,
+        };
+        let failure = Err(reqwest_middleware::Error::Reqwest(
+            disconnected_request_error().await?,
+        ));
+        let start = SystemTime::now();
+        observer
+            .scope(async {
+                assert_eq!(strategy.handle(&failure), Some(Retryable::Transient));
+                assert!(matches!(
+                    policy.should_retry(start, 0),
+                    RetryDecision::Retry { execute_after }
+                        if execute_after.duration_since(start).is_ok_and(|delay| delay < Duration::from_secs(1))
+                ));
+                assert!(!observer.observed.load(Ordering::Acquire));
+
+                strategy.handle(&failure);
+                assert!(matches!(
+                    policy.should_retry(start, 1),
+                    RetryDecision::Retry { execute_after }
+                        if execute_after.duration_since(start).is_ok_and(|delay| delay >= Duration::from_secs(60))
+                ));
+                assert!(observer.observed.load(Ordering::Acquire));
+            })
+            .await;
+
+        let exhausted = Arc::new(MetadataRetryObserver::default());
+        exhausted
+            .scope(async {
+                strategy.handle(&failure);
+                assert!(matches!(
+                    policy.should_retry(start, 2),
+                    RetryDecision::DoNotRetry
+                ));
+            })
+            .await;
+        assert!(!exhausted.observed.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn metadata_retry_observer_waits_for_response_backoff() -> Result<()> {
+        let url = Url::parse("https://example.com/metadata")?;
+        let failure = io::Error::new(io::ErrorKind::UnexpectedEof, "short metadata body");
+        for (delay, retries, retry_expected, observation_expected) in [
+            (Duration::ZERO, 1, true, false),
+            (Duration::from_secs(60), 1, true, true),
+            (Duration::from_secs(60), 0, false, false),
+        ] {
+            let observer = Arc::new(MetadataRetryObserver::default());
+            let mut state = RetryState::start(
+                ExponentialBackoff::builder()
+                    .jitter(reqwest_retry::Jitter::None)
+                    .retry_bounds(delay, delay)
+                    .build_with_max_retries(retries),
+                url.clone(),
+            );
+            observer
+                .scope(async {
+                    assert_eq!(state.should_retry(&failure, 0).is_some(), retry_expected);
+                })
+                .await;
+            assert_eq!(
+                observer.observed.load(Ordering::Acquire),
+                observation_expected
+            );
+        }
         Ok(())
     }
 
