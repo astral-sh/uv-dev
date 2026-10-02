@@ -2499,7 +2499,7 @@ fn compile_git_unnamed_concurrent_access() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn compile_git_mismatched_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_link_mode_warning();
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in
         .write_str("flask @ git+https://github.com/pallets/flask.git@2.0.0\ndask @ git+https://github.com/pallets/flask.git@3.0.0")?;
