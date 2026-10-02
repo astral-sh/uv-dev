@@ -559,6 +559,15 @@ pub struct IndexCapabilities {
 }
 
 impl IndexCapabilities {
+    /// Reuse artifact-origin capabilities with independent index access diagnostics.
+    #[must_use]
+    pub fn fork(&self) -> Self {
+        Self {
+            no_range_requests: self.no_range_requests.clone(),
+            ..Self::default()
+        }
+    }
+
     /// Returns `true` if the artifact's origin is expected to support range requests.
     pub fn supports_range_requests(&self, url: &DisplaySafeUrl) -> bool {
         !self
@@ -655,6 +664,31 @@ mod tests {
         assert!(capabilities.supports_range_requests(&other_host));
         assert!(capabilities.supports_range_requests(&other_port));
         assert!(capabilities.supports_range_requests(&other_scheme));
+    }
+
+    #[test]
+    fn fork_shares_range_capabilities_without_index_access_diagnostics()
+    -> Result<(), Box<dyn Error>> {
+        let capabilities = IndexCapabilities::default();
+        let index = IndexUrl::from_str("https://index.example.com/simple")?;
+        let first = DisplaySafeUrl::parse("https://files.example.com/first.whl")?;
+        let second = DisplaySafeUrl::parse("https://cdn.example.com/second.whl")?;
+        capabilities.set_no_range_requests(&first);
+        capabilities.set_unauthorized(index.clone());
+
+        let fork = capabilities.fork();
+        assert!(!fork.supports_range_requests(&first));
+        assert!(!fork.unauthorized(&index));
+        assert!(!fork.forbidden(&index));
+
+        fork.set_no_range_requests(&second);
+        fork.set_forbidden(index.clone());
+        assert!(!capabilities.supports_range_requests(&second));
+        assert!(capabilities.unauthorized(&index));
+        assert!(!capabilities.forbidden(&index));
+        assert!(!fork.unauthorized(&index));
+        assert!(fork.forbidden(&index));
+        Ok(())
     }
 
     fn index_urls<'a>(indexes: impl IntoIterator<Item = &'a Index>) -> Vec<&'a str> {

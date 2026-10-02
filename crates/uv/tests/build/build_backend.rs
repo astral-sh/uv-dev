@@ -6,6 +6,8 @@ use fs_err::File;
 use futures::io::AllowStdIo;
 use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_json_snapshot, assert_snapshot};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::io::BufReader;
 use std::path::Path;
 use std::process::Command;
@@ -13,7 +15,162 @@ use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
 use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
+use uv_test::packse::{generate_wheel, mount_mismatched_distribution};
 use uv_test::{uv_snapshot, venv_bin_path};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[tokio::test]
+async fn workspace_build_range_capabilities_are_shared() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filter((r"\[(alpha|beta)\]", "[PKG]"));
+    let server = MockServer::start().await;
+    let range_server = MockServer::start().await;
+
+    for name in ["build-first", "build-second", "build-third"] {
+        let (filename, wheel) = generate_wheel(
+            &name.parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        let file_path = format!("/files/{filename}");
+        let origin = if name == "build-third" {
+            range_server.uri()
+        } else {
+            server.uri()
+        };
+        Mock::given(method("GET"))
+            .and(path(format!("/simple/{name}/")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(
+                    serde_json::json!({
+                        "meta": { "api-version": "1.0" },
+                        "name": name,
+                        "files": [{
+                            "filename": filename,
+                            "url": format!("{origin}{file_path}"),
+                            "hashes": { "sha256": hex::encode(Sha256::digest(&wheel)) },
+                            "upload-time": "2024-03-01T00:00:00Z",
+                        }],
+                    })
+                    .to_string(),
+                    "application/vnd.pypi.simple.v1+json",
+                ),
+            )
+            .mount(&server)
+            .await;
+
+        if name == "build-third" {
+            mount_mismatched_distribution(
+                &range_server,
+                &file_path,
+                &filename,
+                wheel.clone(),
+                wheel,
+            )
+            .await;
+        } else {
+            Mock::given(method("HEAD"))
+                .and(path(&file_path))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.clone()))
+                .expect(u64::from(name == "build-first"))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(&file_path))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+                .expect(1..)
+                .mount(&server)
+                .await;
+        }
+    }
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["packages/*"]
+    "#})?;
+    for (name, python, requires) in [
+        ("alpha", "3.11", r#"["build-first==1.0.0"]"#),
+        ("beta", "3.12", "[]"),
+    ] {
+        let package = context.temp_dir.child(format!("packages/{name}"));
+        package.child(".python-version").write_str(python)?;
+        package.child("pyproject.toml").write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1.0.0"
+            requires-python = ">=3.11"
+
+            [build-system]
+            requires = {requires}
+            build-backend = "backend"
+            backend-path = ["."]
+        "#})?;
+        let (output_filename, output_wheel) = generate_wheel(
+            &name.parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        package
+            .child(&output_filename)
+            .write_binary(&output_wheel)?;
+        package.child("backend.py").write_str(&formatdoc! {r#"
+            import importlib.metadata
+            import shutil
+            import time
+            from pathlib import Path
+
+            def get_requires_for_build_wheel(config_settings=None):
+                observed = Path(__file__).parents[2] / "range-discovered"
+                if "{name}" == "alpha":
+                    assert importlib.metadata.version("build-first") == "1.0.0"
+                    observed.touch()
+                    return []
+                deadline = time.monotonic() + 30
+                while not observed.exists():
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("first build did not finish its dependency installation")
+                    time.sleep(0.01)
+                return ["build-second==1.0.0", "build-third==1.0.0"]
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                dependencies = ["build-first"] if "{name}" == "alpha" else ["build-second", "build-third"]
+                for dependency in dependencies:
+                    assert importlib.metadata.version(dependency) == "1.0.0"
+                source = Path(__file__).with_name("{output_filename}")
+                shutil.copyfile(source, Path(wheel_directory) / source.name)
+                return source.name
+        "#})?;
+    }
+
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--all-packages")
+        .arg("--wheel")
+        .arg("--no-build-logs")
+        .arg("--index-url")
+        .arg(format!("{}/simple", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    Successfully built dist/alpha-1.0.0-py3-none-any.whl
+    Successfully built dist/beta-1.0.0-py3-none-any.whl
+    ");
+    server.verify().await;
+    range_server.verify().await;
+    Ok(())
+}
 
 #[test]
 fn get_requires_for_build_returns_error() {
