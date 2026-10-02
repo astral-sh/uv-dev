@@ -1,7 +1,11 @@
 use std::error::Error;
+use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, SystemTimeError};
 use std::{io, iter};
 
+use http::header::RETRY_AFTER;
 use http::status::StatusCode;
 use itertools::Itertools;
 use reqwest::Response;
@@ -10,12 +14,52 @@ use reqwest_retry::{
     RetryPolicy, Retryable, RetryableStrategy, default_on_request_error, default_on_request_success,
 };
 use rustls::{AlertDescription, Error as RustlsError};
+use tokio::sync::Notify;
 use tracing::{debug, trace};
 use url::Url;
 
 use uv_redacted::DisplaySafeUrl;
 
 use crate::{RequestBuilder, WrappedReqwestError};
+
+tokio::task_local! {
+    static METADATA_RETRY_OBSERVER: Arc<MetadataRetryObserver>;
+}
+
+/// A transient metadata failure after which independent callers may proceed.
+///
+/// Rate limits and explicit server backoff do not release waiting callers.
+#[derive(Debug, Default)]
+pub(crate) struct MetadataRetryObserver {
+    observed: AtomicBool,
+    notify: Notify,
+}
+
+impl MetadataRetryObserver {
+    pub(crate) async fn scope<F: Future>(self: &Arc<Self>, future: F) -> F::Output {
+        METADATA_RETRY_OBSERVER.scope(self.clone(), future).await
+    }
+
+    pub(crate) async fn notified(&self) {
+        let notified = self.notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.observed.load(Ordering::Acquire) {
+            notified.await;
+        }
+    }
+
+    fn notify(&self) {
+        self.observed.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+}
+
+fn notify_metadata_retry() {
+    if let Ok(observer) = METADATA_RETRY_OBSERVER.try_with(Arc::clone) {
+        observer.notify();
+    }
+}
 
 /// An extension over [`DefaultRetryableStrategy`] that logs transient request failures and
 /// adds additional retry cases.
@@ -30,6 +74,18 @@ impl RetryableStrategy for UvRetryableStrategy {
 
         // Log on transient errors
         if retryable == Some(Retryable::Transient) {
+            let independent_callers_can_proceed = match res {
+                Ok(response) => {
+                    response.status() != StatusCode::TOO_MANY_REQUESTS
+                        && !response.headers().contains_key(RETRY_AFTER)
+                }
+                // Headers are unavailable after an HTTP response becomes an error, so retain
+                // coalescing for status errors that may carry a server-directed delay.
+                Err(error) => request_error_status(error).is_none(),
+            };
+            if independent_callers_can_proceed {
+                notify_metadata_retry();
+            }
             match res {
                 Ok(response) => {
                     debug!(
@@ -160,6 +216,9 @@ impl RetryState {
                         .unwrap_or_else(|_| Duration::default());
 
                     self.total_retries += 1;
+                    if request_error_status(err).is_none() {
+                        notify_metadata_retry();
+                    }
                     return Some(duration);
                 }
 
@@ -369,6 +428,31 @@ fn request_error_url<'a>(err: &'a (dyn Error + 'static)) -> Option<&'a Url> {
     })
 }
 
+/// Find an HTTP status without discarding transparent middleware and I/O wrappers.
+fn request_error_status(err: &(dyn Error + 'static)) -> Option<StatusCode> {
+    iter::successors(Some(err), |&err| {
+        if let Some(io_error) = err.downcast_ref::<io::Error>()
+            && let Some(inner) = io_error.get_ref()
+        {
+            Some(inner as &(dyn Error + 'static))
+        } else {
+            err.source()
+        }
+    })
+    .find_map(|err| {
+        err.downcast_ref::<reqwest::Error>()
+            .and_then(reqwest::Error::status)
+            .or_else(|| {
+                err.downcast_ref::<reqwest_middleware::Error>()
+                    .and_then(reqwest_middleware::Error::status)
+            })
+            .or_else(|| {
+                err.downcast_ref::<WrappedReqwestError>()
+                    .and_then(|err| err.status())
+            })
+    })
+}
+
 /// Find the first source error of a specific type, including errors wrapped by [`io::Error`].
 ///
 /// Inspired by <https://github.com/seanmonstar/reqwest/issues/1602#issuecomment-1220996681>
@@ -406,6 +490,40 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::{UvRetryableStrategy, retryable_on_request_failure};
+
+    #[tokio::test]
+    async fn metadata_retry_observer_respects_server_backoff() -> Result<()> {
+        let server = MockServer::start().await;
+        for (endpoint, response, expected) in [
+            ("/success", ResponseTemplate::new(200), false),
+            ("/failure", ResponseTemplate::new(503), true),
+            ("/rate-limit", ResponseTemplate::new(429), false),
+            (
+                "/retry-after",
+                ResponseTemplate::new(503).insert_header("Retry-After", "1"),
+                false,
+            ),
+        ] {
+            Mock::given(path(endpoint))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let response = Client::new()
+                .get(format!("{}{endpoint}", server.uri()))
+                .send()
+                .await?;
+            let observer = Arc::new(MetadataRetryObserver::default());
+            observer
+                .scope(async {
+                    UvRetryableStrategy.handle(&Ok(response));
+                })
+                .await;
+            assert_eq!(observer.observed.load(Ordering::Acquire), expected);
+        }
+        server.verify().await;
+        Ok(())
+    }
 
     #[tokio::test]
     #[traced_test]

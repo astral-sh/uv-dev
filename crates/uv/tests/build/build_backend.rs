@@ -64,8 +64,10 @@ async fn workspace_build_wheel_fixture(status: u16) -> Result<(TestContext, Mock
         .and(path(format!("/files/{filename}.metadata")))
         .respond_with(
             ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-store")
                 .set_body_string("Metadata-Version: 2.3\nName: build-dependency\nVersion: 1.0.0\n"),
         )
+        .expect(2)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -76,7 +78,8 @@ async fn workspace_build_wheel_fixture(status: u16) -> Result<(TestContext, Mock
                 .set_body_bytes(wheel)
                 .set_delay(Duration::from_millis(25)),
         )
-        .expect(2)
+        // A completed wheel can also be reused through the command's temporary cache.
+        .expect(1..=2)
         .mount(&server)
         .await;
 
