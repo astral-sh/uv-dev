@@ -131,6 +131,7 @@ def main() -> None:
                     "--quiet",
                     "--",
                     "python",
+                    "-B",
                     "-I",
                     "-c",
                     "from importlib.metadata import version; "
