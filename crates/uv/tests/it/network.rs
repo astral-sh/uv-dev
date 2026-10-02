@@ -187,7 +187,7 @@ async fn mixed_error_server() -> (MockServer, String) {
     (server, mock_server_uri)
 }
 
-type StreamingResponse = hyper::Response<BoxBody<Bytes, Infallible>>;
+pub(super) type StreamingResponse = hyper::Response<BoxBody<Bytes, Infallible>>;
 
 /// Emit some bytes, then wait before ending the response body.
 fn delayed_body(bytes: Bytes, delay: Duration) -> BoxBody<Bytes, Infallible> {
@@ -209,7 +209,7 @@ fn time_out_response(
 
 /// Run a streaming HTTP server on its own runtime so test subprocesses cannot starve it.
 /// Dropping the guard shuts down the runtime and all connection tasks.
-fn streaming_server<F>(handler: F) -> (String, impl Drop)
+pub(super) fn streaming_server<F>(handler: F) -> (String, impl Drop)
 where
     F: Fn(hyper::Request<hyper::body::Incoming>) -> Result<StreamingResponse, http::Error>
         + Send

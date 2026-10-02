@@ -3,14 +3,16 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use console::Term;
+use futures::{StreamExt, stream};
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::{debug, info, trace};
 use uv_auth::Credentials;
 use uv_cache::Cache;
 use uv_client::{
     AuthIntegration, BaseClient, BaseClientBuilder, RedirectPolicy, RegistryClientBuilder,
 };
-use uv_configuration::{KeyringProviderType, TrustedPublishing};
+use uv_configuration::{Concurrency, KeyringProviderType, TrustedPublishing};
 use uv_distribution_types::{IndexLocations, IndexUrl};
 use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
 use uv_publish::{
@@ -39,6 +41,7 @@ pub(crate) async fn publish(
     index_locations: IndexLocations,
     dry_run: bool,
     no_attestations: bool,
+    concurrency: &Concurrency,
     cache: &Cache,
     printer: Printer,
 ) -> Result<ExitStatus> {
@@ -151,7 +154,8 @@ pub(crate) async fn publish(
         &upload_client,
         &oidc_client,
         client_builder.retry_policy(),
-    );
+    )
+    .with_concurrency(concurrency);
     if let Some(index_url) = check_url {
         let registry_client_builder =
             RegistryClientBuilder::new(client_builder.clone(), cache.clone())
@@ -161,7 +165,7 @@ pub(crate) async fn publish(
     }
 
     // Keep the result so finalization also runs after a preparation or upload error.
-    let result = publish_files(distributions, &mut session, dry_run, printer).await;
+    let result = publish_files(distributions, &session, dry_run, concurrency, printer).await;
     let outcome = result.as_ref().copied().unwrap_or(PublishOutcome::Failed);
     match session.finalize(outcome).await {
         Ok(()) => {}
@@ -182,15 +186,37 @@ pub(crate) async fn publish(
 /// Publish each distribution, reporting all validation failures during a dry run.
 async fn publish_files(
     distributions: Vec<PreparedDistribution>,
-    session: &mut PublishSession<'_>,
+    session: &PublishSession<'_>,
     dry_run: bool,
+    concurrency: &Concurrency,
     printer: Printer,
 ) -> Result<PublishOutcome> {
     let mut error_count: usize = 0;
 
-    for prepared in distributions {
+    let mut projects = FxHashSet::default();
+    let mut checks = stream::iter(distributions)
+        .map(|prepared| {
+            // Prefetch each project once. Later files use the snapshot at their ordered check,
+            // including any refresh after an earlier upload was rejected.
+            let prefetch = prepared.raw_filename() == prepared.filename().to_string()
+                && projects.insert(prepared.filename().name().clone());
+            async move {
+                let check = if prefetch {
+                    session.prefetch_check_url(&prepared).await
+                } else {
+                    Ok(())
+                };
+                (prepared, check)
+            }
+        })
+        .buffered(concurrency.downloads);
+    while let Some((prepared, check)) = checks.next().await {
         let reporter = Arc::new(PublishReporter::single(printer, dry_run));
-        match publish_file(prepared, session, reporter, dry_run, printer).await {
+        let result = match check {
+            Ok(()) => publish_file(prepared, session, reporter, dry_run, printer).await,
+            Err(err) => Err(err.into()),
+        };
+        match result {
             Ok(()) => {}
             Err(err) => {
                 if !dry_run {
@@ -222,7 +248,7 @@ async fn publish_files(
 /// Upload a prepared distribution unless this is a dry run.
 async fn publish_file(
     prepared: PreparedDistribution,
-    session: &mut PublishSession<'_>,
+    session: &PublishSession<'_>,
     reporter: Arc<PublishReporter>,
     dry_run: bool,
     printer: Printer,

@@ -1,13 +1,21 @@
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
+use bytes::Bytes;
 use fs_err::OpenOptions;
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::body::Frame;
 use indoc::{formatdoc, indoc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::convert::Infallible;
 use std::env::current_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
+use tokio::sync::Notify;
+use tokio_stream::wrappers::ReceiverStream;
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
 use wiremock::matchers::{basic_auth, body_json, method, path};
@@ -40,6 +48,15 @@ fn basic_package_wheel() -> PathBuf {
 }
 
 fn check_url_index(server: &MockServer, files: &[PathBuf]) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .insert_header("Cache-Control", "public, max-age=600")
+        .set_body_raw(
+            check_url_index_body(&server.uri(), files),
+            "application/vnd.pypi.simple.v1+json",
+        )
+}
+
+fn check_url_index_body(server: &str, files: &[PathBuf]) -> String {
     let files = files
         .iter()
         .map(|file| {
@@ -54,16 +71,11 @@ fn check_url_index(server: &MockServer, files: &[PathBuf]) -> ResponseTemplate {
             json!({
                 "filename": filename,
                 "hashes": {"sha256": sha256},
-                "url": format!("{}/files/{filename}", server.uri()),
+                "url": format!("{server}/files/{filename}"),
             })
         })
         .collect::<Vec<_>>();
-    ResponseTemplate::new(200)
-        .insert_header("Cache-Control", "public, max-age=600")
-        .set_body_raw(
-            json!({"files": files}).to_string(),
-            "application/vnd.pypi.simple.v1+json",
-        )
+    json!({"files": files}).to_string()
 }
 
 /// Read the JSON attestations field from a recorded multipart upload.
@@ -615,6 +627,150 @@ async fn check_url_reuses_package_snapshot() {
     Publishing 2 files to http://[LOCALHOST]/upload
     File basic_package-0.1.0-py3-none-any.whl already exists, skipping
     File basic_package-0.1.0.tar.gz already exists, skipping
+    ");
+}
+
+/// The first project response remains open until the second project is requested. This proves
+/// request overlap without relying on elapsed-time thresholds.
+fn check_url_prefetch(downloads: usize, expected_overlap: bool) {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let app_body = check_url_index_body("", &[basic_app_wheel()]);
+    let package_body = check_url_index_body("", &[basic_package_wheel()]);
+    let second_started = Arc::new(Notify::new());
+    let observed_overlap = Arc::new(AtomicBool::new(false));
+    let app_requests = Arc::new(AtomicUsize::new(0));
+    let package_requests = Arc::new(AtomicUsize::new(0));
+    let (server, _guard) = super::network::streaming_server({
+        let observed_overlap = observed_overlap.clone();
+        let app_requests = app_requests.clone();
+        let package_requests = package_requests.clone();
+        move |request| {
+            let body = match request.uri().path() {
+                "/simple/basic-app/" => {
+                    app_requests.fetch_add(1, Ordering::SeqCst);
+                    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+                    let second_started = second_started.clone();
+                    let observed_overlap = observed_overlap.clone();
+                    let body = app_body.clone();
+                    tokio::spawn(async move {
+                        let overlap =
+                            tokio::time::timeout(Duration::from_secs(5), second_started.notified())
+                                .await
+                                .is_ok();
+                        observed_overlap.store(overlap, Ordering::SeqCst);
+                        let _ = sender
+                            .send(Ok::<_, Infallible>(Frame::data(Bytes::from(body))))
+                            .await;
+                    });
+                    StreamBody::new(ReceiverStream::new(receiver)).boxed()
+                }
+                "/simple/basic-package/" => {
+                    package_requests.fetch_add(1, Ordering::SeqCst);
+                    second_started.notify_one();
+                    Full::new(Bytes::from(package_body.clone())).boxed()
+                }
+                _ => {
+                    return hyper::Response::builder()
+                        .status(404)
+                        .body(Full::new(Bytes::new()).boxed());
+                }
+            };
+            hyper::Response::builder()
+                .header("Content-Type", "application/vnd.pypi.simple.v1+json")
+                .body(body)
+        }
+    });
+
+    insta::allow_duplicates! {
+        uv_snapshot!(context.filters(), context.publish()
+            .env(EnvVars::UV_CONCURRENT_DOWNLOADS, downloads.to_string())
+            .arg("-u").arg("dummy")
+            .arg("-p").arg("dummy")
+            .arg("--check-url").arg(format!("{server}/simple/"))
+            .arg("--publish-url").arg(format!("{server}/upload"))
+            .arg(basic_app_wheel())
+            .arg(basic_package_wheel()), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Publishing 2 files to http://[LOCALHOST]/upload
+        File basic_app-0.1.0-py3-none-any.whl already exists, skipping
+        File basic_package-0.1.0-py3-none-any.whl already exists, skipping
+        ");
+    }
+    assert_eq!(observed_overlap.load(Ordering::SeqCst), expected_overlap);
+    assert_eq!(app_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(package_requests.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn check_url_prefetch_overlaps_independent_projects() {
+    check_url_prefetch(2, true);
+}
+
+#[test]
+fn check_url_prefetch_obeys_download_limit() {
+    check_url_prefetch(1, false);
+}
+
+#[tokio::test]
+async fn check_url_prefetch_reports_errors_in_file_order() {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-app/"))
+        .respond_with(ResponseTemplate::new(400).set_delay(Duration::from_millis(100)))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/basic-package/"))
+        .respond_with(ResponseTemplate::new(410))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.publish()
+        .env(EnvVars::UV_CONCURRENT_DOWNLOADS, "2")
+        .arg("-u").arg("dummy")
+        .arg("-p").arg("dummy")
+        .arg("--check-url").arg(format!("{}/simple/", server.uri()))
+        .arg("--publish-url").arg(format!("{}/upload", server.uri()))
+        .arg(basic_app_wheel())
+        .arg(basic_package_wheel()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Publishing 2 files to http://[LOCALHOST]/upload
+    error: Failed to query check URL
+      cause: Failed to fetch: http://[LOCALHOST]/simple/basic-app/
+      cause: HTTP status client error (400 Bad Request) for url (http://[LOCALHOST]/simple/basic-app/)
+    ");
+
+    uv_snapshot!(context.filters(), context.publish()
+        .env(EnvVars::UV_CONCURRENT_DOWNLOADS, "2")
+        .arg("--dry-run")
+        .arg("-u").arg("dummy")
+        .arg("-p").arg("dummy")
+        .arg("--check-url").arg(format!("{}/simple/", server.uri()))
+        .arg("--publish-url").arg(format!("{}/upload", server.uri()))
+        .arg(basic_app_wheel())
+        .arg(basic_package_wheel()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Checking 2 files against http://[LOCALHOST]/upload
+    error: Failed to query check URL
+      cause: Failed to fetch: http://[LOCALHOST]/simple/basic-app/
+      cause: HTTP status client error (400 Bad Request) for url (http://[LOCALHOST]/simple/basic-app/)
+    error: Failed to query check URL
+      cause: Failed to fetch: http://[LOCALHOST]/simple/basic-package/
+      cause: HTTP status client error (410 Gone) for url (http://[LOCALHOST]/simple/basic-package/)
+    Found issues with 2 files
     ");
 }
 

@@ -2061,6 +2061,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 index_locations,
                 dry_run,
                 no_attestations,
+                &globals.concurrency,
                 &cache,
                 printer,
             )

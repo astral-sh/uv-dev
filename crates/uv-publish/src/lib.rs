@@ -36,7 +36,7 @@ use uv_client::{
     ProblemDetails, RegistryClientBuilder, RequestBuilder, RetryParsingError, RetryState,
     SimpleDetailMetadata,
 };
-use uv_configuration::{KeyringProviderType, TrustedPublishing};
+use uv_configuration::{Concurrency, KeyringProviderType, TrustedPublishing};
 use uv_distribution_filename::{DistFilename, SourceDistExtension, SourceDistFilename};
 use uv_distribution_types::{IndexCapabilities, IndexUrl};
 use uv_extract::hash::Hasher;
@@ -305,8 +305,12 @@ struct CheckUrlClient<'a> {
     registry_client_builder: RegistryClientBuilder<'a>,
     index_capabilities: IndexCapabilities,
     cache: &'a Cache,
-    metadata: Mutex<FxHashMap<String, Option<Arc<SimpleDetailMetadata>>>>,
+    metadata: Mutex<FxHashMap<String, CheckUrlMetadataEntry>>,
 }
+
+/// A fetched package snapshot, including a package that is absent from the index.
+type CheckUrlMetadata = Option<Arc<SimpleDetailMetadata>>;
+type CheckUrlMetadataEntry = Arc<Mutex<Option<CheckUrlMetadata>>>;
 
 /// Shared state for preparing, uploading, and finalizing a set of distributions.
 ///
@@ -323,7 +327,7 @@ pub struct PublishSession<'a> {
     oidc_client: &'a BaseClient,
     retry_policy: ExponentialBackoff,
     check_url_client: Option<CheckUrlClient<'a>>,
-    download_concurrency: Semaphore,
+    download_concurrency: Arc<Semaphore>,
 }
 
 impl PublishSendError {
@@ -620,9 +624,15 @@ impl<'a> PublishSession<'a> {
             oidc_client,
             retry_policy,
             check_url_client: None,
-            // Check URL requests are made one at a time against a single index.
-            download_concurrency: Semaphore::new(1),
+            // Library callers use serial index checks unless they configure a download limit.
+            download_concurrency: Arc::new(Semaphore::new(1)),
         }
+    }
+
+    /// Use the configured download limit for package-index checks.
+    pub fn with_concurrency(mut self, concurrency: &Concurrency) -> Self {
+        self.download_concurrency = concurrency.downloads_semaphore.clone();
+        self
     }
 
     /// Configure the index used to skip existing distributions and detect raced uploads.
@@ -678,7 +688,7 @@ impl<'a> PublishSession<'a> {
     ///
     /// Implements a custom retry and redirect flow since streaming requests cannot be cloned.
     pub async fn upload(
-        &mut self,
+        &self,
         prepared: PreparedDistribution,
         reporter: Arc<impl Reporter>,
     ) -> Result<UploadOutcome, PublishError> {
@@ -834,6 +844,19 @@ impl<'a> PublishSession<'a> {
         self.check_existing_inner(prepared, reporter, false).await
     }
 
+    /// Fetch the package snapshot for a later upload check.
+    ///
+    /// The caller must still use [`Self::check_existing`] immediately before uploading, since a
+    /// rejected earlier upload can refresh the package snapshot.
+    pub async fn prefetch_check_url(
+        &self,
+        prepared: &PreparedDistribution,
+    ) -> Result<(), PublishError> {
+        self.check_url_metadata(&prepared.filename, false)
+            .await
+            .map(|_| ())
+    }
+
     async fn check_existing_inner(
         &self,
         prepared: &PreparedDistribution,
@@ -915,8 +938,16 @@ impl<'a> PublishSession<'a> {
             return Ok(None);
         };
 
-        let mut metadata = metadata.lock().await;
-        if !refresh && let Some(cached) = metadata.get::<str>(filename.name().as_ref()) {
+        let package_metadata = {
+            let mut metadata = metadata.lock().await;
+            metadata
+                .entry(filename.name().to_string())
+                .or_default()
+                .clone()
+        };
+        // Serialize reads of the same project, while independent project pages can overlap.
+        let mut metadata = package_metadata.lock().await;
+        if !refresh && let Some(cached) = metadata.as_ref() {
             return Ok(cached.clone());
         }
 
@@ -947,7 +978,7 @@ impl<'a> PublishSession<'a> {
                         warn!(
                             "Package not found in the registry; skipping upload check for `{filename}`"
                         );
-                        metadata.insert(filename.name().to_string(), None);
+                        *metadata = Some(None);
                         Ok(None)
                     }
                     _ => Err(PublishError::CheckUrlIndex(err)),
@@ -958,7 +989,7 @@ impl<'a> PublishSession<'a> {
             unreachable!("We queried a single index, we must get a single response");
         };
         let simple_metadata = Arc::new(OwnedArchive::deserialize(simple_metadata));
-        metadata.insert(filename.name().to_string(), Some(simple_metadata.clone()));
+        *metadata = Some(Some(simple_metadata.clone()));
         Ok(Some(simple_metadata))
     }
 
@@ -1598,7 +1629,7 @@ mod tests {
 
         let registry = DisplaySafeUrl::parse(&format!("{}/final", mock_server.uri()))
             .expect("Valid registry URL");
-        let mut session = test_session(registry, &client);
+        let session = test_session(registry, &client);
         let prepared = preparation.pop().expect("Distribution should be found");
         let result = session.upload(prepared, Arc::new(DummyReporter)).await;
         let outcome = match &result {
