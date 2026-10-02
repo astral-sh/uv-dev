@@ -848,13 +848,8 @@ impl<'a> PublishSession<'a> {
     ///
     /// The caller must still use [`Self::check_existing`] immediately before uploading, since a
     /// rejected earlier upload can refresh the package snapshot.
-    pub async fn prefetch_check_url(
-        &self,
-        prepared: &PreparedDistribution,
-    ) -> Result<(), PublishError> {
-        self.check_url_metadata(&prepared.filename, false)
-            .await
-            .map(|_| ())
+    pub async fn prefetch_check_url(&self, filename: &DistFilename) -> Result<(), PublishError> {
+        self.check_url_metadata(filename, false).await.map(|_| ())
     }
 
     async fn check_existing_inner(

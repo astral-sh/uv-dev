@@ -631,27 +631,30 @@ async fn check_url_reuses_package_snapshot() {
 }
 
 /// The first project response remains open until the second project is requested. This proves
-/// request overlap without relying on elapsed-time thresholds.
+/// request overlap without relying on elapsed-time thresholds. Both files of the first project
+/// precede the second project, so a file-counted buffer cannot satisfy the two-request gate.
 fn check_url_prefetch(downloads: usize, expected_overlap: bool) {
     let context = uv_test::test_context!("3.12").with_filtered_sizes();
-    let app_body = check_url_index_body("", &[basic_app_wheel()]);
-    let package_body = check_url_index_body("", &[basic_package_wheel()]);
+    let first_files = [dummy_wheel(), test_link("ok-2.0.0-py3-none-any.whl")];
+    let second_file = test_link("tqdm-1000.0.0-py3-none-any.whl");
+    let first_body = check_url_index_body("", &first_files);
+    let second_body = check_url_index_body("", std::slice::from_ref(&second_file));
     let second_started = Arc::new(Notify::new());
     let observed_overlap = Arc::new(AtomicBool::new(false));
-    let app_requests = Arc::new(AtomicUsize::new(0));
-    let package_requests = Arc::new(AtomicUsize::new(0));
+    let first_requests = Arc::new(AtomicUsize::new(0));
+    let second_requests = Arc::new(AtomicUsize::new(0));
     let (server, _guard) = super::network::streaming_server({
         let observed_overlap = observed_overlap.clone();
-        let app_requests = app_requests.clone();
-        let package_requests = package_requests.clone();
+        let first_requests = first_requests.clone();
+        let second_requests = second_requests.clone();
         move |request| {
             let body = match request.uri().path() {
-                "/simple/basic-app/" => {
-                    app_requests.fetch_add(1, Ordering::SeqCst);
+                "/simple/ok/" => {
+                    first_requests.fetch_add(1, Ordering::SeqCst);
                     let (sender, receiver) = tokio::sync::mpsc::channel(1);
                     let second_started = second_started.clone();
                     let observed_overlap = observed_overlap.clone();
-                    let body = app_body.clone();
+                    let body = first_body.clone();
                     tokio::spawn(async move {
                         let overlap =
                             tokio::time::timeout(Duration::from_secs(5), second_started.notified())
@@ -664,10 +667,10 @@ fn check_url_prefetch(downloads: usize, expected_overlap: bool) {
                     });
                     StreamBody::new(ReceiverStream::new(receiver)).boxed()
                 }
-                "/simple/basic-package/" => {
-                    package_requests.fetch_add(1, Ordering::SeqCst);
+                "/simple/tqdm/" => {
+                    second_requests.fetch_add(1, Ordering::SeqCst);
                     second_started.notify_one();
-                    Full::new(Bytes::from(package_body.clone())).boxed()
+                    Full::new(Bytes::from(second_body.clone())).boxed()
                 }
                 _ => {
                     return hyper::Response::builder()
@@ -688,18 +691,19 @@ fn check_url_prefetch(downloads: usize, expected_overlap: bool) {
             .arg("-p").arg("dummy")
             .arg("--check-url").arg(format!("{server}/simple/"))
             .arg("--publish-url").arg(format!("{server}/upload"))
-            .arg(basic_app_wheel())
-            .arg(basic_package_wheel()), @"
+            .args(&first_files)
+            .arg(&second_file), @"
         exit_code: 0 (success)
         ----- stderr -----
-        Publishing 2 files to http://[LOCALHOST]/upload
-        File basic_app-0.1.0-py3-none-any.whl already exists, skipping
-        File basic_package-0.1.0-py3-none-any.whl already exists, skipping
+        Publishing 3 files to http://[LOCALHOST]/upload
+        File ok-1.0.0-py3-none-any.whl already exists, skipping
+        File ok-2.0.0-py3-none-any.whl already exists, skipping
+        File tqdm-1000.0.0-py3-none-any.whl already exists, skipping
         ");
     }
     assert_eq!(observed_overlap.load(Ordering::SeqCst), expected_overlap);
-    assert_eq!(app_requests.load(Ordering::SeqCst), 1);
-    assert_eq!(package_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(first_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(second_requests.load(Ordering::SeqCst), 1);
 }
 
 #[test]

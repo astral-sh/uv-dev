@@ -194,27 +194,32 @@ async fn publish_files(
     let mut error_count: usize = 0;
 
     let mut projects = FxHashSet::default();
-    let mut checks = stream::iter(distributions)
+    let mut project_checks = Vec::new();
+    let distributions = distributions
+        .into_iter()
         .map(|prepared| {
-            // Prefetch each project once. Later files use the snapshot at their ordered check,
-            // including any refresh after an earlier upload was rejected.
             let prefetch = prepared.raw_filename() == prepared.filename().to_string()
                 && projects.insert(prepared.filename().name().clone());
-            async move {
-                let check = if prefetch {
-                    session.prefetch_check_url(&prepared).await
-                } else {
-                    Ok(())
-                };
-                (prepared, check)
+            if prefetch {
+                project_checks.push(prepared.filename().clone());
             }
+            (prepared, prefetch)
         })
+        .collect::<Vec<_>>();
+    // Each buffered check represents a distinct project. Additional wheels and source
+    // distributions use the current snapshot at their ordered check, without consuming request
+    // capacity or missing a refresh after an earlier upload was rejected.
+    let mut checks = stream::iter(project_checks)
+        .map(|filename| async move { session.prefetch_check_url(&filename).await })
         .buffered(concurrency.downloads);
-    while let Some((prepared, check)) = checks.next().await {
+    for (prepared, prefetch) in distributions {
+        let check = if prefetch { checks.next().await } else { None };
         let reporter = Arc::new(PublishReporter::single(printer, dry_run));
         let result = match check {
-            Ok(()) => publish_file(prepared, session, reporter, dry_run, printer).await,
-            Err(err) => Err(err.into()),
+            Some(Err(err)) => Err(err.into()),
+            Some(Ok(())) | None => {
+                publish_file(prepared, session, reporter, dry_run, printer).await
+            }
         };
         match result {
             Ok(()) => {}
