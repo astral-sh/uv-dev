@@ -21,6 +21,64 @@ bench = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench)
 
 
+def selected_distributions(
+    manifest: Path, filenames: list[str]
+) -> tuple[list[dict], list[str]]:
+    entries = json.loads(manifest.read_text())
+    selected = set(filenames) if filenames else {entry["filename"] for entry in entries}
+    entries = [entry for entry in entries if entry["filename"] in selected]
+    if {entry["filename"] for entry in entries} != selected or not entries:
+        raise ValueError("every selected distribution must appear in the manifest")
+    packages = sorted(
+        {bench.normalize(entry["filename"].split("-")[0]) for entry in entries}
+    )
+    return entries, packages
+
+
+def verify_distributions(directory: Path, entries: list[dict], indexes: dict) -> None:
+    for entry in entries:
+        package = bench.normalize(entry["filename"].split("-")[0])
+        remote = indexes[package][entry["filename"]]["hashes"]["sha256"]
+        if (
+            remote != entry["sha256"]
+            or bench.digest(directory / entry["filename"]) != remote
+        ):
+            raise ValueError(f"Distribution digest differs: {entry['filename']}")
+
+
+def lower_bound(
+    fixtures, packages: list[str], profile: dict, route: str, concurrency: int
+) -> dict:
+    required_bytes = (
+        sum(len(fixtures.simple[package]) for package in packages)
+        if route == "current"
+        else 0
+    )
+    netem = bench.netem_profile()
+    required_waves, required_latency = bench.concurrent_latency_floor(
+        [
+            max(
+                0,
+                profile.get("path_latency_ms", {}).get(
+                    f"/simple/{package}/", profile.get("latency_ms", 0)
+                )
+                - profile.get("jitter_ms", 0),
+            )
+            for package in packages
+        ],
+        concurrency,
+        netem.get("rtt_ms", 0),
+    )
+    return {
+        "required_bytes": required_bytes,
+        "required_waves": required_waves,
+        "required_latency_ms": required_latency,
+        "optimistic_network_floor_seconds": bench.network_floor(
+            profile, required_bytes, required_waves, required_latency, netem=netem
+        ),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -34,16 +92,10 @@ def main() -> None:
     args = parser.parse_args()
     if args.concurrency < 1:
         parser.error("concurrency must be positive")
-    manifest = json.loads(args.manifest.read_text())
-    selected = (
-        set(args.filename) if args.filename else {x["filename"] for x in manifest}
-    )
-    entries = [entry for entry in manifest if entry["filename"] in selected]
-    if {entry["filename"] for entry in entries} != selected or not entries:
-        parser.error("every selected distribution must appear in the manifest")
-    packages = sorted(
-        {bench.normalize(entry["filename"].split("-")[0]) for entry in entries}
-    )
+    try:
+        entries, packages = selected_distributions(args.manifest, args.filename)
+    except ValueError as error:
+        parser.error(str(error))
     profile = json.loads(args.profiles.read_text())[args.profile]
     fixtures = bench.Fixtures(
         args.manifest, args.directory, profile.get("pep658", True)
@@ -92,54 +144,22 @@ def main() -> None:
             max_workers=min(args.concurrency, len(packages))
         ) as pool:
             indexes = dict(pool.map(read, packages))
-        for entry in entries:
-            package = bench.normalize(entry["filename"].split("-")[0])
-            remote = indexes[package][entry["filename"]]["hashes"]["sha256"]
-            if (
-                remote != entry["sha256"]
-                or bench.digest(args.directory / entry["filename"]) != remote
-            ):
-                raise ValueError(f"Distribution digest differs: {entry['filename']}")
+        verify_distributions(args.directory, entries, indexes)
         seconds = time.perf_counter() - started
     finally:
         server.shutdown()
         server.wait_idle()
         server.server_close()
         thread.join()
-    required_bytes = (
-        sum(len(fixtures.simple[package]) for package in packages)
-        if args.route == "current"
-        else 0
-    )
-    netem = bench.netem_profile()
-    required_waves, required_latency = bench.concurrent_latency_floor(
-        [
-            max(
-                0,
-                profile.get("path_latency_ms", {}).get(
-                    f"/simple/{package}/", profile.get("latency_ms", 0)
-                )
-                - profile.get("jitter_ms", 0),
-            )
-            for package in packages
-        ],
-        args.concurrency,
-        netem.get("rtt_ms", 0),
-    )
     result = {
         "profile": profile,
-        "netem": netem,
+        "netem": bench.netem_profile(),
         "manifest_sha256": bench.digest(args.manifest),
-        "filenames": sorted(selected),
+        "filenames": sorted({entry["filename"] for entry in entries}),
         "route": args.route,
         "concurrency": args.concurrency,
         "seconds": seconds,
-        "required_bytes": required_bytes,
-        "required_waves": required_waves,
-        "required_latency_ms": required_latency,
-        "optimistic_network_floor_seconds": bench.network_floor(
-            profile, required_bytes, required_waves, required_latency, netem=netem
-        ),
+        **lower_bound(fixtures, packages, profile, args.route, args.concurrency),
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,

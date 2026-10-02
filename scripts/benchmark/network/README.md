@@ -365,6 +365,12 @@ Use `--identity metadata` for a cached PEP 658 sidecar whose advertised hash is 
 known wheel metadata entry by its ZIP offset, verifies the received archive bytes, and reports its
 compressed-byte lower bound. With ranges disabled, it reads the necessary archive prefix instead.
 
+For protocol-matched repeat-publish measurements, `publish_check_http2_oracle.py` accepts the same
+selection, route, and concurrency arguments as `publish_check_oracle.py`, plus the proxy,
+certificate, key, and work-directory paths. It uses bounded parallel `curl` transfers, verifies each
+response's HTTP/2 protocol and content, and records frontend connections and transfer timings. Its
+realizable reference includes curl's retry backoff, while the optimistic bound excludes retries.
+
 For mixed artifact hosts, a `run` profile can set `artifact_origins` to a mapping of origin names to
 `filenames` arrays and optional `profile` overrides. The index links those files to separate
 loopback listeners, each with its own range and failure behavior. All listeners share the root
