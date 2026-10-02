@@ -17,7 +17,7 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
 use uv_test::packse::{generate_wheel, mount_mismatched_distribution};
 use uv_test::{uv_snapshot, venv_bin_path};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
@@ -74,9 +74,11 @@ async fn workspace_build_range_capabilities_are_shared() -> Result<()> {
             )
             .await;
         } else {
-            Mock::given(method("HEAD"))
+            Mock::given(method("GET"))
                 .and(path(&file_path))
+                .and(header("range", "bytes=0-0"))
                 .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.clone()))
+                .with_priority(1)
                 .expect(u64::from(name == "build-first"))
                 .mount(&server)
                 .await;
