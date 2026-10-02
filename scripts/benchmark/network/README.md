@@ -101,17 +101,18 @@ its measured reference also pays the configured connection delay and records any
 
 `make_tool_upgrade_fixtures.py --directory DIR` creates registry tools with two releases and setup
 commands for real upgrades, current or pinned versions, local sources, and empty or single-tool
-controls. Setup uses an uncached install and transient version constraints, so the timed
-`tool upgrade --all --quiet` can upgrade the recorded unpinned requirements. Use
-`--shared-dependencies` and `--index-groups` to vary dependency overlap and saved index settings.
-The `mixed` scenario alternates Python 3.12 and 3.13; provide both interpreters and pass
-`--no-python-env` to retain each installed tool's interpreter during the measured command. For
-preview tool-lock workloads that require a version change, add explicit
-`--upgrade-package NAME==2.0` constraints for the selected projects and verify their installed
-versions. `tool_upgrade_oracle.py --directory DIR --profile PROFILE --scenario SCENARIO` retrieves
-the distinct known project/index pages and full selected wheels through persistent HTTP/1.1
-connections. Its optimistic bound excludes connection setup and installation, and does not count
-optional metadata sidecars when full wheels are required. Pinned and local-source scenarios use a
+controls. Setup installs the lowest releases without a cache and checks their versions through each
+tool's interpreter. The timed `tool upgrade --all --quiet --resolution highest` then overrides the
+saved resolution strategy and upgrades the unpinned requirements. Use `--shared-dependencies` and
+`--index-groups` to vary dependency overlap and saved index settings. The `mixed` scenario
+alternates Python 3.12 and 3.13; provide both interpreters and pass `--no-python-env` to retain each
+installed tool's interpreter during the measured command. For preview tool-lock workloads that
+require a version change, add explicit `--upgrade-package NAME==2.0` constraints for the selected
+projects and verify their installed versions.
+`tool_upgrade_oracle.py --directory DIR --profile PROFILE --scenario SCENARIO` retrieves the
+distinct known project/index pages and full selected wheels through persistent HTTP/1.1 connections.
+Its optimistic bound excludes connection setup and installation, and does not count optional
+metadata sidecars when full wheels are required. Pinned and local-source scenarios use a
 conservative zero network bound.
 
 `make_tool_filename_fixtures.py --directory DIR` creates an executable wheel, the equivalent

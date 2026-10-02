@@ -111,14 +111,33 @@ def main() -> None:
                     command += ["--with", dependency + "==1.0"]
             else:
                 command += ["--default-index", "{base}/upgrade-index-" + str(group)]
-                for dependency in [name, *shared]:
-                    command += ["--upgrade-package", dependency + f"=={initial}.0"]
+                command += ["--resolution", "lowest" if initial == 1 else "highest"]
                 if source == "pinned":
                     for dependency in shared:
                         command += ["--with", dependency + "==1.0"]
                 command += [name + "==1.0" if source == "pinned" else name]
                 projects.update((group, project) for project in [name, *shared])
             setup.append(command)
+            installed_versions = {
+                project: f"{initial}.0" for project in [name, *shared]
+            }
+            setup.append(
+                [
+                    "run",
+                    "--no-project",
+                    "--no-sync",
+                    "--python",
+                    "{work}/state/tools/" + name + "/bin/python",
+                    "--quiet",
+                    "--",
+                    "python",
+                    "-I",
+                    "-c",
+                    "from importlib.metadata import version; "
+                    + f"expected = {installed_versions!r}; "
+                    + "assert {name: version(name) for name in expected} == expected",
+                ]
+            )
             selected.update(
                 project.replace("-", "_") + f"-{final}.0-py3-none-any.whl"
                 for project in [name, *shared]
@@ -136,7 +155,14 @@ def main() -> None:
                 {"index": group, "name": project} for group, project in sorted(projects)
             ],
             "selected_wheels": sorted(selected),
-            "command": ["tool", "upgrade", "--all", "--quiet"]
+            "command": [
+                "tool",
+                "upgrade",
+                "--all",
+                "--quiet",
+                "--resolution",
+                "highest",
+            ]
             + (["--no-index"] if source == "local" else []),
         }
         (args.directory / f"tool-upgrade-{mode}-setup.json").write_text(
