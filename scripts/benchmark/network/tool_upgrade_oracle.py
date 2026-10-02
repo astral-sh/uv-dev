@@ -58,27 +58,43 @@ def bounds(tasks: list[dict], profile: dict, concurrency: int, *, netem=None) ->
     """Bound the generated two-stage page-to-wheel request graph."""
     if concurrency < 1:
         raise ValueError("concurrency must be positive")
+    if netem is None:
+        netem = bench.netem_profile()
+    rtt_ms = netem.get("rtt_ms", 0)
     required_bytes = sum(len(task["expected"]) for task in tasks)
-    critical_path = 2 if any(task["parents"] for task in tasks) else int(bool(tasks))
-    waves = max(critical_path, math.ceil(len(tasks) / concurrency))
-    minimum_latency = min(
-        (
-            max(
-                0,
-                profile.get("path_latency_ms", {}).get(
-                    task["path"], profile.get("latency_ms", 0)
-                )
-                - profile.get("jitter_ms", 0),
+    costs, depths, arrivals = [], [], []
+    for index, task in enumerate(tasks):
+        if any(parent < 0 or parent >= index for parent in task["parents"]):
+            raise ValueError("reference tasks must be in dependency order")
+        cost = rtt_ms + max(
+            0,
+            profile.get("path_latency_ms", {}).get(
+                task["path"], profile.get("latency_ms", 0)
             )
-            for task in tasks
-        ),
-        default=0,
+            - profile.get("jitter_ms", 0),
+        )
+        costs.append(cost)
+        depths.append(
+            1 + max((depths[parent] for parent in task["parents"]), default=0)
+        )
+        arrivals.append(
+            cost + max((arrivals[parent] for parent in task["parents"]), default=0)
+        )
+    waves = max(max(depths, default=0), math.ceil(len(tasks) / concurrency))
+    latency = max(
+        max(arrivals, default=0),
+        sum(costs) / concurrency,
+        waves * min(costs, default=0),
+        waves * rtt_ms,
     )
-    required_latency = waves * minimum_latency
+    # network_floor charges RTTs separately. Subtract that charge so independent
+    # capacity and dependency-path bounds are not added together.
+    required_latency = latency - waves * rtt_ms
     return {
         "required_bytes": required_bytes,
         "required_waves": waves,
         "required_latency_ms": required_latency,
+        "optimistic_latency_bound_ms": latency,
         "optimistic_network_floor_seconds": bench.network_floor(
             profile, required_bytes, waves, required_latency, netem=netem
         ),

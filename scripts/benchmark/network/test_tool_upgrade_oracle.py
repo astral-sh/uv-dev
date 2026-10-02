@@ -134,6 +134,50 @@ class ToolUpgradeOracleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             oracle.bounds(tasks, {}, 0)
 
+    def test_selected_metadata_latency_is_part_of_the_bound(self) -> None:
+        tasks = [
+            {"path": "/page/root", "expected": b"a", "parents": set()},
+            {"path": "/page/shared", "expected": b"a", "parents": set()},
+            {"path": "/wheel/shared", "expected": b"b", "parents": {1}},
+        ]
+        bound = oracle.bounds(
+            tasks,
+            {"path_latency_ms": {"/page/shared": 150}, "jitter_ms": 10},
+            50,
+            netem={},
+        )
+        self.assertEqual(bound["required_waves"], 2)
+        self.assertEqual(bound["required_latency_ms"], 140)
+        self.assertEqual(bound["optimistic_network_floor_seconds"], 0.14)
+
+    def test_rtt_and_weighted_capacity_bounds_are_not_added(self) -> None:
+        tasks = [
+            {"path": f"/page/{number}", "expected": b"a", "parents": set()}
+            for number in range(9)
+        ] + [
+            {"path": f"/wheel/{number}", "expected": b"b", "parents": {number}}
+            for number in range(9)
+        ]
+        bound = oracle.bounds(
+            tasks,
+            {"path_latency_ms": {"/page/0": 1000}},
+            2,
+            netem={"rtt_ms": 100},
+        )
+        self.assertEqual(bound["required_waves"], 9)
+        self.assertEqual(bound["required_latency_ms"], 500)
+        self.assertEqual(bound["optimistic_latency_bound_ms"], 1400)
+        self.assertEqual(bound["optimistic_network_floor_seconds"], 1.4)
+
+    def test_reference_requires_dependency_order(self) -> None:
+        with self.assertRaisesRegex(ValueError, "dependency order"):
+            oracle.bounds(
+                [{"path": "/wheel", "expected": b"a", "parents": {0}}],
+                {},
+                1,
+                netem={},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

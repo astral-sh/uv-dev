@@ -111,9 +111,9 @@ require a version change, add explicit `--upgrade-package NAME==2.0` constraints
 projects and verify their installed versions.
 `tool_upgrade_oracle.py --directory DIR --profile PROFILE --scenario SCENARIO` retrieves the
 distinct known project/index pages and full selected wheels through persistent HTTP/1.1 connections.
-Its optimistic bound excludes connection setup and installation, and does not count optional
-metadata sidecars when full wheels are required. Pinned and local-source scenarios use a
-conservative zero network bound.
+Its optimistic bound includes request-specific latency, dependency paths, and request capacity. It
+excludes connection setup and installation, and does not count optional metadata sidecars when full
+wheels are required. Pinned and local-source scenarios use a conservative zero network bound.
 
 `make_tool_filename_fixtures.py --directory DIR` creates an executable wheel, the equivalent
 normalized source archive, and source-directory and unnamed-archive controls. Its setup commands
