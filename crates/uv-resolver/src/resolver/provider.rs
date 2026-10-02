@@ -241,43 +241,32 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
         {
             Ok(metadata) => Ok(MetadataResponse::Found(metadata)),
             Err(err) => match err {
-                uv_distribution::Error::Client(client) => {
-                    let retries = client.retries();
-                    let duration = client.duration();
-                    match client.into_kind() {
-                        uv_client::ErrorKind::Offline(_) => {
-                            Ok(MetadataResponse::Unavailable(MetadataUnavailable::Offline))
-                        }
-                        uv_client::ErrorKind::MetadataParseError(_, _, err) => {
-                            Ok(MetadataResponse::Unavailable(
-                                MetadataUnavailable::InvalidMetadata(Arc::new(*err)),
-                            ))
-                        }
-                        uv_client::ErrorKind::Metadata(_, err) => {
-                            Ok(MetadataResponse::Unavailable(
-                                MetadataUnavailable::InvalidStructure(Arc::new(err)),
-                            ))
-                        }
-                        uv_client::ErrorKind::WrappedReqwestError(url, err) => {
-                            let Some(status) = err.status().filter(|status| {
-                                dist.index().is_some_and(|index| {
-                                    self.index_locations.ignores_error_code_for(index, *status)
-                                })
-                            }) else {
-                                return Err(uv_client::Error::new(
-                                    uv_client::ErrorKind::WrappedReqwestError(url, err),
-                                    retries,
-                                    duration,
-                                )
-                                .into());
-                            };
-                            Ok(MetadataResponse::Unavailable(MetadataUnavailable::Network(
-                                status,
-                            )))
-                        }
-                        kind => Err(uv_client::Error::new(kind, retries, duration).into()),
+                uv_distribution::Error::Client(client) => match client.kind() {
+                    uv_client::ErrorKind::Offline(_) => {
+                        Ok(MetadataResponse::Unavailable(MetadataUnavailable::Offline))
                     }
-                }
+                    uv_client::ErrorKind::MetadataParseError(_, _, err) => {
+                        Ok(MetadataResponse::Unavailable(
+                            MetadataUnavailable::InvalidMetadata(err.clone()),
+                        ))
+                    }
+                    uv_client::ErrorKind::Metadata(_, err) => Ok(MetadataResponse::Unavailable(
+                        MetadataUnavailable::InvalidStructure(err.clone()),
+                    )),
+                    uv_client::ErrorKind::WrappedReqwestError(_, err) => {
+                        let Some(status) = err.status().filter(|status| {
+                            dist.index().is_some_and(|index| {
+                                self.index_locations.ignores_error_code_for(index, *status)
+                            })
+                        }) else {
+                            return Err(client.into());
+                        };
+                        Ok(MetadataResponse::Unavailable(MetadataUnavailable::Network(
+                            status,
+                        )))
+                    }
+                    _ => Err(client.into()),
+                },
                 uv_distribution::Error::WheelMetadataVersionMismatch { .. } => {
                     Ok(MetadataResponse::Unavailable(
                         MetadataUnavailable::InconsistentMetadata(Arc::new(err)),

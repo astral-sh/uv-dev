@@ -75,7 +75,7 @@ pub(crate) async fn wheel_metadata_from_remote_zip(
             .enumerate()
             .filter_map(|(idx, e)| Some(((idx, e), e.filename().as_str().ok()?))),
     )
-    .map_err(|err| ErrorKind::Metadata(debug_name.to_string(), err))?;
+    .map_err(|err| ErrorKind::Metadata(debug_name.to_string(), err.into()))?;
 
     let offset = metadata_entry.header_offset();
 
