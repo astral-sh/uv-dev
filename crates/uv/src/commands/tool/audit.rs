@@ -1,7 +1,9 @@
 use std::fmt::Write as _;
 use std::io;
+use std::path::PathBuf;
 
 use anyhow::{Result, bail};
+use futures::{StreamExt as _, TryStreamExt as _, stream};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::OnceCell;
 
@@ -9,7 +11,10 @@ use uv_audit::{Dependency, Finding, VulnerabilityID, VulnerabilityServiceFormat,
 use uv_cache::Cache;
 use uv_cli::AuditOutputFormat;
 use uv_client::{BaseClient, BaseClientBuilder, CachedClient, RegistryClientBuilder};
-use uv_configuration::{Concurrency, DependencyGroupsWithDefaults, ExtrasSpecification};
+use uv_configuration::{
+    Concurrency, DependencyGroupsWithDefaults, ExtrasSpecification, KeyringProviderType,
+};
+use uv_distribution_types::IndexLocations;
 use uv_fs::Simplified;
 use uv_lock::{Lock, LockParseError};
 use uv_normalize::{DefaultExtras, PackageName};
@@ -25,6 +30,20 @@ use crate::commands::project::audit::{
 };
 use crate::printer::Printer;
 use crate::settings::ResolverInstallerSettings;
+
+struct ToolAuditInput {
+    name: PackageName,
+    root: PathBuf,
+    lock_path: PathBuf,
+    lock: Lock,
+    settings: ResolverInstallerSettings,
+}
+
+struct ToolAuditGroup {
+    index_locations: IndexLocations,
+    keyring_provider: KeyringProviderType,
+    inputs: Vec<ToolAuditInput>,
+}
 
 /// Audit selected installed tools, or every installed tool if no names are provided.
 pub(crate) async fn audit(
@@ -197,13 +216,19 @@ pub(crate) async fn audit(
         let settings = ResolverInstallerSettings::from(
             ResolverInstallerOptions::from(tool.options().clone()).combine(filesystem.clone()),
         );
-        inputs.push((name, root, lock_path, lock, settings));
+        inputs.push(ToolAuditInput {
+            name,
+            root,
+            lock_path,
+            lock,
+            settings,
+        });
     }
 
     let mut dependencies = Vec::new();
     let mut seen = FxHashSet::default();
-    for (_, _, _, lock, _) in &inputs {
-        for (name, version) in lock.auditable(&extras, &groups, |_| true).packages() {
+    for input in &inputs {
+        for (name, version) in input.lock.auditable(&extras, &groups, |_| true).packages() {
             let dependency = Dependency::new(name.clone(), version.clone());
             if seen.insert(dependency.clone()) {
                 dependencies.push(dependency);
@@ -221,12 +246,28 @@ pub(crate) async fn audit(
     let mut audits = Vec::new();
     let mut matched_ignores = FxHashSet::default();
 
-    for (name, root, lock_path, lock, settings) in inputs {
-        // Transport settings are shared by the invocation. Each tool's saved indexes and keyring
-        // settings still require their own middleware.
+    // Client construction populates the invocation-wide credential cache. Run tools with
+    // matching registry settings together, completing each group before changing that cache.
+    let mut audit_groups: Vec<ToolAuditGroup> = Vec::new();
+    for input in inputs {
+        if let Some(group) = audit_groups.iter_mut().find(|group| {
+            group.index_locations == input.settings.resolver.index_locations
+                && group.keyring_provider == input.settings.resolver.keyring_provider
+        }) {
+            group.inputs.push(input);
+        } else {
+            audit_groups.push(ToolAuditGroup {
+                index_locations: input.settings.resolver.index_locations.clone(),
+                keyring_provider: input.settings.resolver.keyring_provider,
+                inputs: vec![input],
+            });
+        }
+    }
+
+    for group in audit_groups {
         let builder = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
-            .index_locations(settings.resolver.index_locations.clone())
-            .keyring(settings.resolver.keyring_provider);
+            .index_locations(group.index_locations)
+            .keyring(group.keyring_provider);
         let registry_client = if let Some(existing) = registry_transport.as_ref() {
             builder.wrap_existing(existing)?
         } else {
@@ -234,60 +275,71 @@ pub(crate) async fn audit(
             registry_transport = Some(client.cached_client().uncached().clone());
             client
         };
-        let outcome = audit_lock(
-            &lock,
-            &root,
-            &extras,
-            &groups,
-            &settings.resolver,
-            &registry_client,
-            async |selected| {
-                // One OSV query covers the selected tool lockfiles. Keep findings in each
-                // tool's dependency order, including dependencies shared by several tools.
-                let findings = osv_findings
-                    .get_or_try_init(async || {
-                        let mut findings: FxHashMap<Dependency, Vec<Finding>> =
-                            FxHashMap::default();
-                        for finding in osv_service
-                            .query_batch(&dependencies, osv::Filter::All)
-                            .await?
-                        {
-                            match &finding {
-                                Finding::Vulnerability(vulnerability) => findings
-                                    .entry(vulnerability.dependency.clone())
-                                    .or_default()
-                                    .push(finding),
-                                Finding::ProjectStatus(_) => {}
-                            }
-                        }
-                        Ok::<_, osv::Error>(findings)
-                    })
-                    .await?;
-                Ok(selected
-                    .iter()
-                    .flat_map(|dependency| findings.get(dependency).into_iter().flatten())
-                    .cloned()
-                    .collect())
-            },
-            concurrency.clone(),
-            printer,
-            &ignore,
-            &ignore_until_fixed,
-        )
-        .await?;
+        let results = stream::iter(group.inputs)
+            .map(async |input| {
+                let outcome = audit_lock(
+                    &input.lock,
+                    &input.root,
+                    &extras,
+                    &groups,
+                    &input.settings.resolver,
+                    &registry_client,
+                    async |selected| {
+                        // One OSV query covers the selected tool lockfiles. Keep findings in
+                        // each tool's dependency order, including shared dependencies.
+                        let findings = osv_findings
+                            .get_or_try_init(async || {
+                                let mut findings: FxHashMap<Dependency, Vec<Finding>> =
+                                    FxHashMap::default();
+                                for finding in osv_service
+                                    .query_batch(&dependencies, osv::Filter::All)
+                                    .await?
+                                {
+                                    match &finding {
+                                        Finding::Vulnerability(vulnerability) => findings
+                                            .entry(vulnerability.dependency.clone())
+                                            .or_default()
+                                            .push(finding),
+                                        Finding::ProjectStatus(_) => {}
+                                    }
+                                }
+                                Ok::<_, osv::Error>(findings)
+                            })
+                            .await?;
+                        Ok(selected
+                            .iter()
+                            .flat_map(|dependency| findings.get(dependency).into_iter().flatten())
+                            .cloned()
+                            .collect())
+                    },
+                    concurrency.clone(),
+                    printer,
+                    &ignore,
+                    &ignore_until_fixed,
+                )
+                .await?;
 
-        matched_ignores.extend(outcome.matched_ignores);
-        audits.push((
-            name,
-            AuditResults {
-                printer,
-                n_packages: outcome.n_packages,
-                output_format,
-                findings: outcome.findings,
-                artifact_uri: artifact_uri(&lock_path),
-            },
-        ));
+                Ok::<_, anyhow::Error>((
+                    input.name,
+                    AuditResults {
+                        printer,
+                        n_packages: outcome.n_packages,
+                        output_format,
+                        findings: outcome.findings,
+                        artifact_uri: artifact_uri(&input.lock_path),
+                    },
+                    outcome.matched_ignores,
+                ))
+            })
+            .buffered(concurrency.downloads)
+            .try_collect::<Vec<_>>()
+            .await?;
+        for (name, results, ignores) in results {
+            matched_ignores.extend(ignores);
+            audits.push((name, results));
+        }
     }
+    audits.sort_by(|(left, _), (right, _)| left.cmp(right));
 
     warn_unmatched_ignores(
         &ignore,
