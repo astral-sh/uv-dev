@@ -15,7 +15,7 @@ use uv_auth::CredentialsCache;
 use uv_build_backend::check_direct_build;
 use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, CacheBucket};
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, RegistryClientBuilder, SharedWheelMetadata};
 use uv_configuration::{
     BuildIsolation, BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints,
     DependencyGroupsWithDefaults, DependencyMode, DependencyModifiers, HashCheckingMode,
@@ -476,7 +476,7 @@ async fn build_impl(
         }
     }
 
-    let wheel_downloads = WorkspaceWheelDownloads::default();
+    let wheels = WorkspaceWheels::default();
     let results: Vec<_> = futures::future::join_all(packages.into_iter().map(|source| {
         let future = build_package(
             source.clone(),
@@ -492,7 +492,7 @@ async fn build_impl(
             workspace_cache,
             printer,
             index_locations,
-            &wheel_downloads,
+            &wheels,
             client_builder.clone(),
             hash_checking,
             build_logs,
@@ -555,35 +555,42 @@ async fn build_impl(
     }
 }
 
+/// Remote wheel results for a build command with fixed index, credential, and cache settings.
 #[derive(Default)]
-struct WorkspaceWheelDownloads(Mutex<Vec<InterpreterWheelDownloads>>);
+struct WorkspaceWheels(Mutex<Vec<InterpreterWheels>>);
 
-struct InterpreterWheelDownloads {
+struct InterpreterWheels {
     executable: PathBuf,
     markers: MarkerEnvironment,
     platform: Platform,
     downloads: SharedWheelDownloads,
+    metadata: SharedWheelMetadata,
 }
 
-impl WorkspaceWheelDownloads {
-    async fn for_interpreter(&self, interpreter: &Interpreter) -> SharedWheelDownloads {
+impl WorkspaceWheels {
+    async fn for_interpreter(
+        &self,
+        interpreter: &Interpreter,
+    ) -> (SharedWheelDownloads, SharedWheelMetadata) {
         let mut entries = self.0.lock().await;
         if let Some(entry) = entries.iter().find(|entry| {
             entry.executable == interpreter.real_executable()
                 && entry.markers == *interpreter.markers()
                 && entry.platform == *interpreter.platform()
         }) {
-            return entry.downloads.clone();
+            return (entry.downloads.clone(), entry.metadata.clone());
         }
 
         let downloads = SharedWheelDownloads::default();
-        entries.push(InterpreterWheelDownloads {
+        let metadata = SharedWheelMetadata::default();
+        entries.push(InterpreterWheels {
             executable: interpreter.real_executable().to_path_buf(),
             markers: interpreter.markers().clone(),
             platform: interpreter.platform().clone(),
             downloads: downloads.clone(),
+            metadata: metadata.clone(),
         });
-        downloads
+        (downloads, metadata)
     }
 }
 
@@ -602,7 +609,7 @@ async fn build_package(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     index_locations: &IndexLocations,
-    wheel_downloads: &WorkspaceWheelDownloads,
+    wheels: &WorkspaceWheels,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
     build_logs: bool,
@@ -717,12 +724,14 @@ async fn build_package(
     };
 
     // Initialize the registry client.
+    let (wheel_downloads, wheel_metadata) = wheels.for_interpreter(&interpreter).await;
     let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
         .index_locations(index_locations.clone())
         .index_strategy(index_strategy)
         .keyring(keyring_provider)
         .markers(interpreter.markers())
         .platform(interpreter.platform())
+        .shared_wheel_metadata(wheel_metadata)
         .build()?;
 
     // Determine whether to enable build isolation.
@@ -743,8 +752,7 @@ async fn build_package(
     let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
 
     // Initialize any shared state.
-    let state = SharedState::default()
-        .with_shared_wheel_downloads(wheel_downloads.for_interpreter(&interpreter).await);
+    let state = SharedState::default().with_shared_wheel_downloads(wheel_downloads);
 
     let extra_build_requires =
         LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())

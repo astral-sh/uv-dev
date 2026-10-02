@@ -12,7 +12,7 @@ use http::{HeaderMap, StatusCode};
 use itertools::Either;
 use reqwest::{Proxy, Response};
 use rustc_hash::FxHashMap;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tracing::{Instrument, Span, debug, info_span, instrument, trace, warn};
 use url::Url;
 
@@ -59,6 +59,7 @@ pub struct RegistryClientBuilder<'a> {
     cache: Cache,
     base_client_builder: BaseClientBuilder<'a>,
     metadata_range_request: MetadataRangeRequest,
+    wheel_metadata: Option<SharedWheelMetadata>,
 }
 
 impl<'a> RegistryClientBuilder<'a> {
@@ -71,6 +72,7 @@ impl<'a> RegistryClientBuilder<'a> {
             cache,
             base_client_builder: base_client_builder.redirect(RedirectPolicy::RetriggerMiddleware),
             metadata_range_request,
+            wheel_metadata: None,
         }
     }
 
@@ -107,6 +109,13 @@ impl<'a> RegistryClientBuilder<'a> {
     #[must_use]
     pub fn cache(mut self, cache: Cache) -> Self {
         self.cache = cache;
+        self
+    }
+
+    /// Share command-scoped remote wheel metadata with compatible clients.
+    #[must_use]
+    pub fn shared_wheel_metadata(mut self, metadata: SharedWheelMetadata) -> Self {
+        self.wheel_metadata = Some(metadata);
         self
     }
 
@@ -209,6 +218,7 @@ impl<'a> RegistryClientBuilder<'a> {
             client,
             read_timeout,
             flat_indexes: Arc::default(),
+            wheel_metadata: self.wheel_metadata,
             parse_concurrency: Arc::new(Semaphore::new(
                 thread::available_parallelism().map_or(1, |parallelism| parallelism.get().min(4)),
             )),
@@ -237,6 +247,8 @@ pub struct RegistryClient {
     read_timeout: Duration,
     /// The flat index entries for each `--find-links`-style index URL, with one slot per index.
     flat_indexes: Arc<Mutex<FlatIndexCache>>,
+    /// Command-scoped remote wheel metadata, including completed request failures.
+    wheel_metadata: Option<SharedWheelMetadata>,
     /// Bound CPU work for large remote index responses independently of network requests.
     parse_concurrency: Arc<Semaphore>,
     /// Limit decoded input bytes held by offloaded parsers, independently of parsed output size.
@@ -1052,9 +1064,9 @@ impl RegistryClient {
         tokio::task::spawn_blocking(move || {
             let file = fs_err::File::open(path).map_err(ErrorKind::Io)?;
             let contents = read_archive_metadata(&filename, BufReader::new(file))
-                .map_err(|err| ErrorKind::Metadata(metadata_path, err))?;
+                .map_err(|err| ErrorKind::Metadata(metadata_path, Arc::new(err)))?;
             ResolutionMetadata::parse_metadata(&contents).map_err(|err| {
-                ErrorKind::MetadataParseError(filename, built_dist, Box::new(err)).into()
+                ErrorKind::MetadataParseError(filename, built_dist, Arc::new(err)).into()
             })
         })
         .await
@@ -1063,6 +1075,27 @@ impl RegistryClient {
 
     /// Fetch the metadata from a wheel file.
     async fn wheel_metadata_registry(
+        &self,
+        wheel: &RegistryBuiltWheel,
+        url: &DisplaySafeUrl,
+        capabilities: &IndexCapabilities,
+    ) -> Result<ResolutionMetadata, Error> {
+        if let Some(metadata) = &self.wheel_metadata
+            && matches!(url.scheme(), "http" | "https")
+        {
+            return metadata
+                .get_or_insert(wheel)
+                .await
+                .get_or_init(|| self.wheel_metadata_registry_inner(wheel, url, capabilities))
+                .await
+                .clone();
+        }
+
+        self.wheel_metadata_registry_inner(wheel, url, capabilities)
+            .await
+    }
+
+    async fn wheel_metadata_registry_inner(
         &self,
         wheel: &RegistryBuiltWheel,
         url: &DisplaySafeUrl,
@@ -1132,7 +1165,7 @@ impl RegistryClient {
                         Error::from(ErrorKind::MetadataParseError(
                             filename.clone(),
                             url.to_string(),
-                            Box::new(err),
+                            Arc::new(err),
                         ))
                     })
             };
@@ -1247,7 +1280,7 @@ impl RegistryClient {
                         Error::from(ErrorKind::MetadataParseError(
                             filename.clone(),
                             url.to_string(),
-                            Box::new(err),
+                            Arc::new(err),
                         ))
                     })
                 }
@@ -1319,7 +1352,7 @@ impl RegistryClient {
 
                 read_metadata_async_stream(filename, url.as_ref(), reader)
                     .await
-                    .map_err(|err| ErrorKind::Metadata(url.to_string(), err))
+                    .map_err(|err| ErrorKind::Metadata(url.to_string(), Arc::new(err)))
             }
             .instrument(info_span!("read_metadata_stream", wheel = %filename))
         };
@@ -1384,6 +1417,26 @@ impl FlatIndexCache {
 
 type FlatIndexEntriesByPackage = FxHashMap<PackageName, Vec<FlatIndexEntry>>;
 type FlatIndexSlot = Arc<Mutex<Option<FlatIndexEntriesByPackage>>>;
+
+/// Remote registry wheel metadata for one command with fixed index, credential, interpreter, and
+/// cache settings. The full advertised artifact identity keeps URLs, hashes, and sizes separate.
+///
+/// Callers must only share this state between clients with identical request configuration.
+#[derive(Default, Debug, Clone)]
+pub struct SharedWheelMetadata(Arc<Mutex<FxHashMap<RegistryBuiltWheel, WheelMetadataSlot>>>);
+
+impl SharedWheelMetadata {
+    async fn get_or_insert(&self, wheel: &RegistryBuiltWheel) -> WheelMetadataSlot {
+        self.0
+            .lock()
+            .await
+            .entry(wheel.clone())
+            .or_default()
+            .clone()
+    }
+}
+
+type WheelMetadataSlot = Arc<OnceCell<Result<ResolutionMetadata, Error>>>;
 
 #[derive(Default, Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
@@ -1817,8 +1870,12 @@ impl Connectivity {
 mod tests {
     use std::assert_matches;
     use std::str::FromStr;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    use tokio::sync::Semaphore;
+    use async_zip::base::write::ZipFileWriter;
+    use async_zip::{Compression, ZipEntryBuilder};
+    use tokio::sync::{Notify, Semaphore};
     use url::Url;
     use uv_normalize::PackageName;
     use uv_pypi_types::{HashDigest, HashDigests, PypiSimpleDetail};
@@ -1827,16 +1884,17 @@ mod tests {
 
     use crate::{
         BaseClientBuilder, Connectivity, RegistryClient, RegistryClientBuilder,
-        SimpleDetailMetadata, SimpleDetailMetadatum, html::SimpleDetailHTML,
+        SharedWheelMetadata, SimpleDetailMetadata, SimpleDetailMetadatum, html::SimpleDetailHTML,
     };
     use uv_cache::Cache;
     use uv_distribution_types::{
-        FileLocation, Index, IndexCapabilities, IndexFormat, IndexLocations, IndexMetadataRef,
-        IndexUrl, ToUrlError,
+        BuiltDist, File, FileLocation, Index, IndexCapabilities, IndexFormat, IndexLocations,
+        IndexMetadataRef, IndexUrl, RegistryBuiltDist, RegistryBuiltWheel, ToUrlError,
     };
+    use uv_git::GitResolver;
     use uv_small_str::SmallString;
-    use wiremock::matchers::{basic_auth, method, path_regex};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::matchers::{basic_auth, method, path, path_regex};
+    use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     type Error = Box<dyn std::error::Error>;
 
@@ -1895,6 +1953,288 @@ mod tests {
                 .expect("request recording should be enabled")
                 .is_empty()
         );
+    }
+
+    fn registry_metadata_response() -> ResponseTemplate {
+        ResponseTemplate::new(200)
+            .insert_header("Cache-Control", "no-store")
+            .set_body_string("Metadata-Version: 2.3\nName: validation\nVersion: 1.0.0\n")
+    }
+
+    fn registry_wheel(index: IndexUrl, url: &DisplaySafeUrl) -> Result<RegistryBuiltWheel, Error> {
+        let filename = "validation-1.0.0-py3-none-any.whl";
+        Ok(RegistryBuiltWheel {
+            filename: filename.parse()?,
+            file: Box::new(File {
+                dist_info_metadata: Some(HashDigests::empty()),
+                filename: filename.into(),
+                hashes: HashDigests::empty(),
+                requires_python: None,
+                size: None,
+                upload_time_utc_ms: None,
+                url: FileLocation::new(url.as_str().into(), &SmallString::from("")),
+                yanked: None,
+            }),
+            index,
+            size_is_authoritative: false,
+        })
+    }
+
+    #[tokio::test]
+    async fn wheel_metadata_snapshot_respects_artifact_and_client_scope() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        let filename = "validation-1.0.0-py3-none-any.whl";
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{filename}.metadata")))
+            .respond_with(registry_metadata_response())
+            .expect(8)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/other/{filename}.metadata")))
+            .respond_with(registry_metadata_response())
+            .expect(1)
+            .mount(&server)
+            .await;
+        let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+        let other_index = IndexUrl::from_str(&format!("{}/other-simple", server.uri()))?;
+        let url = DisplaySafeUrl::parse(&format!("{}/files/{filename}", server.uri()))?;
+        let wheel = registry_wheel(index.clone(), &url)?;
+        let builder = RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
+            .index_locations(IndexLocations::new(
+                vec![
+                    Index::from_extra_index_url(index),
+                    Index::from_index_url(other_index.clone()),
+                ],
+                vec![],
+                false,
+            ));
+        let shared = SharedWheelMetadata::default();
+        let client = builder
+            .clone()
+            .shared_wheel_metadata(shared.clone())
+            .build()?;
+        let sibling = builder.clone().shared_wheel_metadata(shared).build()?;
+        let capabilities = IndexCapabilities::default();
+        for metadata in futures::future::try_join_all((0..4).map(|member| {
+            let client = if member % 2 == 0 { &client } else { &sibling };
+            client.wheel_metadata_registry(&wheel, &url, &capabilities)
+        }))
+        .await?
+        {
+            assert_eq!(metadata.name, PackageName::from_str("validation")?);
+        }
+        let mut other = wheel.clone();
+        other.index = other_index;
+        client
+            .wheel_metadata_registry(&other, &url, &capabilities)
+            .await?;
+        let mut other = wheel.clone();
+        other.file.hashes =
+            HashDigests::from(format!("sha256:{}", "1".repeat(64)).parse::<HashDigest>()?);
+        client
+            .wheel_metadata_registry(&other, &url, &capabilities)
+            .await?;
+        let mut other = wheel.clone();
+        other.file.size = Some(123);
+        other.size_is_authoritative = true;
+        client
+            .wheel_metadata_registry(&other, &url, &capabilities)
+            .await?;
+        let other_url = DisplaySafeUrl::parse(&format!("{}/other/{filename}", server.uri()))?;
+        let mut other = wheel.clone();
+        other.file.url = FileLocation::new(other_url.as_str().into(), &SmallString::from(""));
+        client
+            .wheel_metadata_registry(&other, &other_url, &capabilities)
+            .await?;
+        let mut other = wheel.clone();
+        other.file.dist_info_metadata = Some(HashDigests::from(
+            format!("sha256:{}", "0".repeat(64)).parse::<HashDigest>()?,
+        ));
+        let error = client
+            .wheel_metadata_registry(&other, &url, &capabilities)
+            .await
+            .expect_err("the advertised metadata hash differs");
+        assert_matches!(error.kind(), crate::ErrorKind::MetadataHashMismatch { .. });
+        let repeated = sibling
+            .wheel_metadata_registry(&other, &url, &capabilities)
+            .await
+            .expect_err("the same metadata hash still differs");
+        assert!(std::ptr::eq(error.kind(), repeated.kind()));
+        builder
+            .clone()
+            .shared_wheel_metadata(SharedWheelMetadata::default())
+            .build()?
+            .wheel_metadata_registry(&wheel, &url, &capabilities)
+            .await?;
+        let ordinary = builder.build()?;
+        for _ in 0..2 {
+            ordinary
+                .wheel_metadata_registry(&wheel, &url, &capabilities)
+                .await?;
+        }
+        server.verify().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wheel_metadata_snapshot_shares_terminal_request_errors() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        let filename = "validation-1.0.0-py3-none-any.whl";
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{filename}.metadata")))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let client = RegistryClientBuilder::new(
+            BaseClientBuilder::default().retries(2).no_retry_delay(true),
+            Cache::temp()?,
+        )
+        .shared_wheel_metadata(SharedWheelMetadata::default())
+        .build()?;
+        let url = DisplaySafeUrl::parse(&format!("{}/files/{filename}", server.uri()))?;
+        let wheel = registry_wheel(IndexUrl::from_str(&server.uri())?, &url)?;
+        let capabilities = IndexCapabilities::default();
+        let responses = futures::future::join_all(
+            (0..4).map(|_| client.wheel_metadata_registry(&wheel, &url, &capabilities)),
+        )
+        .await;
+        let errors = responses
+            .into_iter()
+            .map(|response| response.expect_err("the metadata service is unavailable"))
+            .collect::<Vec<_>>();
+        let first = &errors[0];
+        assert_eq!(first.retries(), 2);
+        assert_matches!(first.kind(), crate::ErrorKind::WrappedReqwestError(_, error) if error.status() == Some(reqwest::StatusCode::SERVICE_UNAVAILABLE));
+        for error in &errors[1..] {
+            assert!(std::ptr::eq(first.kind(), error.kind()));
+            assert_eq!(first.to_string(), error.to_string());
+            assert_eq!(first.retries(), error.retries());
+            assert_eq!(first.duration(), error.duration());
+        }
+        server.verify().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wheel_metadata_snapshot_keeps_credentials_separate() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        let filename = "validation-1.0.0-py3-none-any.whl";
+        let cache = Cache::temp()?;
+        for username in ["alice", "bob"] {
+            Mock::given(method("GET"))
+                .and(path(format!("/files/{filename}.metadata")))
+                .and(basic_auth(username, "password"))
+                .respond_with(registry_metadata_response())
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut url = Url::parse(&format!("{}/files/{filename}", server.uri()))?;
+            assert!(url.set_username(username).is_ok());
+            assert!(url.set_password(Some("password")).is_ok());
+            let mut index_url = url.clone();
+            index_url.set_path("/simple");
+            let index = IndexUrl::from_str(index_url.as_str())?;
+            let url = DisplaySafeUrl::from(url);
+            let wheel = registry_wheel(index.clone(), &url)?;
+            let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone())
+                .index_locations(IndexLocations::new(
+                    vec![Index::from_index_url(index)],
+                    vec![],
+                    false,
+                ))
+                .shared_wheel_metadata(SharedWheelMetadata::default())
+                .build()?;
+            for _ in 0..2 {
+                client
+                    .wheel_metadata_registry(&wheel, &url, &IndexCapabilities::default())
+                    .await?;
+            }
+        }
+        server.verify().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wheel_metadata_snapshot_keeps_local_wheels_live() -> Result<(), Error> {
+        let directory = tempfile::tempdir()?;
+        let filename = "validation-1.0.0-py3-none-any.whl";
+        let wheel_path = directory.path().join(filename);
+        let url =
+            DisplaySafeUrl::from(Url::from_file_path(&wheel_path).expect("an absolute file URL"));
+        let index = IndexUrl::parse(directory.path().to_string_lossy().as_ref(), None)?;
+        let dist = BuiltDist::Registry(RegistryBuiltDist {
+            wheels: vec![registry_wheel(index, &url)?],
+            best_wheel_index: 0,
+            sdist: None,
+        });
+        let client = RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
+            .shared_wheel_metadata(SharedWheelMetadata::default())
+            .build()?;
+        for (requires_dist, expected) in [("", 0), ("Requires-Dist: other\n", 1)] {
+            let metadata =
+                format!("Metadata-Version: 2.3\nName: validation\nVersion: 1.0.0\n{requires_dist}");
+            let mut writer = ZipFileWriter::new(Vec::new());
+            writer
+                .write_entry_whole(
+                    ZipEntryBuilder::new(
+                        "validation-1.0.0.dist-info/METADATA".into(),
+                        Compression::Stored,
+                    ),
+                    metadata.as_bytes(),
+                )
+                .await?;
+            fs_err::write(&wheel_path, writer.close().await?)?;
+            let metadata = client
+                .wheel_metadata(
+                    &dist,
+                    &GitResolver::default(),
+                    &IndexCapabilities::default(),
+                    None,
+                )
+                .await?;
+            assert_eq!(metadata.requires_dist.len(), expected);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wheel_metadata_snapshot_retries_cancelled_initialization() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        let filename = "validation-1.0.0-py3-none-any.whl";
+        let observed = Arc::new(Notify::new());
+        let responder_observed = observed.clone();
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{filename}.metadata")))
+            .respond_with(move |_: &Request| {
+                responder_observed.notify_one();
+                registry_metadata_response().set_delay(Duration::from_millis(200))
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+        let client = RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?)
+            .shared_wheel_metadata(SharedWheelMetadata::default())
+            .build()?;
+        let url = DisplaySafeUrl::parse(&format!("{}/files/{filename}", server.uri()))?;
+        let wheel = registry_wheel(IndexUrl::from_str(&server.uri())?, &url)?;
+        let capabilities = IndexCapabilities::default();
+        let mut pending = Box::pin(client.wheel_metadata_registry(&wheel, &url, &capabilities));
+        let request_started = tokio::select! {
+            _ = &mut pending => false,
+            result = tokio::time::timeout(Duration::from_secs(5), observed.notified()) => {
+                result?;
+                true
+            }
+        };
+        assert!(request_started);
+        drop(pending);
+        client
+            .wheel_metadata_registry(&wheel, &url, &capabilities)
+            .await?;
+        server.verify().await;
+        Ok(())
     }
 
     #[tokio::test]
