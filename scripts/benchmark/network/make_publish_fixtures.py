@@ -19,12 +19,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--builds", type=int, default=12)
+    parser.add_argument("--projects", type=int, default=1)
     args = parser.parse_args()
     if args.builds < 1:
         parser.error("--builds must be positive")
+    if args.projects < 1:
+        parser.error("--projects must be positive")
     args.directory.mkdir(parents=True, exist_ok=True)
+    names = (
+        ["uv-bench-publish"]
+        if args.projects == 1
+        else [f"uv-bench-publish-{index:03d}" for index in range(args.projects)]
+    )
     manifest = [
-        scheduling.wheel(args.directory, "uv-bench-publish", 1, None, build_tag=build)
+        scheduling.wheel(args.directory, name, 1, None, build_tag=build)
+        for name in names
         for build in range(1, args.builds + 1)
     ]
     profiles = {
@@ -39,7 +48,7 @@ def main() -> None:
         "flaky": {
             "latency_ms": 150,
             "bytes_per_second": 1250000,
-            "path_failures": {"/simple/uv-bench-publish/": {"status": 503, "count": 1}},
+            "path_failures": {f"/simple/{names[0]}/": {"status": 503, "count": 1}},
         },
     }
     for filename, data in (

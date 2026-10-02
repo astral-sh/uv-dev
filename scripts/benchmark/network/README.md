@@ -343,10 +343,12 @@ and measures a local metadata read. A direct URL already identified by that cont
 network-transfer bound; process startup, filesystem, and CPU costs remain. Use `--cache-state fresh`
 for a fresh HTTP cache entry or `--cache-state revalidate` to measure one conditional request before
 reading the unchanged cached metadata. `make_publish_fixtures.py --directory DIR` creates a batch of
-distinct wheel builds for repeated `publish --dry-run --check-url` checks. `publish_check_oracle.py`
+distinct wheel builds for repeated `publish --dry-run --check-url` checks. Use `--projects` to
+generate a workspace release with multiple builds per project. `publish_check_oracle.py`
 reads one current index per known package and verifies every selected local file against its
-advertised SHA-256. Use `--route revalidate` to conditionally validate cached index bodies. The
-replay serves already-published files, so this workload does not upload anything. Report it as a
+advertised SHA-256. Use `--concurrency` to bound simultaneous index requests and account for that
+limit in the network floor. Use `--route revalidate` to conditionally validate cached index bodies.
+The replay serves already-published files, so this workload does not upload anything. Report it as a
 synthetic repeat-publish workload. `make_frozen_fixtures.py --directory DIR` creates a wheel-only
 project and setup commands that lock it before timing. Its profiles include a slow or intermittently
 failing find-links source that is introduced only for the frozen installation.

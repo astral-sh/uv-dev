@@ -29,8 +29,11 @@ def main() -> None:
     parser.add_argument("--profile", required=True)
     parser.add_argument("--filename", action="append", default=[])
     parser.add_argument("--route", choices=["current", "revalidate"], default="current")
+    parser.add_argument("--concurrency", type=int, default=50)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.concurrency < 1:
+        parser.error("concurrency must be positive")
     manifest = json.loads(args.manifest.read_text())
     selected = (
         set(args.filename) if args.filename else {x["filename"] for x in manifest}
@@ -85,7 +88,9 @@ def main() -> None:
 
     started = time.perf_counter()
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(packages)) as pool:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(args.concurrency, len(packages))
+        ) as pool:
             indexes = dict(pool.map(read, packages))
         for entry in entries:
             package = bench.normalize(entry["filename"].split("-")[0])
@@ -106,34 +111,40 @@ def main() -> None:
         if args.route == "current"
         else 0
     )
-    required_latency = max(
-        max(
-            0,
-            profile.get("path_latency_ms", {}).get(
-                f"/simple/{package}/", profile.get("latency_ms", 0)
+    netem = bench.netem_profile()
+    required_waves, required_latency = bench.concurrent_latency_floor(
+        [
+            max(
+                0,
+                profile.get("path_latency_ms", {}).get(
+                    f"/simple/{package}/", profile.get("latency_ms", 0)
+                )
+                - profile.get("jitter_ms", 0),
             )
-            - profile.get("jitter_ms", 0),
-        )
-        for package in packages
+            for package in packages
+        ],
+        args.concurrency,
+        netem.get("rtt_ms", 0),
     )
     result = {
         "profile": profile,
-        "netem": bench.netem_profile(),
+        "netem": netem,
         "manifest_sha256": bench.digest(args.manifest),
         "filenames": sorted(selected),
         "route": args.route,
+        "concurrency": args.concurrency,
         "seconds": seconds,
         "required_bytes": required_bytes,
-        "required_waves": 1,
+        "required_waves": required_waves,
         "required_latency_ms": required_latency,
         "optimistic_network_floor_seconds": bench.network_floor(
-            profile, required_bytes, 1, required_latency
+            profile, required_bytes, required_waves, required_latency, netem=netem
         ),
         "actual_bytes": sum(event["bytes"] for event in server.events),
         "requests": len(server.events),
         "events": server.events,
         "retry_scope": "Transient HTTP responses are retried up to three times per URL without oracle backoff. The optimistic floor excludes retries.",
-        "scope": "Known local files and package names. Read each current index concurrently, or conditionally revalidate a cached index with its strong ETag, and verify every selected file's SHA-256. The floor excludes hashing, headers, TCP/TLS, and other CPU work.",
+        "scope": "Known local files and package names. Read each current index within the configured concurrency limit, or conditionally revalidate a cached index with its strong ETag, and verify every selected file's SHA-256. The floor excludes hashing, headers, TCP/TLS, and other CPU work.",
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
