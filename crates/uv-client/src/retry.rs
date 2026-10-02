@@ -84,18 +84,55 @@ impl Middleware for UvRetryMiddleware {
         // The retry library passes responses to its strategy and timing decisions to its policy.
         // Keep their shared state local to this request, including all of its retry attempts.
         let advice = Arc::new(Mutex::new(None));
-        RetryTransientMiddleware::new_with_policy_and_strategy(
-            RetryAdvicePolicy {
-                policy: self.policy,
-                advice: advice.clone(),
+        let budget = extensions.get::<RequestRetryBudget>();
+        let policy = budget.map_or(self.policy, |budget| budget.policy);
+        let result = RetryTransientMiddleware::new_with_policy_and_strategy(
+            RetryBudgetPolicy {
+                policy: RetryAdvicePolicy {
+                    policy,
+                    advice: advice.clone(),
+                },
+                start_time: budget.map(|budget| budget.start_time),
+                past_retries: budget.map_or(0, |budget| budget.total_retries),
             },
             RetryAdviceStrategy {
-                max_delay: self.policy.max_retry_interval,
+                max_delay: policy.max_retry_interval,
                 advice,
             },
         )
         .handle(request, extensions, next)
-        .await
+        .await;
+        if let Some(budget) = extensions.get_mut::<RequestRetryBudget>() {
+            budget.total_retries = budget
+                .total_retries
+                .saturating_add(request_retries(result.as_ref()));
+            budget.recorded = true;
+        }
+        result
+    }
+}
+
+/// Retry accounting for one request and any redirects through the middleware.
+#[derive(Clone)]
+pub(crate) struct RequestRetryBudget {
+    policy: ExponentialBackoff,
+    start_time: SystemTime,
+    total_retries: u32,
+    recorded: bool,
+}
+
+struct RetryBudgetPolicy {
+    policy: RetryAdvicePolicy,
+    start_time: Option<SystemTime>,
+    past_retries: u32,
+}
+
+impl RetryPolicy for RetryBudgetPolicy {
+    fn should_retry(&self, start: SystemTime, past_retries: u32) -> RetryDecision {
+        self.policy.should_retry(
+            self.start_time.unwrap_or(start),
+            self.past_retries.saturating_add(past_retries),
+        )
     }
 }
 
@@ -224,13 +261,27 @@ impl RetryState {
         self.start_time.elapsed()
     }
 
-    /// Send a request and count any retries performed by the middleware.
+    /// Send a request using the remaining retry budget, including middleware retries.
     pub async fn send(
         &mut self,
         request: RequestBuilder<'_>,
     ) -> reqwest_middleware::Result<Response> {
-        let result = request.send().await;
-        self.record_request_retries(result.as_ref());
+        let mut extensions = Extensions::new();
+        extensions.insert(RequestRetryBudget {
+            policy: self.retry_policy,
+            start_time: self.start_time,
+            total_retries: self.total_retries,
+            recorded: false,
+        });
+        let result = request.send_with_extensions(&mut extensions).await;
+        if let Some(budget) = extensions
+            .get::<RequestRetryBudget>()
+            .filter(|budget| budget.recorded)
+        {
+            self.total_retries = budget.total_retries;
+        } else {
+            self.record_request_retries(result.as_ref());
+        }
         result
     }
 
@@ -251,20 +302,7 @@ impl RetryState {
     ///
     /// Call once per request, including successful requests whose bodies may later fail.
     fn record_request_retries(&mut self, result: Result<&Response, &reqwest_middleware::Error>) {
-        let retries = match result {
-            Ok(response) => response
-                .extensions()
-                .get::<reqwest_retry::RetryCount>()
-                .map_or(0, |retries| retries.value()),
-            Err(reqwest_middleware::Error::Middleware(err)) => {
-                match err.downcast_ref::<reqwest_retry::RetryError>() {
-                    Some(reqwest_retry::RetryError::WithRetries { retries, .. }) => *retries,
-                    Some(reqwest_retry::RetryError::Error(_)) | None => 0,
-                }
-            }
-            Err(reqwest_middleware::Error::Reqwest(_)) => 0,
-        };
-        self.total_retries += retries;
+        self.total_retries += request_retries(result);
     }
 
     /// Determines whether request should be retried.
@@ -315,6 +353,22 @@ impl RetryState {
         // TODO(konsti): Should we show a spinner plus a message in the CLI while
         // waiting?
         tokio::time::sleep(duration).await;
+    }
+}
+
+fn request_retries(result: Result<&Response, &reqwest_middleware::Error>) -> u32 {
+    match result {
+        Ok(response) => response
+            .extensions()
+            .get::<reqwest_retry::RetryCount>()
+            .map_or(0, |retries| retries.value()),
+        Err(reqwest_middleware::Error::Middleware(err)) => {
+            match err.downcast_ref::<reqwest_retry::RetryError>() {
+                Some(reqwest_retry::RetryError::WithRetries { retries, .. }) => *retries,
+                Some(reqwest_retry::RetryError::Error(_)) | None => 0,
+            }
+        }
+        Err(reqwest_middleware::Error::Reqwest(_)) => 0,
     }
 }
 

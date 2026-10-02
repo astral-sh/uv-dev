@@ -9,7 +9,7 @@ use http::header::{
     AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, LOCATION,
     PROXY_AUTHORIZATION, REFERER, TRANSFER_ENCODING, WWW_AUTHENTICATE,
 };
-use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use http::{Extensions, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use reqwest::{
     Certificate, Client, ClientBuilder, IntoUrl, NoProxy, Proxy, Request, Response, multipart,
 };
@@ -40,7 +40,7 @@ use uv_warnings::warn_user_once_with_chain;
 
 use crate::linehaul::LineHaul;
 use crate::middleware::{AzureStorageMiddleware, OfflineMiddleware};
-use crate::retry::UvRetryMiddleware;
+use crate::retry::{RequestRetryBudget, UvRetryMiddleware};
 use crate::tls::{Certificates, read_identity};
 use crate::{Connectivity, MetadataRangeRequest, RetriableError, RetryState};
 
@@ -882,10 +882,22 @@ impl RedirectClientWithMiddleware {
 
     /// Executes a request, applying the redirect policy.
     async fn execute(&self, req: Request) -> reqwest_middleware::Result<Response> {
+        self.execute_with_extensions(req, &mut Extensions::new())
+            .await
+    }
+
+    async fn execute_with_extensions(
+        &self,
+        req: Request,
+        extensions: &mut Extensions,
+    ) -> reqwest_middleware::Result<Response> {
         match self.redirect_policy {
-            RedirectPolicy::BypassMiddleware => self.client.execute(req).await,
-            RedirectPolicy::RetriggerMiddleware => self.execute_with_redirect_handling(req).await,
-            RedirectPolicy::NoRedirect => self.client.execute(req).await,
+            RedirectPolicy::BypassMiddleware | RedirectPolicy::NoRedirect => {
+                self.client.execute_with_extensions(req, extensions).await
+            }
+            RedirectPolicy::RetriggerMiddleware => {
+                self.execute_with_redirect_handling(req, extensions).await
+            }
         }
     }
 
@@ -901,16 +913,25 @@ impl RedirectClientWithMiddleware {
     async fn execute_with_redirect_handling(
         &self,
         req: Request,
+        extensions: &mut Extensions,
     ) -> reqwest_middleware::Result<Response> {
         let mut request = req;
         let mut redirects = 0;
         let max_redirects = DEFAULT_MAX_REDIRECTS;
 
         loop {
+            // Each redirect needs fresh middleware state, except for the shared retry budget.
+            let mut request_extensions = extensions.clone();
             let result = self
                 .client
-                .execute(request.try_clone().expect("HTTP request must be cloneable"))
+                .execute_with_extensions(
+                    request.try_clone().expect("HTTP request must be cloneable"),
+                    &mut request_extensions,
+                )
                 .await;
+            if let Some(budget) = request_extensions.remove::<RequestRetryBudget>() {
+                extensions.insert(budget);
+            }
             let Ok(response) = result else {
                 return result;
             };
@@ -1159,6 +1180,15 @@ impl<'a> RequestBuilder<'a> {
         self.client.execute(self.build()?).await
     }
 
+    pub(crate) async fn send_with_extensions(
+        self,
+        extensions: &mut Extensions,
+    ) -> reqwest_middleware::Result<Response> {
+        self.client
+            .execute_with_extensions(self.build()?, extensions)
+            .await
+    }
+
     pub fn raw_builder(&self) -> &reqwest_middleware::RequestBuilder {
         &self.builder
     }
@@ -1243,8 +1273,63 @@ mod tests {
 
     use anyhow::{Context, Result};
     use reqwest::{Client, Method};
+    use reqwest_middleware::Next;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[derive(Clone)]
+    struct RedirectMarker;
+
+    struct RedirectMarkerMiddleware;
+
+    #[async_trait::async_trait]
+    impl Middleware for RedirectMarkerMiddleware {
+        async fn handle(
+            &self,
+            request: Request,
+            extensions: &mut Extensions,
+            next: Next<'_>,
+        ) -> reqwest_middleware::Result<Response> {
+            if extensions.get::<RedirectMarker>().is_some() {
+                return Err(reqwest_middleware::Error::Middleware(anyhow!(
+                    "Middleware state crossed a redirect"
+                )));
+            }
+            extensions.insert(RedirectMarker);
+            next.run(request, extensions).await
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_budget_does_not_share_other_redirect_middleware_state() -> Result<()> {
+        let first = MockServer::start().await;
+        let second = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", second.uri()))
+            .expect(1)
+            .mount(&first)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&second)
+            .await;
+        let client = BaseClientBuilder::default()
+            .retries(1)
+            .no_retry_delay(true)
+            .redirect(RedirectPolicy::RetriggerMiddleware)
+            .extra_middleware(ExtraMiddleware(vec![Arc::new(RedirectMarkerMiddleware)]))
+            .build()?;
+        let url: DisplaySafeUrl = first.uri().parse()?;
+        let mut retry_state = RetryState::start(client.retry_policy(), url.clone());
+        let response = retry_state
+            .send(client.for_host(&url).get(url.as_str()))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        first.verify().await;
+        second.verify().await;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn cache_read_runtime_can_be_dropped_from_an_async_context() {

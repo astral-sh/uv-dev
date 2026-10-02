@@ -3,15 +3,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{assert_matches, io};
 
 use anyhow::Result;
-use reqwest::Response;
+use reqwest::{Response, StatusCode};
 use wiremock::matchers::{any, header, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_cache::CacheEntry;
 use uv_client::{
     BaseClientBuilder, CacheControl, CachedClient, CachedClientError, DataWithCachePolicy,
-    ErrorKind, RetryState,
+    ErrorKind, RedirectPolicy, RetryState,
 };
+use uv_redacted::DisplaySafeUrl;
 
 #[test]
 fn reject_overflowing_cache_policy_length() {
@@ -137,6 +138,110 @@ async fn send_counts_middleware_retries() -> Result<()> {
         assert!(retry_state.should_retry(&error, 0).is_none());
         server.verify().await;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn send_respects_consumed_retry_budget() -> Result<()> {
+    for network_error in [false, true] {
+        for consumed in 0..=2_u32 {
+            let server = MockServer::start().await;
+            let mock = if network_error {
+                Mock::given(any()).respond_with_err(|_: &Request| {
+                    io::Error::new(io::ErrorKind::ConnectionReset, "connection reset")
+                })
+            } else {
+                Mock::given(any()).respond_with(ResponseTemplate::new(503))
+            };
+            mock.expect(u64::from(3 - consumed)).mount(&server).await;
+
+            let client = BaseClientBuilder::default()
+                .retries(2)
+                .no_retry_delay(true)
+                .build()?;
+            let url: DisplaySafeUrl = server.uri().parse()?;
+            let mut retry_state = RetryState::start(client.retry_policy(), url.clone());
+            let error = io::Error::new(io::ErrorKind::TimedOut, "interrupted response");
+            for _ in 0..consumed {
+                assert!(retry_state.should_retry(&error, 0).is_some());
+            }
+
+            let result = retry_state
+                .send(client.for_host(&url).get(url.as_str()))
+                .await;
+            assert_eq!(result.is_err(), network_error);
+            if let Ok(response) = result {
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            }
+            assert!(retry_state.should_retry(&error, 0).is_none());
+            server.verify().await;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn send_uses_the_shared_retry_policy() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = BaseClientBuilder::default()
+        .retries(2)
+        .no_retry_delay(true)
+        .build()?;
+    let url: DisplaySafeUrl = server.uri().parse()?;
+    let mut policy = client.retry_policy();
+    policy.max_n_retries = Some(0);
+    let mut retry_state = RetryState::start(policy, url.clone());
+    let response = retry_state
+        .send(client.for_host(&url).get(url.as_str()))
+        .await?;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn redirected_requests_share_remaining_retry_budget() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(path("/first"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(path("/first"))
+        .respond_with(ResponseTemplate::new(302).insert_header("location", "/second"))
+        .with_priority(2)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(path("/second"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let client = BaseClientBuilder::default()
+        .retries(3)
+        .no_retry_delay(true)
+        .redirect(RedirectPolicy::RetriggerMiddleware)
+        .build()?;
+    let url: DisplaySafeUrl = format!("{}/first", server.uri()).parse()?;
+    let mut retry_state = RetryState::start(client.retry_policy(), url.clone());
+    let error = io::Error::new(io::ErrorKind::TimedOut, "interrupted response");
+    assert!(retry_state.should_retry(&error, 0).is_some());
+    let response = retry_state
+        .send(client.for_host(&url).get(url.as_str()))
+        .await?;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(retry_state.should_retry(&error, 0).is_none());
+    server.verify().await;
     Ok(())
 }
 
