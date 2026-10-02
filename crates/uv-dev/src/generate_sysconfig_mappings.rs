@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 
+use uv_client::{BaseClientBuilder, RetryState};
+
 use crate::ROOT_DIR;
 use crate::generate_all::Mode;
 
@@ -99,9 +101,7 @@ pub(crate) async fn main(args: &Args) -> Result<()> {
 
 async fn generate() -> Result<String> {
     println!("Downloading python-build-standalone cpython-unix/targets.yml ...");
-    let body = reqwest::get(TARGETS_YML_URL).await?.text().await?;
-
-    let parsed: BTreeMap<String, TargetConfig> = serde_yaml::from_str(&body)?;
+    let parsed = download_targets(TARGETS_YML_URL, BaseClientBuilder::default()).await?;
 
     let mut replacements: BTreeMap<&str, BTreeMap<String, String>> = BTreeMap::new();
 
@@ -203,17 +203,189 @@ async fn generate() -> Result<String> {
     Ok(output)
 }
 
+async fn download_targets(
+    url: &str,
+    client_builder: BaseClientBuilder<'_>,
+) -> Result<BTreeMap<String, TargetConfig>> {
+    let retry_policy = client_builder.retry_policy();
+    // One retry budget covers both the request and reading its complete body.
+    let client = client_builder.retries(0).build()?;
+    let url = url.parse()?;
+    let http_client = client.for_host(&url);
+    let mut retry_state = RetryState::start(retry_policy, url.clone());
+    let body = loop {
+        let result: Result<String> = async {
+            let response = retry_state.send(http_client.get(url.as_str())).await?;
+            Ok(response.error_for_status()?.text().await?)
+        }
+        .await;
+        match result {
+            Ok(body) => break body,
+            Err(error) => {
+                let Some(backoff) = retry_state.should_retry(error.as_ref(), 0) else {
+                    return Err(error);
+                };
+                retry_state.sleep_backoff(backoff).await;
+            }
+        }
+    };
+
+    Ok(serde_yaml::from_str(&body)?)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::env;
+    use std::time::Duration;
 
-    use anyhow::Result;
+    use anyhow::{Result, bail};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
 
+    use uv_client::{BaseClientBuilder, DEFAULT_RETRIES};
     use uv_static::EnvVars;
 
     use crate::generate_all::Mode;
 
-    use super::{Args, main};
+    use super::{Args, TargetConfig, download_targets, main};
+
+    const TARGETS: &str = "linux:\n  host_cc: /usr/bin/test-gcc\n";
+
+    #[derive(Clone, Copy)]
+    enum Reply {
+        Disconnect,
+        Http(u16, &'static str),
+        Truncated,
+    }
+
+    async fn request_targets(
+        replies: &[Reply],
+    ) -> Result<(Result<BTreeMap<String, TargetConfig>>, usize)> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/targets.yml", listener.local_addr()?);
+        let replies = replies.to_vec();
+        let (stop, mut stopped) = oneshot::channel();
+        let mut server = tokio::spawn(async move {
+            let mut requests = 0;
+            loop {
+                let (mut stream, _) = tokio::select! {
+                    () = async { let _ = (&mut stopped).await; } => break,
+                    connection = listener.accept() => connection?,
+                };
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    if request.len() == 8192 {
+                        bail!("test request headers exceed the bound");
+                    }
+                    request.push(stream.read_u8().await?);
+                }
+                assert!(request.starts_with(b"GET /targets.yml HTTP/1.1\r\n"));
+                let reply = replies
+                    .get(requests)
+                    .copied()
+                    .unwrap_or(Reply::Http(503, ""));
+                requests += 1;
+                match reply {
+                    Reply::Disconnect => {}
+                    Reply::Http(status, body) => {
+                        let response = format!(
+                            "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        stream.write_all(response.as_bytes()).await?;
+                    }
+                    Reply::Truncated => {
+                        stream
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nlinux:")
+                            .await?;
+                    }
+                }
+                stream.shutdown().await?;
+            }
+            Ok::<_, anyhow::Error>(requests)
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            download_targets(
+                &url,
+                BaseClientBuilder::default()
+                    .custom_client(client)
+                    .no_retry_delay(true),
+            ),
+        )
+        .await;
+        let _ = stop.send(());
+        let requests = match tokio::time::timeout(Duration::from_secs(5), &mut server).await {
+            Ok(result) => result??,
+            Err(error) => {
+                server.abort();
+                let _ = server.await;
+                return Err(error.into());
+            }
+        };
+        Ok((result?, requests))
+    }
+
+    #[tokio::test]
+    async fn targets_retry_transient_failures() -> Result<()> {
+        for first in [
+            Reply::Disconnect,
+            Reply::Http(503, "unavailable"),
+            Reply::Truncated,
+        ] {
+            let (targets, requests) = request_targets(&[first, Reply::Http(200, TARGETS)]).await?;
+            let targets = targets?;
+            assert_eq!(
+                targets["linux"].host_cc.as_deref(),
+                Some("/usr/bin/test-gcc")
+            );
+            assert_eq!(requests, 2);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn targets_retry_budget_is_shared() -> Result<()> {
+        let (targets, requests) = request_targets(&[
+            Reply::Http(503, "unavailable"),
+            Reply::Truncated,
+            Reply::Http(503, "unavailable"),
+            Reply::Truncated,
+            Reply::Http(200, TARGETS),
+        ])
+        .await?;
+        assert!(targets.is_err());
+        assert_eq!(requests, DEFAULT_RETRIES as usize + 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn targets_permanent_errors_are_not_retried() -> Result<()> {
+        for reply in [Reply::Http(403, "forbidden"), Reply::Http(404, "missing")] {
+            let (targets, requests) = request_targets(&[reply, Reply::Http(200, TARGETS)]).await?;
+            assert!(targets.is_err());
+            assert_eq!(requests, 1);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn targets_invalid_yaml_is_not_retried() -> Result<()> {
+        let (targets, requests) = request_targets(&[
+            Reply::Http(200, "linux: [not-a-target"),
+            Reply::Http(200, TARGETS),
+        ])
+        .await?;
+        assert!(targets.is_err());
+        assert_eq!(requests, 1);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_generate_sysconfig_mappings() -> Result<()> {
