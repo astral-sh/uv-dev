@@ -2,9 +2,10 @@ use std::fmt::Write as _;
 use std::io;
 
 use anyhow::{Result, bail};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
+use tokio::sync::OnceCell;
 
-use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
+use uv_audit::{Dependency, Finding, VulnerabilityID, VulnerabilityServiceFormat, osv};
 use uv_cache::Cache;
 use uv_cli::AuditOutputFormat;
 use uv_client::{BaseClient, BaseClientBuilder, CachedClient, RegistryClientBuilder};
@@ -113,10 +114,7 @@ pub(crate) async fn audit(
 
     let extras = ExtrasSpecification::default().with_defaults(DefaultExtras::default());
     let groups = DependencyGroupsWithDefaults::none();
-    let mut audits = Vec::new();
-    let mut matched_ignores = FxHashSet::default();
-    let osv_client = CachedClient::new(client_builder.clone().build()?);
-    let mut registry_transport: Option<BaseClient> = None;
+    let mut inputs = Vec::new();
 
     for (name, tool) in tools {
         let tool = match tool {
@@ -199,6 +197,31 @@ pub(crate) async fn audit(
         let settings = ResolverInstallerSettings::from(
             ResolverInstallerOptions::from(tool.options().clone()).combine(filesystem.clone()),
         );
+        inputs.push((name, root, lock_path, lock, settings));
+    }
+
+    let mut dependencies = Vec::new();
+    let mut seen = FxHashSet::default();
+    for (_, _, _, lock, _) in &inputs {
+        for (name, version) in lock.auditable(&extras, &groups, |_| true).packages() {
+            let dependency = Dependency::new(name.clone(), version.clone());
+            if seen.insert(dependency.clone()) {
+                dependencies.push(dependency);
+            }
+        }
+    }
+    let osv_client = CachedClient::new(client_builder.clone().build()?);
+    let osv_service = match service {
+        VulnerabilityServiceFormat::Osv => {
+            osv::Osv::new(osv_client, service_url, concurrency.clone(), cache.clone())
+        }
+    };
+    let osv_findings: OnceCell<FxHashMap<Dependency, Vec<Finding>>> = OnceCell::new();
+    let mut registry_transport: Option<BaseClient> = None;
+    let mut audits = Vec::new();
+    let mut matched_ignores = FxHashSet::default();
+
+    for (name, root, lock_path, lock, settings) in inputs {
         // Transport settings are shared by the invocation. Each tool's saved indexes and keyring
         // settings still require their own middleware.
         let builder = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
@@ -218,12 +241,36 @@ pub(crate) async fn audit(
             &groups,
             &settings.resolver,
             &registry_client,
-            osv_client.clone(),
+            async |selected| {
+                // One OSV query covers the selected tool lockfiles. Keep findings in each
+                // tool's dependency order, including dependencies shared by several tools.
+                let findings = osv_findings
+                    .get_or_try_init(async || {
+                        let mut findings: FxHashMap<Dependency, Vec<Finding>> =
+                            FxHashMap::default();
+                        for finding in osv_service
+                            .query_batch(&dependencies, osv::Filter::All)
+                            .await?
+                        {
+                            match &finding {
+                                Finding::Vulnerability(vulnerability) => findings
+                                    .entry(vulnerability.dependency.clone())
+                                    .or_default()
+                                    .push(finding),
+                                Finding::ProjectStatus(_) => {}
+                            }
+                        }
+                        Ok::<_, osv::Error>(findings)
+                    })
+                    .await?;
+                Ok(selected
+                    .iter()
+                    .flat_map(|dependency| findings.get(dependency).into_iter().flatten())
+                    .cloned()
+                    .collect())
+            },
             concurrency.clone(),
-            cache,
             printer,
-            service,
-            service_url.clone(),
             &ignore,
             &ignore_until_fixed,
         )

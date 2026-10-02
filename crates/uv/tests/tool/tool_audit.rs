@@ -17,7 +17,7 @@ use insta::assert_json_snapshot;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -535,7 +535,7 @@ async fn tool_audit_multiple_tools() {
 }
 
 #[test]
-fn tool_audit_reuses_osv_connections() -> Result<()> {
+fn tool_audit_batches_osv_queries() -> Result<()> {
     let context = uv_test::test_context!("3.13").with_tool_dirs();
     install_tool(&context, "simple-launcher", true);
     install_tool(&context, "basic-app", true);
@@ -560,18 +560,11 @@ fn tool_audit_reuses_osv_connections() -> Result<()> {
     assert_eq!(connections, 1);
     assert_eq!(
         requests,
-        [
-            AuditRequest {
-                connection: 0,
-                path: "/v1/querybatch".to_owned(),
-                packages: vec!["basic-app".to_owned()],
-            },
-            AuditRequest {
-                connection: 0,
-                path: "/v1/querybatch".to_owned(),
-                packages: vec!["simple-launcher".to_owned()],
-            },
-        ]
+        [AuditRequest {
+            connection: 0,
+            path: "/v1/querybatch".to_owned(),
+            packages: vec!["basic-app".to_owned(), "simple-launcher".to_owned()],
+        }]
     );
     Ok(())
 }
@@ -681,10 +674,8 @@ fn tool_audit_reuses_registry_connections() -> Result<()> {
         .iter()
         .filter(|request| request.path == "/v1/querybatch")
         .collect::<Vec<_>>();
-    assert_eq!(osv_requests.len(), 2);
-    assert_eq!(osv_requests[0].packages, ["audit-tool-a"]);
-    assert_eq!(osv_requests[1].packages, ["audit-tool-b"]);
-    assert_eq!(osv_requests[0].connection, osv_requests[1].connection);
+    assert_eq!(osv_requests.len(), 1);
+    assert_eq!(osv_requests[0].packages, ["audit-tool-a", "audit-tool-b"]);
     assert_ne!(osv_requests[0].connection, registry_requests[0].connection);
     Ok(())
 }
@@ -752,6 +743,247 @@ async fn tool_audit_shared_dependencies() {
     Auditing `simple-launcher`
     Found no known vulnerabilities and no adverse project statuses in 2 packages
     ");
+}
+
+#[tokio::test]
+async fn tool_audit_batches_shared_versions_and_pages() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    for version in ["1.0", "2.0"] {
+        let (filename, wheel) = generate_wheel(
+            &"audit-shared".parse()?,
+            &version.parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        wheels.child(filename).write_binary(&wheel)?;
+    }
+    for (name, shared_version) in [
+        ("audit-tool-a", "1.0"),
+        ("audit-tool-b", "2.0"),
+        ("audit-tool-c", "1.0"),
+    ] {
+        let (filename, wheel) = generate_wheel(
+            &name.parse()?,
+            &"1.0".parse()?,
+            &[format!("audit-shared=={shared_version}").parse()?],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[name.to_owned()],
+        );
+        wheels.child(filename).write_binary(&wheel)?;
+        context
+            .tool_install()
+            .arg(name)
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(wheels.path())
+            .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+            .assert()
+            .success();
+    }
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .respond_with(|request: &Request| {
+            let body: Value = serde_json::from_slice(&request.body).expect("valid OSV query");
+            let results = body["queries"]
+                .as_array()
+                .expect("OSV query array")
+                .iter()
+                .map(|query| {
+                    if query["package"]["name"] != "audit-shared" {
+                        json!({"vulns": []})
+                    } else if query["version"] == "2.0" {
+                        json!({"vulns": [{"id": "VULN-3"}]})
+                    } else if query["page_token"] == "next" {
+                        json!({"vulns": [{"id": "VULN-2"}]})
+                    } else {
+                        json!({"vulns": [{"id": "VULN-1"}], "next_page_token": "next"})
+                    }
+                })
+                .collect::<Vec<_>>();
+            ResponseTemplate::new(200).set_body_json(json!({"results": results}))
+        })
+        .mount(&server)
+        .await;
+    for id in ["VULN-1", "VULN-2", "VULN-3"] {
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/vulns/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": id,
+                "modified": "2026-01-01T00:00:00Z"
+            })))
+            .mount(&server)
+            .await;
+    }
+
+    let output = context
+        .tool_audit()
+        .arg("--all")
+        .arg("--output-format")
+        .arg("json")
+        .arg("--service-url")
+        .arg(server.uri())
+        .env(
+            EnvVars::UV_PREVIEW_FEATURES,
+            "audit,tool-install-locks,json-output",
+        )
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout)?;
+    let findings = report["tools"].as_array().map(|tools| {
+        tools
+            .iter()
+            .map(|tool| {
+                json!([
+                    tool["name"],
+                    tool["vulnerabilities"].as_array().map(|vulnerabilities| {
+                        vulnerabilities
+                            .iter()
+                            .map(|vulnerability| {
+                                json!([
+                                    vulnerability["dependency"]["name"],
+                                    vulnerability["dependency"]["version"],
+                                    vulnerability["id"]
+                                ])
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                ])
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_json_snapshot!(findings, @r#"
+    [
+      [
+        "audit-tool-a",
+        [
+          [
+            "audit-shared",
+            "1.0",
+            "VULN-1"
+          ],
+          [
+            "audit-shared",
+            "1.0",
+            "VULN-2"
+          ]
+        ]
+      ],
+      [
+        "audit-tool-b",
+        [
+          [
+            "audit-shared",
+            "2.0",
+            "VULN-3"
+          ]
+        ]
+      ],
+      [
+        "audit-tool-c",
+        [
+          [
+            "audit-shared",
+            "1.0",
+            "VULN-1"
+          ],
+          [
+            "audit-shared",
+            "1.0",
+            "VULN-2"
+          ]
+        ]
+      ]
+    ]
+    "#);
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("requests should be recorded");
+    let mut queries = requests
+        .iter()
+        .filter(|request| request.method == "POST")
+        .flat_map(|request| {
+            let body: Value = serde_json::from_slice(&request.body).expect("valid OSV query");
+            body["queries"]
+                .as_array()
+                .expect("OSV query array")
+                .iter()
+                .map(|query| {
+                    (
+                        query["package"]["name"]
+                            .as_str()
+                            .expect("package name")
+                            .to_owned(),
+                        query["version"]
+                            .as_str()
+                            .expect("package version")
+                            .to_owned(),
+                        query["page_token"].as_str().map(str::to_owned),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    queries.sort_unstable();
+    assert_json_snapshot!(queries, @r#"
+    [
+      [
+        "audit-shared",
+        "1.0",
+        null
+      ],
+      [
+        "audit-shared",
+        "1.0",
+        "next"
+      ],
+      [
+        "audit-shared",
+        "2.0",
+        null
+      ],
+      [
+        "audit-tool-a",
+        "1.0",
+        null
+      ],
+      [
+        "audit-tool-b",
+        "1.0",
+        null
+      ],
+      [
+        "audit-tool-c",
+        "1.0",
+        null
+      ]
+    ]
+    "#);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "POST")
+            .count(),
+        2
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "GET")
+            .count(),
+        3
+    );
+    Ok(())
 }
 
 #[tokio::test]

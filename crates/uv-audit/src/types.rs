@@ -79,7 +79,7 @@ impl std::fmt::Display for AdverseStatus {
 }
 
 /// A vulnerability within a dependency.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Vulnerability {
     /// The dependency that is vulnerable.
     pub dependency: Dependency,
@@ -158,7 +158,7 @@ impl Vulnerability {
 ///
 /// PEP 792 status markers are project-level, so this finding carries only the
 /// project name — not a specific version.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProjectStatus {
     /// The name of the project with the adverse status.
     pub name: PackageName,
@@ -169,7 +169,7 @@ pub struct ProjectStatus {
 }
 
 /// Represents a finding on a dependency.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Finding {
     Vulnerability(Box<Vulnerability>),
     ProjectStatus(ProjectStatus),
