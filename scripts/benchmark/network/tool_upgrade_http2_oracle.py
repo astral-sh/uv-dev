@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import shutil
@@ -23,7 +24,7 @@ bench = upgrade.bench
 
 def fetch_wave(
     args, work: Path, base: str, tasks: list[dict], ready: list[int]
-) -> list[dict]:
+) -> tuple[list[dict], dict[str, dict]]:
     command = [
         str(args.curl.resolve()),
         "--disable",
@@ -38,7 +39,7 @@ def fetch_wave(
         task = tasks[index]
         url = base + task["path"]
         body_path = work / f"body-{index}"
-        expected_transfers[url] = (body_path, task["expected"])
+        expected_transfers[url] = (task["path"], body_path, task["expected"])
         command.extend(
             [
                 "--silent",
@@ -74,13 +75,19 @@ def fetch_wave(
     by_url = {transfer["url_effective"]: transfer for transfer in transfers}
     if len(by_url) != len(transfers) or by_url.keys() != expected_transfers.keys():
         raise ValueError("Oracle transfers differ from ready requests")
-    for url, (body_path, expected) in expected_transfers.items():
+    verified = {}
+    for url, (path, body_path, expected) in expected_transfers.items():
         transfer = by_url[url]
         if str(transfer["http_version"]) != "2":
             raise ValueError("Oracle transfer did not use HTTP/2")
-        if transfer["http_code"] != 200 or body_path.read_bytes() != expected:
+        body = body_path.read_bytes()
+        if transfer["http_code"] != 200 or body != expected:
             raise ValueError(f"Tool-upgrade reference differs: {url}")
-    return transfers
+        verified[path] = {
+            "bytes": len(body),
+            "sha256": hashlib.sha256(body).hexdigest(),
+        }
+    return transfers, verified
 
 
 def main() -> None:
@@ -119,7 +126,8 @@ def main() -> None:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         proxy = None
-        transfers, waves = [], []
+        transfers, waves, wave_timings = [], [], []
+        client_transfers = {}
         try:
             proxy = bench.Http2Proxy(
                 work,
@@ -136,8 +144,19 @@ def main() -> None:
                 )
                 if not ready:
                     raise ValueError("Reference request graph cannot make progress")
-                transfers.extend(fetch_wave(args, work, server.url, tasks, ready))
+                wave_started = time.perf_counter() - server.epoch
+                received, verified = fetch_wave(args, work, server.url, tasks, ready)
+                wave_completed = time.perf_counter() - server.epoch
+                transfers.extend(received)
+                wave = {"started": wave_started, "completed": wave_completed}
+                client_transfers.update(
+                    {
+                        path: {**transfer, **wave, "wave": len(waves)}
+                        for path, transfer in verified.items()
+                    }
+                )
                 waves.append([tasks[index]["path"] for index in ready])
+                wave_timings.append(wave)
                 finished.update(ready)
                 waiting.difference_update(ready)
             seconds = time.perf_counter() - started
@@ -184,7 +203,10 @@ def main() -> None:
         },
         "proxy_sha256": bench.digest(args.http2_proxy),
         "certificate_sha256": bench.digest(args.tls_certificate),
+        "client_transfers": dict(sorted(client_transfers.items())),
+        "client_timing_reference": "Seconds from the replay origin's monotonic epoch; each transfer uses its dependency wave's start and full-body-verification completion.",
         "transfer_waves": waves,
+        "wave_timings": wave_timings,
         "transfers": transfers,
         "events": sorted(server.events, key=lambda event: event["start"]),
         "retry_scope": "curl retries transient failures up to three times per URL with its default backoff. The optimistic floor excludes retries.",

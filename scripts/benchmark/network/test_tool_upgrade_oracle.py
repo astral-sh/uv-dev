@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -119,6 +120,21 @@ class ToolUpgradeOracleTests(unittest.TestCase):
             self.assertEqual(result["actual_bytes"], required)
             self.assertEqual(result["required_waves"], 5)
             self.assertTrue(all(event["status"] == 200 for event in result["events"]))
+            self.assertEqual(
+                set(result["client_transfers"]), {task["path"] for task in tasks}
+            )
+            for task in tasks:
+                transfer = result["client_transfers"][task["path"]]
+                self.assertEqual(transfer["bytes"], len(task["expected"]))
+                self.assertEqual(
+                    transfer["sha256"], hashlib.sha256(task["expected"]).hexdigest()
+                )
+                self.assertGreaterEqual(transfer["completed"], transfer["started"])
+                for parent in task["parents"]:
+                    self.assertGreaterEqual(
+                        transfer["started"],
+                        result["client_transfers"][tasks[parent]["path"]]["completed"],
+                    )
 
     def test_request_capacity_bound_allows_pipeline_overlap(self) -> None:
         tasks = [

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import hashlib
 import importlib.util
 import json
 import os
@@ -173,11 +174,33 @@ class ToolUpgradeHttp2OracleTests(unittest.TestCase):
                         {path: event["bytes"] for path, event in successful.items()},
                         {task["path"]: len(task["expected"]) for task in tasks},
                     )
+                    self.assertEqual(
+                        set(result["client_transfers"]),
+                        {task["path"] for task in tasks},
+                    )
                     for task in tasks:
+                        transfer = result["client_transfers"][task["path"]]
+                        self.assertEqual(transfer["bytes"], len(task["expected"]))
+                        self.assertEqual(
+                            transfer["sha256"],
+                            hashlib.sha256(task["expected"]).hexdigest(),
+                        )
+                        self.assertIn(
+                            task["path"], result["transfer_waves"][transfer["wave"]]
+                        )
+                        self.assertEqual(
+                            {key: transfer[key] for key in ("started", "completed")},
+                            result["wave_timings"][transfer["wave"]],
+                        )
+                        self.assertGreaterEqual(
+                            transfer["completed"], transfer["started"]
+                        )
                         for parent in task["parents"]:
                             self.assertGreaterEqual(
-                                successful[task["path"]]["start"],
-                                successful[tasks[parent]["path"]]["end"],
+                                transfer["started"],
+                                result["client_transfers"][tasks[parent]["path"]][
+                                    "completed"
+                                ],
                             )
                     self.assertEqual(
                         len(result["transfer_waves"]), 2 if scenario == "upgrade" else 1
@@ -217,6 +240,8 @@ class ToolUpgradeHttp2OracleTests(unittest.TestCase):
                 )
                 self.assertEqual(result["frontend_protocols"], {})
                 self.assertEqual(result["transfer_waves"], [])
+                self.assertEqual(result["wave_timings"], [])
+                self.assertEqual(result["client_transfers"], {})
             filename = "uv_bench_upgrade_tool_000-2.0-py3-none-any.whl"
             with (directory / filename).open("ab") as wheel:
                 wheel.write(b"extra")
