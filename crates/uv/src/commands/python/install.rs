@@ -11,7 +11,7 @@ use indexmap::IndexSet;
 use itertools::Itertools;
 use owo_colors::{AnsiColors, OwoColorize};
 use rustc_hash::{FxHashMap, FxHashSet};
-use tokio::sync::mpsc;
+use tokio::sync::{OnceCell, mpsc};
 use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
@@ -50,12 +50,12 @@ struct InstallRequest<'a> {
     request: PythonRequest,
     /// A download request corresponding to the `request` with platform information filled
     download_request: PythonDownloadRequest,
-    /// A download that satisfies the request
-    download: &'a ManagedPythonDownload,
+    /// The matching download, when the catalog was needed to validate the request.
+    download: Option<&'a ManagedPythonDownload>,
 }
 
 impl<'a> InstallRequest<'a> {
-    fn new(request: PythonRequest, download_list: &'a ManagedPythonDownloadList) -> Result<Self> {
+    fn new(request: PythonRequest) -> Result<Self> {
         // Make sure the request is a valid download request and fill platform information
         let download_request = PythonDownloadRequest::from_request(&request)
             .ok_or_else(|| {
@@ -66,27 +66,39 @@ impl<'a> InstallRequest<'a> {
             })?
             .fill()?;
 
-        // Find a matching download
-        let download = match download_list.find(&download_request) {
-            Ok(download) => download,
+        Ok(Self {
+            request,
+            download_request,
+            download: None,
+        })
+    }
+
+    fn resolve(mut self, download_list: &'a ManagedPythonDownloadList) -> Result<Self> {
+        self.download = Some(self.find_download(download_list)?);
+        Ok(self)
+    }
+
+    fn find_download(
+        &self,
+        download_list: &'a ManagedPythonDownloadList,
+    ) -> Result<&'a ManagedPythonDownload> {
+        if let Some(download) = self.download {
+            return Ok(download);
+        }
+        match download_list.find(&self.download_request) {
+            Ok(download) => Ok(download),
             Err(downloads::Error::NoDownloadFound(request))
                 if request.libc().is_some_and(Libc::is_musl)
                     && request.arch().is_some_and(|arch| {
                         arch.inner() == Arch::from(&uv_platform_tags::Arch::Armv7L)
                     }) =>
             {
-                return Err(anyhow::anyhow!(
+                Err(anyhow::anyhow!(
                     "uv does not yet provide musl Python distributions on armv7."
-                ));
+                ))
             }
-            Err(err) => return Err(err.into()),
-        };
-
-        Ok(Self {
-            request,
-            download_request,
-            download,
-        })
+            Err(err) => Err(err.into()),
+        }
     }
 
     fn matches_installation(&self, installation: &ManagedPythonInstallation) -> bool {
@@ -374,15 +386,16 @@ async fn perform_install(
     let mut is_default_install = false;
     let mut is_unspecified_upgrade = false;
     let retry_policy = client_builder.retry_policy();
-    let download_list = ManagedPythonDownloadList::new(
-        &client_builder,
-        cache,
-        python_downloads_json_url.as_deref(),
-    )
-    .await?;
-    // Python downloads are performing their own retries to catch stream errors, disable the
-    // default retries to avoid the middleware from performing uncontrolled retries.
-    let client = client_builder.retries(0).build()?;
+    let download_list = OnceCell::new();
+    let load_downloads = || {
+        download_list.get_or_try_init(|| {
+            ManagedPythonDownloadList::new(
+                &client_builder,
+                cache,
+                python_downloads_json_url.as_deref(),
+            )
+        })
+    };
     // TODO(zanieb): We use this variable to special-case .python-version files, but it'd be nice to
     // have generalized request source tracking instead
     let mut is_from_python_version_file = false;
@@ -393,16 +406,14 @@ async fn perform_install(
         ) {
             is_unspecified_upgrade = true;
             // On upgrade, derive requests for all of the existing installations
-            let mut minor_version_requests = IndexSet::<InstallRequest>::default();
+            let mut minor_version_requests = IndexSet::<PythonRequest>::default();
             for installation in &existing_installations {
                 let mut request = PythonDownloadRequest::from(installation);
                 // We should always have a version in the request from an existing installation
                 let version = request.take_version().unwrap();
                 // Drop the patch and prerelease parts from the request
                 request = request.with_version(version.only_minor());
-                let install_request =
-                    InstallRequest::new(PythonRequest::Key(request), &download_list)?;
-                minor_version_requests.insert(install_request);
+                minor_version_requests.insert(PythonRequest::Key(request));
             }
             minor_version_requests.into_iter().collect::<Vec<_>>()
         } else {
@@ -433,17 +444,48 @@ async fn perform_install(
                     PythonRequest::Default
                 }]
             })
-            .into_iter()
-            .map(|request| InstallRequest::new(request, &download_list))
-            .collect::<Result<Vec<_>>>()?
         }
     } else {
         targets
             .iter()
             .map(|target| PythonRequest::parse(target.as_str()))
-            .map(|request| InstallRequest::new(request, &download_list))
-            .collect::<Result<Vec<_>>>()?
+            .collect::<Vec<_>>()
     };
+
+    let requests = requests
+        .into_iter()
+        .map(InstallRequest::new)
+        .collect::<Vec<_>>();
+    // Installation keys do not encode build versions, so explicit build pins need the catalog.
+    let requires_catalog = reinstall
+        || match upgrade {
+            PythonUpgrade::Enabled(_) => true,
+            PythonUpgrade::Disabled => requests.iter().any(|request| match request {
+                Ok(request) => {
+                    request.download_request.build().is_some()
+                        || !existing_installations
+                            .iter()
+                            .any(|installation| request.matches_installation(installation))
+                }
+                Err(_) => true,
+            }),
+        };
+    if requires_catalog {
+        load_downloads().await?;
+    }
+    // When downloads are needed, validate every request in input order before making changes.
+    // An ordinary install already satisfied by managed interpreters needs no catalog lookup.
+    let requests = requests
+        .into_iter()
+        .map(|request| {
+            let request = request?;
+            if let Some(download_list) = download_list.get() {
+                request.resolve(download_list)
+            } else {
+                Ok(request)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     if requests.is_empty() {
         match upgrade {
@@ -493,6 +535,7 @@ async fn perform_install(
     // Find requests that are already satisfied
     let mut changelog = Changelog::default();
     let (satisfied, unsatisfied): (Vec<_>, Vec<_>) = if reinstall {
+        let download_list = load_downloads().await?;
         // In the reinstall case, we want to iterate over all matching installations instead of
         // stopping at the first match.
 
@@ -523,7 +566,9 @@ async fn perform_install(
                 }
 
                 // Construct an install request matching the existing installation.
-                match InstallRequest::new(PythonRequest::Key(installation.into()), &download_list) {
+                match InstallRequest::new(PythonRequest::Key(installation.into()))
+                    .and_then(|request| request.resolve(download_list))
+                {
                     Ok(request) => {
                         debug!("Will reinstall `{}`", installation.key());
                         unsatisfied.push(Cow::Owned(request));
@@ -547,14 +592,16 @@ async fn perform_install(
 
         for request in &requests {
             if matches!(upgrade, PythonUpgrade::Enabled(_)) {
+                let download_list = load_downloads().await?;
+                let download = request.find_download(download_list)?;
                 // If this is an upgrade, the requested version is a minor version but the
                 // requested download is the highest patch for that minor version. We need to
                 // install it unless an exact match is found (including build version).
                 if let Some(installation) = existing_installations
                     .iter()
-                    .find(|inst| request.download.key() == inst.key())
+                    .find(|inst| download.key() == inst.key())
                 {
-                    if matches_build(request.download.build(), installation.build()) {
+                    if matches_build(download.build(), installation.build()) {
                         debug!("Found `{}` for request `{}`", installation.key(), request);
                         satisfied.push(installation);
                     } else {
@@ -609,18 +656,26 @@ async fn perform_install(
     }
 
     // Find downloads for the requests
-    let downloads = unsatisfied
-        .iter()
-        .inspect(|request| {
-            debug!(
-                "Found download `{}` for request `{}`",
-                request.download, request,
-            );
-        })
-        .map(|request| request.download)
-        // Ensure we only download each version once
-        .unique_by(|download| download.key())
-        .collect::<Vec<_>>();
+    let downloads = if unsatisfied.is_empty() {
+        Vec::new()
+    } else {
+        let download_list = load_downloads().await?;
+        unsatisfied
+            .iter()
+            .map(|request| {
+                let download = request.find_download(download_list)?;
+                debug!("Found download `{download}` for request `{request}`");
+                Ok(download)
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            // Ensure we only download each version once
+            .unique_by(|download| download.key())
+            .collect::<Vec<_>>()
+    };
+
+    // Python downloads perform their own retries to catch stream errors.
+    let client = client_builder.retries(0).build()?;
 
     // Download and unpack the Python versions concurrently
     let reporter = PythonDownloadReporter::new(printer, Some(downloads.len() as u64));

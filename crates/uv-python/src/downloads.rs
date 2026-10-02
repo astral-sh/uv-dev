@@ -468,6 +468,11 @@ impl PythonDownloadRequest {
         self.libc.as_ref()
     }
 
+    /// Return an explicitly selected build version, including an environment override.
+    pub fn build(&self) -> Option<&str> {
+        self.build.as_deref()
+    }
+
     pub fn take_version(&mut self) -> Option<VersionRequest> {
         self.version.take()
     }

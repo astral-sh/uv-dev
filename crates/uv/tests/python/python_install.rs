@@ -18,6 +18,10 @@ use uv_fs::Simplified;
 use uv_python::managed::platform_key_from_env;
 use uv_static::EnvVars;
 use walkdir::WalkDir;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 #[test]
 fn python_install() {
@@ -121,6 +125,118 @@ fn python_install() {
 
     // The executable should be removed
     bin_python.assert(predicate::path::missing());
+}
+
+#[tokio::test]
+async fn python_install_satisfied_skips_download_catalog() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_filtered_latest_python_versions()
+        .with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.python_install().arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.12.[LATEST] in [TIME]
+     + cpython-3.12.[LATEST]-[PLATFORM] (python3.12)
+    ");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/unused-catalog.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{", "application/json"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let unused_catalog = format!("{}/unused-catalog.json", server.uri());
+
+    uv_snapshot!(context.filters(), context.python_install()
+        .arg("3.12")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &unused_catalog), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Python 3.12 is already installed
+    ");
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.12", LATEST_PYTHON_3_12])
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &unused_catalog), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    All requested versions already installed
+    ");
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.12", "--offline"])
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &unused_catalog), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Python 3.12 is already installed
+    ");
+
+    context
+        .temp_dir
+        .child(".python-versions")
+        .write_str("3.12\n")?;
+    uv_snapshot!(context.filters(), context.python_install()
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &unused_catalog), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Python 3.12 is already installed
+    ");
+
+    let executable = context
+        .bin_dir
+        .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
+    fs_err::remove_file(executable.path())?;
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.12", "--force"])
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, &unused_catalog), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.12.[LATEST] in [TIME]
+     + cpython-3.12.[LATEST]-[PLATFORM] (python3.12)
+    ");
+    executable.assert(predicate::path::exists());
+    server.verify().await;
+
+    for (catalog, arguments) in [
+        ("reinstall", vec!["3.12", "--reinstall"]),
+        ("upgrade", vec!["3.12", "--upgrade"]),
+        ("missing", vec!["3.12", "3.11"]),
+    ] {
+        let catalog_path = format!("/{catalog}.json");
+        Mock::given(method("GET"))
+            .and(path(&catalog_path))
+            .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        context
+            .python_install()
+            .args(arguments)
+            .env(
+                EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL,
+                format!("{}{catalog_path}", server.uri()),
+            )
+            .assert()
+            .failure();
+    }
+    Mock::given(method("GET"))
+        .and(path("/build.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.python_install()
+        .arg("3.12")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "99999999")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, format!("{}/build.json", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No download found for request: cpython-3.12-[PLATFORM]
+    ");
+    server.verify().await;
+    Ok(())
 }
 
 /// Regression test for a panic when `/install` in a sysconfig value is followed by a non-ASCII
