@@ -515,6 +515,10 @@ class Server(ThreadingHTTPServer):
     ) -> None:
         if profile.get("artifact_origins"):
             raise ValueError("Use Replay to configure multiple artifact origins")
+        for path, failure in profile.get("path_failures", {}).items():
+            start_after = failure.get("start_after", 0)
+            if type(start_after) is not int or start_after < 0:
+                raise ValueError(f"Invalid failure start: {path}")
         for path, challenge in profile.get("auth_challenges", {}).items():
             if (
                 not path.startswith("/")
@@ -861,9 +865,9 @@ class Handler(BaseHTTPRequestHandler):
                     "count": profile.get("fail_count", 0),
                 },
             )
-            if failure.get("disconnect") and event["attempt"] <= failure.get(
-                "count", 0
-            ):
+            failure_attempt = event["attempt"] - failure.get("start_after", 0)
+            failure_active = 0 < failure_attempt <= failure.get("count", 0)
+            if failure.get("disconnect") and failure_active:
                 event.update(
                     status=0,
                     response_length=0,
@@ -873,7 +877,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.connection.shutdown(socket.SHUT_RDWR)
                 return
             retry_after = None
-            if failure.get("status") and event["attempt"] <= failure.get("count", 0):
+            if failure.get("status") and failure_active:
                 status, body = failure["status"], b"Injected transient failure"
                 if "body_bytes" in failure:
                     body_bytes = failure["body_bytes"]
@@ -975,7 +979,7 @@ class Handler(BaseHTTPRequestHandler):
                 if is_artifact and event["attempt"] <= profile.get("cut_count", 0)
                 else 0
             )
-            if status in {200, 206} and event["attempt"] <= failure.get("count", 0):
+            if status in {200, 206} and failure_active:
                 cut = failure.get("cut_after_bytes", cut)
             if isinstance(body, Path):
                 with body.open("rb") as source:
