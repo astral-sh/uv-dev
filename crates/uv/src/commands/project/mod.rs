@@ -12,7 +12,10 @@ use uv_audit::{Dependency, VulnerabilityID};
 use uv_auth::{CredentialsCache, CredentialsFromUrlError};
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::{
+    BaseClientBuilder, ClientBuildError, RegistryClient, RegistryClientBuilder,
+    SharedSimpleMetadata,
+};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
     ExtrasSpecification, GitLfsSetting, HashCheckingMode, Override, PackageOverride, Reinstall,
@@ -544,31 +547,54 @@ impl UniversalState {
 
     /// Fork the [`UniversalState`] to create a [`PlatformState`].
     pub(crate) fn fork(&self) -> PlatformState {
-        PlatformState(self.0.fork())
+        PlatformState {
+            shared: self.0.fork(),
+            simple_metadata: None,
+        }
     }
 }
 
 /// A [`SharedState`] instance to use for platform-specific resolution.
 #[derive(Default, Clone)]
-pub(crate) struct PlatformState(SharedState);
+pub(crate) struct PlatformState {
+    shared: SharedState,
+    simple_metadata: Option<SharedSimpleMetadata>,
+}
 
 impl std::ops::Deref for PlatformState {
     type Target = SharedState;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.shared
     }
 }
 
 impl PlatformState {
+    /// Share raw registry metadata with resolutions using the same request configuration.
+    pub(crate) fn with_simple_metadata(mut self, metadata: SharedSimpleMetadata) -> Self {
+        self.simple_metadata = Some(metadata);
+        self
+    }
+
+    fn build_registry_client(
+        &self,
+        builder: RegistryClientBuilder<'_>,
+    ) -> Result<RegistryClient, ClientBuildError> {
+        if let Some(metadata) = &self.simple_metadata {
+            builder.shared_simple_metadata(metadata.clone()).build()
+        } else {
+            builder.build()
+        }
+    }
+
     /// Fork the [`PlatformState`] to create a [`UniversalState`].
     fn fork(&self) -> UniversalState {
-        UniversalState(self.0.fork())
+        UniversalState(self.shared.fork())
     }
 
     /// Create a [`SharedState`] from the [`PlatformState`].
     pub(crate) fn into_inner(self) -> SharedState {
-        self.0
+        self.shared
     }
 }
 
@@ -2813,13 +2839,14 @@ pub(crate) async fn resolve_environment(
         .transpose()?;
 
     // Initialize the registry client.
-    let client = RegistryClientBuilder::new(client_builder, cache.clone())
-        .index_locations(index_locations.clone())
-        .index_strategy(*index_strategy)
-        .torch_backend(torch_backend.clone())
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
+    let client = state.build_registry_client(
+        RegistryClientBuilder::new(client_builder, cache.clone())
+            .index_locations(index_locations.clone())
+            .index_strategy(*index_strategy)
+            .torch_backend(torch_backend.clone())
+            .markers(interpreter.markers())
+            .platform(interpreter.platform()),
+    )?;
 
     // Determine whether to enable build isolation.
     let environment;
@@ -3120,7 +3147,7 @@ pub(crate) async fn update_environment(
     extra_build_requires: ExtraBuildRequires,
     settings: &ResolverInstallerSettings,
     client_builder: &BaseClientBuilder<'_>,
-    state: &SharedState,
+    state: &PlatformState,
     resolve: Box<dyn ResolveLogger>,
     install: Box<dyn InstallLogger>,
     installer_metadata: bool,
@@ -3247,13 +3274,14 @@ pub(crate) async fn update_environment(
         .transpose()?;
 
     // Initialize the registry client.
-    let client = RegistryClientBuilder::new(client_builder, cache.clone())
-        .index_locations(index_locations.clone())
-        .index_strategy(*index_strategy)
-        .torch_backend(torch_backend.clone())
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
+    let client = state.build_registry_client(
+        RegistryClientBuilder::new(client_builder, cache.clone())
+            .index_locations(index_locations.clone())
+            .index_strategy(*index_strategy)
+            .torch_backend(torch_backend.clone())
+            .markers(interpreter.markers())
+            .platform(interpreter.platform()),
+    )?;
 
     // Determine whether to enable build isolation.
     let build_isolation = match build_isolation {
@@ -3300,7 +3328,7 @@ pub(crate) async fn update_environment(
         index_locations,
         &flat_index,
         dependency_metadata,
-        state.clone(),
+        state.clone().into_inner(),
         *index_strategy,
         config_setting,
         config_settings_package,

@@ -1,22 +1,250 @@
+use std::collections::BTreeMap;
 use std::process::Command;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
+use async_zip::base::read::mem::ZipFileReader;
 use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use serde_json::json;
 use wiremock::{
-    Mock, ResponseTemplate,
+    Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
 
 use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
-use uv_test::packse::{PackseServer, scenario::Scenario};
+use uv_test::packse::{PackseServer, generate_wheel, scenario::Scenario};
 use uv_test::{uv_snapshot, venv_bin_path};
+
+/// Serve real tool wheels and their shared dependency, without allowing the HTTP cache to hide
+/// repeated Simple API requests.
+async fn mount_tool_upgrade_metadata_index(
+    server: &MockServer,
+    versions: &[&str],
+    shared_requests: Option<u64>,
+) -> Result<()> {
+    for name in ["upgrade-alpha", "upgrade-beta", "upgrade-shared"] {
+        let requires = if name == "upgrade-shared" {
+            vec![]
+        } else {
+            vec!["upgrade-shared>=1".parse()?]
+        };
+        let entry_points = if name == "upgrade-shared" {
+            vec![]
+        } else {
+            vec![name.to_string()]
+        };
+        let mut files = Vec::new();
+        for version in versions {
+            let (filename, wheel) = generate_wheel(
+                &name.parse()?,
+                &version.parse()?,
+                &requires,
+                &BTreeMap::new(),
+                None,
+                "py3-none-any",
+                &entry_points,
+            );
+            let archive = ZipFileReader::new(wheel.clone()).await?;
+            let metadata_index = archive
+                .file()
+                .entries()
+                .iter()
+                .position(|entry| {
+                    entry
+                        .filename()
+                        .as_str()
+                        .is_ok_and(|filename| filename.ends_with(".dist-info/METADATA"))
+                })
+                .context("generated wheel has no METADATA")?;
+            let mut metadata = Vec::new();
+            archive
+                .reader_with_entry(metadata_index)
+                .await?
+                .read_to_end_checked(&mut metadata)
+                .await?;
+            let file_path = format!("/files/{filename}");
+            files.push(json!({
+                "filename": filename,
+                "url": file_path,
+                "hashes": {},
+                "core-metadata": true,
+                "upload-time": "2024-03-01T00:00:00Z",
+            }));
+            Mock::given(method("GET"))
+                .and(path(format!("{file_path}.metadata")))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(metadata))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(file_path))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+                .mount(server)
+                .await;
+        }
+        let mut index = Mock::given(method("GET"))
+            .and(path(format!("/simple/{name}/")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "no-store")
+                    .set_body_raw(
+                        json!({
+                            "meta": { "api-version": "1.0" },
+                            "name": name,
+                            "files": files,
+                        })
+                        .to_string(),
+                        "application/vnd.pypi.simple.v1+json",
+                    ),
+            );
+        if name == "upgrade-shared"
+            && let Some(requests) = shared_requests
+        {
+            index = index.expect(requests);
+        }
+        index.mount(server).await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_upgrade_shares_compatible_simple_metadata() -> Result<()> {
+    for separate_settings in [false, true] {
+        let context = uv_test::test_context!("3.12")
+            .with_filtered_counts()
+            .with_filtered_exe_suffix()
+            .with_tool_dirs();
+        let bin_dir = context.temp_dir.child("bin");
+        let server = MockServer::start().await;
+        let index_url = format!("{}/simple", server.uri());
+        mount_tool_upgrade_metadata_index(&server, &["1.0.0"], None).await?;
+        for name in ["upgrade-alpha", "upgrade-beta"] {
+            let mut install = context.tool_install();
+            install.arg(name).arg("--index-url").arg(&index_url);
+            if separate_settings && name == "upgrade-beta" {
+                install.arg("--index-strategy").arg("unsafe-best-match");
+            }
+            install
+                .env(EnvVars::PATH, bin_dir.as_os_str())
+                .assert()
+                .success();
+        }
+
+        let shared_requests = if separate_settings { 2 } else { 1 };
+        server.reset().await;
+        mount_tool_upgrade_metadata_index(&server, &["1.0.0", "2.0.0"], Some(shared_requests))
+            .await?;
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), context.tool_upgrade()
+            .arg("--all")
+            .arg("--no-cache")
+            .arg("--index-url")
+            .arg(&index_url)
+                .env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Updated upgrade-alpha v1.0.0 -> v2.0.0
+             - upgrade-alpha==1.0.0
+             + upgrade-alpha==2.0.0
+             - upgrade-shared==1.0.0
+             + upgrade-shared==2.0.0
+            Installed 1 executable: upgrade-alpha
+            Updated upgrade-beta v1.0.0 -> v2.0.0
+             - upgrade-beta==1.0.0
+             + upgrade-beta==2.0.0
+             - upgrade-shared==1.0.0
+             + upgrade-shared==2.0.0
+            Installed 1 executable: upgrade-beta
+            ");
+        }
+        server.verify().await;
+
+        server.reset().await;
+        mount_tool_upgrade_metadata_index(
+            &server,
+            &["1.0.0", "2.0.0", "3.0.0"],
+            Some(shared_requests),
+        )
+        .await?;
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), context.tool_upgrade()
+            .arg("--all")
+            .arg("--no-cache")
+            .arg("--index-url")
+            .arg(&index_url)
+                .env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Updated upgrade-alpha v2.0.0 -> v3.0.0
+             - upgrade-alpha==2.0.0
+             + upgrade-alpha==3.0.0
+             - upgrade-shared==2.0.0
+             + upgrade-shared==3.0.0
+            Installed 1 executable: upgrade-alpha
+            Updated upgrade-beta v2.0.0 -> v3.0.0
+             - upgrade-beta==2.0.0
+             + upgrade-beta==3.0.0
+             - upgrade-shared==2.0.0
+             + upgrade-shared==3.0.0
+            Installed 1 executable: upgrade-beta
+            ");
+        }
+        server.verify().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_upgrade_shared_simple_metadata_resolution() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let server = MockServer::start().await;
+    let index_url = format!("{}/simple", server.uri());
+    mount_tool_upgrade_metadata_index(&server, &["1.0.0"], None).await?;
+    for name in ["upgrade-alpha", "upgrade-beta"] {
+        let mut install = context.tool_install();
+        install.arg(name).arg("--index-url").arg(&index_url);
+        if name == "upgrade-beta" {
+            install.arg("--resolution").arg("lowest");
+        }
+        install
+            .env(EnvVars::PATH, bin_dir.as_os_str())
+            .assert()
+            .success();
+    }
+
+    server.reset().await;
+    mount_tool_upgrade_metadata_index(&server, &["1.0.0", "2.0.0"], Some(1)).await?;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("upgrade-alpha==2.0.0")
+        .arg("upgrade-beta==2.0.0")
+        .arg("--no-cache")
+        .arg("--index-url")
+        .arg(&index_url)
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Updated upgrade-alpha v1.0.0 -> v2.0.0
+     - upgrade-alpha==1.0.0
+     + upgrade-alpha==2.0.0
+     - upgrade-shared==1.0.0
+     + upgrade-shared==2.0.0
+    Installed 1 executable: upgrade-alpha
+    Updated upgrade-beta v1.0.0 -> v2.0.0
+     - upgrade-beta==1.0.0
+     + upgrade-beta==2.0.0
+    Installed 1 executable: upgrade-beta
+    ");
+    server.verify().await;
+    Ok(())
+}
 
 #[test]
 fn tool_upgrade_empty() {

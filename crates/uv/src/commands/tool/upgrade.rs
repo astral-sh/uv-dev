@@ -8,14 +8,21 @@ use tracing::{debug, trace};
 
 use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
-use uv_client::BaseClientBuilder;
-use uv_configuration::{Concurrency, Constraints, DryRun, HashCheckingMode, TargetTriple};
+use uv_client::{BaseClientBuilder, SharedSimpleMetadata};
+use uv_configuration::{
+    Concurrency, Constraints, DryRun, HashCheckingMode, IndexStrategy, KeyringProviderType,
+    TargetTriple,
+};
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
+use uv_distribution_types::{
+    ExtraBuildRequires, Index, IndexLocations, Name, Requirement, RequirementSource,
+};
 use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
+use uv_pep508::MarkerEnvironment;
+use uv_platform_tags::Platform;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{
     EnvironmentPreference, Interpreter, PythonDownloads, PythonInstallation, PythonPreference,
@@ -24,6 +31,7 @@ use uv_python::{
 use uv_requirements::RequirementsSpecification;
 use uv_settings::{Combine, PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_tool::{InstalledTools, Tool};
+use uv_torch::{AmdGpuArchitecture, TorchMode};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
@@ -39,7 +47,7 @@ use crate::commands::reporters::PythonDownloadReporter;
 use crate::commands::tool::common::{ToolLock, remove_entrypoints, tool_environment_spec};
 use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_install};
 use crate::printer::Printer;
-use crate::settings::ResolverInstallerSettings;
+use crate::settings::{ResolverInstallerSettings, ResolverSettings};
 
 /// Upgrade a tool.
 pub(crate) async fn upgrade(
@@ -127,6 +135,7 @@ pub(crate) async fn upgrade(
     // Constraints that caused upgrades to be skipped or altered.
     let mut collected_constraints: Vec<(PackageName, UpgradeConstraint)> = Vec::new();
 
+    let mut registry_metadata = UpgradeRegistryMetadata::default();
     let mut errors = Vec::new();
     for (name, constraints) in &names {
         debug!("Upgrading tool: `{name}`");
@@ -139,6 +148,7 @@ pub(crate) async fn upgrade(
             &installed_tools,
             &args,
             &client_builder,
+            &mut registry_metadata,
             cache,
             workspace_cache,
             &filesystem,
@@ -262,6 +272,51 @@ struct UpgradeReport {
     constraint: Option<UpgradeConstraint>,
 }
 
+#[derive(Default)]
+struct UpgradeRegistryMetadata(Vec<(RegistryMetadataSettings, SharedSimpleMetadata)>);
+
+#[derive(PartialEq, Eq)]
+struct RegistryMetadataSettings {
+    markers: MarkerEnvironment,
+    platform: Platform,
+    python_platform: Option<TargetTriple>,
+    index_locations: IndexLocations,
+    index_strategy: IndexStrategy,
+    keyring_provider: KeyringProviderType,
+    torch_backend: Option<TorchMode>,
+    cuda_driver_version: Option<Version>,
+    amd_gpu_architecture: Option<AmdGpuArchitecture>,
+}
+
+impl UpgradeRegistryMetadata {
+    fn for_settings(
+        &mut self,
+        interpreter: &Interpreter,
+        python_platform: Option<&TargetTriple>,
+        settings: &ResolverSettings,
+    ) -> SharedSimpleMetadata {
+        // Transport and cache settings are fixed for the command. Saved index credentials,
+        // keyring settings, and interpreter metadata can differ between installed tools.
+        let key = RegistryMetadataSettings {
+            markers: interpreter.markers().clone(),
+            platform: interpreter.platform().clone(),
+            python_platform: python_platform.copied(),
+            index_locations: settings.index_locations.clone(),
+            index_strategy: settings.index_strategy,
+            keyring_provider: settings.keyring_provider,
+            torch_backend: settings.torch_backend,
+            cuda_driver_version: settings.cuda_driver_version.clone(),
+            amd_gpu_architecture: settings.amd_gpu_architecture,
+        };
+        if let Some((_, metadata)) = self.0.iter().find(|(settings, _)| *settings == key) {
+            return metadata.clone();
+        }
+        let metadata = SharedSimpleMetadata::default();
+        self.0.push((key, metadata.clone()));
+        metadata
+    }
+}
+
 /// Upgrade a specific tool.
 async fn upgrade_tool(
     name: &PackageName,
@@ -272,6 +327,7 @@ async fn upgrade_tool(
     installed_tools: &InstalledTools,
     args: &ResolverInstallerOptions,
     client_builder: &BaseClientBuilder<'_>,
+    registry_metadata: &mut UpgradeRegistryMetadata,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     filesystem: &ResolverInstallerOptions,
@@ -372,18 +428,22 @@ async fn upgrade_tool(
         manifest_overrides,
         manifest_excludes,
     );
-    // Initialize any shared state.
-    let state = PlatformState::default();
     // Check if we need to create a new environment — if so, resolve it first, then install the
     // requested tool.
     let requested_interpreter =
         interpreter.filter(|interpreter| !environment.environment().uses(interpreter));
+    let target_interpreter =
+        requested_interpreter.unwrap_or_else(|| environment.environment().interpreter());
+    // Resolver indexes remain specific to each tool's constraints and resolution settings.
+    let state = PlatformState::default().with_simple_metadata(registry_metadata.for_settings(
+        target_interpreter,
+        python_platform,
+        &settings.resolver,
+    ));
     let tool_dir = installed_tools.tool_dir(name);
     // TODO(zanieb): When updating an existing environment, build it in the cache directory then
     // copy it into the tool directory.
     let (environment, outcome, tool_lock) = if tool_locks {
-        let target_interpreter =
-            requested_interpreter.unwrap_or_else(|| environment.environment().interpreter());
         let site_packages = SitePackages::from_environment(environment.environment())?;
         let universal_resolution = resolve_environment(
             tool_environment_spec(spec, None, Some(&site_packages)),
