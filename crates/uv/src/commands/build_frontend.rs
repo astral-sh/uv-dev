@@ -15,7 +15,9 @@ use uv_auth::CredentialsCache;
 use uv_build_backend::check_direct_build;
 use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, CacheBucket};
-use uv_client::{BaseClientBuilder, RegistryClientBuilder, SharedSimpleMetadata};
+use uv_client::{
+    BaseClientBuilder, RegistryClientBuilder, SharedSimpleMetadata, SharedWheelMetadata,
+};
 use uv_configuration::{
     BuildIsolation, BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints,
     DependencyGroupsWithDefaults, DependencyMode, DependencyModifiers, HashCheckingMode,
@@ -476,7 +478,7 @@ async fn build_impl(
         }
     }
 
-    let simple_metadata = WorkspaceSimpleMetadata::default();
+    let registry_metadata = WorkspaceRegistryMetadata::default();
     let results: Vec<_> = futures::future::join_all(packages.into_iter().map(|source| {
         let future = build_package(
             source.clone(),
@@ -492,7 +494,7 @@ async fn build_impl(
             workspace_cache,
             printer,
             index_locations,
-            &simple_metadata,
+            &registry_metadata,
             client_builder.clone(),
             hash_checking,
             build_logs,
@@ -555,37 +557,43 @@ async fn build_impl(
     }
 }
 
-/// Raw index metadata for one build command. All request configuration except the interpreter
+/// Raw registry metadata for one build command. All request configuration except the interpreter
 /// is fixed by the command; each resolver still applies its own distribution policy.
 #[derive(Default)]
-struct WorkspaceSimpleMetadata(Mutex<Vec<InterpreterSimpleMetadata>>);
+struct WorkspaceRegistryMetadata(Mutex<Vec<InterpreterRegistryMetadata>>);
 
-struct InterpreterSimpleMetadata {
+struct InterpreterRegistryMetadata {
     executable: PathBuf,
     markers: MarkerEnvironment,
     platform: Platform,
-    metadata: SharedSimpleMetadata,
+    simple: SharedSimpleMetadata,
+    wheel: SharedWheelMetadata,
 }
 
-impl WorkspaceSimpleMetadata {
-    async fn for_interpreter(&self, interpreter: &Interpreter) -> SharedSimpleMetadata {
+impl WorkspaceRegistryMetadata {
+    async fn for_interpreter(
+        &self,
+        interpreter: &Interpreter,
+    ) -> (SharedSimpleMetadata, SharedWheelMetadata) {
         let mut entries = self.0.lock().await;
         if let Some(entry) = entries.iter().find(|entry| {
             entry.executable == interpreter.real_executable()
                 && entry.markers == *interpreter.markers()
                 && entry.platform == *interpreter.platform()
         }) {
-            return entry.metadata.clone();
+            return (entry.simple.clone(), entry.wheel.clone());
         }
 
-        let metadata = SharedSimpleMetadata::default();
-        entries.push(InterpreterSimpleMetadata {
+        let simple = SharedSimpleMetadata::default();
+        let wheel = SharedWheelMetadata::default();
+        entries.push(InterpreterRegistryMetadata {
             executable: interpreter.real_executable().to_path_buf(),
             markers: interpreter.markers().clone(),
             platform: interpreter.platform().clone(),
-            metadata: metadata.clone(),
+            simple: simple.clone(),
+            wheel: wheel.clone(),
         });
-        metadata
+        (simple, wheel)
     }
 }
 
@@ -604,7 +612,7 @@ async fn build_package(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     index_locations: &IndexLocations,
-    simple_metadata: &WorkspaceSimpleMetadata,
+    registry_metadata: &WorkspaceRegistryMetadata,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
     build_logs: bool,
@@ -719,13 +727,15 @@ async fn build_package(
     };
 
     // Initialize the registry client.
+    let (simple_metadata, wheel_metadata) = registry_metadata.for_interpreter(&interpreter).await;
     let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
         .index_locations(index_locations.clone())
         .index_strategy(index_strategy)
         .keyring(keyring_provider)
         .markers(interpreter.markers())
         .platform(interpreter.platform())
-        .shared_simple_metadata(simple_metadata.for_interpreter(&interpreter).await)
+        .shared_simple_metadata(simple_metadata)
+        .shared_wheel_metadata(wheel_metadata)
         .build()?;
 
     // Determine whether to enable build isolation.

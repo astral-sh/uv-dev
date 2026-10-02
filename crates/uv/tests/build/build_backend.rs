@@ -15,13 +15,13 @@ use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
 use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_static::EnvVars;
-use uv_test::packse::{generate_wheel, mount_mismatched_distribution};
+use uv_test::packse::generate_wheel;
 use uv_test::{uv_snapshot, venv_bin_path};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
-async fn workspace_build_simple_metadata_is_shared_per_interpreter() -> Result<()> {
+async fn workspace_build_registry_metadata_is_shared_per_interpreter() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filter((r"\[(alpha|beta|gamma)\]", "[PKG]"));
     let server = MockServer::start().await;
@@ -34,6 +34,7 @@ async fn workspace_build_simple_metadata_is_shared_per_interpreter() -> Result<(
         "py3-none-any",
         &[],
     );
+    let metadata = "Metadata-Version: 2.3\nName: build-requirement\nVersion: 1.0.0\n";
     let file_path = format!("/files/{filename}");
     Mock::given(method("GET"))
         .and(path("/simple/build-requirement/"))
@@ -48,6 +49,7 @@ async fn workspace_build_simple_metadata_is_shared_per_interpreter() -> Result<(
                             "filename": filename,
                             "url": file_path,
                             "hashes": { "sha256": hex::encode(Sha256::digest(&wheel)) },
+                            "core-metadata": { "sha256": hex::encode(Sha256::digest(metadata)) },
                             "upload-time": "2024-03-01T00:00:00Z",
                         }],
                     })
@@ -58,7 +60,22 @@ async fn workspace_build_simple_metadata_is_shared_per_interpreter() -> Result<(
         .expect(4)
         .mount(&server)
         .await;
-    mount_mismatched_distribution(&server, &file_path, &filename, wheel.clone(), wheel).await;
+    Mock::given(method("GET"))
+        .and(path(format!("{file_path}.metadata")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "no-store")
+                .set_body_string(metadata),
+        )
+        .expect(4)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(&file_path))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(6)
+        .mount(&server)
+        .await;
 
     context
         .temp_dir

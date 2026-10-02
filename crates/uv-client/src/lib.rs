@@ -10,8 +10,8 @@ pub use file_hash::FileHashError;
 pub use flat_index::{FlatIndexClient, FlatIndexEntries, FlatIndexEntry, FlatIndexError};
 pub use registry_client::{
     Connectivity, MetadataFormat, MetadataRangeRequest, RegistryClient, RegistryClientBuilder,
-    SharedSimpleMetadata, SimpleDetailMetadata, SimpleDetailMetadatum, SimpleIndexMetadata,
-    VersionFiles,
+    SharedSimpleMetadata, SharedWheelMetadata, SimpleDetailMetadata, SimpleDetailMetadatum,
+    SimpleIndexMetadata, VersionFiles,
 };
 pub(crate) use retry::UvRetryableStrategy;
 pub use retry::{RetriableError, RetryState, retryable_on_request_failure};
