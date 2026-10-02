@@ -37,7 +37,7 @@ level = "expect"
 reason = "used by Pixi to provide its own HTTP client"
 
 [[override]]
-lint = "hawk::dead_public"
+lint = "hawk::unnecessary_public"
 crate = "uv_client"
 item = "base_client::BaseClientBuilder::<'a>::extra_middleware"
 kind = "inherent_method"

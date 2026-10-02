@@ -65,9 +65,10 @@ async fn workspace_build_wheel_fixture(status: u16) -> Result<(TestContext, Mock
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("Cache-Control", "no-store")
-                .set_body_string("Metadata-Version: 2.3\nName: build-dependency\nVersion: 1.0.0\n"),
+                .set_body_string("Metadata-Version: 2.3\nName: build-dependency\nVersion: 1.0.0\n")
+                .set_delay(Duration::from_millis(25)),
         )
-        .expect(2)
+        .expect(if cfg!(windows) { 2..=2 } else { 2..=4 })
         .mount(&server)
         .await;
     Mock::given(method("GET"))
