@@ -105,7 +105,7 @@ fn python_list_versioned_catalog_artifacts() -> Result<()> {
             uv_snapshot!(context.filters(), list(), @"
             exit_code: 2 (failure)
             ----- stderr -----
-            error: Unable to parse the JSON Python download list at [TEMP_DIR]/downloads.json
+            error: Unable to parse the JSON Python download list at `[TEMP_DIR]/downloads.json`
               cause: Conflicting Python download records `a` and `b` for `cpython-3.13.7+custom-linux-x86_64-gnu` at build revision `42`
             ");
         }
@@ -119,7 +119,7 @@ fn python_list_versioned_catalog_artifacts() -> Result<()> {
     uv_snapshot!(context.filters(), list(), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Unable to parse the JSON Python download list at [TEMP_DIR]/downloads.json
+    error: Unable to parse the JSON Python download list at `[TEMP_DIR]/downloads.json`
       cause: Python build revision `042` in `a` must be a non-empty string of ASCII digits without leading zeros
     ");
 
@@ -899,7 +899,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
         .arg("--python-downloads-json-url").arg(format!("{}/versioned-invalid-revision", server.uri())), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-revision
+    error: Unable to parse the JSON Python download list at `http://[LOCALHOST]/versioned-invalid-revision`
       cause: Python build revision `invalid` in `cpython-3.14.0-darwin-aarch64-none` must be a non-empty string of ASCII digits without leading zeros
     "#);
 
@@ -909,7 +909,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
         .arg("--python-downloads-json-url").arg(format!("{}/versioned-invalid-build-name", server.uri())), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Unable to parse the JSON Python download list at http://[LOCALHOST]/versioned-invalid-build-name
+    error: Unable to parse the JSON Python download list at `http://[LOCALHOST]/versioned-invalid-build-name`
       cause: invalid type: integer `42`, expected a string at line 52 column 28
     ");
 
@@ -919,7 +919,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
         .arg("--python-downloads-json-url").arg(format!("{}/unsupported-version", server.uri())), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: This version of uv is too old to support the JSON Python download list at http://[LOCALHOST]/unsupported-version
+    error: This version of uv is too old to support the JSON Python download list at `http://[LOCALHOST]/unsupported-version`
     ");
 
     // Versioned catalogs require canonical build names.
@@ -961,7 +961,7 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
                 .arg("--python-downloads-json-url").arg(format!("{}{endpoint}", server.uri())), @r#"
             exit_code: 2 (failure)
             ----- stderr -----
-            error: Unable to parse the JSON Python download list at http://[LOCALHOST]/invalid-build-name-[INDEX]
+            error: Unable to parse the JSON Python download list at `http://[LOCALHOST]/invalid-build-name-[INDEX]`
               cause: [INVALID BUILD NAME]
             "#);
         }
