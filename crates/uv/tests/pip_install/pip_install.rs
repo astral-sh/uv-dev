@@ -3279,17 +3279,21 @@ fn install_git_public_https_missing_branch_or_tag() {
 
 #[tokio::test]
 #[cfg(feature = "test-git")]
-async fn pinned_git_subdirectory_skips_commit_lookup() -> Result<()> {
+async fn git_subdirectory_commit_lookup() -> Result<()> {
     const REPOSITORY: &str = "https://github.com/uv-network-benchmark/pinned-subdirectory";
     const MISSING: &str = "0000000000000000000000000000000000000001";
     const NAMED_BRANCH: &str = "0000000000000000000000000000000000000002";
 
-    for (kind, expected_requests) in [
-        ("commit", 0),
-        ("short", 1),
-        ("branch", 1),
-        ("named-branch", 1),
-        ("missing", 0),
+    for kind in [
+        "commit",
+        "short",
+        "branch",
+        "tag",
+        "named-ref",
+        "default",
+        "named-branch",
+        "missing",
+        "missing-branch",
     ] {
         let context = uv_test::test_context!("3.12");
         let repository = context.temp_dir.child("repository");
@@ -3336,6 +3340,12 @@ async fn pinned_git_subdirectory_skips_commit_lookup() -> Result<()> {
             .output()?;
         assert!(output.status.success());
         let commit = String::from_utf8(output.stdout)?.trim().to_owned();
+        Command::new("git")
+            .arg("-C")
+            .arg(repository.path())
+            .args(["tag", "v1"])
+            .assert()
+            .success();
         let repository_url = Url::from_directory_path(repository.path())
             .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
         let repository_url = repository_url.as_str().trim_end_matches('/');
@@ -3343,17 +3353,25 @@ async fn pinned_git_subdirectory_skips_commit_lookup() -> Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(200).set_body_string(commit.clone()))
-            .expect(expected_requests)
+            .expect(0)
             .mount(&server)
             .await;
 
-        let mut command = if kind == "named-branch" {
-            Command::new("git")
-                .arg("-C")
-                .arg(repository.path())
-                .args(["branch", NAMED_BRANCH])
-                .assert()
-                .success();
+        let project_reference = match kind {
+            "named-branch" => {
+                Command::new("git")
+                    .arg("-C")
+                    .arg(repository.path())
+                    .args(["branch", NAMED_BRANCH])
+                    .assert()
+                    .success();
+                Some(("branch", NAMED_BRANCH))
+            }
+            "tag" => Some(("tag", "v1")),
+            "missing-branch" => Some(("branch", "missing")),
+            _ => None,
+        };
+        let mut command = if let Some((field, reference)) = project_reference {
             context.temp_dir.child("pyproject.toml").write_str(&formatdoc! {r#"
                 [project]
                 name = "project"
@@ -3362,7 +3380,7 @@ async fn pinned_git_subdirectory_skips_commit_lookup() -> Result<()> {
                 dependencies = ["uv-pinned-subdirectory"]
 
                 [tool.uv.sources]
-                uv-pinned-subdirectory = {{ git = "{REPOSITORY}", branch = "{NAMED_BRANCH}", subdirectory = "package" }}
+                uv-pinned-subdirectory = {{ git = "{REPOSITORY}", {field} = "{reference}", subdirectory = "package" }}
             "#})?;
             let mut command = context.lock();
             command.arg("--no-index");
@@ -3372,14 +3390,21 @@ async fn pinned_git_subdirectory_skips_commit_lookup() -> Result<()> {
                 "commit" => commit.as_str(),
                 "short" => &commit[..12],
                 "branch" => "main",
+                "named-ref" => "refs/heads/main",
+                "default" => "",
                 "missing" => MISSING,
-                _ => unreachable!(),
+                kind => return Err(anyhow!("unexpected Git reference kind: {kind}")),
+            };
+            let suffix = if reference.is_empty() {
+                String::new()
+            } else {
+                format!("@{reference}")
             };
             context
                 .temp_dir
                 .child("requirements.in")
                 .write_str(&format!(
-                    "uv-pinned-subdirectory @ git+{REPOSITORY}@{reference}#subdirectory=package\n"
+                    "uv-pinned-subdirectory @ git+{REPOSITORY}{suffix}#subdirectory=package\n"
                 ))?;
             let mut command = context.pip_compile();
             command.args([
@@ -3402,15 +3427,106 @@ async fn pinned_git_subdirectory_skips_commit_lookup() -> Result<()> {
             .env("GIT_CONFIG_KEY_1", "protocol.file.allow")
             .env("GIT_CONFIG_VALUE_1", "always")
             .env(EnvVars::UV_GITHUB_FAST_PATH_URL, server.uri());
-        if kind == "missing" {
+        if kind == "missing" || kind == "missing-branch" {
+            let missing = if kind == "missing" {
+                MISSING
+            } else {
+                "missing"
+            };
             command
                 .assert()
                 .failure()
-                .stderr(predicate::str::contains(MISSING));
-        } else {
+                .stderr(predicate::str::contains(missing));
+        } else if project_reference.is_some() {
             command.assert().success();
+            let lock: toml::Value =
+                toml::from_str(&fs::read_to_string(context.temp_dir.child("uv.lock"))?)?;
+            let packages = lock["package"]
+                .as_array()
+                .context("missing lock packages")?;
+            let source = packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("uv-pinned-subdirectory"))
+                .context("missing Git package")?["source"]["git"]
+                .as_str()
+                .context("missing Git source")?;
+            assert!(source.ends_with(&format!("#{commit}")));
+        } else {
+            command
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(format!(
+                    "@{commit}#subdirectory=package"
+                )));
         }
         server.verify().await;
+
+        if kind == "branch" {
+            // Resolving the commit through the API can reuse an existing Git checkout.
+            server.reset().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(commit.clone()))
+                .expect(1)
+                .mount(&server)
+                .await;
+            command
+                .arg("--upgrade")
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(format!(
+                    "@{commit}#subdirectory=package"
+                )));
+            server.verify().await;
+
+            // The cached repository must not make a mutable reference stale.
+            repository
+                .child("package/pyproject.toml")
+                .write_str(indoc! {r#"
+                [project]
+                name = "uv-pinned-subdirectory"
+                version = "2.0.0"
+                requires-python = ">=3.8"
+                dependencies = []
+            "#})?;
+            Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args([
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-am",
+                    "Advance branch",
+                ])
+                .assert()
+                .success();
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args(["rev-parse", "HEAD"])
+                .output()?;
+            assert!(output.status.success());
+            let updated_commit = String::from_utf8(output.stdout)?.trim().to_owned();
+            assert_ne!(updated_commit, commit);
+
+            server.reset().await;
+            Mock::given(method("GET"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(updated_commit.clone()))
+                .expect(1)
+                .mount(&server)
+                .await;
+            command
+                .assert()
+                .success()
+                .stdout(predicate::str::contains(format!(
+                    "@{updated_commit}#subdirectory=package"
+                )));
+            server.verify().await;
+        }
     }
     Ok(())
 }

@@ -2285,13 +2285,25 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     WheelCache::Git(resource.url, oid.as_short_str()).root(),
                 )
             });
+        let pinned_commit = match resource.git.reference() {
+            GitReference::BranchOrTagOrCommit(reference) => GitOid::from_str(reference).is_ok(),
+            GitReference::Branch(_)
+            | GitReference::Tag(_)
+            | GitReference::BranchOrTag(_)
+            | GitReference::NamedRef(_)
+            | GitReference::DefaultBranch => false,
+        };
         if resource.subdirectory.is_some()
-            && matches!(resource.git.reference(), GitReference::BranchOrTagOrCommit(reference) if GitOid::from_str(reference).is_ok())
+            && (pinned_commit
+                || !GitResolver::has_cached_repository(
+                    resource.git,
+                    &self.build_context.cache().bucket(CacheBucket::Git),
+                ))
         {
-            // Subdirectory metadata requires a checkout to discover workspace sources. An exact
-            // commit does not need API resolution, and the Git fetch validates it against the
-            // repository before using its metadata.
-            debug!("Skipping GitHub fast path for: {source} (pinned subdirectory)");
+            // Subdirectory metadata requires a checkout to discover workspace sources. A cold
+            // checkout can resolve the reference during its Git fetch. For a cached repository,
+            // the GitHub API can resolve a fresh commit that avoids another Git fetch.
+            debug!("Skipping GitHub fast path for: {source} (subdirectory requires checkout)");
         } else if cache_shard
             .as_ref()
             .is_some_and(|cache_shard| cache_shard.is_dir())

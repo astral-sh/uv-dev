@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -95,6 +95,13 @@ impl Default for GitResolver {
 }
 
 impl GitResolver {
+    /// Return whether a Git database directory exists for the repository.
+    ///
+    /// This is a performance hint. The requested revision still needs to be resolved and validated.
+    pub fn has_cached_repository(url: &GitUrl, cache: &Path) -> bool {
+        GitSource::database_path(url, cache).is_dir()
+    }
+
     /// Inserts a new [`GitOid`] for the given [`RepositoryReference`].
     pub fn insert(&self, reference: RepositoryReference, sha: GitOid) {
         self.0.pin().insert(reference, sha);

@@ -42,6 +42,11 @@ impl GitSource {
         }
     }
 
+    /// Return the path to the repository's cached Git database.
+    pub(crate) fn database_path(git: &GitUrl, cache: &Path) -> PathBuf {
+        cache.join("db").join(cache_digest(git.repository()))
+    }
+
     /// Disable SSL verification for this [`GitSource`].
     #[must_use]
     pub(crate) fn dangerous(self) -> Self {
@@ -67,7 +72,7 @@ impl GitSource {
 
         // The path to the repo, within the Git database.
         let ident = cache_digest(self.git.repository());
-        let db_path = self.cache.join("db").join(&ident);
+        let db_path = Self::database_path(&self.git, &self.cache);
 
         // Authenticate the URL, if necessary.
         let remote = if let Some(credentials) = GIT_STORE.get(self.git.repository()) {
