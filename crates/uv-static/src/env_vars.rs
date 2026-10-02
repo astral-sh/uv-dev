@@ -555,13 +555,16 @@ impl EnvVars {
     /// Pin managed CPython versions to a specific build revision.
     ///
     /// For CPython, this should be the build date (e.g., "20250814").
+    ///
+    /// Reinstalling with this pin requires an explicit Python request, not a bare or `any` reinstall.
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_CPYTHON_BUILD: &'static str = "UV_PYTHON_CPYTHON_BUILD";
 
     /// Pin a named managed Python build to a specific build revision.
     ///
-    /// This applies to requests with a publisher-defined build name, such as `3.13+custom`,
-    /// and to reinstalls of existing named builds.
+    /// This applies to requests with a publisher-defined build name, such as `3.13+custom`.
+    /// Reinstalling with this pin requires an explicit build-name request, not a bare or `any`
+    /// reinstall.
     ///
     /// Requests for unnamed builds, such as `3.13` or `3.13+freethreaded`,
     /// use implementation-specific variables such as `UV_PYTHON_CPYTHON_BUILD`.
@@ -571,18 +574,24 @@ impl EnvVars {
     /// Pin managed PyPy versions to a specific build revision.
     ///
     /// For PyPy, this should be the PyPy version (e.g., "7.3.20").
+    ///
+    /// Reinstalling with this pin requires an explicit Python request, not a bare or `any` reinstall.
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_PYPY_BUILD: &'static str = "UV_PYTHON_PYPY_BUILD";
 
     /// Pin managed GraalPy versions to a specific build revision.
     ///
     /// For GraalPy, this should be the GraalPy version (e.g., "24.2.2").
+    ///
+    /// Reinstalling with this pin requires an explicit Python request, not a bare or `any` reinstall.
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_GRAALPY_BUILD: &'static str = "UV_PYTHON_GRAALPY_BUILD";
 
     /// Pin managed Pyodide versions to a specific build revision.
     ///
     /// For Pyodide, this should be the Pyodide version (e.g., "0.28.1").
+    ///
+    /// Reinstalling with this pin requires an explicit Python request, not a bare or `any` reinstall.
     #[attr_added_in("0.8.14")]
     pub const UV_PYTHON_PYODIDE_BUILD: &'static str = "UV_PYTHON_PYODIDE_BUILD";
 

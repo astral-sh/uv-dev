@@ -396,16 +396,6 @@ async fn perform_install(
     // Resolve the requests
     let mut is_default_install = false;
     let mut is_unspecified_upgrade = false;
-    let retry_policy = client_builder.retry_policy();
-    let download_list = ManagedPythonDownloadList::new(
-        &client_builder,
-        cache,
-        python_downloads_json_url.as_deref(),
-    )
-    .await?;
-    // Python downloads are performing their own retries to catch stream errors, disable the
-    // default retries to avoid the middleware from performing uncontrolled retries.
-    let client = client_builder.retries(0).build()?;
     // TODO(zanieb): We use this variable to special-case .python-version files, but it'd be nice to
     // have generalized request source tracking instead
     let mut is_from_python_version_file = false;
@@ -460,6 +450,35 @@ async fn perform_install(
             .map(|target| PythonRequest::parse(target.as_str()))
             .collect()
     };
+
+    if reinstall && (is_default_install || requests.contains(&PythonRequest::Any)) {
+        // A bulk reinstall can span unrelated builds. Revision pins require an explicit target.
+        // With no installations, the fallback download is unnamed CPython.
+        for request in existing_installations
+            .iter()
+            .map(PythonDownloadRequest::from)
+            .chain(existing_installations.is_empty().then(|| {
+                PythonDownloadRequest::default().with_implementation(ImplementationName::CPython)
+            }))
+        {
+            if let Some((variable, _)) = request.build_revision_pin_from_env()? {
+                anyhow::bail!(
+                    "`{variable}` requires an explicit Python request when reinstalling; specify a Python version or unset `{variable}`"
+                );
+            }
+        }
+    }
+
+    let retry_policy = client_builder.retry_policy();
+    let download_list = ManagedPythonDownloadList::new(
+        &client_builder,
+        cache,
+        python_downloads_json_url.as_deref(),
+    )
+    .await?;
+    // Python downloads are performing their own retries to catch stream errors, disable the
+    // default retries to avoid the middleware from performing uncontrolled retries.
+    let client = client_builder.retries(0).build()?;
 
     let mut install_requests = Vec::with_capacity(requests.len());
     for request in requests {

@@ -214,7 +214,7 @@ impl PythonVersion {
 }
 
 /// Get the environment variable name for the build constraint for a given implementation.
-fn python_build_revision_variable(implementation: ImplementationName) -> &'static str {
+pub(crate) fn python_build_revision_variable(implementation: ImplementationName) -> &'static str {
     match implementation {
         ImplementationName::CPython => EnvVars::UV_PYTHON_CPYTHON_BUILD,
         ImplementationName::PyPy => EnvVars::UV_PYTHON_PYPY_BUILD,
@@ -237,7 +237,9 @@ pub(crate) fn python_named_build_revision_from_env() -> Result<Option<String>, B
     build_revision_from_env(EnvVars::UV_PYTHON_BUILD_REVISION)
 }
 
-fn build_revision_from_env(variable: &'static str) -> Result<Option<String>, BuildRevisionError> {
+pub(crate) fn build_revision_from_env(
+    variable: &'static str,
+) -> Result<Option<String>, BuildRevisionError> {
     let Some(revision_os) = env::var_os(variable) else {
         return Ok(None);
     };

@@ -1435,7 +1435,9 @@ async fn python_reinstall_build_name() -> anyhow::Result<()> {
     ] {
         let context = uv_test::test_context_with_versions!(&[])
             .with_managed_python_dirs()
-            .with_http_retries("0");
+            .with_http_retries("0")
+            .with_env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "missing-build")
+            .with_env(EnvVars::UV_PYTHON_BUILD_REVISION, " \t");
         let platform = platform_key_from_env()?;
         let installed_key = format!("cpython-3.13.7+custom-{platform}");
         let key = installed_key.parse::<PythonInstallationKey>()?;
@@ -1686,7 +1688,9 @@ fn python_reinstall_empty() {
         .with_filtered_exe_suffix()
         .with_filtered_latest_python_versions()
         .with_managed_python_dirs()
-        .with_empty_python_install_mirror();
+        .with_empty_python_install_mirror()
+        .with_env(EnvVars::UV_PYTHON_BUILD_REVISION, "missing-build")
+        .with_env(EnvVars::UV_PYTHON_CPYTHON_BUILD, " \t");
 
     uv_snapshot!(context.filters(), context.python_install().arg("--reinstall"), @"
     exit_code: 0 (success)
@@ -1702,7 +1706,9 @@ fn python_reinstall() {
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
         .with_filtered_latest_python_versions()
-        .with_managed_python_dirs();
+        .with_managed_python_dirs()
+        .with_env(EnvVars::UV_PYTHON_BUILD_REVISION, "missing-build")
+        .with_env(EnvVars::UV_PYTHON_CPYTHON_BUILD, " \t");
 
     // Install a couple versions
     uv_snapshot!(context.filters(), context.python_install().arg("3.12").arg("3.13"), @"
@@ -5748,18 +5754,29 @@ fn python_install_build_name_revision() -> anyhow::Result<()> {
     marker.assert(predicate::path::missing());
     insta::assert_snapshot!(fs_err::read_to_string(&build)?, @"20260901");
 
-    // An explicit reinstall must also replace matching keys with a different revision.
-    marker.touch()?;
-    build.write_str("20260825")?;
-    context
-        .python_install()
-        .arg("3.13.7+custom")
-        .arg("--reinstall")
-        .env(EnvVars::UV_PYTHON_BUILD_REVISION, "20260901")
-        .assert()
-        .success();
-    marker.assert(predicate::path::missing());
-    insta::assert_snapshot!(fs_err::read_to_string(&build)?, @"20260901");
+    // Explicit requests from the command line or version file can reinstall a pinned revision.
+    for target in [Some("3.13.7+custom"), None] {
+        marker.touch()?;
+        build.write_str("20260825")?;
+        if target.is_none() {
+            context
+                .temp_dir
+                .child(".python-version")
+                .write_str("3.13.7+custom")?;
+        }
+        context
+            .python_install()
+            .args(target)
+            .arg("--reinstall")
+            .env(EnvVars::UV_PYTHON_BUILD_REVISION, "20260901")
+            .assert()
+            .success();
+        marker.assert(predicate::path::missing());
+        let revision = fs_err::read_to_string(&build)?;
+        allow_duplicates! {
+            insta::assert_snapshot!(revision, @"20260901");
+        }
+    }
     Ok(())
 }
 
@@ -5812,6 +5829,73 @@ fn python_install_build_name_revision_overlapping_requests() -> anyhow::Result<(
 }
 
 #[test]
+fn python_reinstall_revision_pin_requires_request() -> anyhow::Result<()> {
+    let platform = platform_key_from_env()?;
+    for (key, variable) in [
+        (
+            Some(format!("cpython-3.13.7+custom-{platform}")),
+            EnvVars::UV_PYTHON_BUILD_REVISION,
+        ),
+        (
+            Some(format!("cpython-3.13.7-{platform}")),
+            EnvVars::UV_PYTHON_CPYTHON_BUILD,
+        ),
+        (
+            Some(format!("pypy-3.10.16-{platform}")),
+            EnvVars::UV_PYTHON_PYPY_BUILD,
+        ),
+        (
+            Some(format!("graalpy-3.11.0-{platform}")),
+            EnvVars::UV_PYTHON_GRAALPY_BUILD,
+        ),
+        (
+            Some("pyodide-3.13.2-emscripten-wasm32-musl".to_string()),
+            EnvVars::UV_PYTHON_PYODIDE_BUILD,
+        ),
+        (None, EnvVars::UV_PYTHON_CPYTHON_BUILD),
+    ] {
+        for (target, pin) in [(None, None), (Some("any"), None), (None, Some("any"))] {
+            let context = uv_test::test_context_with_versions!(&[])
+                .with_managed_python_dirs()
+                .with_filter((variable, "[REVISION_ENV_VAR]"));
+            if let Some(key) = &key {
+                let installation = context.temp_dir.child("managed").child(key);
+                installation.create_dir_all()?;
+                installation.child("BUILD").write_str("10")?;
+                installation.child("marker").touch()?;
+            }
+            if let Some(pin) = pin {
+                context.temp_dir.child(".python-version").write_str(pin)?;
+            }
+
+            // Reject the pin before reading the catalog or modifying any installations.
+            allow_duplicates! {
+                uv_snapshot!(context.filters(), context.python_install()
+                    .arg("--reinstall")
+                    .args(target)
+                    .env(variable, "20")
+                    .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, "missing-catalog.json"), @"
+                exit_code: 2 (failure)
+                ----- stderr -----
+                error: `[REVISION_ENV_VAR]` requires an explicit Python request when reinstalling; specify a Python version or unset `[REVISION_ENV_VAR]`
+                ");
+            }
+            if let Some(key) = &key {
+                let installation = context.temp_dir.child("managed").child(key);
+                installation
+                    .child("marker")
+                    .assert(predicate::path::exists());
+                let build = fs_err::read_to_string(installation.child("BUILD"))?;
+                allow_duplicates! {
+                    insta::assert_snapshot!(build, @"10");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn python_install_build_name_revision_reinstall_overlapping_requests() -> anyhow::Result<()> {
     for requests in [["any", "3.13+custom"], ["3.13+custom", "any"]] {
         let (context, installation) = python_build_name_revision_context("custom")?;
@@ -5825,35 +5909,34 @@ fn python_install_build_name_revision_reinstall_overlapping_requests() -> anyhow
             .as_str()
             .context("Missing unnamed build revision")?;
 
-        // An unavailable explicit pin must fail before either installation is replaced.
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), context.python_install()
-                .args(requests)
-                .args(["--reinstall", "--no-bin"])
-                .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, unnamed_revision)
-                .env(EnvVars::UV_PYTHON_BUILD_REVISION, "99999999"), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: No download found for request: cpython-3.13+custom-[PLATFORM]
-            ");
-        }
-        for installation in [&unnamed, &installation] {
-            installation
-                .child("marker")
-                .assert(predicate::path::exists());
-            let build = fs_err::read_to_string(installation.child("BUILD"))?;
+        // A wildcard cannot use a revision pin, even when the pinned revision is available.
+        for revision in ["99999999", "20260901"] {
             allow_duplicates! {
-                insta::assert_snapshot!(build, @"20260825");
+                uv_snapshot!(context.filters(), context.python_install()
+                    .args(requests)
+                    .args(["--reinstall", "--no-bin"])
+                    .env(EnvVars::UV_PYTHON_BUILD_REVISION, revision), @"
+                exit_code: 2 (failure)
+                ----- stderr -----
+                error: `UV_PYTHON_BUILD_REVISION` requires an explicit Python request when reinstalling; specify a Python version or unset `UV_PYTHON_BUILD_REVISION`
+                ");
+            }
+            for installation in [&unnamed, &installation] {
+                installation
+                    .child("marker")
+                    .assert(predicate::path::exists());
+                let build = fs_err::read_to_string(installation.child("BUILD"))?;
+                allow_duplicates! {
+                    insta::assert_snapshot!(build, @"20260825");
+                }
             }
         }
 
-        // Expanding `any` uses each build's pin, agreeing with the explicit named request.
+        // Without a revision pin, overlapping requests reinstall each build once.
         allow_duplicates! {
             uv_snapshot!(context.filters(), context.python_install()
                 .args(requests)
-                .args(["--reinstall", "--no-bin"])
-                .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, unnamed_revision)
-                .env(EnvVars::UV_PYTHON_BUILD_REVISION, "20260901"), @"
+                .args(["--reinstall", "--no-bin"]), @"
             exit_code: 0 (success)
             ----- stderr -----
             Installed 2 versions in [TIME]

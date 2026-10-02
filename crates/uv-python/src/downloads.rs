@@ -46,7 +46,10 @@ use crate::implementation::{
 };
 use crate::installation::{PythonInstallation, PythonInstallationKey};
 use crate::managed::{ManagedPythonInstallation, compare_build_revisions};
-use crate::python_version::{BuildRevisionError, PythonBuildRevisionPins};
+use crate::python_version::{
+    BuildRevisionError, PythonBuildRevisionPins, build_revision_from_env,
+    python_build_revision_variable,
+};
 use crate::{
     Interpreter, PythonBuildName, PythonBuildRequest, PythonRequest, PythonVariant, PythonVersion,
     VersionRequest,
@@ -345,7 +348,7 @@ impl PythonDownloadRequest {
     }
 
     #[must_use]
-    fn with_implementation(mut self, implementation: ImplementationName) -> Self {
+    pub fn with_implementation(mut self, implementation: ImplementationName) -> Self {
         match implementation {
             // Pyodide is actually CPython with an Emscripten OS, we paper over that for usability
             ImplementationName::Pyodide => {
@@ -456,25 +459,30 @@ impl PythonDownloadRequest {
     /// Fill the build revision from the environment variable relevant for the
     /// [`ImplementationName`].
     fn fill_build_revision_from_env(mut self) -> Result<Self, Error> {
-        if self.build_revision.is_some() {
+        if self.build_revision.is_some() || self.implementation.is_none() {
             return Ok(self);
         }
-        let Some(implementation) = self.implementation else {
-            return Ok(self);
-        };
+        self.build_revision = self
+            .build_revision_pin_from_env()?
+            .map(|(_, revision)| revision);
+        Ok(self)
+    }
 
-        let build_request = self
+    /// Read the applicable revision pin and its environment variable name, if set.
+    pub fn build_revision_pin_from_env(&self) -> Result<Option<(&'static str, String)>, Error> {
+        let variable = if self
             .version
             .as_ref()
-            .and_then(VersionRequest::build_request);
-        self.build_revision =
-            PythonBuildRevisionPins::from_env(build_request, Some(implementation))?
-                .get(
-                    Some(implementation),
-                    build_request.and_then(PythonBuildRequest::build_name),
-                )
-                .map(str::to_owned);
-        Ok(self)
+            .and_then(VersionRequest::build_request)
+            .is_some_and(|request| request.build_name().is_some())
+        {
+            EnvVars::UV_PYTHON_BUILD_REVISION
+        } else if let Some(implementation) = self.implementation {
+            python_build_revision_variable(implementation)
+        } else {
+            return Ok(None);
+        };
+        Ok(build_revision_from_env(variable)?.map(|revision| (variable, revision)))
     }
 
     pub fn fill(mut self) -> Result<Self, Error> {
