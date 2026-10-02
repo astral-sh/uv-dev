@@ -344,14 +344,14 @@ network-transfer bound; process startup, filesystem, and CPU costs remain. Use `
 for a fresh HTTP cache entry or `--cache-state revalidate` to measure one conditional request before
 reading the unchanged cached metadata. `make_publish_fixtures.py --directory DIR` creates a batch of
 distinct wheel builds for repeated `publish --dry-run --check-url` checks. Use `--projects` to
-generate a workspace release with multiple builds per project. `publish_check_oracle.py`
-reads one current index per known package and verifies every selected local file against its
-advertised SHA-256. Use `--concurrency` to bound simultaneous index requests and account for that
-limit in the network floor. Use `--route revalidate` to conditionally validate cached index bodies.
-The replay serves already-published files, so this workload does not upload anything. Report it as a
-synthetic repeat-publish workload. `make_frozen_fixtures.py --directory DIR` creates a wheel-only
-project and setup commands that lock it before timing. Its profiles include a slow or intermittently
-failing find-links source that is introduced only for the frozen installation.
+generate a workspace release with multiple builds per project. `publish_check_oracle.py` reads one
+current index per known package and verifies every selected local file against its advertised
+SHA-256. Use `--concurrency` to bound simultaneous index requests and account for that limit in the
+network floor. Use `--route revalidate` to conditionally validate cached index bodies. The replay
+serves already-published files, so this workload does not upload anything. Report it as a synthetic
+repeat-publish workload. `make_frozen_fixtures.py --directory DIR` creates a wheel-only project and
+setup commands that lock it before timing. Its profiles include a slow or intermittently failing
+find-links source that is introduced only for the frozen installation.
 `make_pylock_fixtures.py --directory DIR` creates direct wheel and local source-build `pylock.toml`
 inputs. The source build imports a dependency available from the replay index and copies a valid
 wheel, providing a control for indexes needed during builds. `sdist_metadata_oracle.py` measures a
