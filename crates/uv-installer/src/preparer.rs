@@ -8,13 +8,15 @@ use uv_cache::Cache;
 use uv_configuration::BuildOptions;
 use uv_distribution::{DistributionDatabase, LocalWheel};
 use uv_distribution_types::{
-    BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, Hashed, Identifier, Name,
-    RemoteSource, Resolution,
+    ArchiveHashPolicy, BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, Hashed,
+    Identifier, Name, RemoteSource, Resolution,
 };
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
 use uv_redacted::DisplaySafeUrl;
 use uv_types::{BuildContext, HashStrategy, InFlight};
+
+use crate::SharedWheelDownloads;
 
 /// Prepare distributions for installation.
 ///
@@ -25,6 +27,7 @@ pub struct Preparer<'a, Context: BuildContext> {
     hashes: &'a HashStrategy,
     build_options: &'a BuildOptions,
     database: DistributionDatabase<'a, Context>,
+    shared_wheels: Option<&'a SharedWheelDownloads>,
     reporter: Option<Arc<dyn Reporter>>,
 }
 
@@ -42,6 +45,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             hashes,
             build_options,
             database,
+            shared_wheels: None,
             reporter: None,
         }
     }
@@ -58,7 +62,15 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
                 .database
                 .with_reporter(reporter.clone().into_distribution_reporter()),
             reporter: Some(reporter),
+            shared_wheels: self.shared_wheels,
         }
+    }
+
+    /// Reuse remote wheels across independent builds for the same interpreter.
+    #[must_use]
+    pub fn with_shared_wheels(mut self, wheels: Option<&'a SharedWheelDownloads>) -> Self {
+        self.shared_wheels = wheels;
+        self
     }
 
     /// Fetch, build, and unzip the distributions in parallel.
@@ -134,6 +146,25 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             }
         }
 
+        let policy = self.hashes.archive_policy(&dist);
+        if let Dist::Built(built) = &dist
+            && let Some(download) = self
+                .shared_wheels
+                .and_then(|wheels| wheels.download(built, policy))
+        {
+            let result = if let Some(result) = download.register_or_wait().await {
+                result
+            } else {
+                let result = self
+                    .get_or_build_wheel(&dist, policy)
+                    .await
+                    .map_err(Arc::new);
+                download.done(result.clone());
+                result
+            };
+            return result.map_err(|error| Error::from_shared_dist(dist, error, resolution));
+        }
+
         let id = dist.distribution_id();
         if let Some(result) = in_flight.downloads.register_or_wait(&id).await {
             match result.as_ref() {
@@ -171,27 +202,10 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
                 Err(err) => Err(Error::Thread(err.to_owned())),
             }
         } else {
-            let policy = self.hashes.archive_policy(&dist);
-
             let result = self
-                .database
-                .get_or_build_wheel(&dist, self.tags, policy)
-                .boxed_local()
+                .get_or_build_wheel(&dist, policy)
                 .map_err(|err| Error::from_dist(dist.clone(), err, resolution))
-                .await
-                .and_then(|wheel: LocalWheel| {
-                    if wheel.satisfies(policy) {
-                        Ok(wheel)
-                    } else {
-                        let err = uv_distribution::Error::hash_mismatch(
-                            dist.to_string(),
-                            policy.digests(),
-                            wheel.hashes(),
-                        );
-                        Err(Error::from_dist(dist, err, resolution))
-                    }
-                })
-                .map(CachedDist::from);
+                .await;
             match result {
                 Ok(cached) => {
                     in_flight.downloads.done(id, Ok(cached.clone()));
@@ -203,6 +217,26 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
                 }
             }
         }
+    }
+
+    async fn get_or_build_wheel(
+        &self,
+        dist: &Dist,
+        policy: ArchiveHashPolicy<'_>,
+    ) -> Result<CachedDist, uv_distribution::Error> {
+        let wheel: LocalWheel = self
+            .database
+            .get_or_build_wheel(dist, self.tags, policy)
+            .boxed_local()
+            .await?;
+        if !wheel.satisfies(policy) {
+            return Err(uv_distribution::Error::hash_mismatch(
+                dist.to_string(),
+                policy.digests(),
+                wheel.hashes(),
+            ));
+        }
+        Ok(CachedDist::from(wheel))
     }
 }
 
@@ -217,7 +251,7 @@ pub enum Error {
         DistErrorKind,
         Box<Dist>,
         DerivationChain,
-        #[source] Box<uv_distribution::Error>,
+        #[source] Arc<uv_distribution::Error>,
     ),
     #[error("Cyclic build dependency detected for `{0}`")]
     CyclicBuildDependency(PackageName),
@@ -237,13 +271,21 @@ impl Error {
 
     /// Create an [`Error`] from a distribution error.
     fn from_dist(dist: Dist, err: uv_distribution::Error, resolution: &Resolution) -> Self {
+        Self::from_shared_dist(dist, Arc::new(err), resolution)
+    }
+
+    fn from_shared_dist(
+        dist: Dist,
+        err: Arc<uv_distribution::Error>,
+        resolution: &Resolution,
+    ) -> Self {
         let chain =
             DerivationChain::from_resolution(resolution, (&dist).into()).unwrap_or_default();
         Self::Dist(
-            DistErrorKind::from_dist(&dist, &err),
+            DistErrorKind::from_dist(&dist, err.as_ref()),
             Box::new(dist),
             chain,
-            Box::new(err),
+            err,
         )
     }
 }
