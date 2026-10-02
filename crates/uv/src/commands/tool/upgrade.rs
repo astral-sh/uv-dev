@@ -8,7 +8,7 @@ use tracing::{debug, trace};
 
 use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
-use uv_client::BaseClientBuilder;
+use uv_client::{BaseClient, BaseClientBuilder, ClientBuildError, RegistryClientBuilder};
 use uv_configuration::{Concurrency, Constraints, DryRun, HashCheckingMode, TargetTriple};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
@@ -16,6 +16,8 @@ use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
+use uv_pep508::MarkerEnvironment;
+use uv_platform_tags::Platform;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{
     EnvironmentPreference, Interpreter, PythonDownloads, PythonInstallation, PythonPreference,
@@ -127,6 +129,7 @@ pub(crate) async fn upgrade(
     // Constraints that caused upgrades to be skipped or altered.
     let mut collected_constraints: Vec<(PackageName, UpgradeConstraint)> = Vec::new();
 
+    let mut registry_clients = UpgradeRegistryClients::default();
     let mut errors = Vec::new();
     for (name, constraints) in &names {
         debug!("Upgrading tool: `{name}`");
@@ -139,6 +142,7 @@ pub(crate) async fn upgrade(
             &installed_tools,
             &args,
             &client_builder,
+            &mut registry_clients,
             cache,
             workspace_cache,
             &filesystem,
@@ -262,6 +266,40 @@ struct UpgradeReport {
     constraint: Option<UpgradeConstraint>,
 }
 
+#[derive(Default)]
+struct UpgradeRegistryClients(Vec<UpgradeRegistryClient>);
+
+struct UpgradeRegistryClient {
+    markers: MarkerEnvironment,
+    platform: Platform,
+    client: BaseClient,
+}
+
+impl UpgradeRegistryClients {
+    fn for_interpreter(
+        &mut self,
+        markers: &MarkerEnvironment,
+        platform: &Platform,
+        builder: RegistryClientBuilder<'_>,
+    ) -> Result<BaseClient, ClientBuildError> {
+        if let Some(client) = self
+            .0
+            .iter()
+            .find(|client| client.markers == *markers && client.platform == *platform)
+        {
+            return Ok(client.client.clone());
+        }
+
+        let client = builder.build()?.cached_client().uncached().clone();
+        self.0.push(UpgradeRegistryClient {
+            markers: markers.clone(),
+            platform: platform.clone(),
+            client: client.clone(),
+        });
+        Ok(client)
+    }
+}
+
 /// Upgrade a specific tool.
 async fn upgrade_tool(
     name: &PackageName,
@@ -272,6 +310,7 @@ async fn upgrade_tool(
     installed_tools: &InstalledTools,
     args: &ResolverInstallerOptions,
     client_builder: &BaseClientBuilder<'_>,
+    registry_clients: &mut UpgradeRegistryClients,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     filesystem: &ResolverInstallerOptions,
@@ -378,6 +417,19 @@ async fn upgrade_tool(
     // requested tool.
     let requested_interpreter =
         interpreter.filter(|interpreter| !environment.environment().uses(interpreter));
+    // Transport settings are shared by the invocation, while interpreter identity is part of
+    // the user agent. Each resolution still builds middleware for its own indexes and keyring.
+    let target_interpreter =
+        requested_interpreter.unwrap_or_else(|| environment.environment().interpreter());
+    let transport = registry_clients.for_interpreter(
+        target_interpreter.markers(),
+        target_interpreter.platform(),
+        RegistryClientBuilder::new(client_builder.clone(), cache.clone())
+            .markers(target_interpreter.markers())
+            .platform(target_interpreter.platform()),
+    )?;
+    let shared_client_builder = client_builder.clone().reuse_client(&transport);
+    let client_builder = &shared_client_builder;
     let tool_dir = installed_tools.tool_dir(name);
     // TODO(zanieb): When updating an existing environment, build it in the cache directory then
     // copy it into the tool directory.
@@ -665,4 +717,137 @@ fn pinned_version_from(requirements: &[Requirement], name: &PackageName) -> Opti
             }
             _ => None,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+
+    use anyhow::Result;
+    use bytes::Bytes;
+    use http::header::USER_AGENT;
+    use http_body_util::Full;
+    use hyper::body::Incoming;
+    use hyper::service::service_fn;
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+
+    use uv_cache::Cache;
+    use uv_client::{BaseClientBuilder, RegistryClient, RegistryClientBuilder};
+    use uv_pep440::Version;
+    use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
+    use uv_platform_tags::{Arch, Os, Platform};
+    use uv_redacted::DisplaySafeUrl;
+
+    use super::UpgradeRegistryClients;
+
+    async fn observe(client: &RegistryClient, url: &DisplaySafeUrl) -> Result<Value> {
+        Ok(client
+            .uncached_client(url)
+            .get(url.as_str())
+            .send()
+            .await?
+            .json()
+            .await?)
+    }
+
+    #[tokio::test]
+    async fn tool_upgrade_connections_follow_interpreter_identity() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = DisplaySafeUrl::parse(&format!("http://{}", listener.local_addr()?))?;
+        let server = tokio::spawn(async move {
+            let mut connection = 0;
+            while let Ok((stream, _)) = listener.accept().await {
+                connection += 1;
+                tokio::spawn(async move {
+                    let service = service_fn(move |request: hyper::Request<Incoming>| async move {
+                        let user_agent = request
+                            .headers()
+                            .get(USER_AGENT)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default();
+                        let body = json!({"connection": connection, "user_agent": user_agent});
+                        Ok::<_, Infallible>(hyper::Response::new(Full::new(Bytes::from(
+                            body.to_string(),
+                        ))))
+                    });
+                    let _ = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+
+        let markers = MarkerEnvironment::try_from(MarkerEnvironmentBuilder {
+            implementation_name: "cpython",
+            implementation_version: "3.12.0",
+            os_name: "posix",
+            platform_machine: "x86_64",
+            platform_python_implementation: "CPython",
+            platform_release: "6.0.0",
+            platform_system: "Linux",
+            platform_version: "6.0.0",
+            python_full_version: "3.12.0",
+            python_version: "3.12",
+            sys_platform: "linux",
+        })?;
+        let other_markers = markers
+            .clone()
+            .with_python_full_version(Version::new([3, 12, 1]));
+        let platform = Platform::new(
+            Os::Manylinux {
+                major: 2,
+                minor: 17,
+            },
+            Arch::X86_64,
+        );
+        let other_platform = Platform::new(
+            Os::Manylinux {
+                major: 2,
+                minor: 17,
+            },
+            Arch::Aarch64,
+        );
+        let cache = Cache::temp()?;
+        let mut clients = UpgradeRegistryClients::default();
+        let mut observations = Vec::new();
+        for (markers, platform) in [
+            (&markers, &platform),
+            (&markers, &platform),
+            (&other_markers, &platform),
+            (&markers, &other_platform),
+            (&markers, &platform),
+        ] {
+            let transport = clients.for_interpreter(
+                markers,
+                platform,
+                RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone())
+                    .markers(markers)
+                    .platform(platform),
+            )?;
+            let client = RegistryClientBuilder::new(
+                BaseClientBuilder::default().reuse_client(&transport),
+                cache.clone(),
+            )
+            .markers(markers)
+            .platform(platform)
+            .build()?;
+            observations.push(observe(&client, &url).await?);
+        }
+        let separate = RegistryClientBuilder::new(BaseClientBuilder::default(), cache)
+            .markers(&markers)
+            .platform(&other_platform)
+            .build()?;
+        let separate = observe(&separate, &url).await?;
+        server.abort();
+
+        assert_eq!(observations[0], observations[1]);
+        assert_eq!(observations[0], observations[4]);
+        assert_ne!(observations[0]["connection"], observations[2]["connection"]);
+        assert_ne!(observations[0]["user_agent"], observations[2]["user_agent"]);
+        assert_ne!(observations[0]["connection"], observations[3]["connection"]);
+        assert_eq!(observations[3]["user_agent"], separate["user_agent"]);
+        Ok(())
+    }
 }

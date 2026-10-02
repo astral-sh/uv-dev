@@ -128,6 +128,8 @@ pub struct BaseClientBuilder<'a> {
     cross_origin_credential_policy: CrossOriginCredentialsPolicy,
     /// Optional custom reqwest client to use instead of creating a new one.
     custom_client: Option<Client>,
+    /// An existing transport to wrap in this builder's middleware.
+    reused_client: Option<BaseClient>,
     /// uv subcommand in which this client is being used
     subcommand: Option<Vec<String>>,
     /// Optional name for this client, used in debug logging.
@@ -235,6 +237,7 @@ impl Default for BaseClientBuilder<'_> {
             redirect_policy: RedirectPolicy::default(),
             cross_origin_credential_policy: CrossOriginCredentialsPolicy::Secure,
             custom_client: None,
+            reused_client: None,
             subcommand: None,
             client_name: None,
             no_retry_delay: env::var_os(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY).is_some(),
@@ -273,6 +276,19 @@ impl<'a> BaseClientBuilder<'a> {
     #[must_use]
     pub fn custom_client(mut self, client: Client) -> Self {
         self.custom_client = Some(client);
+        self.reused_client = None;
+        self
+    }
+
+    /// Reuse an existing client's secure and insecure transports.
+    ///
+    /// The existing client's TLS, proxy, timeout, and user-agent configuration must match the
+    /// requested transport. Authentication, index, and retry middleware are rebuilt from this
+    /// builder's settings.
+    #[must_use]
+    pub fn reuse_client(mut self, client: &BaseClient) -> Self {
+        self.custom_client = None;
+        self.reused_client = Some(client.clone());
         self
     }
 
@@ -461,6 +477,10 @@ impl<'a> BaseClientBuilder<'a> {
     }
 
     pub fn build(&self) -> Result<BaseClient, ClientBuildError> {
+        if let Some(existing) = &self.reused_client {
+            return Ok(self.wrap_existing(existing));
+        }
+
         if let Some(name) = self.client_name {
             debug!(
                 "Using request connect timeout of {}s and read timeout of {}s for {} client",
