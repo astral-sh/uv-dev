@@ -391,6 +391,93 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual([event["bytes"] for event in events], [0, len(self.body)])
         self.assertEqual(events[0]["injected_disconnect"], "before-headers")
 
+    def test_delayed_status_after_interruption(self) -> None:
+        server = self.server(
+            {
+                "cut_after_bytes": 17,
+                "cut_count": 1,
+                "path_failures": {
+                    "/files/example.whl": {
+                        "status": 503,
+                        "start_after": 1,
+                        "count": 2,
+                    }
+                },
+            }
+        )
+        with self.assertRaises(http.client.IncompleteRead) as error:
+            self.get(server)
+        self.assertEqual(error.exception.partial, self.body[:17])
+        for _ in range(2):
+            self.assertEqual(
+                self.get(server, "bytes=17-"), (503, b"Injected transient failure")
+            )
+        self.assertEqual(self.get(server, "bytes=17-"), (206, self.body[17:]))
+        server.wait_idle()
+        events = sorted(server.events, key=lambda event: event["attempt"])
+        self.assertEqual([event["status"] for event in events], [200, 503, 503, 206])
+        self.assertEqual(
+            [event["range"] for event in events], [None] + ["bytes=17-"] * 3
+        )
+        self.assertTrue(events[0]["injected_disconnect"])
+
+    def test_delayed_disconnect(self) -> None:
+        server = self.server(
+            {
+                "path_failures": {
+                    "/files/example.whl": {
+                        "disconnect": True,
+                        "start_after": 1,
+                        "count": 1,
+                    }
+                }
+            }
+        )
+        self.assertEqual(self.get(server), (200, self.body))
+        with self.assertRaises(http.client.RemoteDisconnected):
+            self.get(server)
+        self.assertEqual(self.get(server), (200, self.body))
+        server.wait_idle()
+        events = sorted(server.events, key=lambda event: event["attempt"])
+        self.assertEqual([event["status"] for event in events], [200, 0, 200])
+
+    def test_delayed_truncation(self) -> None:
+        server = self.server(
+            {
+                "path_failures": {
+                    "/files/example.whl": {
+                        "cut_after_bytes": 17,
+                        "start_after": 1,
+                        "count": 1,
+                    }
+                }
+            }
+        )
+        self.assertEqual(self.get(server), (200, self.body))
+        with self.assertRaises(http.client.IncompleteRead) as error:
+            self.get(server)
+        self.assertEqual(error.exception.partial, self.body[:17])
+        self.assertEqual(self.get(server), (200, self.body))
+        server.wait_idle()
+        events = sorted(server.events, key=lambda event: event["attempt"])
+        self.assertEqual(
+            [event["bytes"] for event in events], [len(self.body), 17, len(self.body)]
+        )
+
+    def test_invalid_failure_start(self) -> None:
+        for start_after in (-1, True, "1"):
+            with (
+                self.subTest(start_after=start_after),
+                self.assertRaisesRegex(ValueError, "Invalid failure start"),
+            ):
+                self.server(
+                    {
+                        "path_failures": {
+                            "/files/example.whl": {"start_after": start_after}
+                        }
+                    }
+                )
+
     def test_truncated_metadata_body_is_recorded(self) -> None:
         self.fixtures.simple["example"] = b'{"name":"example","files":[]}'
         for path, body in (
