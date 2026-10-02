@@ -354,9 +354,9 @@ installation key.
 
 Select a named build explicitly with a request like `3.13+custom`. Build-name input is
 case-insensitive and uv normalizes it to lowercase. Python variants and build names can be composed,
-as in `3.13+freethreaded+custom`. In this section, an **unqualified version request** means a version
-request without a build name, such as `3.13` or `3.13+freethreaded`. Such a request matches an
-unnamed build; it does not fall back to a named build. A complete installation key also
+as in `3.13+freethreaded+custom`. In this section, an **unqualified version request** means a
+version request without a build name, such as `3.13` or `3.13+freethreaded`. Such a request matches
+an unnamed build; it does not fall back to a named build. A complete installation key also
 identifies its build name exactly, including an unnamed build when the key has no build name.
 
 !!! warning "Choose build names carefully"
@@ -455,10 +455,16 @@ particular revision exactly, including an older revision retained in the catalog
 $ UV_PYTHON_BUILD_REVISION=20260825 uv python install 3.13+custom
 ```
 
-`UV_PYTHON_BUILD_REVISION` applies to requests with an explicit build name and to reinstalls of
-existing named builds. For unnamed CPython builds, use
-[`UV_PYTHON_CPYTHON_BUILD`](../reference/environment.md#uv_python_cpython_build) to select a build
-revision.
+`UV_PYTHON_BUILD_REVISION` applies to requests with an explicit build name. For unnamed CPython
+builds, use [`UV_PYTHON_CPYTHON_BUILD`](../reference/environment.md#uv_python_cpython_build) to
+select a build revision.
+
+When reinstalling with a revision pin, specify a target, for example,
+`uv python install --reinstall 3.13+custom`. A specific request in a `.python-version` or
+`.python-versions` file also works. Bare `--reinstall` without a version-file request and
+`--reinstall any` reject applicable revision pins before reading the catalog or changing
+installations, even if the requested revision is available. This applies to both named-build and
+implementation-specific pins. Unset the relevant pin to reinstall all installed builds.
 
 `uv python list` applies these revision pins when listing downloads. Without a pin, it shows the
 newest available revision for each matching installation key.
