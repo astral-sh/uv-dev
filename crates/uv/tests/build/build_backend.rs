@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::io::BufReader;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
 use tempfile::TempDir;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
