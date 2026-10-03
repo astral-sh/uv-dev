@@ -153,6 +153,17 @@ async fn do_uninstall(
     // Find and remove all relevant Python executables
     let mut uninstalled_executables: FxHashMap<PythonInstallationKey, FxHashSet<PathBuf>> =
         FxHashMap::default();
+    let executable_names: FxHashSet<_> = matching_installations
+        .iter()
+        .flat_map(|installation| {
+            [
+                installation.key().executable_name_minor(),
+                installation.key().executable_name_major(),
+                installation.key().executable_name(),
+            ]
+        })
+        .collect();
+
     for executable in python_executable_dir()?
         .read_dir()
         .into_iter()
@@ -170,15 +181,15 @@ async fn do_uninstall(
         // TODO(zanieb): This is a minor optimization to avoid opening more files, but we could
         // leave broken links behind, i.e., if the user created them.
         .filter(|path| {
-            matching_installations.iter().any(|installation| {
-                let name = path.file_name().and_then(|name| name.to_str());
-                name == Some(&installation.key().executable_name_minor())
-                    || name == Some(&installation.key().executable_name_major())
-                    || name == Some(&installation.key().executable_name())
-            })
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| executable_names.contains(name))
         })
         .sorted()
     {
+        // The filename only narrows which files to inspect. A user-created link can point to a
+        // different selected installation, and multiple installations can name the same file.
+        // Search in installation order so the first owner receives the changelog entry.
         let Some(installation) = matching_installations
             .iter()
             .find(|installation| installation.is_bin_link(executable.as_path()))
