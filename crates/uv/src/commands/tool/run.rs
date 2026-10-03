@@ -27,6 +27,7 @@ use uv_distribution_types::{
     RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_errors::HintOrdering;
+use uv_install_wheel::InstallerMetadata;
 use uv_installer::{BuildSettings, InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
@@ -144,7 +145,6 @@ fn find_verbose_flag(args: &[std::ffi::OsString]) -> Option<&str> {
 }
 
 /// Run a command.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn run(
     command: Option<ExternalCommand>,
     from: Option<String>,
@@ -165,7 +165,7 @@ pub(crate) async fn run(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     cache: Cache,
     workspace_cache: WorkspaceCache,
@@ -758,7 +758,7 @@ async fn get_or_create_environment(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: &Concurrency,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,

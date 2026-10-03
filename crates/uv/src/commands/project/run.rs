@@ -28,6 +28,7 @@ use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::NameRequirementSpecification;
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
+use uv_install_wheel::InstallerMetadata;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
@@ -114,7 +115,7 @@ pub(crate) async fn run(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     cache: Cache,
     workspace_cache: &WorkspaceCache,

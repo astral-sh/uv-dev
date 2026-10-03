@@ -13,6 +13,7 @@ use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DryRun, ExtrasSpecification, InstallOptions,
 };
 use uv_fs::Simplified;
+use uv_install_wheel::InstallerMetadata;
 use uv_normalize::PackageName;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups};
 use uv_preview::Preview;
@@ -59,7 +60,7 @@ pub(crate) async fn remove(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
