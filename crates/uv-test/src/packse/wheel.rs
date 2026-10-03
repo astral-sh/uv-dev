@@ -22,6 +22,8 @@ use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::Requirement;
 
+use super::scenario::PackageMetadata;
+
 /// Generate a wheel (`.whl`) as an in-memory ZIP archive.
 ///
 /// Returns `(filename, bytes)`.
@@ -77,19 +79,46 @@ pub fn generate_wheel_with_files(
     tag: &str,
     files: &[(&str, &str)],
 ) -> (String, Vec<u8>) {
+    let metadata = PackageMetadata {
+        requires: requires.to_vec(),
+        extras: extras.clone(),
+        requires_python: requires_python.cloned(),
+        ..PackageMetadata::default()
+    };
+    generate_wheel_impl(name, version, &metadata, tag, files)
+}
+
+pub(super) fn generate_scenario_wheel(
+    name: &PackageName,
+    version: &Version,
+    metadata: &PackageMetadata,
+    tag: &str,
+) -> (String, Vec<u8>) {
+    generate_wheel_impl(name, version, metadata, tag, &[])
+}
+
+fn generate_wheel_impl(
+    name: &PackageName,
+    version: &Version,
+    metadata: &PackageMetadata,
+    tag: &str,
+    files: &[(&str, &str)],
+) -> (String, Vec<u8>) {
     let normalized = name.as_dist_info_name();
+    let module_name = metadata.module_name.as_deref().unwrap_or(&normalized);
+    let scripts = package_scripts(module_name, metadata);
     let dist_info = format!("{normalized}-{version}.dist-info");
 
     let mut zip = ZipFileWriter::new(Vec::new());
 
     let mut entries = vec![
         (
-            format!("{normalized}/__init__.py"),
-            format!("__version__ = \"{version}\"\n"),
+            format!("{module_name}/__init__.py"),
+            build_init_py(name, version, &scripts, metadata.init_py.as_deref()),
         ),
         (
             format!("{dist_info}/METADATA"),
-            build_metadata(name, version, requires, extras, requires_python),
+            build_metadata(name, version, metadata),
         ),
         (
             format!("{dist_info}/WHEEL"),
@@ -101,6 +130,15 @@ pub fn generate_wheel_with_files(
             ),
         ),
     ];
+    if !scripts.is_empty() {
+        entries.push((
+            format!("{dist_info}/entry_points.txt"),
+            build_entry_points(&scripts),
+        ));
+    }
+    if !metadata.entry_points.is_empty() {
+        entries.push((format!("{module_name}/cli.py"), build_cli_module(name)));
+    }
     entries.extend(
         files
             .iter()
@@ -151,39 +189,56 @@ pub fn generate_sdist(
     requires_python: Option<&VersionSpecifiers>,
     entry_points: &[String],
 ) -> (String, Vec<u8>) {
+    let metadata = PackageMetadata {
+        requires: requires.to_vec(),
+        extras: extras.clone(),
+        requires_python: requires_python.cloned(),
+        entry_points: entry_points.to_vec(),
+        ..PackageMetadata::default()
+    };
+    generate_scenario_sdist(name, version, &metadata)
+}
+
+pub(super) fn generate_scenario_sdist(
+    name: &PackageName,
+    version: &Version,
+    metadata: &PackageMetadata,
+) -> (String, Vec<u8>) {
     let normalized = name.as_dist_info_name();
+    let module_name = metadata.module_name.as_deref().unwrap_or(&normalized);
+    let scripts = package_scripts(module_name, metadata);
     let prefix = format!("{normalized}-{version}");
 
     let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
     let mut tar = TarEncoder::new(AllowStdIo::new(&mut encoder).compat_write()).builder();
 
-    let pyproject = build_pyproject_toml(
+    let pyproject = build_hatchling_pyproject_toml(
         name,
         version,
-        requires,
-        extras,
-        requires_python,
-        entry_points,
+        &metadata.requires,
+        &metadata.extras,
+        &scripts,
+        module_name,
+        metadata.requires_python.as_ref(),
     );
     add_tar_file(
         &mut tar,
         &format!("{prefix}/pyproject.toml"),
         pyproject.as_bytes(),
     );
-
-    let pkg_info = build_metadata(name, version, requires, extras, requires_python);
+    let pkg_info = build_metadata(name, version, metadata);
     add_tar_file(&mut tar, &format!("{prefix}/PKG-INFO"), pkg_info.as_bytes());
 
-    let init_py = format!("__version__ = \"{version}\"\n");
+    let init_py = build_init_py(name, version, &scripts, metadata.init_py.as_deref());
     add_tar_file(
         &mut tar,
-        &format!("{prefix}/src/{normalized}/__init__.py"),
+        &format!("{prefix}/src/{module_name}/__init__.py"),
         init_py.as_bytes(),
     );
-    if !entry_points.is_empty() {
+    if !metadata.entry_points.is_empty() {
         add_tar_file(
             &mut tar,
-            &format!("{prefix}/src/{normalized}/cli.py"),
+            &format!("{prefix}/src/{module_name}/cli.py"),
             build_cli_module(name).as_bytes(),
         );
     }
@@ -201,35 +256,40 @@ fn build_cli_module(name: &PackageName) -> String {
     format!("def main():\n    print('Hello from {name}!')\n")
 }
 
+/// Combine explicitly configured scripts with generated scenario entry points.
+fn package_scripts(module_name: &str, package: &PackageMetadata) -> BTreeMap<String, String> {
+    let mut scripts = package
+        .entry_points
+        .iter()
+        .map(|entry_point| (entry_point.clone(), format!("{module_name}.cli:main")))
+        .collect::<BTreeMap<_, _>>();
+    scripts.extend(package.scripts.clone());
+    scripts
+}
+
 /// Build PEP 566 / PEP 643 metadata content.
-fn build_metadata(
-    name: &PackageName,
-    version: &Version,
-    requires: &[Requirement],
-    extras: &BTreeMap<ExtraName, Vec<Requirement>>,
-    requires_python: Option<&VersionSpecifiers>,
-) -> String {
+fn build_metadata(name: &PackageName, version: &Version, package: &PackageMetadata) -> String {
     let mut metadata = String::new();
     writeln!(&mut metadata, "Metadata-Version: 2.3")
         .expect("writing metadata into a string should succeed");
     writeln!(&mut metadata, "Name: {name}").expect("writing metadata into a string should succeed");
     writeln!(&mut metadata, "Version: {version}")
         .expect("writing metadata into a string should succeed");
-    if let Some(requires_python) = requires_python {
+    if let Some(requires_python) = &package.requires_python {
         writeln!(&mut metadata, "Requires-Python: {requires_python}")
             .expect("writing metadata into a string should succeed");
     }
 
-    for extra_name in extras.keys() {
+    for extra_name in package.extras.keys() {
         writeln!(&mut metadata, "Provides-Extra: {extra_name}")
             .expect("writing metadata into a string should succeed");
     }
 
-    for requirement in requires {
+    for requirement in &package.requires {
         writeln!(&mut metadata, "Requires-Dist: {requirement}")
             .expect("writing metadata into a string should succeed");
     }
-    for (extra_name, extra_requirements) in extras {
+    for (extra_name, extra_requirements) in &package.extras {
         for requirement in extra_requirements {
             let requirement = requirement.clone().with_extra_marker(extra_name.clone());
             writeln!(&mut metadata, "Requires-Dist: {requirement}")
@@ -240,16 +300,39 @@ fn build_metadata(
     metadata
 }
 
-/// Build a minimal `pyproject.toml` for an sdist using hatchling.
-fn build_pyproject_toml(
+/// Build the stub package module for generated wheels and source distributions.
+fn build_init_py(
+    name: &PackageName,
+    version: &Version,
+    scripts: &BTreeMap<String, String>,
+    init_py: Option<&str>,
+) -> String {
+    if let Some(init_py) = init_py {
+        init_py.to_string()
+    } else if scripts.is_empty() {
+        format!("__version__ = \"{version}\"\n")
+    } else {
+        formatdoc! {
+            r#"
+            __version__ = "{version}"
+
+            def main():
+                print("{name} " + __version__)
+            "#
+        }
+    }
+}
+
+/// Build a minimal `pyproject.toml` for an sdist using Hatchling.
+fn build_hatchling_pyproject_toml(
     name: &PackageName,
     version: &Version,
     requires: &[Requirement],
     extras: &BTreeMap<ExtraName, Vec<Requirement>>,
+    scripts: &BTreeMap<String, String>,
+    module_name: &str,
     requires_python: Option<&VersionSpecifiers>,
-    entry_points: &[String],
 ) -> String {
-    let normalized = name.as_dist_info_name();
     let dependencies = if requires.is_empty() {
         "dependencies = []\n".to_string()
     } else {
@@ -279,16 +362,25 @@ fn build_pyproject_toml(
         }
         optional_dependencies
     };
-
-    let scripts = if entry_points.is_empty() {
+    let scripts = if scripts.is_empty() {
         String::new()
     } else {
-        let scripts: BTreeMap<_, _> = entry_points
-            .iter()
-            .map(|entry_point| (entry_point, format!("{normalized}.cli:main")))
-            .collect();
-        let scripts = toml::to_string(&scripts).expect("console scripts should serialize to TOML");
-        format!("\n[project.scripts]\n{scripts}")
+        let mut project_scripts = String::from("\n[project.scripts]\n");
+        for (script_name, target) in scripts {
+            let script_name = if !script_name.is_empty()
+                && script_name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+            {
+                script_name.clone()
+            } else {
+                toml::Value::String(script_name.clone()).to_string()
+            };
+            let target = toml::Value::String(target.clone());
+            writeln!(&mut project_scripts, "{script_name} = {target}")
+                .expect("writing project scripts into a string should succeed");
+        }
+        project_scripts
     };
 
     formatdoc! {
@@ -298,10 +390,10 @@ fn build_pyproject_toml(
         build-backend = "hatchling.build"
 
         [tool.hatch.build.targets.wheel]
-        packages = ["src/{normalized}"]
+        packages = ["src/{module_name}"]
 
         [tool.hatch.build.targets.sdist]
-        only-include = ["src/{normalized}"]
+        only-include = ["src/{module_name}"]
 
         [project]
         name = "{name}"
@@ -309,6 +401,16 @@ fn build_pyproject_toml(
         {dependencies}{requires_python}{optional_dependencies}{scripts}
         "#
     }
+}
+
+/// Build `entry_points.txt` content for generated wheels.
+fn build_entry_points(scripts: &BTreeMap<String, String>) -> String {
+    let mut entry_points = String::from("[console_scripts]\n");
+    for (script_name, target) in scripts {
+        writeln!(&mut entry_points, "{script_name} = {target}")
+            .expect("writing entry points into a string should succeed");
+    }
+    entry_points
 }
 
 /// Add a file entry to a tar archive from a byte slice.
@@ -336,6 +438,28 @@ mod tests {
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     use super::*;
+
+    #[test]
+    fn hatchling_script_names_are_literal_keys() -> anyhow::Result<()> {
+        let pyproject = build_hatchling_pyproject_toml(
+            &"scenario-tool".parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::from([(
+                "scenario.tool".to_string(),
+                "scenario_tool.cli:main".to_string(),
+            )]),
+            "scenario_tool",
+            None,
+        );
+        let pyproject: toml::Value = toml::from_str(&pyproject)?;
+        assert_eq!(
+            pyproject["project"]["scripts"]["scenario.tool"].as_str(),
+            Some("scenario_tool.cli:main"),
+        );
+        Ok(())
+    }
 
     #[test]
     fn generate_simple_wheel() {
@@ -451,9 +575,10 @@ mod tests {
         let metadata = build_metadata(
             &PackageName::from_str("pkg").expect("valid package name"),
             &Version::from_str("1.0.0").expect("valid version"),
-            &[],
-            &extras,
-            None,
+            &PackageMetadata {
+                extras,
+                ..PackageMetadata::default()
+            },
         );
         assert!(
             metadata.contains(
@@ -476,9 +601,10 @@ mod tests {
         let metadata = build_metadata(
             &PackageName::from_str("pkg").expect("valid package name"),
             &Version::from_str("1.0.0").expect("valid version"),
-            &[],
-            &extras,
-            None,
+            &PackageMetadata {
+                extras,
+                ..PackageMetadata::default()
+            },
         );
         assert!(
             metadata.contains(
