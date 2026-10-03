@@ -158,7 +158,9 @@ impl<'a> FlatIndexClient<'a> {
                 }
                 Ok::<FlatIndexEntries, FlatIndexError>(entries)
             })
-            .buffered(16);
+            // Results are sorted below. Consume completed fetches immediately so one slow
+            // index does not prevent later locations from using an available slot.
+            .buffer_unordered(16);
 
         let mut results = FlatIndexEntries::default();
         while let Some(entries) = fetches.next().await.transpose()? {
@@ -405,6 +407,69 @@ mod tests {
     use fs_err::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn completed_fetches_start_later_indexes() -> anyhow::Result<()> {
+        use std::convert::Infallible;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use http_body_util::Full;
+        use hyper::body::Bytes;
+        use hyper::service::service_fn;
+        use hyper_util::rt::TokioIo;
+        use tokio::net::TcpListener;
+        use tokio::sync::Notify;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let last_started = Arc::new(Notify::new());
+        let server = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let last_started = Arc::clone(&last_started);
+                tokio::spawn(async move {
+                    let service =
+                        service_fn(move |request: hyper::Request<hyper::body::Incoming>| {
+                            let last_started = Arc::clone(&last_started);
+                            async move {
+                                match request.uri().path() {
+                                    "/0" => last_started.notified().await,
+                                    "/16" => last_started.notify_one(),
+                                    _ => {}
+                                }
+                                Ok::<_, Infallible>(hyper::Response::new(Full::new(
+                                    Bytes::from_static(
+                                        b"<a href='example-1.0-py3-none-any.whl'>example</a>",
+                                    ),
+                                )))
+                            }
+                        });
+                    hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await
+                });
+            }
+        });
+        let indexes = (0..17)
+            .map(|index| IndexUrl::parse(&format!("http://{address}/{index}"), None))
+            .collect::<Result<Vec<_>, _>>()?;
+        let cache = Cache::temp()?.init().await?;
+        let client = CachedClient::new(crate::BaseClientBuilder::default().build()?);
+        let flat = FlatIndexClient::new(&client, Connectivity::Online, &cache);
+        let result =
+            tokio::time::timeout(Duration::from_secs(2), flat.fetch_all(indexes.iter())).await;
+        server.abort();
+        let entries = result??;
+        assert_eq!(entries.entries.len(), 17);
+        assert!(entries.entries.windows(2).all(|pair| {
+            pair[0]
+                .filename
+                .cmp(&pair[1].filename)
+                .then(pair[0].index.cmp(&pair[1].index))
+                .is_le()
+        }));
+        Ok(())
+    }
 
     /// Round-trip a synthetic flat-index cache entry and preserve sidecar hashes.
     #[test]
