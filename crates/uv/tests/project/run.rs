@@ -143,6 +143,75 @@ fn run_with_python_version() -> Result<()> {
 }
 
 #[test]
+#[cfg(windows)]
+fn run_with_python_directory_reuses_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let requested = context.temp_dir.child("requested");
+
+    context
+        .venv()
+        .arg("--offline")
+        .arg("--python")
+        .arg(&context.python_versions[0].1)
+        .arg(requested.path())
+        .assert()
+        .success();
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        package = false
+        "#
+        })?;
+
+    context
+        .run()
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--offline")
+        .arg("--python")
+        .arg(requested.path())
+        .arg("python")
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(contains("Python 3.12."));
+
+    let marker = context.venv.child("directory-request-marker");
+    marker.write_str("preserved")?;
+    let requested_executable = requested.child("Scripts").child("python.exe");
+
+    // Windows creates distinct launchers for environments with the same base interpreter.
+    for request in [requested_executable.path(), requested.path()] {
+        context
+            .run()
+            .env_remove(EnvVars::VIRTUAL_ENV)
+            .arg("--offline")
+            .arg("--python")
+            .arg(request)
+            .arg("python")
+            .arg("--version")
+            .assert()
+            .success()
+            .stdout(contains("Python 3.12."));
+        assert!(
+            marker.path().is_file(),
+            "environment was recreated for {}",
+            request.display()
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn run_args() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filter((
