@@ -49,110 +49,36 @@ impl CachedDist {
         build_info: Option<BuildInfo>,
         path: Box<Path>,
     ) -> Self {
-        match remote {
-            Dist::Built(BuiltDist::Registry(_dist)) => Self::Registry(CachedRegistryDist {
-                filename,
-                path,
-                hashes,
-                cache_info,
-                build_info,
-            }),
-            Dist::Built(BuiltDist::DirectUrl(dist)) => Self::Url(CachedDirectUrlDist {
-                filename,
-                url: VerbatimParsedUrl {
-                    parsed_url: dist.to_parsed_url(),
-                    verbatim: dist.url,
-                },
-                hashes,
-                cache_info,
-                build_info,
-                path,
-            }),
-            Dist::Built(BuiltDist::Path(dist)) => Self::Url(CachedDirectUrlDist {
-                filename,
-                url: VerbatimParsedUrl {
-                    parsed_url: dist.to_parsed_url(),
-                    verbatim: dist.url,
-                },
-                hashes,
-                cache_info,
-                build_info,
-                path,
-            }),
-            Dist::Built(BuiltDist::GitPath(dist)) => Self::Url(CachedDirectUrlDist {
-                filename,
-                url: VerbatimParsedUrl {
-                    parsed_url: dist.to_parsed_url(),
-                    verbatim: dist.url,
-                },
-                hashes,
-                cache_info,
-                build_info,
-                path,
-            }),
-            Dist::Source(SourceDist::Registry(_dist)) => Self::Registry(CachedRegistryDist {
-                filename,
-                path,
-                hashes,
-                cache_info,
-                build_info,
-            }),
-            Dist::Source(SourceDist::DirectUrl(dist)) => Self::Url(CachedDirectUrlDist {
-                filename,
-                url: VerbatimParsedUrl {
-                    parsed_url: dist.to_parsed_url(),
-                    verbatim: dist.url,
-                },
-                hashes,
-                cache_info,
-                build_info,
-                path,
-            }),
-            Dist::Source(SourceDist::GitDirectory(dist)) => Self::Url(CachedDirectUrlDist {
-                filename,
-                url: VerbatimParsedUrl {
-                    parsed_url: dist.to_parsed_url(),
-                    verbatim: dist.url,
-                },
-                hashes,
-                cache_info,
-                build_info,
-                path,
-            }),
-            Dist::Source(SourceDist::GitPath(dist)) => Self::Url(CachedDirectUrlDist {
-                filename,
-                url: VerbatimParsedUrl {
-                    parsed_url: dist.to_parsed_url(),
-                    verbatim: dist.url,
-                },
-                hashes,
-                cache_info,
-                build_info,
-                path,
-            }),
-            Dist::Source(SourceDist::Path(dist)) => Self::Url(CachedDirectUrlDist {
-                filename,
-                url: VerbatimParsedUrl {
-                    parsed_url: dist.to_parsed_url(),
-                    verbatim: dist.url,
-                },
-                hashes,
-                cache_info,
-                build_info,
-                path,
-            }),
-            Dist::Source(SourceDist::Directory(dist)) => Self::Url(CachedDirectUrlDist {
-                filename,
-                url: VerbatimParsedUrl {
-                    parsed_url: dist.to_parsed_url(),
-                    verbatim: dist.url,
-                },
-                hashes,
-                cache_info,
-                build_info,
-                path,
-            }),
-        }
+        let (parsed_url, verbatim) = match remote {
+            Dist::Built(BuiltDist::Registry(_)) | Dist::Source(SourceDist::Registry(_)) => {
+                return Self::Registry(CachedRegistryDist {
+                    filename,
+                    path,
+                    hashes,
+                    cache_info,
+                    build_info,
+                });
+            }
+            Dist::Built(BuiltDist::DirectUrl(dist)) => (dist.to_parsed_url(), dist.url),
+            Dist::Built(BuiltDist::Path(dist)) => (dist.to_parsed_url(), dist.url),
+            Dist::Built(BuiltDist::GitPath(dist)) => (dist.to_parsed_url(), dist.url),
+            Dist::Source(SourceDist::DirectUrl(dist)) => (dist.to_parsed_url(), dist.url),
+            Dist::Source(SourceDist::GitDirectory(dist)) => (dist.to_parsed_url(), dist.url),
+            Dist::Source(SourceDist::GitPath(dist)) => (dist.to_parsed_url(), dist.url),
+            Dist::Source(SourceDist::Path(dist)) => (dist.to_parsed_url(), dist.url),
+            Dist::Source(SourceDist::Directory(dist)) => (dist.to_parsed_url(), dist.url),
+        };
+        Self::Url(CachedDirectUrlDist {
+            filename,
+            url: VerbatimParsedUrl {
+                parsed_url,
+                verbatim,
+            },
+            hashes,
+            cache_info,
+            build_info,
+            path,
+        })
     }
 
     /// Return the [`Path`] at which the distribution is stored on-disk.
