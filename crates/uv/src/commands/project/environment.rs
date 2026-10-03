@@ -19,6 +19,7 @@ use uv_configuration::{Concurrency, Constraints, HashCheckingMode, TargetTriple}
 use uv_distribution_types::{
     BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
 };
+use uv_pep440::Version;
 use uv_preview::Preview;
 use uv_python::{Interpreter, PythonEnvironment, canonicalize_executable};
 use uv_settings::MalwareCheckSettings;
@@ -115,6 +116,10 @@ struct CachedEnvironmentDist {
     dist: ResolvedDist,
     hashes: uv_pypi_types::HashDigests,
     cache_info: Option<CacheInfo>,
+}
+
+fn cached_environment_interpreter_hash(executable: &Path, version: &Version) -> String {
+    cache_digest(&(executable, version))
 }
 
 fn cached_environment_resolution_hash(
@@ -304,11 +309,12 @@ impl CachedEnvironment {
         // the cached environment, it would be shared across all projects that use the same
         // interpreter and the same cached dependencies.
         //
-        // TODO(zanieb): We should include the version of the base interpreter in the hash, so if
-        // the interpreter at the canonicalized path changes versions we construct a new
-        // environment.
-        let interpreter_hash =
-            cache_digest(&canonicalize_executable(interpreter.sys_executable())?);
+        // Include the base interpreter's full version so replacing the interpreter at the same
+        // canonical path selects a new environment.
+        let interpreter_hash = cached_environment_interpreter_hash(
+            &canonicalize_executable(interpreter.sys_executable())?,
+            interpreter.python_version(),
+        );
 
         // Search in the content-addressed cache.
         let cache_entry = cache.entry(CacheBucket::Environments, interpreter_hash, resolution_hash);
@@ -406,11 +412,50 @@ impl CachedEnvironment {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::sync::Arc;
 
+    use uv_pep440::{Prerelease, PrereleaseKind, Version};
     use uv_types::HashStrategy;
 
-    use super::{cached_environment_resolution_hash, hash_digest};
+    use super::{
+        cached_environment_interpreter_hash, cached_environment_resolution_hash, hash_digest,
+    };
+
+    #[test]
+    fn cached_environment_interpreter_hash_uses_full_version() {
+        let executable = Path::new("/usr/bin/python");
+        let interpreter_hash =
+            cached_environment_interpreter_hash(executable, &Version::new([3, 12, 1]));
+
+        assert_eq!(
+            interpreter_hash,
+            cached_environment_interpreter_hash(executable, &Version::new([3, 12, 1]))
+        );
+        assert_ne!(
+            interpreter_hash,
+            cached_environment_interpreter_hash(executable, &Version::new([3, 12, 2]))
+        );
+
+        let prerelease = Version::new([3, 13, 0]).with_pre(Some(Prerelease {
+            kind: PrereleaseKind::Rc,
+            number: 1,
+        }));
+        assert_ne!(
+            cached_environment_interpreter_hash(executable, &prerelease),
+            cached_environment_interpreter_hash(executable, &Version::new([3, 13, 0]))
+        );
+    }
+
+    #[test]
+    fn cached_environment_interpreter_hash_keeps_paths_distinct() {
+        let version = Version::new([3, 12, 1]);
+
+        assert_ne!(
+            cached_environment_interpreter_hash(Path::new("/usr/bin/python"), &version),
+            cached_environment_interpreter_hash(Path::new("/opt/python/bin/python"), &version)
+        );
+    }
 
     #[test]
     fn verified_cached_environment_uses_separate_resolution_hash() {
