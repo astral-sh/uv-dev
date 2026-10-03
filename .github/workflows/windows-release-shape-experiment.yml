@@ -1,0 +1,174 @@
+name: Windows release runner shape experiment
+"on":
+  push:
+    branches:
+      - zb/ci-windows-release-shape-20260909
+permissions:
+  contents: read
+env:
+  ACTIONS_CACHE_MODE: none
+  AWS_LC_SYS_USE_SYSTEM: "0"
+  PACKAGE_NAME: uv
+  MODULE_NAME: uv
+  PYTHON_VERSION: "3.11"
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUSTUP_MAX_RETRIES: 10
+  UV_LOCKED: 1
+jobs:
+  compare:
+    defaults:
+      run:
+        shell: pwsh
+    name: ${{ matrix.platform.target }} / ${{ matrix.shape.id }} / ${{ matrix.replica }}
+    runs-on: ${{ matrix.shape.runner }}
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        replica:
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+        shape:
+          - id: 16x32
+            runner: namespace-profile-windows-2022-x86-64-16x32
+          - id: 8x16
+            runner: namespace-profile-uv-ci-windows-2022-8x16
+        platform:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+          - target: i686-pc-windows-msvc
+            arch: x86
+          - target: aarch64-pc-windows-msvc
+            arch: x64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          repository: astral-sh/uv
+          ref: c4be691531385fd7563e2a29d9bfa2e19b4c2025
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          cache: ""
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: ${{ matrix.platform.arch }}
+      - name: Prep README.md
+        run: python scripts/transform_readme.py --target pypi
+      - name: Install cargo extensions
+        shell: bash
+        run: scripts/install-cargo-extensions.sh
+      - name: Install NASM
+        if: contains(matrix.platform.target, 'x86') || contains(matrix.platform.target, 'i686')
+        run: |
+          # Namespace runners do not include winget.
+          $version = '3.02'
+          $sha256 = '0DDB40310861EB29F4D649FEB9466779982A2D251C0DB2B9CF0D21CF591171F3'
+          $installer = Join-Path $env:RUNNER_TEMP "nasm-${version}-installer-x64.exe"
+          Invoke-WebRequest "https://www.nasm.us/pub/nasm/releasebuilds/$version/win64/nasm-${version}-installer-x64.exe" -OutFile $installer
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne $sha256) {
+            throw 'NASM installer checksum mismatch'
+          }
+          $installation = Start-Process $installer -ArgumentList '/S' -Wait -PassThru
+          if ($installation.ExitCode -ne 0) {
+            throw "NASM installation failed: $($installation.ExitCode)"
+          }
+          echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: Install LLVM profiling tools
+        if: ${{ matrix.platform.target == 'x86_64-pc-windows-msvc' }}
+        run: rustup component add llvm-tools-preview
+      - name: Train PGO uv
+        if: ${{ matrix.platform.target == 'x86_64-pc-windows-msvc' }}
+        shell: bash
+        run: |
+          export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-feature=+crt-static"
+
+          python scripts/build_uv_pgo.py \
+            --target "${{ matrix.platform.target }}" \
+            --target-dir "${{ github.workspace }}/target/uv-pgo" \
+            --train-only
+        env:
+          CARGO: ${{ github.workspace }}/scripts/cargo.cmd
+          AWS_LC_SYS_PREBUILT_NASM: "0"
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
+        with:
+          sccache: false
+          maturin-version: v1.14.1
+          target: ${{ matrix.platform.target }}
+          args: --release --locked --out dist --features self-update,windows-gui-bin --compatibility pypi
+        env:
+          CARGO: ${{ github.workspace }}/scripts/cargo.cmd
+          AWS_LC_SYS_PREBUILT_NASM: "0"
+          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: ${{ matrix.platform.target == 'x86_64-pc-windows-msvc' && format('-Cprofile-use={0}/target/uv-pgo/uv.profdata', github.workspace) || '' }}
+      - name: Verify static Windows runtime
+        if: ${{ matrix.platform.target == 'x86_64-pc-windows-msvc' }}
+        shell: bash
+        run: |
+          LLVM_READOBJ="$(rustc --print sysroot)/lib/rustlib/${{ matrix.platform.target }}/bin/llvm-readobj.exe"
+
+          for binary in uv uvx uvw; do
+            IMPORTS_FILE="$RUNNER_TEMP/${binary}-coff-imports.txt"
+            "$LLVM_READOBJ" --coff-imports "target/${{ matrix.platform.target }}/release/${binary}.exe" > "$IMPORTS_FILE"
+
+            if grep -Eiq 'vcruntime[[:digit:]_]*\.dll|ucrtbase\.dll|api-ms-win-crt-' "$IMPORTS_FILE"; then
+              echo "$binary must not dynamically link the Visual C++ runtime" >&2
+              exit 1
+            fi
+          done
+      - name: Test wheel
+        if: matrix.platform.target != 'aarch64-pc-windows-msvc'
+        shell: bash
+        run: |
+          pip install ${PACKAGE_NAME} --no-index --find-links dist/ --force-reinstall
+          ${MODULE_NAME} --help
+          python -m ${MODULE_NAME} --help
+          uvx --help
+          uvw --help
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: wheels_uv-${{ matrix.platform.target }}-${{ matrix.shape.id }}-${{ matrix.replica }}
+          path: dist
+      - name: Archive binary
+        shell: bash
+        run: |
+          ARCHIVE_FILE=uv-${PLATFORM_TARGET}.zip
+          7z a $ARCHIVE_FILE ./target/${PLATFORM_TARGET}/release/uv.exe
+          7z a $ARCHIVE_FILE ./target/${PLATFORM_TARGET}/release/uvx.exe
+          7z a $ARCHIVE_FILE ./target/${PLATFORM_TARGET}/release/uvw.exe
+          sha256sum $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
+        env:
+          PLATFORM_TARGET: ${{ matrix.platform.target }}
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: artifacts-${{ matrix.platform.target }}-${{ matrix.shape.id }}-${{ matrix.replica }}
+          path: |
+            *.zip
+            *.sha256
+      - name: Build wheels uv-build
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
+        with:
+          sccache: false
+          maturin-version: v1.14.1
+          target: ${{ matrix.platform.target }}
+          args: --profile minimal-size --locked --out crates/uv-build/dist -m crates/uv-build/Cargo.toml --compatibility pypi
+        env:
+          CARGO: ${{ github.workspace }}/scripts/cargo.cmd
+      - name: Test wheel uv-build
+        if: matrix.platform.target != 'aarch64-pc-windows-msvc'
+        shell: bash
+        run: |
+          pip install ${PACKAGE_NAME}_build --no-index --find-links crates/uv-build/dist --force-reinstall
+          ${MODULE_NAME}-build --help
+          python -m ${MODULE_NAME}_build --help
+      - name: Upload wheels uv-build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: wheels_uv_build-${{ matrix.platform.target }}-${{ matrix.shape.id }}-${{ matrix.replica }}
+          path: crates/uv-build/dist
+    timeout-minutes: 75
