@@ -9,7 +9,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use uv_configuration::TargetTriple;
 use uv_distribution_filename::WheelFilename;
@@ -94,8 +94,11 @@ pub struct Package {
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct PackageMetadata {
-    /// The `Requires-Python` specifier. Defaults to `">=3.12"`.
-    #[serde(default = "default_requires_python")]
+    /// The `Requires-Python` specifier. Defaults to `">=3.12"`; `false` omits it.
+    #[serde(
+        default = "default_requires_python",
+        deserialize_with = "deserialize_requires_python"
+    )]
     pub requires_python: Option<VersionSpecifiers>,
 
     /// Dependency requirements.
@@ -105,6 +108,10 @@ pub struct PackageMetadata {
     /// Build requirements for the generated source distribution.
     #[serde(default)]
     pub build_requires: Vec<Requirement>,
+
+    /// Literal `Requires-Dist` lines for tests of invalid or unusual metadata.
+    #[serde(default)]
+    pub raw_requires_dist: Vec<String>,
 
     /// Extra names mapped to their optional dependency requirements.
     #[serde(default)]
@@ -156,6 +163,28 @@ pub struct PackageMetadata {
     /// An empty list means produce only the default `py3-none-any` wheel.
     #[serde(default)]
     pub wheel_tags: Vec<WheelTag>,
+}
+
+fn deserialize_requires_python<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<VersionSpecifiers>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Specifiers(VersionSpecifiers),
+        Enabled(bool),
+    }
+
+    match Value::deserialize(deserializer)? {
+        Value::Specifiers(specifiers) => Ok(Some(specifiers)),
+        Value::Enabled(false) => Ok(None),
+        Value::Enabled(true) => Err(serde::de::Error::custom(
+            "requires_python must be a version specifier or false",
+        )),
+    }
 }
 
 /// Backend used by a generated source distribution.
@@ -409,6 +438,19 @@ sdist_subdirectory = "project"
         assert_eq!(metadata.build_requires[0].to_string(), "build-dependency");
         assert_eq!(metadata.sdist_subdirectory.as_deref(), Some("project"));
         assert_eq!(metadata.sdist_backend, SdistBackend::LegacySetuptools);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_unusual_core_metadata() -> Result<()> {
+        let metadata: PackageMetadata = toml::from_str(
+            r#"
+requires_python = false
+raw_requires_dist = ["deliberately invalid ;"]
+"#,
+        )?;
+        assert!(metadata.requires_python.is_none());
+        assert_eq!(metadata.raw_requires_dist, ["deliberately invalid ;"]);
         Ok(())
     }
 
