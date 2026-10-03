@@ -27,7 +27,7 @@ use uv_distribution_types::{
 use uv_fs::{PortablePathBuf, Simplified};
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_lock::{Installable, Lock, PythonReport};
-use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
+use uv_normalize::{DefaultExtras, DefaultGroups, GroupName, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
@@ -52,7 +52,11 @@ use crate::commands::pip::resolution_markers;
 use crate::commands::pip::{operations, resolution_tags};
 use crate::commands::project::discovery::DiscoveredProject;
 use crate::commands::project::install_target::{InstallTarget, PackageSelection};
-use crate::commands::project::lock::{LockMode, LockOperation, LockResult};
+use crate::commands::project::lock::{
+    LockMode, LockOperation, LockResult, command_workspace_group,
+    command_workspace_group_from_lock, lockfile_selection_members, select_workspace_group_lock,
+    workspace_selection_members,
+};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::lockfile::FrozenWorkspace;
 use crate::commands::project::{
@@ -75,7 +79,8 @@ pub(crate) async fn sync(
     dry_run: DryRun,
     active: ActiveEnvironment,
     all_packages: bool,
-    package: Vec<PackageName>,
+    mut package: Vec<PackageName>,
+    workspace_group: Option<GroupName>,
     extras: ExtrasSpecification,
     groups: DependencyGroups,
     editable: Option<EditableMode>,
@@ -164,6 +169,64 @@ pub(crate) async fn sync(
         }
     };
 
+    let mut selection_members = match &target {
+        SyncTarget::Manifest(SyncManifest::Project(project)) => {
+            workspace_selection_members(project, &package, all_packages)
+        }
+        SyncTarget::Lockfile {
+            workspace,
+            project_name,
+            ..
+        } => lockfile_selection_members(
+            workspace.lock(),
+            project_name.as_ref(),
+            &package,
+            all_packages,
+        ),
+        SyncTarget::Manifest(SyncManifest::Script(_)) => Default::default(),
+    };
+    let explicit_workspace_group = workspace_group.is_some();
+    let workspace_group = match &target {
+        SyncTarget::Manifest(SyncManifest::Project(project)) => command_workspace_group(
+            project.workspace(),
+            workspace_group.as_ref(),
+            &selection_members,
+            frozen,
+            &settings.resolver.sources,
+        )
+        .await
+        .map_err(UvError::from)?,
+        SyncTarget::Lockfile { workspace, .. } => command_workspace_group_from_lock(
+            workspace.lock(),
+            workspace_group.as_ref(),
+            &selection_members,
+        )
+        .map_err(UvError::from)?,
+        SyncTarget::Manifest(SyncManifest::Script(_)) => {
+            if workspace_group.is_some() {
+                anyhow::bail!("Workspace groups are not supported for scripts");
+            }
+            None
+        }
+    };
+    let group_workspace = match (&target, &workspace_group) {
+        (SyncTarget::Manifest(SyncManifest::Project(project)), Some(group)) => Some(
+            project
+                .workspace()
+                .with_workspace_groups(std::slice::from_ref(group)),
+        ),
+        _ => None,
+    };
+    if let Some(group) = &workspace_group
+        && (explicit_workspace_group || group.definition.default)
+        && package.is_empty()
+    {
+        selection_members.clone_from(&group.definition.members);
+        if !all_packages {
+            package.extend(group.definition.members.iter().cloned());
+        }
+    }
+
     // Read the frozen lock before selecting an environment, since the selected member's default
     // groups can affect the Python requirement. Manifest-free targets were read during discovery.
     let frozen_lock = if let Some(source) = frozen
@@ -185,7 +248,25 @@ pub(crate) async fn sync(
         None
     };
 
-    let locked_default_groups = match (&frozen_lock, package.as_slice()) {
+    let selected_workspace_group = workspace_group
+        .as_ref()
+        .filter(|group| explicit_workspace_group || group.definition.default)
+        .map(|group| &group.definition.name);
+    let selected_frozen_lock = match (&target, frozen_lock.as_ref()) {
+        (SyncTarget::Lockfile { workspace, .. }, _) => Some(select_workspace_group_lock(
+            workspace.lock().clone(),
+            selected_workspace_group,
+            &selection_members,
+        )?),
+        (SyncTarget::Manifest(_), Some(lock)) => Some(select_workspace_group_lock(
+            lock.clone(),
+            selected_workspace_group,
+            &selection_members,
+        )?),
+        (SyncTarget::Manifest(_), None) => None,
+    };
+
+    let locked_default_groups = match (&selected_frozen_lock, package.as_slice()) {
         (Some(lock), [name]) => lock.member_default_groups(name),
         _ => None,
     };
@@ -217,9 +298,11 @@ pub(crate) async fn sync(
     let extras = extras.with_defaults(DefaultExtras::default());
 
     // Reject invalid lockfile selections before creating an environment.
-    if let SyncTarget::Lockfile { workspace, .. } = &target {
-        let install_target =
-            identify_installation_target(&target, workspace.lock(), all_packages, &package);
+    if let SyncTarget::Lockfile { .. } = &target {
+        let lock = selected_frozen_lock
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Missing frozen lockfile"))?;
+        let install_target = identify_installation_target(&target, lock, all_packages, &package);
         install_target.validate_extras(&extras)?;
         install_target.validate_groups(&groups)?;
         detect_conflicts(&install_target, &extras, &groups)?;
@@ -229,8 +312,12 @@ pub(crate) async fn sync(
     let environment = match &target {
         SyncTarget::Manifest(SyncManifest::Project(project)) => SyncEnvironment::Project(
             ProjectEnvironment::get_or_init(
-                ProjectEnvironmentTarget::from(project.workspace()),
-                frozen_lock
+                ProjectEnvironmentTarget::from(
+                    group_workspace
+                        .as_ref()
+                        .unwrap_or_else(|| project.workspace()),
+                ),
+                selected_frozen_lock
                     .as_ref()
                     .filter(|_| use_locked_python)
                     .map(|lock| {
@@ -253,15 +340,18 @@ pub(crate) async fn sync(
             )
             .await?,
         ),
-        SyncTarget::Lockfile { workspace, .. } => SyncEnvironment::Project(
+        SyncTarget::Lockfile { workspace, .. } => SyncEnvironment::Project({
+            let lock = selected_frozen_lock
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Missing frozen lockfile"))?;
             ProjectEnvironment::get_or_init(
                 ProjectEnvironmentTarget::Lockfile {
                     root: workspace.root(),
-                    lock: workspace.lock(),
+                    lock,
                 },
                 Some(identify_installation_target(
                     &target,
-                    workspace.lock(),
+                    lock,
                     all_packages,
                     &package,
                 )),
@@ -280,8 +370,8 @@ pub(crate) async fn sync(
                 LinkErrorReporting::User,
                 printer,
             )
-            .await?,
-        ),
+            .await?
+        }),
         SyncTarget::Manifest(SyncManifest::Script(script)) => SyncEnvironment::Script(
             ScriptEnvironment::get_or_init(
                 script.into(),
@@ -445,10 +535,12 @@ pub(crate) async fn sync(
     };
 
     let (outcome, lock_report) = match &target {
-        SyncTarget::Lockfile {
-            path, workspace, ..
-        } => (
-            Outcome::Frozen(workspace.lock()),
+        SyncTarget::Lockfile { path, .. } => (
+            Outcome::Frozen(
+                selected_frozen_lock
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Missing frozen lockfile"))?,
+            ),
             LockReport {
                 path: path.as_path().into(),
                 action: LockAction::Use,
@@ -483,7 +575,9 @@ pub(crate) async fn sync(
                 .await
             };
             let outcome = match result {
-                Ok(result) => Outcome::Success(result),
+                Ok(result) => Outcome::Success(
+                    result.select_workspace_group(selected_workspace_group, &selection_members)?,
+                ),
                 Err(ProjectError::Operation(err)) => return Err(UvError::from(err).into()),
                 Err(err @ ProjectError::LockFormat(..)) => return Err(UvError::user(err).into()),
                 Err(ProjectError::LockMismatch(prev, cur, lock_source)) => {
@@ -862,6 +956,34 @@ pub(crate) async fn do_sync<'a>(
     malware_settings: impl Into<MalwareCheckContext<'a>>,
 ) -> Result<Changelog, ProjectError> {
     let malware_context = malware_settings.into();
+
+    // Commands that edit a project also sync through this entry point. A grouped lock
+    // must be projected before any installation graph is traversed.
+    let selected_lock;
+    let target = if target.lock().workspace_groups().is_empty() {
+        target
+    } else {
+        let workspace_target = match target {
+            InstallTarget::Workspace { .. } | InstallTarget::NonProjectWorkspace { .. } => true,
+            InstallTarget::Project { .. }
+            | InstallTarget::Projects { .. }
+            | InstallTarget::Lockfile { .. }
+            | InstallTarget::Script { .. } => false,
+        };
+        let members = if workspace_target
+            && let Some(group) = target
+                .lock()
+                .workspace_groups()
+                .iter()
+                .find(|group| group.definition.default)
+        {
+            group.definition.members.clone()
+        } else {
+            target.roots().cloned().collect()
+        };
+        selected_lock = select_workspace_group_lock(target.lock().clone(), None, &members)?;
+        target.with_lock(&selected_lock)
+    };
 
     // Extract the project settings.
     let InstallerSettingsRef {

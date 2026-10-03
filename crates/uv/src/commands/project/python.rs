@@ -269,6 +269,28 @@ fn find_workspace_python_requirement(
     groups: &DependencyGroupsWithDefaults,
 ) -> Result<Option<ProjectPythonRequirement>, ProjectError> {
     let requires_python = workspace.requires_python(groups)?;
+    if let Some(workspace_group_requires_python) = workspace.workspace_group_requires_python()? {
+        let Some(requires_python_intersection) = RequiresPython::intersection(
+            std::iter::once(workspace_group_requires_python.specifiers()).chain(
+                requires_python
+                    .iter()
+                    .filter_map(|(declaration, specifiers)| match declaration {
+                        RequiresPythonDeclaration::Member(_, Some(_))
+                        | RequiresPythonDeclaration::Workspace(_) => Some(specifiers),
+                        RequiresPythonDeclaration::Member(_, None) => None,
+                    }),
+            ),
+        ) else {
+            return Err(ProjectError::DisjointRequiresPython(requires_python));
+        };
+        return Ok(Some(ProjectPythonRequirement {
+            requires_python: requires_python_intersection,
+            source: PythonRequirementSource::Workspace {
+                sources: requires_python,
+                multiple_members: workspace.packages().len() > 1,
+            },
+        }));
+    }
     // If there are no `Requires-Python` specifiers in the workspace, return `None`.
     if requires_python.is_empty() {
         return Ok(None);

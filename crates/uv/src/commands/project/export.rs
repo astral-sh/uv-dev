@@ -33,7 +33,10 @@ use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceC
 use crate::commands::pip::loggers::DefaultResolveLogger;
 use crate::commands::project::discovery::DiscoveredProject;
 use crate::commands::project::install_target::{InstallTarget, PackageSelection};
-use crate::commands::project::lock::{LockMode, LockOperation};
+use crate::commands::project::lock::{
+    LockMode, LockOperation, command_workspace_group, command_workspace_group_from_lock,
+    lockfile_selection_members, select_workspace_group_lock, workspace_selection_members,
+};
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::lockfile::FrozenWorkspace;
 use crate::commands::project::{
@@ -161,7 +164,8 @@ pub(crate) async fn export(
     project_dir: &Path,
     format: Option<ExportFormat>,
     all_packages: bool,
-    package: Vec<PackageName>,
+    mut package: Vec<PackageName>,
+    workspace_group: Option<GroupName>,
     prune: Vec<PackageName>,
     hashes: bool,
     install_options: InstallOptions,
@@ -269,9 +273,65 @@ pub(crate) async fn export(
         }
     };
 
-    let resolved_lock;
-    let lock = match &source {
-        ExportSource::Lockfile { workspace, .. } => workspace.lock(),
+    let mut selection_members = match &source {
+        ExportSource::Manifest(ExportTarget::Project(project)) => {
+            workspace_selection_members(project, &package, all_packages)
+        }
+        ExportSource::Lockfile {
+            workspace,
+            project_name,
+        } => lockfile_selection_members(
+            workspace.lock(),
+            project_name.as_ref(),
+            &package,
+            all_packages,
+        ),
+        ExportSource::Manifest(ExportTarget::Script(_)) => Default::default(),
+    };
+    let explicit_workspace_group = workspace_group.is_some();
+    let workspace_group = match &source {
+        ExportSource::Manifest(ExportTarget::Project(project)) => command_workspace_group(
+            project.workspace(),
+            workspace_group.as_ref(),
+            &selection_members,
+            frozen,
+            &settings.sources,
+        )
+        .await
+        .map_err(UvError::from)?,
+        ExportSource::Lockfile { workspace, .. } => command_workspace_group_from_lock(
+            workspace.lock(),
+            workspace_group.as_ref(),
+            &selection_members,
+        )
+        .map_err(UvError::from)?,
+        ExportSource::Manifest(ExportTarget::Script(_)) => {
+            if workspace_group.is_some() {
+                bail!("Workspace groups are not supported for scripts");
+            }
+            None
+        }
+    };
+    let group_workspace = match (&source, &workspace_group) {
+        (ExportSource::Manifest(ExportTarget::Project(project)), Some(group)) => Some(
+            project
+                .workspace()
+                .with_workspace_groups(std::slice::from_ref(group)),
+        ),
+        _ => None,
+    };
+    if let Some(group) = &workspace_group
+        && (explicit_workspace_group || group.definition.default)
+        && package.is_empty()
+    {
+        selection_members.clone_from(&group.definition.members);
+        if !all_packages {
+            package.extend(group.definition.members.iter().cloned());
+        }
+    }
+
+    let resolved_lock = match &source {
+        ExportSource::Lockfile { workspace, .. } => workspace.lock().clone(),
         ExportSource::Manifest(target) => {
             // Find an interpreter for the project, unless `--frozen` is set.
             let interpreter = if frozen.is_some() {
@@ -306,14 +366,22 @@ pub(crate) async fn export(
                         };
                         let project_python = ProjectPythonRequest::from_request(
                             python.as_deref().map(PythonRequest::parse),
-                            Some(project.workspace()),
+                            Some(
+                                group_workspace
+                                    .as_ref()
+                                    .unwrap_or_else(|| project.workspace()),
+                            ),
                             &interpreter_groups,
                             project_dir,
                             config_discovery,
                         )
                         .await?;
                         ProjectInterpreter::discover(
-                            ProjectEnvironmentTarget::from(project.workspace()),
+                            ProjectEnvironmentTarget::from(
+                                group_workspace
+                                    .as_ref()
+                                    .unwrap_or_else(|| project.workspace()),
+                            ),
                             project_python,
                             &client_builder,
                             python_preference,
@@ -348,7 +416,7 @@ pub(crate) async fn export(
             // Initialize any shared state.
             let state = UniversalState::default();
 
-            resolved_lock = match Box::pin(
+            match Box::pin(
                 LockOperation::new(
                     mode,
                     &settings,
@@ -367,10 +435,18 @@ pub(crate) async fn export(
             {
                 Ok(result) => result.into_lock(),
                 Err(err) => return Err(UvError::from(err).into()),
-            };
-            &resolved_lock
+            }
         }
     };
+    let resolved_lock = select_workspace_group_lock(
+        resolved_lock,
+        workspace_group
+            .as_ref()
+            .filter(|group| explicit_workspace_group || group.definition.default)
+            .map(|group| &group.definition.name),
+        &selection_members,
+    )?;
+    let lock = &resolved_lock;
 
     if let Some(batch) = &batch {
         let mut writers = Vec::with_capacity(batch.export.len());
