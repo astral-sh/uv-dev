@@ -198,6 +198,27 @@ pub struct ExtrasSpecificationHistory {
 }
 
 impl ExtrasSpecificationHistory {
+    /// Return the sole positive `--extra` without other selections or defaults.
+    pub fn single_extra(&self) -> Option<&ExtraName> {
+        let Self {
+            extra,
+            only_extra,
+            no_extra,
+            all_extras: false,
+            no_default_extras: false,
+            defaults: DefaultExtras::List(defaults),
+        } = self
+        else {
+            return None;
+        };
+        match extra.as_slice() {
+            [extra] if only_extra.is_empty() && no_extra.is_empty() && defaults.is_empty() => {
+                Some(extra)
+            }
+            _ => None,
+        }
+    }
+
     /// Returns all the CLI flags that this represents.
     ///
     /// If a flag was provided multiple times (e.g. `--extra A --extra B`) this will
@@ -288,5 +309,70 @@ impl IncludeExtras {
 impl Default for IncludeExtras {
     fn default() -> Self {
         Self::Some(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_normalize::{DefaultExtras, ExtraName};
+
+    use super::ExtrasSpecification;
+
+    fn extras(names: &[&str]) -> Vec<ExtraName> {
+        names.iter().map(|name| name.parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn single_explicit_extra() {
+        let singleton = ExtrasSpecification::from_extra(extras(&["Foo_Bar"]));
+        assert_eq!(
+            singleton.history().single_extra().map(ExtraName::as_str),
+            Some("foo-bar"),
+        );
+
+        for specification in [
+            ExtrasSpecification::default(),
+            ExtrasSpecification::from_extra(extras(&["dev", "dev"])),
+            ExtrasSpecification::from_extra(extras(&["dev", "docs"])),
+            ExtrasSpecification::from_args(vec![], vec![], false, extras(&["dev"]), false),
+            ExtrasSpecification::from_args(
+                extras(&["dev"]),
+                vec![],
+                false,
+                extras(&["docs"]),
+                false,
+            ),
+            ExtrasSpecification::from_args(
+                extras(&["dev"]),
+                extras(&["docs"]),
+                false,
+                vec![],
+                false,
+            ),
+            ExtrasSpecification::from_all_extras(),
+            ExtrasSpecification::from_args(extras(&["dev"]), vec![], false, vec![], true),
+            ExtrasSpecification::from_args(extras(&["dev"]), vec![], true, vec![], false),
+        ] {
+            assert!(
+                specification.history().single_extra().is_none(),
+                "{specification:?}",
+            );
+        }
+
+        for (defaults, expected) in [
+            (DefaultExtras::List(vec![]), Some("foo-bar")),
+            (DefaultExtras::List(extras(&["docs"])), None),
+            (DefaultExtras::All, None),
+        ] {
+            let specification = singleton.with_defaults(defaults);
+            assert_eq!(
+                specification
+                    .history()
+                    .single_extra()
+                    .map(ExtraName::as_str),
+                expected,
+                "{specification:?}",
+            );
+        }
     }
 }
