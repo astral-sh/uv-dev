@@ -1499,7 +1499,7 @@ fn build_with_all_metadata() -> Result<()> {
     Version: 1.0.0
     Summary: A Python package with all metadata fields
     Keywords: example,test,metadata
-    Author: Jane Doe, John Doe
+    Author: John Doe
     Author-email: Jane Doe <jane@example.com>, info@example.com
     License-Expression: MIT OR Apache-2.0
     License-File: License.txt
@@ -1508,7 +1508,6 @@ fn build_with_all_metadata() -> Result<()> {
     Classifier: Programming Language :: Python :: 3.12
     Requires-Dist: anyio>=4,<5
     Requires-Dist: pytest>=7.0 ; extra == 'dev'
-    Maintainer: ferris
     Maintainer-email: ferris <ferris@example.com>
     Requires-Python: >=3.12
     Project-URL: Homepage, https://octocat.github.io/spoon-knife
@@ -1528,7 +1527,7 @@ fn build_with_all_metadata() -> Result<()> {
     let metadata_json: serde_json::Value = serde_json::from_str(&metadata_json)?;
     assert_json_snapshot!(metadata_json, @r#"
     {
-      "author": "Jane Doe, John Doe",
+      "author": "John Doe",
       "author_email": "Jane Doe <jane@example.com>, info@example.com",
       "classifiers": [
         "Development Status :: 4 - Beta",
@@ -1552,7 +1551,7 @@ fn build_with_all_metadata() -> Result<()> {
       "license_files": [
         "License.txt"
       ],
-      "maintainer": "ferris",
+      "maintainer": null,
       "maintainer_email": "ferris <ferris@example.com>",
       "metadata_version": "2.4",
       "name": "foo",
