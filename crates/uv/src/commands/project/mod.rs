@@ -2551,6 +2551,7 @@ impl ScriptEnvironment {
                     uv_virtualenv::Seed::Disabled,
                     upgradeable,
                 )?;
+                environment.cache(cache)?;
 
                 Ok(if replaced {
                     Self::Replaced(environment)

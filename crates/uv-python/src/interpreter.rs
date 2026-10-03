@@ -115,6 +115,33 @@ impl Interpreter {
         }
     }
 
+    /// Cache the interpreter information for the given executable.
+    pub(crate) fn cache(&self, executable: impl AsRef<Path>, cache: &Cache) -> Result<(), Error> {
+        let executable = executable.as_ref();
+        let absolute = std::path::absolute(executable)?;
+        let canonical = canonicalize_executable(&absolute)?;
+
+        // Match `query_cached`: use the canonical executable's timestamp to invalidate the entry.
+        let modified = Timestamp::from_path(&canonical)?;
+        let cache_entry = InterpreterInfo::cache_entry(&absolute, &canonical, cache);
+
+        // Avoid caching interpreter information for shims that redirect to another executable.
+        if !is_same_file(executable, &self.sys_executable).unwrap_or(false) {
+            return Ok(());
+        }
+
+        fs::create_dir_all(cache_entry.dir())?;
+        write_atomic_sync(
+            cache_entry.path(),
+            rmp_serde::to_vec(&CachedByTimestamp {
+                timestamp: modified,
+                data: InterpreterInfo::from(self),
+            })?,
+        )?;
+
+        Ok(())
+    }
+
     /// Return a new [`Interpreter`] with the given virtual environment root.
     #[must_use]
     pub fn with_virtualenv(self, virtualenv: VirtualEnvironment) -> Self {
@@ -957,11 +984,9 @@ struct InterpreterInfo {
     virtualenv: Scheme,
     manylinux_compatible: bool,
     sys_prefix: PathBuf,
-    sys_base_exec_prefix: PathBuf,
     sys_base_prefix: PathBuf,
     sys_base_executable: Option<PathBuf>,
     sys_executable: PathBuf,
-    sys_path: Vec<PathBuf>,
     site_packages: Vec<PathBuf>,
     stdlib: PathBuf,
     extension_suffixes: Vec<Box<str>>,
@@ -969,6 +994,29 @@ struct InterpreterInfo {
     pointer_size: PointerSize,
     gil_disabled: bool,
     debug_enabled: bool,
+}
+
+impl From<&Interpreter> for InterpreterInfo {
+    fn from(interpreter: &Interpreter) -> Self {
+        Self {
+            platform: interpreter.platform.clone(),
+            markers: interpreter.markers.as_ref().clone(),
+            scheme: interpreter.scheme.clone(),
+            virtualenv: interpreter.virtualenv.clone(),
+            manylinux_compatible: interpreter.manylinux_compatible,
+            sys_prefix: interpreter.sys_prefix.clone(),
+            sys_base_prefix: interpreter.sys_base_prefix.clone(),
+            sys_base_executable: interpreter.sys_base_executable.clone(),
+            sys_executable: interpreter.sys_executable.clone(),
+            site_packages: interpreter.site_packages.clone(),
+            stdlib: interpreter.stdlib.clone(),
+            extension_suffixes: interpreter.extension_suffixes.clone(),
+            standalone: interpreter.standalone,
+            pointer_size: interpreter.pointer_size,
+            gil_disabled: interpreter.gil_disabled,
+            debug_enabled: interpreter.debug_enabled,
+        }
+    }
 }
 
 impl InterpreterInfo {
