@@ -8,6 +8,7 @@ use fs_err::File;
 use tracing::{instrument, trace};
 
 use uv_distribution_filename::WheelFilename;
+use uv_fs::Simplified;
 use uv_pep440::Version;
 use uv_pypi_types::{DirectUrl, Metadata10};
 
@@ -40,6 +41,36 @@ fn wheel_destination<'layout>(
         LibKind::Plat => &layout.scheme.platlib,
     };
     Ok((dist_info_prefix, site_packages))
+}
+
+/// Validate that the wheel's `scripts` data directory contains only regular files.
+fn validate_data_scripts(wheel: &Path, dist_info_prefix: &str) -> Result<(), Error> {
+    let scripts = wheel.join(format!("{dist_info_prefix}.data/scripts"));
+    let entries = match fs_err::read_dir(&scripts) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if !file_type.is_file() {
+            let kind = if file_type.is_dir() {
+                "directory"
+            } else if file_type.is_symlink() {
+                "symlink"
+            } else {
+                "non-file"
+            };
+            return Err(Error::InvalidWheel(format!(
+                "Wheel contains an invalid entry ({kind}) in the `scripts` directory: {}",
+                entry.path().simplified_display()
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Install the given wheel to the given venv
@@ -81,6 +112,9 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
             return Err(Error::MismatchedVersion(version, filename.version.clone()));
         }
     }
+
+    // Reject invalid script data before linking any wheel files into the environment.
+    validate_data_scripts(wheel, &dist_info_prefix)?;
 
     // We're going step by step though
     // https://packaging.python.org/en/latest/specifications/binary-distribution-format/#installing-a-wheel-distribution-1-0-py32-none-any-whl
