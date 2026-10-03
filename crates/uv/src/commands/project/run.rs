@@ -1797,9 +1797,7 @@ impl RunCommand {
                         process.arg(OsString::from_vec(script.clone()));
                     },
                     _ => {
-                        let script =
-                            String::from_utf8(script.clone()).expect("script is valid UTF-8");
-                        process.arg(script);
+                        process.arg(String::from_utf8_lossy(script).as_ref());
                     },
                 }
                 process.args(args);
@@ -1828,9 +1826,7 @@ impl RunCommand {
                         process.arg(OsString::from_vec(script.clone()));
                     },
                     _ => {
-                        let script =
-                            String::from_utf8(script.clone()).expect("script is valid UTF-8");
-                        process.arg(script);
+                        process.arg(String::from_utf8_lossy(script).as_ref());
                     },
                 }
                 process.args(args);
