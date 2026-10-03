@@ -72,6 +72,61 @@ fn create_venv() {
 }
 
 #[test]
+fn create_venv_startup_files() -> Result<()> {
+    for version in ["3.14", "3.15"] {
+        let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+        context.python_install().arg(version).assert().success();
+        context
+            .venv()
+            .arg("--python")
+            .arg(version)
+            .assert()
+            .success();
+        let site_packages = site_packages_path(&context.venv, &format!("python{version}"));
+        assert_eq!(
+            fs_err::read_to_string(site_packages.join("_virtualenv.pth"))?,
+            "import _virtualenv; _virtualenv.patch()\n"
+        );
+        assert_eq!(
+            fs_err::read_to_string(site_packages.join("_virtualenv.start"))?,
+            "_virtualenv:patch\n"
+        );
+
+        insta::allow_duplicates! {
+        uv_snapshot!(context.filters(), context.python_command().arg("-c").arg(indoc! {r"
+            import sys
+            import _virtualenv
+            _virtualenv.patch()
+            print(sum(isinstance(finder, _virtualenv._Finder) for finder in sys.meta_path))
+        "}), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        1
+        ");
+        }
+
+        if version == "3.15" {
+            fs_err::write(
+                site_packages.join("_virtualenv.pth"),
+                "import sys; sys._uv_legacy_startup = True\n",
+            )?;
+            uv_snapshot!(context.filters(), context.python_command().arg("-c").arg(indoc! {r"
+                import sys
+                import _virtualenv
+                print(hasattr(sys, '_uv_legacy_startup'))
+                print(sum(isinstance(finder, _virtualenv._Finder) for finder in sys.meta_path))
+            "}), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            False
+            1
+            ");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn create_venv_preview_skips_distutils_patch_on_py310_plus() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
@@ -93,6 +148,7 @@ fn create_venv_preview_skips_distutils_patch_on_py310_plus() {
     let site_packages = site_packages_path(context.venv.path(), "python3.12");
     assert!(!site_packages.join("_virtualenv.py").exists());
     assert!(!site_packages.join("_virtualenv.pth").exists());
+    assert!(!site_packages.join("_virtualenv.start").exists());
 }
 
 #[test]
