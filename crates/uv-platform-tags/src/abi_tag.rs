@@ -52,8 +52,10 @@ impl DerefMut for CPythonAbiVariants {
 
 impl Display for CPythonAbiVariants {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        // Preserve the known order of flags, as observed from CPython itself.
-        // TODO(konsti): Is there a canonical source for that?
+        // Preserve CPython's flag order: historical `dmu` (PEP 3149), with free-threading `t`
+        // before debug `d` (CPython's configure script).
+        // https://peps.python.org/pep-3149/#proposal
+        // https://github.com/python/cpython/blob/60403a5409ff2c3f3b07dd2ca91a7a3e096839c7/configure.ac#L1728-L1760
         if self.contains(Self::Freethreading) {
             // https://peps.python.org/pep-0703/#build-configuration-changes
             // Python 3.13+ only, but it makes more sense to just rely on the sysconfig var.
@@ -525,6 +527,22 @@ mod tests {
 
         let err = AbiTag::from_str("cp39dd").unwrap_err();
         assert_snapshot!(err, @"Duplicate suffix `d` in CPython ABI tag: cp39dd");
+    }
+
+    #[test]
+    fn cpython_abi_suffix_order() {
+        for (input, expected) in [
+            ("cp32dmu", "cp32dmu"),
+            ("cp32umd", "cp32dmu"),
+            ("cp37dm", "cp37dm"),
+            ("cp37md", "cp37dm"),
+            ("cp313td", "cp313td"),
+            ("cp313dt", "cp313td"),
+        ] {
+            let tag = AbiTag::from_str(input).unwrap();
+            assert_eq!(tag.to_string(), expected);
+            assert_eq!(AbiTag::from_str(expected).unwrap(), tag);
+        }
     }
 
     #[test]
