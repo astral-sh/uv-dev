@@ -6310,6 +6310,7 @@ version = "0.0.89"
 dependencies = [
  "anyhow",
  "astral-version-ranges",
+ "bitflags 2.13.1",
  "clap",
  "either",
  "fs-err",
