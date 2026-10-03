@@ -541,9 +541,9 @@ fn help_subsubcommand() {
     Download and install Python versions.
 
     Supports CPython and PyPy. CPython distributions are downloaded from the Astral
-    `python-build-standalone` project. PyPy distributions are downloaded from `python.org`. The
-    available Python versions are bundled with each uv release. To install new Python versions, you may
-    need upgrade uv.
+    `python-build-standalone` project. PyPy distributions are downloaded from `python.org`. Available
+    Python versions are bundled with each uv release. Enable the `remote-python-download-metadata`
+    preview feature to fetch new CPython versions at runtime.
 
     Python versions are installed into the uv Python directory, which can be retrieved with `uv python
     dir`.
@@ -611,7 +611,7 @@ fn help_subsubcommand() {
               Distributions can be read from a local directory by using the `file://` URL scheme.
 
           --python-downloads-json-url <PYTHON_DOWNLOADS_JSON_URL>
-              URL pointing to JSON of custom Python installations
+              URL pointing to JSON or NDJSON describing custom Python installations
 
       -r, --reinstall
               Reinstall the requested Python version, if it's already installed.
@@ -901,7 +901,7 @@ fn help_flag_subsubcommand() {
           --pypy-mirror <PYPY_MIRROR>
               Set the URL to use as the source for downloading PyPy installations
           --python-downloads-json-url <PYTHON_DOWNLOADS_JSON_URL>
-              URL pointing to JSON of custom Python installations
+              URL pointing to JSON or NDJSON describing custom Python installations
       -r, --reinstall
               Reinstall the requested Python version, if it's already installed
       -f, --force

@@ -1,12 +1,14 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 use std::io::Read;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant, SystemTimeError};
+use std::time::{Duration, Instant, SystemTime, SystemTimeError};
 use std::{env, io};
 
 use futures::TryStreamExt;
@@ -18,14 +20,15 @@ use reqwest_retry::policies::ExponentialBackoff;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter, ReadBuf};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader, BufWriter, ReadBuf};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
 use tracing::{debug, instrument};
 use url::Url;
 use zstd::stream::read::Decoder;
 
-use uv_cache::{Cache, CacheBucket};
+use uv_cache::{Cache, CacheBucket, CacheEntry, CacheShard};
+use uv_cache_info::Timestamp;
 use uv_cache_key::cache_digest;
 use uv_client::{
     BaseClient, BaseClientBuilder, CacheControl, CachedClient, CachedClientError, ClientBuildError,
@@ -34,8 +37,9 @@ use uv_client::{
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
-use uv_fs::{Simplified, rename_with_retry};
+use uv_fs::{Simplified, rename_with_retry, write_atomic};
 use uv_platform::{self as platform, Arch, Libc, Os, Platform};
+use uv_preview::PreviewFeature;
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_static::{
@@ -128,6 +132,10 @@ pub enum Error {
     RemotePythonDownloadsJSONClient(Box<uv_client::Error>),
     #[error(transparent)]
     ClientBuild(Box<ClientBuildError>),
+    #[error("Unable to parse NDJSON line at {0}")]
+    InvalidPythonDownloadsNdjsonLine(String, #[source] serde_json::Error),
+    #[error("Error while fetching remote python downloads NDJSON from '{0}'")]
+    FetchingPythonDownloadsNdjsonError(String, #[source] Box<Self>),
     #[error("An offline Python installation was requested, but `{file}` (from `{url}`) is missing in `{}`", python_builds_dir.user_display())]
     OfflinePythonMissing {
         file: Box<PythonInstallationKey>,
@@ -967,6 +975,63 @@ impl FromStr for PythonDownloadRequest {
 const BUILTIN_PYTHON_DOWNLOADS_ZSTD: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/download-metadata.json.zst"));
 
+/// Path within the `astral-sh/versions` repository for runtime Python download metadata.
+const REMOTE_PYTHON_DOWNLOAD_METADATA_PATH: &str = "v1/python-build-standalone.ndjson";
+static REMOTE_PYTHON_DOWNLOAD_METADATA_URL: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "https://raw.githubusercontent.com/astral-sh/versions/refs/heads/main/{REMOTE_PYTHON_DOWNLOAD_METADATA_PATH}"
+    )
+});
+static REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_SUFFIX: LazyLock<String> =
+    LazyLock::new(|| format!("/github/versions/main/{REMOTE_PYTHON_DOWNLOAD_METADATA_PATH}"));
+static REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_URL: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{}{}",
+        astral_mirror_base_url(None),
+        REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_SUFFIX.as_str()
+    )
+});
+
+const VERSIONS_CACHE_FILENAME: &str = "python-build-standalone.ndjson";
+const VERSIONS_CACHE_META_FILENAME: &str = "python-build-standalone.meta.json";
+const VERSIONS_CACHE_FRESHNESS: Duration = Duration::from_mins(10);
+// 2025-03-11, the first CPython release date whose musl builds are dynamically linked.
+const CPYTHON_MUSL_STATIC_RELEASE_END: u64 = 2025 * 10_000 + 3 * 100 + 11;
+const NDJSON_FLAVOR_PREFERENCES: &[&str] = &[
+    "install_only_stripped",
+    "install_only",
+    "shared-pgo",
+    "shared-noopt",
+    "static-noopt",
+];
+const NDJSON_KNOWN_FLAVORS: &[&str] = &["full", "install_only", "install_only_stripped"];
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct VersionsCacheMeta {
+    content_length: u64,
+    etag: Option<String>,
+    checked_at: Timestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadListFormat {
+    Json,
+    Ndjson,
+}
+
+#[derive(Debug, Clone)]
+struct DownloadListSource<'a> {
+    location: DownloadListLocation<'a>,
+    format: DownloadListFormat,
+    implicit: bool,
+}
+
+#[derive(Debug, Clone)]
+enum DownloadListLocation<'a> {
+    Path(Cow<'a, Path>),
+    Http(Vec<DisplaySafeUrl>),
+}
+
 pub struct ManagedPythonDownloadList {
     downloads: Vec<ManagedPythonDownload>,
 }
@@ -993,10 +1058,576 @@ struct JsonArch {
     variant: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+struct NdjsonPythonVersionInfo {
+    version: String,
+    artifacts: Vec<NdjsonPythonArtifact>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct NdjsonPythonArtifact {
+    platform: String,
+    variant: String,
+    url: String,
+    sha256: Option<Digest<32>>,
+}
+
 #[derive(Debug, Clone)]
 pub enum DownloadResult {
     AlreadyAvailable(PathBuf),
     Fetched(PathBuf),
+}
+
+fn detect_download_list_format(url_or_path: &str) -> DownloadListFormat {
+    let path = Url::parse(url_or_path)
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https" | "file"))
+        .map(|url| url.path().to_owned());
+    let path = path.as_deref().unwrap_or(url_or_path);
+
+    if path.ends_with(".ndjson") {
+        DownloadListFormat::Ndjson
+    } else {
+        DownloadListFormat::Json
+    }
+}
+
+fn python_download_metadata_urls(
+    astral_mirror_url: Option<&str>,
+) -> Result<Vec<DisplaySafeUrl>, Error> {
+    let astral_mirror_url = custom_astral_mirror_url(astral_mirror_url);
+    let mirror = DisplaySafeUrl::parse(&format!(
+        "{}{}",
+        astral_mirror_base_url(astral_mirror_url),
+        REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_SUFFIX.as_str()
+    ))?;
+    let mut urls = vec![mirror];
+    if astral_mirror_url.is_none() {
+        urls.push(DisplaySafeUrl::parse(&REMOTE_PYTHON_DOWNLOAD_METADATA_URL)?);
+    }
+    Ok(urls)
+}
+
+fn resolve_download_list_source(
+    python_downloads_json_url: Option<&str>,
+) -> Result<Option<DownloadListSource<'_>>, Error> {
+    if python_downloads_json_url.is_none()
+        && !uv_preview::is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata)
+    {
+        return Ok(None);
+    }
+    let implicit = python_downloads_json_url.is_none();
+    let source = if let Some(source) = python_downloads_json_url {
+        Cow::Borrowed(source)
+    } else if let Some(source) = env::var_os(EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL)
+        .filter(|value| !value.is_empty())
+        .map(|value| Cow::Owned(value.to_string_lossy().into_owned()))
+    {
+        source
+    } else {
+        return Ok(Some(DownloadListSource {
+            location: DownloadListLocation::Http(python_download_metadata_urls(
+                astral_mirror_url_from_env().as_deref(),
+            )?),
+            format: DownloadListFormat::Ndjson,
+            implicit,
+        }));
+    };
+
+    let format = detect_download_list_format(&source);
+    let location = if let Ok(url) = DisplaySafeUrl::parse(&source) {
+        match url.scheme() {
+            "http" | "https" => DownloadListLocation::Http(vec![url]),
+            "file" => DownloadListLocation::Path(Cow::Owned(
+                url.to_file_path().or(Err(Error::InvalidUrlFormat(url)))?,
+            )),
+            _ => DownloadListLocation::Path(Cow::Owned(PathBuf::from(source.as_ref()))),
+        }
+    } else {
+        DownloadListLocation::Path(Cow::Owned(PathBuf::from(source.as_ref())))
+    };
+
+    Ok(Some(DownloadListSource {
+        location,
+        format,
+        implicit,
+    }))
+}
+
+impl DownloadListSource<'_> {
+    fn merge_downloads(
+        &self,
+        downloads: Vec<ManagedPythonDownload>,
+        filter: Option<&PythonDownloadRequest>,
+        limit: Option<usize>,
+    ) -> Result<Vec<ManagedPythonDownload>, Error> {
+        if self.implicit {
+            merge_with_embedded_non_cpython(downloads, filter, limit)
+        } else {
+            Ok(filter_downloads(downloads, filter, limit))
+        }
+    }
+
+    fn find_in_implicit_embedded_non_cpython(
+        &self,
+        request: &PythonDownloadRequest,
+    ) -> Result<Option<ManagedPythonDownload>, Error> {
+        if self.implicit {
+            find_in_embedded_non_cpython(request)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn on_error<T>(
+        &self,
+        err: Error,
+        fallback: impl FnOnce() -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        if self.implicit {
+            debug!("Falling back to embedded Python downloads metadata: {err}");
+            fallback()
+        } else if let DownloadListLocation::Http(urls) = &self.location {
+            let url = urls.last().expect("HTTP metadata sources have a URL");
+            match err {
+                err @ (Error::InvalidPythonDownloadsJSON(..)
+                | Error::UnsupportedPythonDownloadsJSON(..)
+                | Error::InvalidPythonDownloadsNdjsonLine(..)) => Err(err),
+                err => Err(match self.format {
+                    DownloadListFormat::Json => {
+                        Error::FetchingPythonDownloadsJSONError(url.to_string(), Box::new(err))
+                    }
+                    DownloadListFormat::Ndjson => {
+                        Error::FetchingPythonDownloadsNdjsonError(url.to_string(), Box::new(err))
+                    }
+                }),
+            }
+        } else {
+            Err(err)
+        }
+    }
+}
+
+fn versions_cache_shard_key(url: &DisplaySafeUrl) -> String {
+    if url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_URL.as_str() {
+        "versions/default".to_string()
+    } else {
+        let unredacted_url = url.as_str();
+        format!("versions/url/{}", cache_digest(&unredacted_url))
+    }
+}
+
+fn versions_cache_shard(cache: &Cache, url: &DisplaySafeUrl) -> CacheShard {
+    cache.shard(CacheBucket::Python, versions_cache_shard_key(url))
+}
+
+fn versions_cache_entries(shard: &CacheShard) -> (CacheEntry, CacheEntry) {
+    (
+        shard.entry(VERSIONS_CACHE_FILENAME),
+        shard.entry(VERSIONS_CACHE_META_FILENAME),
+    )
+}
+
+fn supports_incremental_versions_cache(url: &DisplaySafeUrl) -> bool {
+    // Only the official manifest promises to add new releases by prepending complete records.
+    url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_URL.as_str()
+        || url.as_str() == REMOTE_PYTHON_DOWNLOAD_METADATA_MIRROR_URL.as_str()
+}
+
+async fn read_versions_cache(
+    content_entry: &CacheEntry,
+    meta_entry: &CacheEntry,
+) -> Option<(Vec<u8>, VersionsCacheMeta)> {
+    let meta_bytes = fs_err::tokio::read(meta_entry.path()).await.ok()?;
+    let meta: VersionsCacheMeta = serde_json::from_slice(&meta_bytes).ok()?;
+    let content = fs_err::tokio::read(content_entry.path()).await.ok()?;
+    if content.len() as u64 != meta.content_length {
+        debug!(
+            "Cached Python downloads metadata length mismatch: expected {}, got {}",
+            meta.content_length,
+            content.len()
+        );
+        return None;
+    }
+    Some((content, meta))
+}
+
+fn versions_cache_is_fresh(cache: &Cache, url: &DisplaySafeUrl, meta: &VersionsCacheMeta) -> bool {
+    let shard = versions_cache_shard(cache, url);
+    let (_, meta_entry) = versions_cache_entries(&shard);
+    if !cache
+        .freshness(&meta_entry, None, None)
+        .is_ok_and(uv_cache::Freshness::is_fresh)
+    {
+        return false;
+    }
+    let Some(revalidate_after) = SystemTime::now().checked_sub(VERSIONS_CACHE_FRESHNESS) else {
+        return false;
+    };
+    meta.checked_at >= Timestamp::from(revalidate_after)
+}
+
+async fn write_versions_cache_meta(
+    meta_entry: &CacheEntry,
+    meta: &VersionsCacheMeta,
+) -> Result<(), Error> {
+    fs_err::tokio::create_dir_all(meta_entry.dir()).await?;
+    let meta_bytes = serde_json::to_vec(meta)
+        .map_err(|err| io::Error::other(format!("Failed to serialize cache metadata: {err}")))?;
+    write_atomic(meta_entry.path(), &meta_bytes).await?;
+    Ok(())
+}
+
+async fn refresh_versions_cache_meta(
+    cache: &Cache,
+    url: &DisplaySafeUrl,
+    expected: &VersionsCacheMeta,
+) {
+    let shard = versions_cache_shard(cache, url);
+    let Ok(_lock) = shard.lock().await else {
+        debug!("Failed to lock Python downloads cache");
+        return;
+    };
+    let (content_entry, meta_entry) = versions_cache_entries(&shard);
+    let Some((_, current)) = read_versions_cache(&content_entry, &meta_entry).await else {
+        return;
+    };
+    // A concurrent fetch may have replaced the contents while HEAD was in flight.
+    if current != *expected {
+        return;
+    }
+    let meta = VersionsCacheMeta {
+        checked_at: Timestamp::now(),
+        ..current
+    };
+    if let Err(err) = write_versions_cache_meta(&meta_entry, &meta).await {
+        debug!("Failed to refresh Python downloads cache metadata: {err}");
+    }
+}
+
+async fn write_versions_cache(
+    content_entry: &CacheEntry,
+    meta_entry: &CacheEntry,
+    content: &[u8],
+    meta: &VersionsCacheMeta,
+) -> Result<(), Error> {
+    fs_err::tokio::create_dir_all(content_entry.dir()).await?;
+    write_atomic(content_entry.path(), content).await?;
+    write_versions_cache_meta(meta_entry, meta).await?;
+    Ok(())
+}
+
+fn validate_ndjson_bytes(source: &str, buf: &[u8]) -> Result<(), Error> {
+    parse_ndjson_bytes_with(source, buf, |_| ControlFlow::<()>::Continue(()))?;
+    Ok(())
+}
+
+fn ndjson_cache_content_is_valid(source: &str, content: &[u8]) -> bool {
+    match validate_ndjson_bytes(source, content) {
+        Ok(()) => true,
+        Err(err) => {
+            debug!(
+                "Skipping Python downloads metadata cache write because NDJSON did not parse: {err}"
+            );
+            false
+        }
+    }
+}
+
+async fn write_versions_cache_if_valid(
+    content_entry: &CacheEntry,
+    meta_entry: &CacheEntry,
+    source: &str,
+    content: &[u8],
+    meta: &VersionsCacheMeta,
+) {
+    if ndjson_cache_content_is_valid(source, content)
+        && let Err(err) = write_versions_cache(content_entry, meta_entry, content, meta).await
+    {
+        debug!("Failed to write cached Python downloads metadata: {err}");
+    }
+}
+
+async fn read_versions_cache_content(
+    cache: &Cache,
+    url: &DisplaySafeUrl,
+) -> Option<(Vec<u8>, VersionsCacheMeta)> {
+    let shard = versions_cache_shard(cache, url);
+    let _lock = shard.lock().await.ok()?;
+    let (content_entry, meta_entry) = versions_cache_entries(&shard);
+    read_versions_cache(&content_entry, &meta_entry).await
+}
+
+async fn fetch_versions_cache_etag(client: &BaseClient, url: &DisplaySafeUrl) -> Option<String> {
+    let response = match client
+        .for_host(url)
+        .head(Url::from(url.clone()))
+        .send()
+        .await
+    {
+        Ok(response) => match response.error_for_status() {
+            Ok(response) => response,
+            Err(err) => {
+                debug!("Failed to validate Python downloads metadata with HEAD request: {err}");
+                return None;
+            }
+        },
+        Err(err) => {
+            debug!("Failed to send HEAD request for Python downloads metadata: {err}");
+            return None;
+        }
+    };
+
+    response_etag(&response)
+}
+
+async fn write_streamed_versions_cache_if_valid(
+    cache: &Cache,
+    url: &DisplaySafeUrl,
+    source: &str,
+    content: &[u8],
+    etag: Option<String>,
+) {
+    let shard = versions_cache_shard(cache, url);
+    let Ok(_lock) = shard.lock().await else {
+        debug!("Failed to lock Python downloads cache");
+        return;
+    };
+    let (content_entry, meta_entry) = versions_cache_entries(&shard);
+    let meta = VersionsCacheMeta {
+        content_length: content.len() as u64,
+        etag,
+        checked_at: Timestamp::now(),
+    };
+    write_versions_cache_if_valid(&content_entry, &meta_entry, source, content, &meta).await;
+}
+
+fn prepend_versions_cache_content(
+    source: &str,
+    existing: &[u8],
+    new_content: &[u8],
+    content_length: u64,
+) -> Option<Vec<u8>> {
+    if new_content.last() != Some(&b'\n')
+        || existing.len() as u64 + new_content.len() as u64 != content_length
+    {
+        return None;
+    }
+    let mut combined = Vec::with_capacity(new_content.len() + existing.len());
+    combined.extend_from_slice(new_content);
+    combined.extend_from_slice(existing);
+    validate_ndjson_bytes(source, &combined).ok()?;
+    Some(combined)
+}
+
+fn response_etag(response: &Response) -> Option<String> {
+    response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned)
+}
+
+async fn fetch_bytes_from_url(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+) -> Result<(Vec<u8>, Option<String>), Error> {
+    let response = fetch_http_response(client, url).await?;
+    let etag = response_etag(&response);
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|err| Error::NetworkError(url.clone(), WrappedReqwestError::from(err)))?;
+    Ok((bytes.to_vec(), etag))
+}
+
+async fn fetch_ndjson_cached(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    cache: Option<&Cache>,
+) -> Result<Vec<u8>, Error> {
+    let Some(cache) = cache else {
+        return fetch_bytes_from_url(client, url)
+            .await
+            .map(|(content, _)| content);
+    };
+
+    let shard = versions_cache_shard(cache, url);
+    let _lock = shard
+        .lock()
+        .await
+        .map_err(|err| io::Error::other(format!("Failed to lock Python downloads cache: {err}")))?;
+    let (content_entry, meta_entry) = versions_cache_entries(&shard);
+    let cached = read_versions_cache(&content_entry, &meta_entry).await;
+    let source = url.to_string();
+
+    if client.connectivity().is_offline() {
+        if let Some((content, _)) = cached {
+            debug!("Using cached Python downloads metadata in offline mode");
+            return Ok(content);
+        }
+        return fetch_bytes_from_url(client, url)
+            .await
+            .map(|(content, _)| content);
+    }
+
+    if let Some((content, meta)) = &cached
+        && versions_cache_is_fresh(cache, url, meta)
+    {
+        debug!("Using fresh cached Python downloads metadata without revalidation");
+        return Ok(content.clone());
+    }
+
+    let head_result = client
+        .for_host(url)
+        .head(Url::from(url.clone()))
+        .send()
+        .await;
+    let head_response = match head_result {
+        Ok(response) => match response.error_for_status() {
+            Ok(response) => Some(response),
+            Err(err) => {
+                debug!("Failed to validate Python downloads metadata with HEAD request: {err}");
+                None
+            }
+        },
+        Err(err) => {
+            debug!("Failed to send HEAD request for Python downloads metadata: {err}");
+            None
+        }
+    };
+
+    let Some(head_response) = head_response else {
+        return match fetch_bytes_from_url(client, url).await {
+            Ok((content, etag)) => {
+                let meta = VersionsCacheMeta {
+                    content_length: content.len() as u64,
+                    etag,
+                    checked_at: Timestamp::now(),
+                };
+                write_versions_cache_if_valid(
+                    &content_entry,
+                    &meta_entry,
+                    &source,
+                    &content,
+                    &meta,
+                )
+                .await;
+                Ok(content)
+            }
+            Err(err) => {
+                if let Some((content, _)) = cached {
+                    debug!("Using stale cached Python downloads metadata after HEAD failure");
+                    Ok(content)
+                } else {
+                    Err(err)
+                }
+            }
+        };
+    };
+
+    let current_length = head_response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let current_etag = response_etag(&head_response);
+
+    if let Some((cached_content, cached_meta)) = &cached {
+        if current_etag.is_some() && current_etag == cached_meta.etag {
+            debug!("Using cached Python downloads metadata with matching ETag");
+            let meta = VersionsCacheMeta {
+                checked_at: Timestamp::now(),
+                ..cached_meta.clone()
+            };
+            if let Err(err) = write_versions_cache_meta(&meta_entry, &meta).await {
+                debug!("Failed to refresh Python downloads cache metadata: {err}");
+            }
+            return Ok(cached_content.clone());
+        }
+
+        if supports_incremental_versions_cache(url)
+            && let Some(current_length) = current_length
+            && current_length > cached_meta.content_length
+            && let Some(etag) = current_etag
+                .as_deref()
+                .filter(|etag| !etag.starts_with("W/"))
+        {
+            let delta_size = current_length - cached_meta.content_length;
+            let range_header = format!("bytes=0-{}", delta_size - 1);
+            let content_range = format!("bytes 0-{}/{current_length}", delta_size - 1);
+            let response = client
+                .for_host(url)
+                .get(Url::from(url.clone()))
+                .header(reqwest::header::RANGE, &range_header)
+                .header(reqwest::header::IF_MATCH, etag)
+                .send()
+                .await;
+            match response {
+                Ok(response)
+                    if response.status() == reqwest::StatusCode::PARTIAL_CONTENT
+                        && response
+                            .headers()
+                            .get(reqwest::header::CONTENT_RANGE)
+                            .and_then(|value| value.to_str().ok())
+                            == Some(content_range.as_str())
+                        && response
+                            .headers()
+                            .get(reqwest::header::ETAG)
+                            .and_then(|value| value.to_str().ok())
+                            == Some(etag) =>
+                {
+                    if let Ok(delta) = response.bytes().await
+                        && let Some(combined) = prepend_versions_cache_content(
+                            &source,
+                            cached_content,
+                            &delta,
+                            current_length,
+                        )
+                    {
+                        let meta = VersionsCacheMeta {
+                            content_length: current_length,
+                            etag: current_etag.clone(),
+                            checked_at: Timestamp::now(),
+                        };
+                        if let Err(err) =
+                            write_versions_cache(&content_entry, &meta_entry, &combined, &meta)
+                                .await
+                        {
+                            debug!("Failed to write cached Python downloads metadata: {err}");
+                        }
+                        return Ok(combined);
+                    }
+                    debug!("Python downloads metadata delta was incomplete or invalid");
+                }
+                Ok(_) => debug!(
+                    "Python downloads metadata server did not return the requested representation"
+                ),
+                Err(err) => debug!("Failed to fetch Python downloads metadata delta: {err}"),
+            }
+        }
+    }
+
+    match fetch_bytes_from_url(client, url).await {
+        Ok((content, etag)) => {
+            let meta = VersionsCacheMeta {
+                content_length: content.len() as u64,
+                etag,
+                checked_at: Timestamp::now(),
+            };
+            write_versions_cache_if_valid(&content_entry, &meta_entry, &source, &content, &meta)
+                .await;
+            Ok(content)
+        }
+        Err(err) => {
+            if let Some((content, _)) = cached {
+                debug!("Using stale cached Python downloads metadata after fetch failure");
+                Ok(content)
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 impl ManagedPythonDownloadList {
@@ -1034,48 +1665,32 @@ impl ManagedPythonDownloadList {
         Err(Error::NoDownloadFound(request.clone()))
     }
 
-    /// Load available Python distributions from a provided source or the compiled-in list.
+    /// Load available Python distributions from an explicit source or the embedded list.
     ///
-    /// Returns an error if the provided list could not be opened, if the JSON is invalid, or if it
-    /// does not parse into the expected data structure.
+    /// The remote metadata preview fetches the default NDJSON source when no explicit source is
+    /// provided. Implicit sources fall back to embedded metadata after a fetch or parse failure.
     pub async fn new(
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
         python_downloads_json_url: Option<&str>,
     ) -> Result<Self, Error> {
-        // file:// URLs are converted to local file reads, and we also support parsing bare
-        // filenames like "/tmp/py.json", not just "file:///tmp/py.json". Note that
-        // "C:\Temp\py.json" should be considered a filename, even though Url::parse would
-        // successfully misparse it as a URL with scheme "C".
-        enum Source<'a> {
-            BuiltIn,
-            Path(Cow<'a, Path>),
-            Http(DisplaySafeUrl),
-        }
-
-        let json_source = if let Some(url_or_path) = python_downloads_json_url {
-            if let Ok(url) = DisplaySafeUrl::parse(url_or_path) {
-                match url.scheme() {
-                    "http" | "https" => Source::Http(url),
-                    "file" => Source::Path(Cow::Owned(
-                        url.to_file_path().or(Err(Error::InvalidUrlFormat(url)))?,
-                    )),
-                    _ => Source::Path(Cow::Borrowed(Path::new(url_or_path))),
-                }
-            } else {
-                Source::Path(Cow::Borrowed(Path::new(url_or_path)))
-            }
-        } else {
-            Source::BuiltIn
+        let Some(source) = resolve_download_list_source(python_downloads_json_url)? else {
+            return Self::new_only_embedded();
         };
 
-        let json_downloads = match json_source {
-            Source::BuiltIn => parse_builtin_downloads()?,
-            Source::Path(ref path) => parse_downloads_json(
-                &fs_err::read(path.as_ref())?,
-                path.to_string_lossy().to_string(),
-            )?,
-            Source::Http(ref url) => {
+        let result = match (&source.location, source.format) {
+            (DownloadListLocation::Path(path), DownloadListFormat::Json) => {
+                fs_err::read(path.as_ref())
+                    .map_err(Error::from)
+                    .and_then(|bytes| parse_json_download_bytes(&path.to_string_lossy(), &bytes))
+            }
+            (DownloadListLocation::Path(path), DownloadListFormat::Ndjson) => {
+                fs_err::read(path.as_ref())
+                    .map_err(Error::from)
+                    .and_then(|bytes| parse_ndjson_bytes(&path.to_string_lossy(), &bytes))
+            }
+            (DownloadListLocation::Http(urls), DownloadListFormat::Json) => {
+                let url = &urls[0];
                 let client = CachedClient::new(
                     client_builder
                         .build()
@@ -1083,24 +1698,165 @@ impl ManagedPythonDownloadList {
                 );
                 fetch_downloads_from_url(&client, cache, url)
                     .await
-                    .map_err(|e| match e {
-                        e @ (Error::InvalidPythonDownloadsJSON(..)
-                        | Error::UnsupportedPythonDownloadsJSON(..)) => e,
-                        e => Error::FetchingPythonDownloadsJSONError(url.to_string(), Box::new(e)),
-                    })?
+                    .map(parse_json_downloads)
+            }
+            (DownloadListLocation::Http(urls), DownloadListFormat::Ndjson) => {
+                let client = client_builder
+                    .clone()
+                    .retries(0)
+                    .build()
+                    .map_err(|err| Error::ClientBuild(Box::new(err)))?;
+                fetch_with_url_fallback(
+                    urls,
+                    client_builder.retry_policy(),
+                    "Python download metadata",
+                    async |url| {
+                        let bytes = fetch_ndjson_cached(&client, &url, Some(cache)).await?;
+                        parse_ndjson_bytes(&url.to_string(), &bytes)
+                    },
+                )
+                .await
             }
         };
 
-        let downloads = parse_json_downloads(json_downloads);
+        let downloads = match result {
+            Ok(downloads) => source.merge_downloads(downloads, None, None)?,
+            Err(err) => source.on_error(err, embedded_downloads)?,
+        };
         Ok(Self { downloads })
+    }
+
+    /// Load matching Python distributions, stopping at `limit` for explicit NDJSON sources.
+    pub async fn new_filtered(
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        python_downloads_json_url: Option<&str>,
+        filter: Option<&PythonDownloadRequest>,
+        limit: Option<usize>,
+    ) -> Result<Self, Error> {
+        let Some(source) = resolve_download_list_source(python_downloads_json_url)? else {
+            return Ok(Self {
+                downloads: filter_downloads(embedded_downloads()?, filter, limit),
+            });
+        };
+        // Implicit metadata is merged with other implementations and deduplicated before limiting.
+        let parse_limit = if source.implicit { None } else { limit };
+        let predicate = |download: &ManagedPythonDownload| {
+            filter.is_none_or(|request| request.satisfied_by_download(download))
+        };
+        let result = match (&source.location, source.format) {
+            (DownloadListLocation::Path(path), DownloadListFormat::Ndjson) => {
+                fs_err::read(path.as_ref())
+                    .map_err(Error::from)
+                    .and_then(|bytes| {
+                        parse_ndjson_bytes_filtered(
+                            &path.to_string_lossy(),
+                            &bytes,
+                            predicate,
+                            parse_limit,
+                        )
+                    })
+            }
+            (DownloadListLocation::Http(urls), DownloadListFormat::Ndjson) => {
+                let client = client_builder
+                    .clone()
+                    .retries(0)
+                    .build()
+                    .map_err(|err| Error::ClientBuild(Box::new(err)))?;
+                fetch_with_url_fallback(
+                    urls,
+                    client_builder.retry_policy(),
+                    "Python download metadata",
+                    async |url| {
+                        if client.connectivity().is_offline() {
+                            let bytes = fetch_ndjson_cached(&client, &url, Some(cache)).await?;
+                            parse_ndjson_bytes_filtered(
+                                &url.to_string(),
+                                &bytes,
+                                predicate,
+                                parse_limit,
+                            )
+                        } else {
+                            fetch_ndjson_collect_streaming_cached(
+                                &client,
+                                &url,
+                                cache,
+                                predicate,
+                                parse_limit,
+                            )
+                            .await
+                        }
+                    },
+                )
+                .await
+            }
+            (
+                DownloadListLocation::Path(_) | DownloadListLocation::Http(_),
+                DownloadListFormat::Json,
+            ) => {
+                return Ok(Self {
+                    downloads: filter_downloads(
+                        Self::new(client_builder, cache, python_downloads_json_url)
+                            .await?
+                            .downloads,
+                        filter,
+                        limit,
+                    ),
+                });
+            }
+        };
+        let downloads = match result {
+            Ok(downloads) => source.merge_downloads(downloads, filter, limit)?,
+            Err(err) => source.on_error(err, || {
+                Ok(filter_downloads(embedded_downloads()?, filter, limit))
+            })?,
+        };
+        Ok(Self { downloads })
+    }
+
+    /// Find the first matching download in newest-first NDJSON metadata.
+    pub async fn find_streaming(
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
+        python_downloads_json_url: Option<&str>,
+        request: &PythonDownloadRequest,
+    ) -> Result<Option<ManagedPythonDownload>, Error> {
+        let Some(source) = resolve_download_list_source(python_downloads_json_url)? else {
+            return find_in_embedded_downloads_with_prereleases(request);
+        };
+        if source.format == DownloadListFormat::Json {
+            return match Self::new(client_builder, cache, python_downloads_json_url)
+                .await?
+                .find(request)
+            {
+                Ok(download) => Ok(Some(download.clone())),
+                Err(Error::NoDownloadFound(_)) => Ok(None),
+                Err(err) => Err(err),
+            };
+        }
+        if let Some(download) =
+            find_matching_download(client_builder, &source, cache, request).await?
+        {
+            return Ok(Some(download));
+        }
+        if request.allows_prereleases() {
+            return Ok(None);
+        }
+        find_matching_download(
+            client_builder,
+            &source,
+            cache,
+            &request.clone().with_prereleases(true),
+        )
+        .await
     }
 
     /// Load available Python distributions from the compiled-in list only.
     /// for testing purposes.
     pub fn new_only_embedded() -> Result<Self, Error> {
-        let json_downloads = parse_builtin_downloads()?;
-        let result = parse_json_downloads(json_downloads);
-        Ok(Self { downloads: result })
+        Ok(Self {
+            downloads: embedded_downloads()?,
+        })
     }
 }
 
@@ -1188,8 +1944,137 @@ async fn fetch_downloads_from_url(
         })
 }
 
+fn embedded_non_cpython_downloads() -> Result<Vec<ManagedPythonDownload>, Error> {
+    Ok(embedded_downloads()?
+        .into_iter()
+        .filter(|download| {
+            !matches!(
+                download.key().implementation().as_ref(),
+                LenientImplementationName::Known(ImplementationName::CPython)
+            )
+        })
+        .collect())
+}
+
+fn merge_with_embedded_non_cpython(
+    downloads: Vec<ManagedPythonDownload>,
+    filter: Option<&PythonDownloadRequest>,
+    limit: Option<usize>,
+) -> Result<Vec<ManagedPythonDownload>, Error> {
+    let mut merged = BTreeMap::new();
+
+    for download in downloads {
+        merged.entry(download.key().clone()).or_insert(download);
+    }
+
+    for download in filter_downloads(embedded_non_cpython_downloads()?, filter, None) {
+        merged.entry(download.key().clone()).or_insert(download);
+    }
+
+    let mut downloads = merged.into_values().collect::<Vec<_>>();
+    downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+
+    if let Some(limit) = limit {
+        downloads.truncate(limit);
+    }
+
+    Ok(downloads)
+}
+
+fn find_in_embedded_non_cpython(
+    request: &PythonDownloadRequest,
+) -> Result<Option<ManagedPythonDownload>, Error> {
+    Ok(embedded_non_cpython_downloads()?
+        .into_iter()
+        .find(|download| request.satisfied_by_download(download)))
+}
+
+fn find_in_embedded_downloads(
+    request: &PythonDownloadRequest,
+) -> Result<Option<ManagedPythonDownload>, Error> {
+    Ok(embedded_downloads()?
+        .into_iter()
+        .find(|download| request.satisfied_by_download(download)))
+}
+
+fn filter_downloads(
+    mut downloads: Vec<ManagedPythonDownload>,
+    filter: Option<&PythonDownloadRequest>,
+    limit: Option<usize>,
+) -> Vec<ManagedPythonDownload> {
+    if let Some(filter) = filter {
+        downloads.retain(|download| filter.satisfied_by_download(download));
+    }
+
+    if let Some(limit) = limit {
+        downloads.truncate(limit);
+    }
+
+    downloads
+}
+
+fn find_matching_or_implicit_embedded(
+    source: &DownloadListSource<'_>,
+    download: Option<ManagedPythonDownload>,
+    request: &PythonDownloadRequest,
+) -> Result<Option<ManagedPythonDownload>, Error> {
+    match download {
+        Some(download) => Ok(Some(download)),
+        None => source.find_in_implicit_embedded_non_cpython(request),
+    }
+}
+
+fn find_in_embedded_downloads_with_prereleases(
+    request: &PythonDownloadRequest,
+) -> Result<Option<ManagedPythonDownload>, Error> {
+    match ManagedPythonDownloadList::new_only_embedded()?.find(request) {
+        Ok(download) => Ok(Some(download.clone())),
+        Err(Error::NoDownloadFound(_)) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+async fn find_matching_download(
+    client_builder: &BaseClientBuilder<'_>,
+    source: &DownloadListSource<'_>,
+    cache: &Cache,
+    request: &PythonDownloadRequest,
+) -> Result<Option<ManagedPythonDownload>, Error> {
+    let predicate = |download: &ManagedPythonDownload| request.satisfied_by_download(download);
+    let result = match &source.location {
+        DownloadListLocation::Path(path) => fs_err::read(path.as_ref())
+            .map_err(Error::from)
+            .and_then(|bytes| parse_ndjson_bytes_find(&path.to_string_lossy(), &bytes, predicate)),
+        DownloadListLocation::Http(urls) => {
+            let client = client_builder
+                .clone()
+                .retries(0)
+                .build()
+                .map_err(|err| Error::ClientBuild(Box::new(err)))?;
+            fetch_with_url_fallback(
+                urls,
+                client_builder.retry_policy(),
+                "Python download metadata",
+                async |url| {
+                    if client.connectivity().is_offline() {
+                        let bytes = fetch_ndjson_cached(&client, &url, Some(cache)).await?;
+                        parse_ndjson_bytes_find(&url.to_string(), &bytes, predicate)
+                    } else {
+                        fetch_ndjson_find_cached(&client, &url, cache, predicate).await
+                    }
+                },
+            )
+            .await
+        }
+    };
+    match result {
+        Ok(download) => find_matching_or_implicit_embedded(source, download, request),
+        Err(err) => source.on_error(err, || find_in_embedded_downloads(request)),
+    }
+}
+
 impl ManagedPythonDownload {
-    pub(crate) fn url(&self) -> &Cow<'static, str> {
+    pub fn url(&self) -> &Cow<'static, str> {
         &self.url
     }
 
@@ -1201,7 +2086,7 @@ impl ManagedPythonDownload {
         self.key.os()
     }
 
-    pub(crate) fn sha256(&self) -> Option<&Digest<32>> {
+    pub fn sha256(&self) -> Option<&Digest<32>> {
         self.sha256.as_ref()
     }
 
@@ -1729,6 +2614,456 @@ fn parse_json_downloads(
         .collect()
 }
 
+fn embedded_downloads() -> Result<Vec<ManagedPythonDownload>, Error> {
+    Ok(parse_json_downloads(parse_builtin_downloads()?))
+}
+
+fn parse_json_download_bytes(
+    source: &str,
+    buf: &[u8],
+) -> Result<Vec<ManagedPythonDownload>, Error> {
+    Ok(parse_json_downloads(parse_downloads_json(
+        buf,
+        source.to_owned(),
+    )?))
+}
+
+fn parse_version_with_build(s: &str) -> Result<(PythonVersion, Option<&str>), Error> {
+    if let Some((version_str, build)) = s.split_once('+') {
+        let version = PythonVersion::from_str(version_str)
+            .map_err(|_| Error::InvalidPythonVersion(s.to_string()))?;
+        Ok((version, Some(build)))
+    } else {
+        let version =
+            PythonVersion::from_str(s).map_err(|_| Error::InvalidPythonVersion(s.to_string()))?;
+        Ok((version, None))
+    }
+}
+
+/// Parse one NDJSON version record into managed downloads, selecting the best
+/// artifact for each platform and [`PythonVariant`].
+fn parse_ndjson_version_info(version_info: NdjsonPythonVersionInfo) -> Vec<ManagedPythonDownload> {
+    let (version, build) = match parse_version_with_build(&version_info.version) {
+        Ok((version, build)) => (version, build),
+        Err(err) => {
+            debug!(
+                "Skipping NDJSON entry: invalid version '{}' - {}",
+                version_info.version, err
+            );
+            return Vec::new();
+        }
+    };
+
+    let release = build.and_then(|value| value.parse::<u64>().ok());
+    let build = build.map(|value| Box::leak(value.to_owned().into_boxed_str()) as &'static str);
+
+    let mut artifacts = version_info.artifacts;
+    // Match the built-in metadata generator's deterministic tie-breaker when two artifacts have
+    // the same platform, variant, and priority.
+    artifacts.sort_by(|a, b| a.url.cmp(&b.url));
+
+    let mut selected = BTreeMap::new();
+    for artifact in artifacts {
+        let Some((download, priority)) = parse_ndjson_artifact(&version, build, release, artifact)
+        else {
+            continue;
+        };
+        let key = (download.key().platform().clone(), *download.key().variant());
+
+        // Collapse duplicate artifacts for the same platform and variant to
+        // the preferred flavor/build-option combination.
+        if let Some((existing_download, existing_priority)) = selected.get(&key)
+            && priority >= *existing_priority
+        {
+            debug!(
+                "Skipping NDJSON artifact {} (priority {:?}): lower priority than {} (priority {:?})",
+                download, priority, existing_download, existing_priority
+            );
+            continue;
+        }
+
+        selected.insert(key, (download, priority));
+    }
+
+    selected
+        .into_values()
+        .map(|(download, _priority)| download)
+        .collect()
+}
+
+fn parse_ndjson_artifact(
+    version: &PythonVersion,
+    build: Option<&'static str>,
+    release: Option<u64>,
+    artifact: NdjsonPythonArtifact,
+) -> Option<(ManagedPythonDownload, (usize, i8))> {
+    let (platform, mut build_options) = parse_ndjson_platform(&artifact.platform)?;
+    let (flavor, variant_build_options) = parse_ndjson_artifact_variant(&artifact.variant);
+    build_options.extend(variant_build_options);
+
+    if build_options.contains(&"static") {
+        debug!("Skipping NDJSON artifact: static builds are unsupported");
+        return None;
+    }
+
+    if release.is_some_and(|release| release < CPYTHON_MUSL_STATIC_RELEASE_END)
+        && matches!(platform.libc, Libc::Some(target_lexicon::Environment::Musl))
+    {
+        return None;
+    }
+
+    let variant = python_variant_from_ndjson_build_options(&build_options);
+    let priority = ndjson_artifact_priority(flavor, &build_options);
+
+    Some((
+        ManagedPythonDownload {
+            key: PythonInstallationKey::new_from_version(
+                LenientImplementationName::Known(ImplementationName::CPython),
+                version,
+                platform,
+                variant,
+            ),
+            url: Cow::Owned(artifact.url),
+            sha256: artifact.sha256,
+            build,
+        },
+        priority,
+    ))
+}
+
+fn parse_ndjson_platform(platform: &str) -> Option<(Platform, Vec<&str>)> {
+    let mut platform = platform;
+    let mut build_options = Vec::new();
+
+    for (suffix, build_option) in [("-debug", "debug"), ("-freethreaded", "freethreaded")] {
+        if let Some(stripped) = platform.strip_suffix(suffix) {
+            platform = stripped;
+            build_options.push(build_option);
+        }
+    }
+
+    let platform = match Platform::from_cargo_dist_triple(platform) {
+        Ok(platform) => platform,
+        Err(err) => {
+            debug!(
+                "Skipping NDJSON artifact: invalid platform '{}' - {}",
+                platform, err
+            );
+            return None;
+        }
+    };
+
+    Some((platform, build_options))
+}
+
+fn parse_ndjson_artifact_variant(variant: &str) -> (&str, Vec<&str>) {
+    let mut parts = Vec::new();
+    for part in variant.split('+') {
+        match part {
+            "shared-freethreaded" => parts.extend(["shared", "freethreaded"]),
+            "shared-noopt" => parts.extend(["shared", "noopt"]),
+            "shared-pgo" => parts.extend(["shared", "pgo"]),
+            "static-noopt" => parts.extend(["static", "noopt"]),
+            part => parts.push(part),
+        }
+    }
+    if parts
+        .last()
+        .is_some_and(|flavor| NDJSON_KNOWN_FLAVORS.contains(flavor))
+        && let Some(flavor) = parts.pop()
+    {
+        (flavor, parts)
+    } else {
+        (variant, Vec::new())
+    }
+}
+
+fn python_variant_from_ndjson_build_options(build_options: &[&str]) -> PythonVariant {
+    let debug = build_options.contains(&"debug");
+    let freethreaded = build_options.contains(&"freethreaded");
+
+    match (debug, freethreaded) {
+        (true, true) => PythonVariant::FreethreadedDebug,
+        (true, false) => PythonVariant::Debug,
+        (false, true) => PythonVariant::Freethreaded,
+        (false, false) => PythonVariant::default(),
+    }
+}
+
+fn ndjson_artifact_priority(flavor: &str, build_options: &[&str]) -> (usize, i8) {
+    let flavor_priority = NDJSON_FLAVOR_PREFERENCES
+        .iter()
+        .position(|preference| *preference == flavor)
+        .unwrap_or(NDJSON_FLAVOR_PREFERENCES.len() + 1);
+
+    let build_option_priority = -i8::from(build_options.contains(&"lto"))
+        - i8::from(build_options.contains(&"pgo"))
+        - i8::from(!build_options.contains(&"static"));
+
+    (flavor_priority, build_option_priority)
+}
+
+fn parse_ndjson_line(source: &str, line: &[u8]) -> Result<NdjsonPythonVersionInfo, Error> {
+    let line_str = std::str::from_utf8(line).map_err(|_| {
+        Error::InvalidPythonDownloadsNdjsonLine(
+            source.to_owned(),
+            serde_json::from_str::<()>("invalid utf8").unwrap_err(),
+        )
+    })?;
+    serde_json::from_str(line_str)
+        .map_err(|err| Error::InvalidPythonDownloadsNdjsonLine(source.to_owned(), err))
+}
+
+fn visit_ndjson_line<T>(
+    source: &str,
+    line: &[u8],
+    visitor: &mut impl FnMut(ManagedPythonDownload) -> ControlFlow<T, ()>,
+) -> Result<Option<T>, Error> {
+    if line.is_empty() || line.iter().all(u8::is_ascii_whitespace) {
+        return Ok(None);
+    }
+
+    let version_info = parse_ndjson_line(source, line)?;
+    for download in parse_ndjson_version_info(version_info) {
+        if let ControlFlow::Break(value) = visitor(download) {
+            return Ok(Some(value));
+        }
+    }
+
+    Ok(None)
+}
+
+fn parse_ndjson_bytes_with<T>(
+    source: &str,
+    buf: &[u8],
+    mut visitor: impl FnMut(ManagedPythonDownload) -> ControlFlow<T, ()>,
+) -> Result<Option<T>, Error> {
+    for line in buf.split(|byte| *byte == b'\n') {
+        if let Some(value) = visit_ndjson_line(source, line, &mut visitor)? {
+            return Ok(Some(value));
+        }
+    }
+
+    Ok(None)
+}
+
+fn parse_ndjson_bytes(source: &str, buf: &[u8]) -> Result<Vec<ManagedPythonDownload>, Error> {
+    let mut downloads = Vec::new();
+    parse_ndjson_bytes_with(source, buf, |download| {
+        downloads.push(download);
+        ControlFlow::<()>::Continue(())
+    })?;
+    downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+    Ok(downloads)
+}
+
+fn parse_ndjson_bytes_filtered(
+    source: &str,
+    buf: &[u8],
+    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+    limit: Option<usize>,
+) -> Result<Vec<ManagedPythonDownload>, Error> {
+    let mut downloads = Vec::new();
+    parse_ndjson_bytes_with(source, buf, |download| {
+        if predicate(&download) {
+            downloads.push(download);
+            if limit.is_some_and(|limit| downloads.len() >= limit) {
+                return ControlFlow::Break(());
+            }
+        }
+        ControlFlow::Continue(())
+    })?;
+    downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+    Ok(downloads)
+}
+
+fn parse_ndjson_bytes_find(
+    source: &str,
+    buf: &[u8],
+    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+) -> Result<Option<ManagedPythonDownload>, Error> {
+    parse_ndjson_bytes_with(source, buf, |download| {
+        if predicate(&download) {
+            ControlFlow::Break(download)
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+}
+
+async fn fetch_ndjson_streaming<T>(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    mut visitor: impl FnMut(ManagedPythonDownload) -> ControlFlow<T, ()>,
+) -> Result<Option<T>, Error> {
+    let source = url.to_string();
+    let (reader, _) = read_url(url, client).await?;
+    let mut reader = BufReader::new(reader);
+    let mut line = Vec::new();
+
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).await? == 0 {
+            break;
+        }
+
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        }
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+
+        if let Some(value) = visit_ndjson_line(&source, &line, &mut visitor)? {
+            return Ok(Some(value));
+        }
+    }
+
+    Ok(None)
+}
+
+async fn fetch_ndjson_find(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+) -> Result<Option<ManagedPythonDownload>, Error> {
+    fetch_ndjson_streaming(client, url, |download| {
+        if predicate(&download) {
+            ControlFlow::Break(download)
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+    .await
+}
+
+async fn fetch_ndjson_find_cached(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    cache: &Cache,
+    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+) -> Result<Option<ManagedPythonDownload>, Error> {
+    let source = url.to_string();
+    let cached = read_versions_cache_content(cache, url).await;
+    if let Some((content, meta)) = &cached
+        && versions_cache_is_fresh(cache, url, meta)
+    {
+        return parse_ndjson_bytes_find(&source, content, predicate);
+    }
+
+    if let Some((content, meta)) = &cached {
+        let etag = fetch_versions_cache_etag(client, url).await;
+        if etag.is_some() && etag == meta.etag {
+            refresh_versions_cache_meta(cache, url, meta).await;
+            return parse_ndjson_bytes_find(&source, content, predicate);
+        }
+    }
+
+    match fetch_ndjson_find(client, url, &predicate).await {
+        Ok(download) => Ok(download),
+        Err(err @ Error::InvalidPythonDownloadsNdjsonLine(..)) => Err(err),
+        Err(err) => {
+            if let Some((content, _)) = cached {
+                debug!("Using stale cached Python downloads metadata after fetch failure");
+                return parse_ndjson_bytes_find(&source, &content, predicate);
+            }
+            Err(err)
+        }
+    }
+}
+
+async fn fetch_ndjson_collect_streaming_cached(
+    client: &BaseClient,
+    url: &DisplaySafeUrl,
+    cache: &Cache,
+    predicate: impl Fn(&ManagedPythonDownload) -> bool,
+    limit: Option<usize>,
+) -> Result<Vec<ManagedPythonDownload>, Error> {
+    let source = url.to_string();
+    let cached = read_versions_cache_content(cache, url).await;
+    if let Some((content, meta)) = &cached
+        && versions_cache_is_fresh(cache, url, meta)
+    {
+        return parse_ndjson_bytes_filtered(&source, content, predicate, limit);
+    }
+
+    let etag = fetch_versions_cache_etag(client, url).await;
+    if let Some((content, meta)) = &cached
+        && etag.is_some()
+        && etag == meta.etag
+    {
+        refresh_versions_cache_meta(cache, url, meta).await;
+        return parse_ndjson_bytes_filtered(&source, content, predicate, limit);
+    }
+
+    let response = match fetch_http_response(client, url).await {
+        Ok(response) => response,
+        Err(err) => {
+            if let Some((content, _)) = cached {
+                debug!("Using stale cached Python downloads metadata after fetch failure");
+                return parse_ndjson_bytes_filtered(&source, &content, predicate, limit);
+            }
+            return Err(err);
+        }
+    };
+    let etag = response_etag(&response);
+    let reader = response
+        .bytes_stream()
+        .map_err(io::Error::other)
+        .into_async_read()
+        .compat();
+    let mut reader = BufReader::new(reader);
+    let mut line = Vec::new();
+    let mut content = Vec::new();
+    let mut downloads = Vec::new();
+    let mut completed = true;
+    let mut visitor = |download| {
+        if predicate(&download) {
+            downloads.push(download);
+            if limit.is_some_and(|limit| downloads.len() >= limit) {
+                return ControlFlow::Break(());
+            }
+        }
+        ControlFlow::Continue(())
+    };
+
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line).await {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(err) => {
+                if let Some((content, _)) = cached {
+                    debug!("Using stale cached Python downloads metadata after fetch failure");
+                    return parse_ndjson_bytes_filtered(&source, &content, predicate, limit);
+                }
+                return Err(err.into());
+            }
+        }
+
+        content.extend_from_slice(&line);
+
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        }
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+
+        if visit_ndjson_line(&source, &line, &mut visitor)?.is_some() {
+            completed = false;
+            break;
+        }
+    }
+
+    if completed {
+        write_streamed_versions_cache_if_valid(cache, url, &source, &content, etag).await;
+    }
+
+    downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+    Ok(downloads)
+}
+
 impl Error {
     fn from_reqwest(
         url: DisplaySafeUrl,
@@ -1835,6 +3170,23 @@ where
 }
 
 /// Convert a [`Url`] into an [`AsyncRead`] stream.
+async fn fetch_http_response(client: &BaseClient, url: &DisplaySafeUrl) -> Result<Response, Error> {
+    let start = Instant::now();
+    let response = client
+        .for_host(url)
+        .get(Url::from(url.clone()))
+        .send()
+        .await
+        .map_err(|err| Error::from_reqwest_middleware(url.clone(), err))?;
+    let retry_count = response
+        .extensions()
+        .get::<reqwest_retry::RetryCount>()
+        .map(|retries| retries.value());
+    response
+        .error_for_status()
+        .map_err(|err| Error::from_reqwest(url.clone(), err, retry_count, start))
+}
+
 async fn read_url(
     url: &DisplaySafeUrl,
     client: &BaseClient,
@@ -1850,24 +3202,7 @@ async fn read_url(
 
         Ok((Either::Left(reader), Some(size)))
     } else {
-        let start = Instant::now();
-        let response = client
-            .for_host(url)
-            .get(Url::from(url.clone()))
-            .send()
-            .await
-            .map_err(|err| Error::from_reqwest_middleware(url.clone(), err))?;
-
-        let retry_count = response
-            .extensions()
-            .get::<reqwest_retry::RetryCount>()
-            .map(|retries| retries.value());
-
-        // Check the status code.
-        let response = response
-            .error_for_status()
-            .map_err(|err| Error::from_reqwest(url.clone(), err, retry_count, start))?;
-
+        let response = fetch_http_response(client, url).await?;
         let size = response.content_length();
         let stream = response
             .bytes_stream()
@@ -1882,13 +3217,33 @@ async fn read_url(
 mod tests {
     use std::assert_matches;
     use std::collections::HashSet;
+    use std::io::{BufRead, Write};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration as StdDuration;
 
     use crate::PythonVariant;
     use crate::implementation::LenientImplementationName;
     use crate::installation::PythonInstallationKey;
+    use uv_client::BaseClientBuilder;
     use uv_platform::{Arch, Libc, Os, Platform};
 
     use super::*;
+
+    fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        // Accepted sockets can inherit the listener's nonblocking mode on Windows.
+        stream.set_nonblocking(false).unwrap();
+        let mut reader = std::io::BufReader::new(stream);
+        let mut request = String::new();
+        loop {
+            let start = request.len();
+            if reader.read_line(&mut request).unwrap() == 0
+                || matches!(&request[start..], "\r\n" | "\n")
+            {
+                return request;
+            }
+        }
+    }
 
     /// Parse a request with all of its fields.
     #[test]
@@ -2104,11 +3459,7 @@ mod tests {
             .with_implementation(ImplementationName::CPython);
         request.build = Some("20240814".to_string());
 
-        let client_builder = uv_client::BaseClientBuilder::default();
-        let cache = uv_cache::Cache::temp().expect("failed to create temp cache");
-        let download_list = ManagedPythonDownloadList::new(&client_builder, &cache, None)
-            .await
-            .unwrap();
+        let download_list = ManagedPythonDownloadList::new_only_embedded().unwrap();
 
         let downloads: Vec<_> = download_list
             .iter_all()
@@ -2133,11 +3484,7 @@ mod tests {
             .with_implementation(ImplementationName::CPython);
         request.build = Some("99999999".to_string());
 
-        let client_builder = uv_client::BaseClientBuilder::default();
-        let cache = uv_cache::Cache::temp().expect("failed to create temp cache");
-        let download_list = ManagedPythonDownloadList::new(&client_builder, &cache, None)
-            .await
-            .unwrap();
+        let download_list = ManagedPythonDownloadList::new_only_embedded().unwrap();
 
         // Should find no matching downloads
         let downloads: Vec<_> = download_list
@@ -2148,6 +3495,655 @@ mod tests {
         assert_eq!(downloads.len(), 0);
     }
 
+    #[test]
+    fn parse_ndjson_bytes_filtered_applies_limit() {
+        let ndjson = br#"{"version":"3.14.1+20260420","artifacts":[{"url":"https://example.com/cpython-3.14.1-aarch64-apple-darwin.tar.gz","platform":"aarch64-apple-darwin","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+{"version":"3.13.2","artifacts":[{"url":"https://example.com/cpython-3.13.2-aarch64-apple-darwin.tar.gz","platform":"aarch64-apple-darwin","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only"}]}
+"#;
+
+        let downloads = parse_ndjson_bytes_filtered("test.ndjson", ndjson, |_| true, Some(1))
+            .expect("NDJSON should parse");
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].key().version().to_string(), "3.14.1");
+        assert_eq!(downloads[0].build(), Some("20260420"));
+    }
+
+    #[test]
+    fn parse_ndjson_bytes_find_returns_first_match() {
+        let ndjson = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/cpython-3.14.1-aarch64-apple-darwin.tar.gz","platform":"aarch64-apple-darwin","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+{"version":"3.13.2","artifacts":[{"url":"https://example.com/cpython-3.13.2-aarch64-apple-darwin.tar.gz","platform":"aarch64-apple-darwin","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only"}]}
+"#;
+
+        let download = parse_ndjson_bytes_find("test.ndjson", ndjson, |download| {
+            download.key().version().to_string() == "3.13.2"
+        })
+        .expect("NDJSON should parse")
+        .expect("matching download should be found");
+
+        assert_eq!(download.key().version().to_string(), "3.13.2");
+        assert_eq!(
+            download.url().as_ref(),
+            "https://example.com/cpython-3.13.2-aarch64-apple-darwin.tar.gz"
+        );
+    }
+
+    #[test]
+    fn parse_ndjson_bytes_matches_generator_artifact_selection() {
+        let ndjson = br#"{"version":"3.14.1+20260420","artifacts":[{"url":"https://example.com/cpython-3.14.1-aarch64-apple-darwin-install_only.tar.gz","platform":"aarch64-apple-darwin","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"},{"url":"https://example.com/cpython-3.14.1-aarch64-apple-darwin-install_only_stripped.tar.gz","platform":"aarch64-apple-darwin","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only_stripped"}]}
+{"version":"3.10.0+20211017","artifacts":[{"url":"https://example.com/cpython-3.10.0-x86_64-unknown-linux-gnu-pgo-lto-full.tar.zst","platform":"x86_64-unknown-linux-gnu","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","variant":"pgo+lto+full"}]}
+"#;
+
+        let downloads = parse_ndjson_bytes("test.ndjson", ndjson).expect("NDJSON should parse");
+        let downloads = downloads
+            .iter()
+            .map(|download| (download.key().to_string(), download.url().as_ref()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            downloads,
+            vec![
+                (
+                    "cpython-3.14.1-macos-aarch64-none".to_string(),
+                    "https://example.com/cpython-3.14.1-aarch64-apple-darwin-install_only_stripped.tar.gz",
+                ),
+                (
+                    "cpython-3.10.0-linux-x86_64-gnu".to_string(),
+                    "https://example.com/cpython-3.10.0-x86_64-unknown-linux-gnu-pgo-lto-full.tar.zst",
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_ndjson_bytes_accepts_powerpc_manifest_alias() {
+        let ndjson = br#"{"version":"3.13.2","artifacts":[{"url":"https://example.com/cpython-3.13.2-ppc64le-unknown-linux-gnu-install_only.tar.gz","platform":"ppc64le-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+"#;
+
+        let downloads = parse_ndjson_bytes("test.ndjson", ndjson).expect("NDJSON should parse");
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].key().to_string(),
+            "cpython-3.13.2-linux-powerpc64le-gnu"
+        );
+    }
+
+    #[test]
+    fn parse_ndjson_bytes_splits_compound_variant_tokens() {
+        let ndjson = br#"{"version":"3.15.0b1","artifacts":[{"url":"https://example.com/cpython-3.15.0b1-x86_64-pc-windows-msvc-shared-freethreaded-pgo-full.tar.zst","platform":"x86_64-pc-windows-msvc","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"shared-freethreaded+pgo+full"},{"url":"https://example.com/cpython-3.15.0b1-x86_64-pc-windows-msvc-install_only.tar.gz","platform":"x86_64-pc-windows-msvc","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only"}]}
+"#;
+
+        let downloads = parse_ndjson_bytes("test.ndjson", ndjson).expect("NDJSON should parse");
+
+        assert!(downloads.iter().any(|download| {
+            download.key().to_string() == "cpython-3.15.0b1+freethreaded-windows-x86_64-none"
+        }));
+    }
+
+    #[test]
+    fn parse_ndjson_bytes_skips_compound_static_variant_tokens() {
+        let ndjson = br#"{"version":"3.12.13","artifacts":[{"url":"https://example.com/cpython-3.12.13-x86_64-unknown-linux-musl-static-noopt-full.tar.zst","platform":"x86_64-unknown-linux-musl","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"static-noopt+full"}]}
+"#;
+
+        let downloads = parse_ndjson_bytes("test.ndjson", ndjson).expect("NDJSON should parse");
+
+        assert!(downloads.is_empty());
+    }
+
+    #[test]
+    fn versions_cache_shard_key_hashes_unredacted_url() {
+        let url_a = DisplaySafeUrl::parse("https://user:tokenA@example.com/versions.ndjson")
+            .expect("URL should parse");
+        let url_b = DisplaySafeUrl::parse("https://user:tokenB@example.com/versions.ndjson")
+            .expect("URL should parse");
+
+        assert_eq!(url_a.to_string(), url_b.to_string());
+        assert_ne!(
+            versions_cache_shard_key(&url_a),
+            versions_cache_shard_key(&url_b)
+        );
+    }
+
+    #[test]
+    fn python_metadata_mirror_urls() -> Result<(), Error> {
+        let urls = python_download_metadata_urls(None)?;
+        assert_eq!(urls.len(), 2);
+        assert_eq!(
+            urls[0].as_str(),
+            "https://releases.astral.sh/github/versions/main/v1/python-build-standalone.ndjson"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://raw.githubusercontent.com/astral-sh/versions/refs/heads/main/v1/python-build-standalone.ndjson"
+        );
+
+        let urls = python_download_metadata_urls(Some("https://example.com/mirror/"))?;
+        assert_eq!(urls.len(), 1);
+        assert_eq!(
+            urls[0].as_str(),
+            "https://example.com/mirror/github/versions/main/v1/python-build-standalone.ndjson"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_ndjson_bytes_rejects_invalid_digest() {
+        let ndjson = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/python.tar.gz","platform":"aarch64-apple-darwin","sha256":"abc123","variant":"install_only"}]}"#;
+        assert_matches!(
+            parse_ndjson_bytes("test.ndjson", ndjson),
+            Err(Error::InvalidPythonDownloadsNdjsonLine(..))
+        );
+    }
+
+    #[test]
+    fn implicit_ndjson_merge_respects_platform_filter() {
+        let request = PythonDownloadRequest::from_str("cpython-3.14-macos-aarch64-none")
+            .unwrap()
+            .with_prereleases(true);
+        assert_eq!(request.implementation(), Some(&ImplementationName::CPython));
+        assert!(
+            merge_with_embedded_non_cpython(Vec::new(), Some(&request), None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn versions_cache_records_get_etag() {
+        let content = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
+        for streaming in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                for method in ["HEAD", "GET"] {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let request = read_http_request(&mut stream);
+                    assert!(request.starts_with(method));
+                    let etag = if method == "HEAD" { "old" } else { "new" };
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nETag: \"{etag}\"\r\nContent-Length: {}\r\n\r\n",
+                        content.len()
+                    )
+                    .unwrap();
+                    if method == "GET" {
+                        stream.write_all(content).unwrap();
+                    }
+                }
+            });
+            let cache = Cache::temp().unwrap().init().await.unwrap();
+            let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+            let client = BaseClientBuilder::default().retries(0).build().unwrap();
+            if streaming {
+                fetch_ndjson_collect_streaming_cached(&client, &url, &cache, |_| true, None)
+                    .await
+                    .unwrap();
+            } else {
+                assert_eq!(
+                    fetch_ndjson_cached(&client, &url, Some(&cache))
+                        .await
+                        .unwrap(),
+                    content
+                );
+            }
+            let (cached, meta) = read_versions_cache_content(&cache, &url).await.unwrap();
+            assert_eq!(cached, content);
+            assert_eq!(meta.etag.as_deref(), Some("\"new\""));
+            server.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn versions_cache_refresh_does_not_overwrite_newer_metadata() {
+        let content = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
+        let cache = Cache::temp().unwrap().init().await.unwrap();
+        let url = DisplaySafeUrl::parse("https://example.com/versions.ndjson").unwrap();
+        let shard = versions_cache_shard(&cache, &url);
+        let (content_entry, meta_entry) = versions_cache_entries(&shard);
+        let old = VersionsCacheMeta {
+            content_length: content.len() as u64,
+            etag: Some("\"old\"".to_string()),
+            checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+        };
+        let new = VersionsCacheMeta {
+            etag: Some("\"new\"".to_string()),
+            ..old.clone()
+        };
+        write_versions_cache(&content_entry, &meta_entry, content, &new)
+            .await
+            .unwrap();
+        refresh_versions_cache_meta(&cache, &url, &old).await;
+        let (_, current) = read_versions_cache_content(&cache, &url).await.unwrap();
+        assert_eq!(current, new);
+    }
+
+    #[tokio::test]
+    async fn versions_cache_respects_refresh_policy() {
+        let content = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
+        let cache = Cache::temp().unwrap().init().await.unwrap();
+        let url = DisplaySafeUrl::parse("https://example.com/versions.ndjson").unwrap();
+        let shard = versions_cache_shard(&cache, &url);
+        let (content_entry, meta_entry) = versions_cache_entries(&shard);
+        let meta = VersionsCacheMeta {
+            content_length: content.len() as u64,
+            etag: None,
+            checked_at: Timestamp::now(),
+        };
+        write_versions_cache(&content_entry, &meta_entry, content, &meta)
+            .await
+            .unwrap();
+        assert!(versions_cache_is_fresh(&cache, &url, &meta));
+
+        let refresh = uv_cache::Refresh::All(Timestamp::from(
+            SystemTime::now() + StdDuration::from_secs(1),
+        ));
+        assert!(!versions_cache_is_fresh(
+            &cache.with_refresh(refresh),
+            &url,
+            &meta
+        ));
+    }
+
+    #[test]
+    fn versions_cache_delta_requires_complete_records() {
+        let existing = b"{\"version\":\"3.14.0\",\"artifacts\":[]}\n";
+        let new = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
+        let length = (existing.len() + new.len()) as u64;
+        assert_eq!(
+            prepend_versions_cache_content("test", existing, new, length),
+            Some([new.as_slice(), existing.as_slice()].concat())
+        );
+        assert!(prepend_versions_cache_content("test", existing, new, length + 1).is_none());
+        assert!(
+            prepend_versions_cache_content("test", existing, &new[..new.len() - 1], length - 1)
+                .is_none()
+        );
+        assert!(
+            prepend_versions_cache_content("test", existing, b"{\n", existing.len() as u64 + 2)
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn find_streaming_with_cache_returns_before_body_stream_failure() {
+        let first_line = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/cpython-3.14.1-x86_64-unknown-linux-gnu.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+"#;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _request = read_http_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:X}\r\n",
+                first_line.len()
+            )
+            .unwrap();
+            stream.write_all(first_line).unwrap();
+            stream.write_all(b"\r\nZZZ\r\n").unwrap();
+        });
+
+        let cache = Cache::temp().unwrap().init().await.unwrap();
+        let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu").unwrap();
+        let download = ManagedPythonDownloadList::find_streaming(
+            &BaseClientBuilder::default().retries(0),
+            &cache,
+            Some(&format!("http://{address}/versions.ndjson")),
+            &request,
+        )
+        .await
+        .unwrap()
+        .expect("matching download should be found");
+
+        assert_eq!(download.key().version().to_string(), "3.14.1");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn custom_ndjson_cache_revalidates_without_etag_even_when_length_matches() {
+        let cached = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/token-a.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+"#;
+        let refreshed = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/token-b.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+"#;
+        assert_eq!(cached.len(), refreshed.len());
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let get_requests = Arc::new(AtomicUsize::new(0));
+        let get_requests_server = Arc::clone(&get_requests);
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let request = read_http_request(&mut stream);
+                        if request.starts_with("HEAD ") {
+                            write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                                refreshed.len()
+                            )
+                            .unwrap();
+                        } else if request.starts_with("GET ") {
+                            get_requests_server.fetch_add(1, Ordering::SeqCst);
+                            write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/x-ndjson\r\n\r\n",
+                                refreshed.len()
+                            )
+                            .unwrap();
+                            stream.write_all(refreshed).unwrap();
+                            return;
+                        }
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(StdDuration::from_millis(10));
+                    }
+                    Err(err) => panic!("failed to accept connection: {err}"),
+                }
+            }
+        });
+
+        let cache = Cache::temp().unwrap().init().await.unwrap();
+        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+        let shard = versions_cache_shard(&cache, &url);
+        let (content_entry, meta_entry) = versions_cache_entries(&shard);
+        write_versions_cache(
+            &content_entry,
+            &meta_entry,
+            cached,
+            &VersionsCacheMeta {
+                content_length: cached.len() as u64,
+                etag: None,
+                checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+            },
+        )
+        .await
+        .unwrap();
+
+        let client = BaseClientBuilder::default().build().unwrap();
+        let contents = fetch_ndjson_cached(&client, &url, Some(&cache))
+            .await
+            .unwrap();
+
+        assert_eq!(contents, refreshed);
+        assert_eq!(get_requests.load(Ordering::SeqCst), 1);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn streaming_cache_reuses_matching_etag_without_get() {
+        let cached = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/token-a.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+"#;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let get_requests = Arc::new(AtomicUsize::new(0));
+        let get_requests_server = Arc::clone(&get_requests);
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let request = read_http_request(&mut stream);
+                        if request.starts_with("HEAD ") {
+                            write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nETag: \"v1\"\r\nContent-Length: {}\r\n\r\n",
+                                cached.len()
+                            )
+                            .unwrap();
+                            return;
+                        }
+                        if request.starts_with("GET ") {
+                            get_requests_server.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(StdDuration::from_millis(10));
+                    }
+                    Err(err) => panic!("failed to accept connection: {err}"),
+                }
+            }
+        });
+
+        let cache = Cache::temp().unwrap().init().await.unwrap();
+        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+        let shard = versions_cache_shard(&cache, &url);
+        let (content_entry, meta_entry) = versions_cache_entries(&shard);
+        write_versions_cache(
+            &content_entry,
+            &meta_entry,
+            cached,
+            &VersionsCacheMeta {
+                content_length: cached.len() as u64,
+                etag: Some("\"v1\"".to_string()),
+                checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+            },
+        )
+        .await
+        .unwrap();
+
+        let client = BaseClientBuilder::default().retries(0).build().unwrap();
+        let downloads =
+            fetch_ndjson_collect_streaming_cached(&client, &url, &cache, |_| true, None)
+                .await
+                .unwrap();
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].url().as_ref(),
+            "https://example.com/token-a.tar.gz"
+        );
+        assert_eq!(get_requests.load(Ordering::SeqCst), 0);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn find_streaming_cache_reuses_matching_etag_without_get() {
+        let cached = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/token-a.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+"#;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let get_requests = Arc::new(AtomicUsize::new(0));
+        let get_requests_server = Arc::clone(&get_requests);
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let request = read_http_request(&mut stream);
+                        if request.starts_with("HEAD ") {
+                            write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nETag: \"v1\"\r\nContent-Length: {}\r\n\r\n",
+                                cached.len()
+                            )
+                            .unwrap();
+                            return;
+                        }
+                        if request.starts_with("GET ") {
+                            get_requests_server.fetch_add(1, Ordering::SeqCst);
+                            write!(
+                                stream,
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/x-ndjson\r\n\r\n",
+                                cached.len()
+                            )
+                            .unwrap();
+                            stream.write_all(cached).unwrap();
+                            return;
+                        }
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(StdDuration::from_millis(10));
+                    }
+                    Err(err) => panic!("failed to accept connection: {err}"),
+                }
+            }
+        });
+
+        let cache = Cache::temp().unwrap().init().await.unwrap();
+        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+        let shard = versions_cache_shard(&cache, &url);
+        let (content_entry, meta_entry) = versions_cache_entries(&shard);
+        write_versions_cache(
+            &content_entry,
+            &meta_entry,
+            cached,
+            &VersionsCacheMeta {
+                content_length: cached.len() as u64,
+                etag: Some("\"v1\"".to_string()),
+                checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+            },
+        )
+        .await
+        .unwrap();
+
+        let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu").unwrap();
+        let download = ManagedPythonDownloadList::find_streaming(
+            &BaseClientBuilder::default().retries(0),
+            &cache,
+            Some(url.as_str()),
+            &request,
+        )
+        .await
+        .unwrap()
+        .expect("matching download should be found");
+
+        assert_eq!(
+            download.url().as_ref(),
+            "https://example.com/token-a.tar.gz"
+        );
+        assert_eq!(get_requests.load(Ordering::SeqCst), 0);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn streaming_cache_uses_stale_content_after_refresh_failure() {
+        let cached = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/token-a.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+"#;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || -> io::Result<usize> {
+            let deadline = std::time::Instant::now() + StdDuration::from_secs(5);
+            let mut requests = 0;
+            while std::time::Instant::now() < deadline && requests < 2 {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_read_timeout(Some(StdDuration::from_secs(5)))?;
+                        let request = read_http_request(&mut stream);
+                        assert!(request.starts_with(["HEAD ", "GET "][requests]));
+                        requests += 1;
+                        // Each response closes its connection, so the client must not reuse it.
+                        write!(
+                            stream,
+                            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )?;
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(StdDuration::from_millis(10));
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+            Ok(requests)
+        });
+
+        let cache = Cache::temp().unwrap().init().await.unwrap();
+        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+        let shard = versions_cache_shard(&cache, &url);
+        let (content_entry, meta_entry) = versions_cache_entries(&shard);
+        write_versions_cache(
+            &content_entry,
+            &meta_entry,
+            cached,
+            &VersionsCacheMeta {
+                content_length: cached.len() as u64,
+                etag: None,
+                checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+            },
+        )
+        .await
+        .unwrap();
+
+        let client = BaseClientBuilder::default().retries(0).build().unwrap();
+        let downloads =
+            fetch_ndjson_collect_streaming_cached(&client, &url, &cache, |_| true, None)
+                .await
+                .unwrap();
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].url().as_ref(),
+            "https://example.com/token-a.tar.gz"
+        );
+        assert_eq!(
+            server
+                .join()
+                .expect("mock server should not panic")
+                .expect("mock requests should succeed"),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn find_streaming_uses_stale_content_after_refresh_failure() {
+        let cached = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/token-a.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+"#;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _request = read_http_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
+            )
+            .unwrap();
+        });
+
+        let cache = Cache::temp().unwrap().init().await.unwrap();
+        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+        let shard = versions_cache_shard(&cache, &url);
+        let (content_entry, meta_entry) = versions_cache_entries(&shard);
+        write_versions_cache(
+            &content_entry,
+            &meta_entry,
+            cached,
+            &VersionsCacheMeta {
+                content_length: cached.len() as u64,
+                etag: None,
+                checked_at: Timestamp::from(SystemTime::UNIX_EPOCH),
+            },
+        )
+        .await
+        .unwrap();
+
+        let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu").unwrap();
+        let download = ManagedPythonDownloadList::find_streaming(
+            &BaseClientBuilder::default().retries(0),
+            &cache,
+            Some(url.as_str()),
+            &request,
+        )
+        .await
+        .unwrap()
+        .expect("matching download should be found");
+
+        assert_eq!(
+            download.url().as_ref(),
+            "https://example.com/token-a.tar.gz"
+        );
+        server.join().unwrap();
+    }
     #[test]
     fn upgrade_request_native_defaults() {
         let request = PythonDownloadRequest::default()

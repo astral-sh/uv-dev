@@ -112,23 +112,23 @@ pub(crate) async fn list(
                 }
             }
         }
-        // Include pre-release versions
         .map(|request| request.with_prereleases(true))
     } else {
         None
     };
 
     let mut output = BTreeSet::new();
-    if let Some(download_request) = download_request {
-        let download_list = ManagedPythonDownloadList::new(
+    if let Some(download_request) = &download_request {
+        let download_list = ManagedPythonDownloadList::new_filtered(
             client_builder,
             cache,
             python_downloads_json_url.as_deref(),
+            Some(download_request),
+            None,
         )
         .await?;
-
         let downloads = download_list
-            .iter_matching(&download_request)
+            .iter_matching(download_request)
             // TODO(zanieb): Add a way to show debug downloads, we just hide them for now
             .filter(|download| !download.key().variant().is_debug());
 
