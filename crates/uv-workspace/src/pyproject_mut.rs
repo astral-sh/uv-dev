@@ -68,6 +68,8 @@ pub enum Error {
     },
     #[error("Unknown bound king {0}")]
     UnknownBoundKind(String),
+    #[error("Cannot add `{0}` because it is declared as dynamic in `project.dynamic`")]
+    DynamicField(&'static str),
 }
 
 /// The result of editing an array in a TOML document.
@@ -346,6 +348,11 @@ impl PyProjectTomlMut {
         source: Option<&Source>,
         raw: bool,
     ) -> Result<ArrayEdit, Error> {
+        if self.target == DependencyTarget::PyProjectToml && self.has_dynamic_field("dependencies")
+        {
+            return Err(Error::DynamicField("dependencies"));
+        }
+
         // Get or create `project.dependencies`.
         let dependencies = self
             .project()?
@@ -671,6 +678,10 @@ impl PyProjectTomlMut {
         source: Option<&Source>,
         raw: bool,
     ) -> Result<ArrayEdit, Error> {
+        if self.has_dynamic_field("optional-dependencies") {
+            return Err(Error::DynamicField("optional-dependencies"));
+        }
+
         // Get or create `project.optional-dependencies`.
         let optional_dependencies = self
             .project()?
@@ -721,6 +732,10 @@ impl PyProjectTomlMut {
 
     /// Ensure that an optional dependency group exists, creating an empty group if it doesn't.
     pub fn ensure_optional_dependency(&mut self, extra: &ExtraName) -> Result<(), Error> {
+        if self.has_dynamic_field("optional-dependencies") {
+            return Err(Error::DynamicField("optional-dependencies"));
+        }
+
         // Get or create `project.optional-dependencies`.
         let optional_dependencies = self
             .project()?
@@ -1383,7 +1398,7 @@ impl PyProjectTomlMut {
         Ok(Version::from_str(version)?)
     }
 
-    pub fn has_dynamic_version(&mut self) -> bool {
+    fn has_dynamic_field(&self, field: &str) -> bool {
         let Some(dynamic) = self
             .doc
             .get("project")
@@ -1394,7 +1409,11 @@ impl PyProjectTomlMut {
             return false;
         };
 
-        dynamic.iter().any(|val| val.as_str() == Some("version"))
+        dynamic.iter().any(|value| value.as_str() == Some(field))
+    }
+
+    pub fn has_dynamic_version(&mut self) -> bool {
+        self.has_dynamic_field("version")
     }
 
     pub fn set_version(&mut self, version: &Version) -> Result<(), Error> {
