@@ -17,7 +17,7 @@ use uv_cache_info::Timestamp;
 use uv_cli::ExternalCommand;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    Concurrency, Constraints, DependencyMode, DependencyModifiers, Excludes, GitLfsSetting,
+    Concurrency, Constraints, DependencyMode, DependencyModifiers, EnvFile, Excludes, GitLfsSetting,
     Overrides, TargetTriple,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
@@ -144,7 +144,6 @@ fn find_verbose_flag(args: &[std::ffi::OsString]) -> Option<&str> {
 }
 
 /// Run a command.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn run(
     command: Option<ExternalCommand>,
     from: Option<String>,
@@ -170,8 +169,7 @@ pub(crate) async fn run(
     cache: Cache,
     workspace_cache: WorkspaceCache,
     printer: Printer,
-    env_file: Vec<PathBuf>,
-    no_env_file: bool,
+    env_file: EnvFile,
     preview: Preview,
 ) -> anyhow::Result<ExitStatus> {
     /// Whether the target looks like a Python script rather than a package source.
@@ -203,11 +201,7 @@ pub(crate) async fn run(
         );
     }
 
-    let env_file_environment = if no_env_file {
-        Vec::new()
-    } else {
-        read_env_files(env_file.iter())?
-    };
+    let env_file_environment = read_env_files(env_file.iter())?;
 
     let Some(command) = command else {
         // When a command isn't provided, we'll show a brief help including available tools
