@@ -13,7 +13,9 @@ use uv_workspace::{
     WorkspaceErrorKind,
 };
 
-use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
+use crate::metadata::{
+    GitWorkspaceMember, LoweredRequirement, MetadataError, source_group_requirements,
+};
 
 /// Like [`crate::RequiresDist`] but only supporting dependency-groups.
 ///
@@ -200,11 +202,13 @@ impl SourcedDependencyGroups {
         sources: &BTreeMap<PackageName, Sources>,
         dependency_groups: &FlatDependencyGroups,
     ) -> Result<(), MetadataError> {
+        let group_requirements = source_group_requirements(sources, dependency_groups);
+
         for (name, sources) in sources {
             for source in sources.iter() {
                 if let Some(group) = source.group() {
                     // If the group doesn't exist at all, error.
-                    let Some(flat_group) = dependency_groups.get(group) else {
+                    let Some(requirements) = group_requirements.get(group) else {
                         return Err(MetadataError::MissingSourceGroup(
                             name.clone(),
                             group.clone(),
@@ -212,11 +216,7 @@ impl SourcedDependencyGroups {
                     };
 
                     // If there is no such requirement with the group, error.
-                    if !flat_group
-                        .requirements
-                        .iter()
-                        .any(|requirement| requirement.name == *name)
-                    {
+                    if !requirements.contains(name) {
                         return Err(MetadataError::IncompleteSourceGroup(
                             name.clone(),
                             group.clone(),
@@ -227,5 +227,70 @@ impl SourcedDependencyGroups {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use indoc::indoc;
+    use uv_workspace::dependency_groups::FlatDependencyGroups;
+    use uv_workspace::pyproject::PyProjectToml;
+
+    use super::{MetadataError, SourcedDependencyGroups};
+
+    #[test]
+    fn missing_and_incomplete_scoped_sources() {
+        let input = indoc! {r#"
+            [dependency-groups]
+            group = ["present"]
+
+            [tool.uv.sources]
+            first = { index = "local", group = "missing" }
+            second = { index = "local", group = "group" }
+
+            [[tool.uv.index]]
+            name = "local"
+            url = "https://example.com/simple"
+            explicit = true
+        "#};
+        let pyproject = PyProjectToml::from_string(input.to_string(), "pyproject.toml").unwrap();
+        let sources = pyproject
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.sources.as_ref())
+            .unwrap()
+            .inner();
+        let dependency_groups =
+            FlatDependencyGroups::from_pyproject_toml("pyproject.toml".as_ref(), &pyproject)
+                .unwrap();
+
+        assert!(matches!(
+            SourcedDependencyGroups::validate_sources(sources, &dependency_groups),
+            Err(MetadataError::MissingSourceGroup(name, group))
+                if name.as_ref() == "first" && group.as_ref() == "missing"
+        ));
+
+        let input = input.replace(
+            "first = { index = \"local\", group = \"missing\" }",
+            "first = { index = \"local\", group = \"group\" }",
+        );
+        let pyproject = PyProjectToml::from_string(input, "pyproject.toml").unwrap();
+        let sources = pyproject
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.sources.as_ref())
+            .unwrap()
+            .inner();
+        let dependency_groups =
+            FlatDependencyGroups::from_pyproject_toml("pyproject.toml".as_ref(), &pyproject)
+                .unwrap();
+
+        assert!(matches!(
+            SourcedDependencyGroups::validate_sources(sources, &dependency_groups),
+            Err(MetadataError::IncompleteSourceGroup(name, group))
+                if name.as_ref() == "first" && group.as_ref() == "group"
+        ));
     }
 }
