@@ -219,6 +219,17 @@ Or package sources with [Git LFS](https://git-lfs.com):
 $ uv tool install --lfs git+https://github.com/astral-sh/lfs-cowsay
 ```
 
+Local projects can also provide tools. From a project with a
+[command-line interface](../concepts/projects/config.md#command-line-interfaces) and a
+[build system](../concepts/projects/config.md#build-systems), use:
+
+```console
+$ uv tool install --editable .
+```
+
+The editable installation reflects changes to the project's source code without reinstalling the
+tool.
+
 As with `uvx`, installations can include additional packages:
 
 ```console
