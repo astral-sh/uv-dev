@@ -5969,6 +5969,7 @@ name = "uv-bench"
 version = "0.0.89"
 dependencies = [
  "anyhow",
+ "astral-version-ranges",
  "astral_async_zip",
  "clap",
  "codspeed-criterion-compat",
