@@ -127,9 +127,27 @@
     {
       "caller": "uv",
       "environment": "automations",
+      "caller_workflow": "sync-uv-dev.yml",
+      "reusable_workflow": "retarget-promoted-pull-request-children.yml",
+      "on": ["push", "workflow_dispatch"],
+      "permissions": { "contents": "read", "pull_requests": "write" },
+      "target": "uv-dev"
+    },
+    {
+      "caller": "uv",
+      "environment": "automations",
       "caller_workflow": "sync-uv-security.yml",
       "on": ["push", "workflow_dispatch"],
       "permissions": { "contents": "write", "workflows": "write" },
+      "target": "uv-security"
+    },
+    {
+      "caller": "uv",
+      "environment": "automations",
+      "caller_workflow": "sync-uv-security.yml",
+      "reusable_workflow": "retarget-promoted-pull-request-children.yml",
+      "on": ["push", "workflow_dispatch"],
+      "permissions": { "contents": "read", "pull_requests": "write" },
       "target": "uv-security"
     },
     {
