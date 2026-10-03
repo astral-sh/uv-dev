@@ -57,16 +57,12 @@ impl GlobDirFilter {
                     .determinize_size_limit(Some(DFA_SIZE_LIMIT)),
             )
             .build_many(&regexes);
-        let dfa = if let Ok(dfa) = dfa_builder {
-            Some(dfa)
-        } else {
-            // TODO(konsti): `regex_automata::dfa::dense::BuildError` should allow asking whether
-            // is a size error
-            warn!(
-                "Glob expressions regex is larger than {DFA_SIZE_LIMIT} bytes, \
-                    falling back to full directory traversal!"
-            );
-            None
+        let dfa = match dfa_builder {
+            Ok(dfa) => Some(dfa),
+            Err(err) => {
+                warn!("{}", dfa_fallback_message(&err));
+                None
+            }
         };
 
         Ok(Self { glob_set, dfa })
@@ -120,10 +116,26 @@ impl GlobDirFilter {
     }
 }
 
+/// Explain why the directory-prefix optimization could not be used.
+fn dfa_fallback_message(err: &dfa::dense::BuildError) -> String {
+    if err.is_size_limit_exceeded() {
+        format!(
+            "Glob expressions regex is larger than {DFA_SIZE_LIMIT} bytes, \
+                falling back to full directory traversal!"
+        )
+    } else {
+        format!(
+            "Failed to compile glob expressions regex: {err}; \
+                falling back to full directory traversal!"
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::PortableGlobParser;
-    use crate::glob_dir_filter::GlobDirFilter;
+    use crate::glob_dir_filter::{GlobDirFilter, dfa_fallback_message};
+    use regex_automata::dfa;
     use std::path::{MAIN_SEPARATOR, Path};
     use tempfile::tempdir;
     use walkdir::WalkDir;
@@ -148,6 +160,23 @@ mod tests {
         // Not sufficient for descending
         "path5",
     ];
+
+    #[test]
+    fn dfa_size_limit_message() {
+        let err = dfa::dense::Builder::new()
+            .configure(dfa::dense::Config::new().dfa_size_limit(Some(0)))
+            .build("a")
+            .unwrap_err();
+        assert!(err.is_size_limit_exceeded());
+        insta::assert_snapshot!(dfa_fallback_message(&err), @"Glob expressions regex is larger than 1000000 bytes, falling back to full directory traversal!");
+    }
+
+    #[test]
+    fn dfa_unsupported_feature_message() {
+        let err = dfa::dense::Builder::new().build(r"\bxyz\b").unwrap_err();
+        assert!(!err.is_size_limit_exceeded());
+        insta::assert_snapshot!(dfa_fallback_message(&err), @"Failed to compile glob expressions regex: unsupported regex feature for DFAs: cannot build DFAs for regexes with Unicode word boundaries; switch to ASCII word boundaries, or heuristically enable Unicode word boundaries or use a different regex engine; falling back to full directory traversal!");
+    }
 
     #[test]
     fn match_directory() {
