@@ -1,5 +1,5 @@
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::pin::Pin;
 
 use async_zip::base::read::cd::Entry;
@@ -8,10 +8,12 @@ use futures::executor::block_on;
 use futures::io::AllowStdIo;
 use futures::{AsyncReadExt, StreamExt};
 use rustc_hash::{FxHashMap, FxHashSet};
+#[cfg(windows)]
+use tar_codec::Member;
 use tar_codec::extract::{ExtractPolicy, LinkPolicy, SymlinkPolicy};
 use tar_codec::{
-    Archive, DecodeError, DecodePolicy, ExtractError, Member, PaxDecodePolicy,
-    PaxVendorExtensionPolicy, TarArchive,
+    Archive, DecodeError, DecodePolicy, ExtractError, PaxDecodePolicy, PaxVendorExtensionPolicy,
+    TarArchive,
 };
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as TokioAsyncReadExt, AsyncWriteExt};
@@ -724,12 +726,10 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
 }
 
 /// Unpack the given tar archive into the destination directory.
-///
-/// Returns the list of unpacked files and their sizes.
 async fn untar_in_tar_codec<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
     dst: &Path,
-) -> Result<Vec<UnhashedFile>, ExtractError<DecodeError>> {
+) -> Result<(), ExtractError<DecodeError>> {
     let decode_policy = DecodePolicy::default().pax_policy(
         PaxDecodePolicy::default()
             // NOTE: We intentionally allow (ignore) `SCHILY.*` and `LIBARCHIVE.*`
@@ -744,30 +744,17 @@ async fn untar_in_tar_codec<R: tokio::io::AsyncRead + Unpin>(
             .allow_non_utf8_pax_vendor_values(true),
     );
     let archive = TarArchive::new(reader).with_policy(decode_policy);
-
-    let mut files = Vec::new();
-    RecordingArchive::new(archive, &mut files)
-        .extract_in(dst, tar_extract_policy())
-        .await?;
-    Ok(files)
+    #[cfg(windows)]
+    let archive = WarnOnSkippedSymlinks(archive);
+    archive.extract_in(dst, tar_extract_policy()).await
 }
 
-/// An archive adapter that records file metadata as members are extracted.
-///
-/// Keeping this observation inside the lending archive cursor avoids a second filesystem walk and
-/// preserves the paths and declared sizes from the archive itself.
-struct RecordingArchive<'files, A> {
-    archive: A,
-    files: &'files mut Vec<UnhashedFile>,
-}
+/// An archive adapter that warns when Windows skips a symbolic link.
+#[cfg(windows)]
+struct WarnOnSkippedSymlinks<A>(A);
 
-impl<'files, A> RecordingArchive<'files, A> {
-    fn new(archive: A, files: &'files mut Vec<UnhashedFile>) -> Self {
-        Self { archive, files }
-    }
-}
-
-impl<A: Archive> Archive for RecordingArchive<'_, A> {
+#[cfg(windows)]
+impl<A: Archive> Archive for WarnOnSkippedSymlinks<A> {
     type Error = A::Error;
     type Payload<'archive>
         = A::Payload<'archive>
@@ -775,14 +762,9 @@ impl<A: Archive> Archive for RecordingArchive<'_, A> {
         Self: 'archive;
 
     async fn next_member(&mut self) -> Result<Option<Member<Self::Payload<'_>>>, Self::Error> {
-        let Self { archive, files } = self;
-        let member = archive.next_member().await?;
-        #[cfg(windows)]
+        let member = self.0.next_member().await?;
         if let Some(Member::SymbolicLink { metadata, .. }) = &member {
             warn!("Skipping symlink in tar archive: {}", metadata.path);
-        }
-        if let Some(Member::File { metadata, size, .. }) = &member {
-            files.push(UnhashedFile::new(PathBuf::from(&metadata.path), *size));
         }
         Ok(member)
     }
@@ -802,19 +784,15 @@ fn tar_extract_policy() -> ExtractPolicy {
 /// Unpack the given tar archive into the destination directory with `astral-tokio-tar`.
 ///
 /// This is equivalent to `archive.unpack_in(dst)`, but it also preserves the executable bit.
-///
-/// Returns the list of unpacked files and their sizes.
 async fn untar_in_tokio_tar(
     mut archive: tokio_tar::Archive<&'_ mut (dyn tokio::io::AsyncRead + Unpin)>,
     dst: &Path,
-) -> std::io::Result<Vec<UnhashedFile>> {
+) -> std::io::Result<()> {
     // Like `tokio-tar`, canonicalize the destination prior to unpacking.
     let dst = fs_err::tokio::canonicalize(dst).await?;
 
     // Memoize filesystem calls to canonicalize paths.
     let mut memo = FxHashSet::default();
-
-    let mut files = Vec::new();
 
     let mut entries = archive.entries()?;
     let mut pinned = Pin::new(&mut entries);
@@ -836,13 +814,8 @@ async fn untar_in_tokio_tar(
 
         // Unpack the file into the destination directory.
         let unpacked_at = file.unpack_in_raw(&dst, &mut memo).await?;
-
-        // Collect file paths (excluding directories) that were unpacked successfully.
-        if unpacked_at.is_some() && (entry_type.is_file() || entry_type.is_hard_link()) {
-            let relpath = file.path()?.into_owned();
-            let size = file.effective_size();
-            files.push(UnhashedFile::new(relpath, size));
-        }
+        #[cfg(not(unix))]
+        let _ = (entry_type, unpacked_at);
 
         // Preserve the executable bit.
         #[cfg(unix)]
@@ -869,14 +842,11 @@ async fn untar_in_tokio_tar(
         }
     }
 
-    Ok(files)
+    Ok(())
 }
 
 /// Select the tar implementation and unpack the archive into the destination directory.
-async fn untar_in<R: tokio::io::AsyncRead + Unpin>(
-    mut reader: R,
-    dst: &Path,
-) -> Result<Vec<UnhashedFile>, Error> {
+async fn untar_in<R: tokio::io::AsyncRead + Unpin>(mut reader: R, dst: &Path) -> Result<(), Error> {
     if uv_preview::is_enabled(PreviewFeature::TarCodec) {
         untar_in_tar_codec(reader, dst).await.map_err(Error::from)
     } else {
@@ -895,12 +865,10 @@ async fn untar_in<R: tokio::io::AsyncRead + Unpin>(
 /// Unpack a `.tar.gz` archive into the target directory, without requiring `Seek`.
 ///
 /// This is useful for unpacking files as they're being downloaded.
-///
-/// Returns the list of unpacked files and their sizes.
 async fn untar_gz<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
     target: impl AsRef<Path>,
-) -> Result<Vec<UnhashedFile>, Error> {
+) -> Result<(), Error> {
     let reader = tokio::io::BufReader::with_capacity(DEFAULT_BUF_SIZE, reader);
     let decompressed_bytes = async_compression::tokio::bufread::GzipDecoder::new(reader);
     untar_in(decompressed_bytes, target.as_ref()).await
@@ -909,12 +877,10 @@ async fn untar_gz<R: tokio::io::AsyncRead + Unpin>(
 /// Unpack a `.tar.zst` archive into the target directory, without requiring `Seek`.
 ///
 /// This is useful for unpacking files as they're being downloaded.
-///
-/// Returns the list of unpacked files and their sizes.
 async fn untar_zst<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
     target: impl AsRef<Path>,
-) -> Result<Vec<UnhashedFile>, Error> {
+) -> Result<(), Error> {
     let reader = tokio::io::BufReader::with_capacity(DEFAULT_BUF_SIZE, reader);
     let decompressed_bytes = async_compression::tokio::bufread::ZstdDecoder::new(reader);
     untar_in(decompressed_bytes, target.as_ref()).await
@@ -923,12 +889,10 @@ async fn untar_zst<R: tokio::io::AsyncRead + Unpin>(
 /// Unpack a `.tar` archive into the target directory, without requiring `Seek`.
 ///
 /// This is useful for unpacking files as they're being downloaded.
-///
-/// Returns the list of unpacked files and their sizes.
 async fn untar<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
     target: impl AsRef<Path>,
-) -> Result<Vec<UnhashedFile>, Error> {
+) -> Result<(), Error> {
     let reader = tokio::io::BufReader::with_capacity(DEFAULT_BUF_SIZE, reader);
     untar_in(reader, target.as_ref()).await
 }
@@ -936,16 +900,16 @@ async fn untar<R: tokio::io::AsyncRead + Unpin>(
 /// Unpack a `.zip`, `.tar.gz`, or `.tar.zst` archive into the target directory,
 /// without requiring `Seek`.
 ///
-/// Returns the temporary directory and the list of unpacked files and their sizes.
+/// Returns the temporary directory containing the unpacked archive.
 /// ZIP extraction transfers ownership of the directory to a blocking worker; see [`unzip`].
 pub async fn archive<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
     ext: SourceDistExtension,
     target: TempDir,
-) -> Result<(TempDir, Vec<UnhashedFile>), Error> {
-    let files = match ext {
+) -> Result<TempDir, Error> {
+    match ext {
         SourceDistExtension::Legacy(LegacySourceDistExtension::Zip) => {
-            return unzip(reader, target).await;
+            return unzip(reader, target).await.map(|(target, _)| target);
         }
         SourceDistExtension::Legacy(LegacySourceDistExtension::Tar) => {
             untar(reader, target.path()).await
@@ -957,5 +921,5 @@ pub async fn archive<R: tokio::io::AsyncRead + Unpin>(
         }
         SourceDistExtension::Legacy(_) => Err(Error::UnsupportedCompression),
     }?;
-    Ok((target, files))
+    Ok(target)
 }

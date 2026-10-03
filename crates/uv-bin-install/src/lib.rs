@@ -842,7 +842,7 @@ async fn download_and_unpack(
 
     let id = reporter.on_download_start(binary.name(), version, size);
     let mut progress_reader = ProgressReader::new(reader, id, reporter);
-    let (temp_dir, _) = stream::archive(&mut progress_reader, format.into(), temp_dir)
+    let temp_dir = stream::archive(&mut progress_reader, format.into(), temp_dir)
         .await
         .map_err(|e| Error::Extract { source: e })?;
     reporter.on_download_complete(id);
