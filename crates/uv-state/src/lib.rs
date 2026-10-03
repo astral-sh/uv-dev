@@ -35,7 +35,7 @@ impl StateStore {
         })
     }
 
-    /// The folder for a specific cache bucket
+    /// Return the path for a specific state bucket.
     pub fn bucket(&self, state_bucket: StateBucket) -> PathBuf {
         self.root.join(state_bucket.to_str())
     }
@@ -46,7 +46,7 @@ impl StateStore {
     /// 2. The system-appropriate user-level data directory.
     /// 3. A `.uv` directory in the current working directory.
     ///
-    /// Returns an absolute cache dir.
+    /// Explicitly supplied paths are retained as provided and may be relative.
     pub fn from_settings(state_dir: Option<PathBuf>) -> Result<Self, io::Error> {
         if let Some(state_dir) = state_dir {
             Ok(Self::from_path(state_dir))
