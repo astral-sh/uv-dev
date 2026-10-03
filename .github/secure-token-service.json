@@ -26,6 +26,14 @@
     {
       "caller": "uv-dev",
       "environment": "automations",
+      "caller_workflow": "import-rust-caches.yml",
+      "on": ["push", "workflow_dispatch"],
+      "permissions": { "actions": "read" },
+      "target": "uv"
+    },
+    {
+      "caller": "uv-dev",
+      "environment": "automations",
       "caller_workflow": "import-codspeed-profiles.yml",
       "on": ["push", "workflow_dispatch"],
       "permissions": { "actions": "read" },
