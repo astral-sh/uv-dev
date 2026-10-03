@@ -337,6 +337,10 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
                                 format!("{}{}", range, padded(" ", &message, ""))
                             }
                         }
+                        UnavailableReason::Coordinated(_) => {
+                            let range = self.compatible_range(package, set);
+                            format!("{range} cannot be used because {reason}")
+                        }
                     }
                 }
             }
@@ -766,11 +770,12 @@ impl PubGrubReportFormatter<'_> {
         while let Some((derivation_tree, inherited_exclude_newer_ranges)) = pending.pop() {
             match derivation_tree {
                 DerivationTree::External(External::Custom(package, set, reason)) => {
-                    if matches!(
-                        reason,
-                        UnavailableReason::Version(UnavailableVersion::UnsatisfiableDependency(_))
-                    ) {
-                        continue;
+                    match reason {
+                        UnavailableReason::Coordinated(_)
+                        | UnavailableReason::Version(
+                            UnavailableVersion::UnsatisfiableDependency(_),
+                        ) => continue,
+                        UnavailableReason::Package(_) | UnavailableReason::Version(_) => {}
                     }
 
                     if let Some(name) = package.name_no_root() {

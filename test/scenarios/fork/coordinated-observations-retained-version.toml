@@ -1,0 +1,148 @@
+name = "coordinated-observations-retained-version"
+description = '''
+Two siblings independently select `shared==2`. The anchor requires that
+version permanently, while the fluctuating sibling initially selects
+`flaky==2`, whose `leaf==1` dependency conflicts with a delayed `leaf==2`
+requirement. Ordinary PubGrub backtracking therefore changes that sibling to
+`flaky==1` and `shared==1`.
+
+A third sibling reaches its broad shared dependency only after the withdrawal.
+The surviving anchor observation must still make it prefer `shared==2` over
+both the newly observed `shared==1` and the otherwise-preferred `shared==3`.
+The final lock alone is insufficient: a resolver trace also verifies that the
+third sibling selects version 2 as a live preference after the real backtrack.
+'''
+
+[testgen]
+disable = true
+
+[environment]
+python = "3.12"
+
+[resolver_options]
+universal = true
+fork_strategy = "fewest"
+environments = [
+  "python_version == '3.12'",
+  "python_version == '3.13'",
+  "python_version == '3.14'",
+]
+
+[expected]
+satisfiable = true
+
+[root]
+requires_python = ">=3.12,<3.15"
+requires = [
+  "anchor; python_version == '3.12'",
+  "fluctuating; python_version == '3.13'",
+  "consumer-delay-000; python_version == '3.14'",
+]
+
+[packages.anchor.versions."1.0.0"]
+requires = ["shared==2.0.0"]
+
+[packages.fluctuating.versions."1.0.0"]
+requires = ["flaky>=1.0.0,<=2.0.0", "conflict-one"]
+
+[packages.flaky.versions."1.0.0"]
+requires = ["shared==1.0.0", "leaf==2.0.0"]
+
+[packages.flaky.versions."2.0.0"]
+requires = ["shared==2.0.0", "leaf==1.0.0"]
+
+[packages.conflict-one.versions."1.0.0"]
+requires = ["conflict-two"]
+
+[packages.conflict-two.versions."1.0.0"]
+requires = ["conflict-three"]
+
+[packages.conflict-three.versions."1.0.0"]
+requires = ["conflict-four"]
+
+[packages.conflict-four.versions."1.0.0"]
+requires = ["conflict-five"]
+
+[packages.conflict-five.versions."1.0.0"]
+requires = ["leaf==2.0.0"]
+
+[packages.shared.versions."1.0.0"]
+[packages.shared.versions."2.0.0"]
+[packages.shared.versions."3.0.0"]
+[packages.leaf.versions."1.0.0"]
+[packages.leaf.versions."2.0.0"]
+
+[packages.consumer.versions."1.0.0"]
+requires = ["shared>=1.0.0,<=3.0.0"]
+
+[packages.consumer-delay-000.versions."1.0.0"]
+requires = ["consumer-delay-001"]
+
+[packages.consumer-delay-001.versions."1.0.0"]
+requires = ["consumer-delay-002"]
+
+[packages.consumer-delay-002.versions."1.0.0"]
+requires = ["consumer-delay-003"]
+
+[packages.consumer-delay-003.versions."1.0.0"]
+requires = ["consumer-delay-004"]
+
+[packages.consumer-delay-004.versions."1.0.0"]
+requires = ["consumer-delay-005"]
+
+[packages.consumer-delay-005.versions."1.0.0"]
+requires = ["consumer-delay-006"]
+
+[packages.consumer-delay-006.versions."1.0.0"]
+requires = ["consumer-delay-007"]
+
+[packages.consumer-delay-007.versions."1.0.0"]
+requires = ["consumer-delay-008"]
+
+[packages.consumer-delay-008.versions."1.0.0"]
+requires = ["consumer-delay-009"]
+
+[packages.consumer-delay-009.versions."1.0.0"]
+requires = ["consumer-delay-010"]
+
+[packages.consumer-delay-010.versions."1.0.0"]
+requires = ["consumer-delay-011"]
+
+[packages.consumer-delay-011.versions."1.0.0"]
+requires = ["consumer-delay-012"]
+
+[packages.consumer-delay-012.versions."1.0.0"]
+requires = ["consumer-delay-013"]
+
+[packages.consumer-delay-013.versions."1.0.0"]
+requires = ["consumer-delay-014"]
+
+[packages.consumer-delay-014.versions."1.0.0"]
+requires = ["consumer-delay-015"]
+
+[packages.consumer-delay-015.versions."1.0.0"]
+requires = ["consumer-delay-016"]
+
+[packages.consumer-delay-016.versions."1.0.0"]
+requires = ["consumer-delay-017"]
+
+[packages.consumer-delay-017.versions."1.0.0"]
+requires = ["consumer-delay-018"]
+
+[packages.consumer-delay-018.versions."1.0.0"]
+requires = ["consumer-delay-019"]
+
+[packages.consumer-delay-019.versions."1.0.0"]
+requires = ["consumer-delay-020"]
+
+[packages.consumer-delay-020.versions."1.0.0"]
+requires = ["consumer-delay-021"]
+
+[packages.consumer-delay-021.versions."1.0.0"]
+requires = ["consumer-delay-022"]
+
+[packages.consumer-delay-022.versions."1.0.0"]
+requires = ["consumer-delay-023"]
+
+[packages.consumer-delay-023.versions."1.0.0"]
+requires = ["consumer"]

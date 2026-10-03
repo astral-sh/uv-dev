@@ -11,7 +11,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use uv_configuration::TargetTriple;
+use uv_configuration::{ForkStrategy, TargetTriple};
 use uv_distribution_filename::WheelFilename;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
@@ -256,6 +256,10 @@ pub struct ResolverOptions {
     #[serde(default)]
     pub resolution: Option<Resolution>,
 
+    /// Fork strategy for universal resolution.
+    #[serde(default)]
+    pub fork_strategy: Option<ForkStrategy>,
+
     /// Python version override for resolution.
     #[serde(default)]
     pub python: Option<PythonVersion>,
@@ -279,6 +283,10 @@ pub struct ResolverOptions {
     /// Python platform to resolve for.
     #[serde(default)]
     pub python_platform: Option<TargetTriple>,
+
+    /// Supported environments for generated lock tests.
+    #[serde(default)]
+    pub environments: Vec<MarkerTree>,
 
     /// Required environments (platform markers).
     #[serde(default)]
@@ -368,6 +376,33 @@ requires = ["a>=2 ; sys_platform == 'linux'", "a<2 ; sys_platform == 'darwin'"]
         assert!(scenario.resolver_options.universal);
         assert_eq!(scenario.packages.len(), 1);
         assert_eq!(scenario.packages[&package_name].versions.len(), 2);
+    }
+
+    #[test]
+    fn parse_universal_fork_options() {
+        let scenario: Scenario = toml::from_str(
+            r#"
+name = "fewest-versions"
+
+[root]
+requires = []
+
+[expected]
+satisfiable = true
+
+[resolver_options]
+universal = true
+fork_strategy = "fewest"
+environments = ["python_version < '3.13'", "python_version >= '3.13'"]
+"#,
+        )
+        .expect("scenario should parse");
+
+        assert_eq!(
+            scenario.resolver_options.fork_strategy,
+            Some(ForkStrategy::Fewest)
+        );
+        assert_eq!(scenario.resolver_options.environments.len(), 2);
     }
 
     #[test]
