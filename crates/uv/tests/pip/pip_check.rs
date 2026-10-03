@@ -9,7 +9,8 @@ use uv_test::uv_snapshot;
 
 #[test]
 fn check_compatible_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context =
+        uv_test::test_context!("3.12").with_packse_index("packages/pip-check-requests.toml");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==2.31.0")?;
@@ -180,7 +181,8 @@ fn check_post_release_after_prerelease() -> Result<()> {
 /// Check a versionless `.egg-info` file installed by distutils.
 #[test]
 fn check_versionless_egg_info_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context =
+        uv_test::test_context!("3.12").with_packse_index("packages/pip-check-requests.toml");
 
     ChildPath::new(context.site_packages())
         .child("demo.egg-info")
@@ -201,7 +203,8 @@ fn check_versionless_egg_info_file() -> Result<()> {
 // this test force-installs idna 2.4 to trigger a failure.
 #[test]
 fn check_incompatible_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context =
+        uv_test::test_context!("3.12").with_packse_index("packages/pip-check-requests.toml");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==2.31.0")?;
@@ -261,7 +264,8 @@ fn check_incompatible_packages() -> Result<()> {
 // with multiple incompatible packages.
 #[test]
 fn check_multiple_incompatible_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context =
+        uv_test::test_context!("3.12").with_packse_index("packages/pip-check-requests.toml");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==2.31.0")?;
@@ -322,7 +326,8 @@ fn check_multiple_incompatible_packages() -> Result<()> {
 
 #[test]
 fn check_python_version() {
-    let context = uv_test::test_context!("3.12");
+    let context =
+        uv_test::test_context!("3.12").with_packse_index("packages/pip-check-requests.toml");
 
     uv_snapshot!(context
         .pip_install()
@@ -349,7 +354,8 @@ fn check_python_version() {
 
 #[test]
 fn check_dependency_metadata_from_config_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context =
+        uv_test::test_context!("3.12").with_packse_index("packages/pip-check-requests.toml");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==2.31.0")?;

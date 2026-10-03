@@ -1,6 +1,6 @@
 //! Integration tests for uv pip commands.
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod pip_check;
 
 mod pip_compile_scenarios;
