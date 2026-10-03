@@ -302,7 +302,7 @@ pub(crate) async fn tree(
                 build_isolation: _,
                 extra_build_dependencies: _,
                 extra_build_variables: _,
-                exclude_newer: _,
+                exclude_newer,
                 link_mode: _,
                 upgrade: _,
                 build_options: _,
@@ -323,8 +323,6 @@ pub(crate) async fn tree(
             .keyring(*keyring_provider)
             .build()?;
             let download_concurrency = concurrency.downloads_semaphore.clone();
-
-            let exclude_newer = lock.exclude_newer();
 
             // Initialize the client to fetch the latest version of each package.
             let client = LatestClient {
