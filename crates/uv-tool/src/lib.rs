@@ -134,7 +134,7 @@ impl InstalledTools {
             Ok(Self::from_path(std::path::absolute(tool_dir)?))
         } else {
             Ok(Self::from_path(
-                StateStore::from_settings(None)?.bucket(StateBucket::Tools),
+                StateStore::from_settings(None).bucket(StateBucket::Tools),
             ))
         }
     }
