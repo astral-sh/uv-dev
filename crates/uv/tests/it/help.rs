@@ -427,11 +427,17 @@ fn help_subcommand() {
               Repeating this option, e.g., `-qq`, will enable a silent mode in which uv will write no
               output to stdout.
 
+              `UV_QUIET` accepts an integer from 0 to 255. Explicit `--quiet` or `--verbose` arguments
+              take precedence over both `UV_QUIET` and `UV_VERBOSE`.
+
       -v, --verbose...
               Use verbose output.
 
               You can configure fine-grained logging using the `RUST_LOG` environment variable.
               (<https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives>)
+
+              `UV_VERBOSE` accepts an integer from 0 to 255. Explicit `--quiet` or `--verbose` arguments
+              take precedence over both `UV_QUIET` and `UV_VERBOSE`.
 
           --color <COLOR_CHOICE>
               Control the use of color in output.
@@ -710,11 +716,17 @@ fn help_subsubcommand() {
               Repeating this option, e.g., `-qq`, will enable a silent mode in which uv will write no
               output to stdout.
 
+              `UV_QUIET` accepts an integer from 0 to 255. Explicit `--quiet` or `--verbose` arguments
+              take precedence over both `UV_QUIET` and `UV_VERBOSE`.
+
       -v, --verbose...
               Use verbose output.
 
               You can configure fine-grained logging using the `RUST_LOG` environment variable.
               (<https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives>)
+
+              `UV_VERBOSE` accepts an integer from 0 to 255. Explicit `--quiet` or `--verbose` arguments
+              take precedence over both `UV_QUIET` and `UV_VERBOSE`.
 
           --color <COLOR_CHOICE>
               Control the use of color in output.
