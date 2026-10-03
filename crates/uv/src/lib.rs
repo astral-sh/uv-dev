@@ -254,7 +254,18 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     }
 
     // The `--isolated` argument is deprecated on preview APIs, and warns on non-preview APIs.
-    let deprecated_isolated = if cli.top_level.global_args.isolated {
+    let deprecated_isolated = if cli.top_level.global_args.isolated
+        || environment.isolated.value == Some(true)
+    {
+        let (isolated, remediation) = if cli.top_level.global_args.isolated {
+            ("`--isolated` flag", "use `--no-config`")
+        } else {
+            (
+                "`UV_ISOLATED` environment variable",
+                "unset `UV_ISOLATED` and use `--no-config`",
+            )
+        };
+
         match &*cli.command {
             // Supports `--isolated` as its own argument, so we can't warn either way.
             Commands::Tool(ToolNamespace {
@@ -271,7 +282,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             // `--isolated` moved to `--no-workspace`.
             Commands::Project(command) if matches!(**command, ProjectCommand::Init(_)) => {
                 warn_user!(
-                    "The `--isolated` flag is deprecated and has no effect. Instead, use `--no-config` to prevent uv from discovering configuration files or `--no-workspace` to prevent uv from adding the initialized project to the containing workspace."
+                    "The {isolated} is deprecated and has no effect. Instead, {remediation} to prevent uv from discovering configuration files or `--no-workspace` to prevent uv from adding the initialized project to the containing workspace."
                 );
                 false
             }
@@ -279,7 +290,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             // Preview APIs. Ignore `--isolated` and warn.
             Commands::Project(_) | Commands::Tool(_) | Commands::Python(_) => {
                 warn_user!(
-                    "The `--isolated` flag is deprecated and has no effect. Instead, use `--no-config` to prevent uv from discovering configuration files."
+                    "The {isolated} is deprecated and has no effect. Instead, {remediation} to prevent uv from discovering configuration files."
                 );
                 false
             }
@@ -287,7 +298,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             // Non-preview APIs. Continue to support `--isolated`, but warn.
             _ => {
                 warn_user!(
-                    "The `--isolated` flag is deprecated. Instead, use `--no-config` to prevent uv from discovering configuration files."
+                    "The {isolated} is deprecated. Instead, {remediation} to prevent uv from discovering configuration files."
                 );
                 true
             }
