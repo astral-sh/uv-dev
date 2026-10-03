@@ -1565,7 +1565,7 @@ fn tool_install_with_incompatible_build_constraints() -> Result<()> {
     error: Failed to download and build `requests==1.2.0`
       cause: Failed to resolve requirements from `setup.py` build
       cause: No solution found when resolving: `setuptools>=40.8.0`
-      cause: Because you require setuptools>=40.8.0 and setuptools==2, we can conclude that your requirements are unsatisfiable.
+      cause: you require setuptools>=40.8.0 and setuptools==2.
     ");
 
     tool_dir
@@ -3374,8 +3374,8 @@ fn tool_install_git_does_not_infer_dynamic_requires_python() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because the current Python version (3.11.[X]) does not satisfy Python>=3.12,<3.13 and dynamic-requires-python-tool==0.1.0 depends on Python>=3.12,<3.13, we can conclude that dynamic-requires-python-tool==0.1.0 cannot be used.
-             And because only dynamic-requires-python-tool==0.1.0 is available and you require dynamic-requires-python-tool, we can conclude that your requirements are unsatisfiable.
+      cause: the current Python version (3.11.[X]) does not satisfy Python>=3.12,<3.13 and dynamic-requires-python-tool==0.1.0 depends on Python>=3.12,<3.13, so dynamic-requires-python-tool==0.1.0 cannot be used.
+             And only dynamic-requires-python-tool==0.1.0 is available and you require dynamic-requires-python-tool.
     ");
 }
 
@@ -4425,8 +4425,8 @@ fn tool_install_preserve_environment() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because black==24.1.1 depends on packaging>=22.0 and you require black==24.1.1, we can conclude that you require packaging>=22.0.
-             And because you require packaging==0.0.1, we can conclude that your requirements are unsatisfiable.
+      cause: black==24.1.1 depends on packaging>=22.0 and you require black==24.1.1, so you require packaging>=22.0.
+             And you require packaging==0.0.1.
     ");
 
     // Install `black`. The tool should already be installed, since we didn't remove the environment.
@@ -5701,8 +5701,8 @@ fn tool_install_find_links() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving tool dependencies
-      cause: Because basic-app==0.1 needs to be downloaded from a registry and only basic-app==0.1 is available, we can conclude that all versions of basic-app cannot be used.
-             And because you require basic-app, we can conclude that your requirements are unsatisfiable.
+      cause: basic-app==0.1 needs to be downloaded from a registry and only basic-app==0.1 is available, so all versions of basic-app cannot be used.
+             And you require basic-app.
 
     hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");

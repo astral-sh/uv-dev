@@ -523,7 +523,7 @@ mod tests {
     fn test_error_wrapping_with_columns() {
         #[derive(Debug, thiserror::Error)]
         #[error(
-            "Because fiasobfhuasbf was not found in the package registry and you require fiasobfhuasbf, we can conclude that your requirements are unsatisfiable."
+            "fiasobfhuasbf was not found in the package registry and you require fiasobfhuasbf."
         )]
         struct Inner;
 
@@ -548,9 +548,8 @@ mod tests {
 
         assert_snapshot!(output, @"
         error: No solution found when resolving dependencies
-          cause: Because fiasobfhuasbf was not found in the package registry and you
-                 require fiasobfhuasbf, we can conclude that your requirements are
-                 unsatisfiable.
+          cause: fiasobfhuasbf was not found in the package registry and you require
+                 fiasobfhuasbf.
         ");
     }
 
