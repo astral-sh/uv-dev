@@ -40,8 +40,7 @@ use crate::commands::project::lock::LockMode;
 use crate::commands::project::lock_target::LockTarget;
 use crate::commands::project::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectError, ProjectInterpreter, ProjectPythonRequest, UniversalState,
-    project_python_roots,
+    ProjectError, ProjectInterpreter, ProjectPythonRequest, UniversalState, project_python_roots,
 };
 use crate::commands::{ExitStatus, UvError, project};
 use crate::printer::Printer;
