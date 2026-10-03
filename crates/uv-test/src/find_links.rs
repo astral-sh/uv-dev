@@ -125,10 +125,6 @@ mod tests {
     fn vendor_server_construction_does_not_load_artifacts() {
         let _server = FindLinksServer::vendor();
 
-        assert!(
-            vendor_artifacts()
-                .iter()
-                .all(|artifact| !artifact.is_loaded())
-        );
+        assert!(vendor_artifacts().all(|artifact| !artifact.is_loaded()));
     }
 }
