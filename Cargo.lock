@@ -7627,6 +7627,7 @@ dependencies = [
  "itertools 0.14.0",
  "owo-colors",
  "pathdiff",
+ "tempfile",
  "thiserror",
  "tracing",
  "uv-console",

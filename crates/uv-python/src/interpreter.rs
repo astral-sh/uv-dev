@@ -25,7 +25,7 @@ use uv_install_wheel::Layout;
 use uv_pep440::Version;
 use uv_pep508::{MarkerEnvironment, StringVersion};
 use uv_platform::{Arch, Libc, Os};
-use uv_platform_tags::{Platform, Tags, TagsError, TagsOptions};
+use uv_platform_tags::{Os as PlatformOs, Platform, Tags, TagsError, TagsOptions};
 use uv_pypi_types::{ResolverMarkerEnvironment, Scheme};
 use uv_static::EnvVars;
 
@@ -71,6 +71,7 @@ impl Interpreter {
     pub fn query(executable: impl AsRef<Path>, cache: &Cache) -> Result<Self, Error> {
         let executable = executable.as_ref();
         let info = InterpreterInfo::query_cached(executable, cache)?;
+        let debug_enabled = info.is_debug();
 
         debug_assert!(
             info.sys_executable.is_absolute(),
@@ -87,7 +88,7 @@ impl Interpreter {
             sys_prefix: info.sys_prefix,
             pointer_size: info.pointer_size,
             gil_disabled: info.gil_disabled,
-            debug_enabled: info.debug_enabled,
+            debug_enabled,
             sys_base_prefix: info.sys_base_prefix,
             sys_base_executable: info.sys_base_executable,
             sys_executable: info.sys_executable,
@@ -972,6 +973,14 @@ struct InterpreterInfo {
 }
 
 impl InterpreterInfo {
+    fn is_debug(&self) -> bool {
+        self.debug_enabled
+            // Cached Windows metadata from Python <3.14 may not report `Py_DEBUG`.
+            || (matches!(self.platform.os(), PlatformOs::Windows)
+                && self.markers.implementation_name() == "cpython"
+                && self.extension_suffixes.iter().any(|suffix| suffix.starts_with("_d.")))
+    }
+
     /// Return the resolved [`InterpreterInfo`] for the given Python executable.
     fn query(interpreter: &Path, cache: &Cache) -> Result<Self, Error> {
         let tempdir = tempfile::tempdir_in(cache.root())?;
@@ -1372,6 +1381,25 @@ mod tests {
     use uv_pep440::Version;
 
     use crate::Interpreter;
+
+    #[test]
+    fn test_windows_debug_metadata() -> Result<()> {
+        let mut response: Value = serde_json::from_str(mocked_interpreter_response())?;
+        response["platform"]["os"] = serde_json::json!({"name": "windows"});
+        for suffix in [
+            "_d.pyd",
+            "_d.cp313t-win_amd64.pyd",
+            "_d.cp314-win_amd64.pyd",
+        ] {
+            response["extension_suffixes"] = serde_json::json!([suffix, ".pyd"]);
+            let info: super::InterpreterInfo = serde_json::from_value(response.clone())?;
+            assert!(info.is_debug());
+        }
+        response["extension_suffixes"] = serde_json::json!([".cp313t-win_amd64.pyd", ".pyd"]);
+        let info: super::InterpreterInfo = serde_json::from_value(response)?;
+        assert!(!info.is_debug());
+        Ok(())
+    }
 
     fn mocked_interpreter_response() -> &'static str {
         indoc! {r##"

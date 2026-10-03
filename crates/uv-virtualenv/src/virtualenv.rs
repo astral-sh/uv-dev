@@ -72,6 +72,8 @@ pub(crate) fn create(
     seed: Seed,
     upgradeable: bool,
 ) -> Result<VirtualEnvironment, Error> {
+    let debug = interpreter.implementation_name() == "cpython" && interpreter.debug_enabled();
+
     // Determine the base Python executable; that is, the Python executable that should be
     // considered the "base" for the virtual environment.
     //
@@ -304,29 +306,39 @@ pub(crate) fn create(
     // transparent upgrades.
     if cfg!(windows) {
         if using_minor_version_link {
-            let target = scripts.join(WindowsExecutable::Python.exe(interpreter));
+            let target = scripts.join(WindowsExecutable::Python.exe(interpreter.python_tuple()));
             replace_link_to_executable(
                 target.as_path(),
                 PythonExecutable::console(&executable_target),
             )
             .map_err(Error::Python)?;
-            let windowed_executable_name = WindowsExecutable::Pythonw.exe(interpreter);
+            let windowed_executable_name =
+                WindowsExecutable::Pythonw.exe(interpreter.python_tuple());
             let targetw = scripts.join(&windowed_executable_name);
-            let windowed_executable_target =
-                executable_target.with_file_name(windowed_executable_name);
+            let mut windowed_executable_target = executable_target.with_file_name(
+                WindowsExecutable::Pythonw.source_exe(interpreter.python_tuple(), debug),
+            );
+            if interpreter.gil_disabled() && !windowed_executable_target.exists() {
+                windowed_executable_target = executable_target.with_file_name(
+                    WindowsExecutable::PythonwMajorMinort
+                        .source_exe(interpreter.python_tuple(), debug),
+                );
+            }
             replace_link_to_executable(
                 targetw.as_path(),
                 PythonExecutable::windowed(&windowed_executable_target),
             )
             .map_err(Error::Python)?;
             if interpreter.gil_disabled() {
-                let targett = scripts.join(WindowsExecutable::PythonMajorMinort.exe(interpreter));
+                let targett = scripts
+                    .join(WindowsExecutable::PythonMajorMinort.exe(interpreter.python_tuple()));
                 replace_link_to_executable(
                     targett.as_path(),
                     PythonExecutable::console(&executable_target),
                 )
                 .map_err(Error::Python)?;
-                let targetwt = scripts.join(WindowsExecutable::PythonwMajorMinort.exe(interpreter));
+                let targetwt = scripts
+                    .join(WindowsExecutable::PythonwMajorMinort.exe(interpreter.python_tuple()));
                 replace_link_to_executable(
                     targetwt.as_path(),
                     PythonExecutable::windowed(&windowed_executable_target),
@@ -339,7 +351,7 @@ pub(crate) fn create(
         ) {
             // For PyEmscripten, link only `python.exe`.
             // This should not be copied as `python.exe` is a wrapper that launches Pyodide.
-            let target = scripts.join(WindowsExecutable::Python.exe(interpreter));
+            let target = scripts.join(WindowsExecutable::Python.exe(interpreter.python_tuple()));
             replace_link_to_executable(
                 target.as_path(),
                 PythonExecutable::console(&executable_target),
@@ -460,6 +472,28 @@ pub(crate) fn create(
                         )?;
                     }
                 }
+            }
+        }
+
+        if debug {
+            // Match the stdlib's debug aliases while retaining `python.exe` for activation.
+            for executable in [WindowsExecutable::Python, WindowsExecutable::Pythonw]
+                .into_iter()
+                .chain(
+                    interpreter
+                        .gil_disabled()
+                        .then_some([
+                            WindowsExecutable::PythonMajorMinort,
+                            WindowsExecutable::PythonwMajorMinort,
+                        ])
+                        .into_iter()
+                        .flatten(),
+                )
+            {
+                fs_err::copy(
+                    scripts.join(executable.exe(interpreter.python_tuple())),
+                    scripts.join(executable.source_exe(interpreter.python_tuple(), debug)),
+                )?;
             }
         }
     }
@@ -770,59 +804,60 @@ enum WindowsExecutable {
 
 impl WindowsExecutable {
     /// The name of the Python executable.
-    fn exe(self, interpreter: &Interpreter) -> Cow<'static, OsStr> {
+    fn exe(self, python_version: (u8, u8)) -> Cow<'static, OsStr> {
         match self {
             Self::Python => Cow::Borrowed(OsStr::new("python.exe")),
-            Self::PythonMajor => Cow::Owned(OsString::from(format!(
-                "python{}.exe",
-                interpreter.python_major()
-            ))),
+            Self::PythonMajor => {
+                Cow::Owned(OsString::from(format!("python{}.exe", python_version.0)))
+            }
             Self::PythonMajorMinor => Cow::Owned(OsString::from(format!(
                 "python{}.{}.exe",
-                interpreter.python_major(),
-                interpreter.python_minor()
+                python_version.0, python_version.1
             ))),
             Self::PythonMajorMinort => Cow::Owned(OsString::from(format!(
                 "python{}.{}t.exe",
-                interpreter.python_major(),
-                interpreter.python_minor()
+                python_version.0, python_version.1
             ))),
             Self::Pythonw => Cow::Borrowed(OsStr::new("pythonw.exe")),
             Self::PythonwMajorMinort => Cow::Owned(OsString::from(format!(
                 "pythonw{}.{}t.exe",
-                interpreter.python_major(),
-                interpreter.python_minor()
+                python_version.0, python_version.1
             ))),
             Self::PyPy => Cow::Borrowed(OsStr::new("pypy.exe")),
-            Self::PyPyMajor => Cow::Owned(OsString::from(format!(
-                "pypy{}.exe",
-                interpreter.python_major()
-            ))),
+            Self::PyPyMajor => Cow::Owned(OsString::from(format!("pypy{}.exe", python_version.0))),
             Self::PyPyMajorMinor => Cow::Owned(OsString::from(format!(
                 "pypy{}.{}.exe",
-                interpreter.python_major(),
-                interpreter.python_minor()
+                python_version.0, python_version.1
             ))),
             Self::PyPyw => Cow::Borrowed(OsStr::new("pypyw.exe")),
             Self::PyPyMajorMinorw => Cow::Owned(OsString::from(format!(
                 "pypy{}.{}w.exe",
-                interpreter.python_major(),
-                interpreter.python_minor()
+                python_version.0, python_version.1
             ))),
             Self::GraalPy => Cow::Borrowed(OsStr::new("graalpy.exe")),
         }
     }
 
+    /// The name supplied by the base interpreter, including its debug suffix.
+    fn source_exe(self, python_version: (u8, u8), debug: bool) -> Cow<'static, OsStr> {
+        let name = self.exe(python_version);
+        if debug {
+            let mut name = Path::new(&*name).with_extension("").into_os_string();
+            name.push("_d.exe");
+            Cow::Owned(name)
+        } else {
+            name
+        }
+    }
+
     /// The name of the launcher shim.
-    fn launcher(self, interpreter: &Interpreter) -> &'static str {
-        match self {
-            Self::Python | Self::PythonMajor | Self::PythonMajorMinor
-                if interpreter.gil_disabled() =>
-            {
+    fn launcher(self, gil_disabled: bool, debug: bool) -> Cow<'static, str> {
+        let name = match self {
+            Self::Python | Self::PythonMajor | Self::PythonMajorMinor if gil_disabled => {
                 "venvlaunchert.exe"
             }
             Self::Python | Self::PythonMajor | Self::PythonMajorMinor => "venvlauncher.exe",
-            Self::Pythonw if interpreter.gil_disabled() => "venvwlaunchert.exe",
+            Self::Pythonw if gil_disabled => "venvwlaunchert.exe",
             Self::Pythonw => "venvwlauncher.exe",
             Self::PythonMajorMinort => "venvlaunchert.exe",
             Self::PythonwMajorMinort => "venvwlaunchert.exe",
@@ -831,6 +866,11 @@ impl WindowsExecutable {
             Self::PyPy | Self::PyPyMajor | Self::PyPyMajorMinor => "venvlauncher.exe",
             Self::PyPyw | Self::PyPyMajorMinorw => "venvwlauncher.exe",
             Self::GraalPy => "venvlauncher.exe",
+        };
+        if debug {
+            Cow::Owned(format!("{}_d.exe", name.trim_end_matches(".exe")))
+        } else {
+            Cow::Borrowed(name)
         }
     }
 }
@@ -847,55 +887,25 @@ fn copy_launcher_windows(
     scripts: &Path,
     python_home: &Path,
 ) -> Result<(), Error> {
-    // First priority: the `python.exe` and `pythonw.exe` shims.
-    let shim = interpreter
-        .stdlib()
-        .join("venv")
-        .join("scripts")
-        .join("nt")
-        .join(executable.exe(interpreter));
-    match fs_err::copy(shim, scripts.join(executable.exe(interpreter))) {
-        Ok(_) => return Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(err.into());
-        }
-    }
-
-    // Second priority: the `venvlauncher.exe` and `venvwlauncher.exe` shims.
-    // These are equivalent to the `python.exe` and `pythonw.exe` shims, which were
-    // renamed in Python 3.13.
-    let shim = interpreter
-        .stdlib()
-        .join("venv")
-        .join("scripts")
-        .join("nt")
-        .join(executable.launcher(interpreter));
-    match fs_err::copy(shim, scripts.join(executable.exe(interpreter))) {
-        Ok(_) => return Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(err.into());
-        }
-    }
-
-    // Third priority: on Conda at least, we can look for the launcher shim next to
-    // the Python executable itself.
-    let shim = base_python.with_file_name(executable.launcher(interpreter));
-    match fs_err::copy(shim, scripts.join(executable.exe(interpreter))) {
-        Ok(_) => return Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(err.into());
-        }
+    let debug = interpreter.implementation_name() == "cpython" && interpreter.debug_enabled();
+    if copy_launcher_windows_shim(
+        executable,
+        interpreter.python_tuple(),
+        interpreter.gil_disabled(),
+        debug,
+        interpreter.stdlib(),
+        base_python,
+        scripts,
+    )? {
+        return Ok(());
     }
 
     // Fourth priority: if the launcher shim doesn't exist, assume this is
     // an embedded Python. Copy the Python executable itself, along with
     // the DLLs, `.pyd` files, and `.zip` files in the same directory.
     match fs_err::copy(
-        base_python.with_file_name(executable.exe(interpreter)),
-        scripts.join(executable.exe(interpreter)),
+        base_python.with_file_name(executable.source_exe(interpreter.python_tuple(), debug)),
+        scripts.join(executable.exe(interpreter.python_tuple())),
     ) {
         Ok(_) => {
             // Copy `.dll` and `.pyd` files from the top-level, and from the
@@ -957,4 +967,129 @@ fn copy_launcher_windows(
     }
 
     Err(Error::NotFound(base_python.user_display().to_string()))
+}
+
+/// Copy the stdlib launcher, including layouts used before Python 3.13 and by Conda.
+fn copy_launcher_windows_shim(
+    executable: WindowsExecutable,
+    python_version: (u8, u8),
+    gil_disabled: bool,
+    debug: bool,
+    stdlib: &Path,
+    base_python: &Path,
+    scripts: &Path,
+) -> io::Result<bool> {
+    let stdlib_scripts = stdlib.join("venv").join("scripts").join("nt");
+    let launcher = executable.launcher(gil_disabled, debug);
+    for source in [
+        stdlib_scripts.join(executable.source_exe(python_version, debug)),
+        stdlib_scripts.join(launcher.as_ref()),
+        base_python.with_file_name(launcher.as_ref()),
+    ] {
+        match fs_err::copy(source, scripts.join(executable.exe(python_version))) {
+            Ok(_) => return Ok(true),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WindowsExecutable, copy_launcher_windows_shim};
+    use std::io;
+
+    #[test]
+    fn windows_debug_launchers() -> io::Result<()> {
+        for (executable, source, destination, gil_disabled) in [
+            (
+                WindowsExecutable::Python,
+                "python_d.exe",
+                "python.exe",
+                false,
+            ),
+            (
+                WindowsExecutable::Pythonw,
+                "pythonw_d.exe",
+                "pythonw.exe",
+                false,
+            ),
+            (
+                WindowsExecutable::Python,
+                "venvlauncher_d.exe",
+                "python.exe",
+                false,
+            ),
+            (
+                WindowsExecutable::Pythonw,
+                "venvwlauncher_d.exe",
+                "pythonw.exe",
+                false,
+            ),
+            (
+                WindowsExecutable::Python,
+                "venvlaunchert_d.exe",
+                "python.exe",
+                true,
+            ),
+            (
+                WindowsExecutable::Pythonw,
+                "venvwlaunchert_d.exe",
+                "pythonw.exe",
+                true,
+            ),
+            (
+                WindowsExecutable::PythonMajorMinort,
+                "venvlaunchert_d.exe",
+                "python3.13t.exe",
+                true,
+            ),
+            (
+                WindowsExecutable::PythonwMajorMinort,
+                "venvwlaunchert_d.exe",
+                "pythonw3.13t.exe",
+                true,
+            ),
+        ] {
+            let temp = tempfile::tempdir()?;
+            let stdlib = temp.path().join("Lib");
+            let stdlib_scripts = stdlib.join("venv/scripts/nt");
+            let scripts = temp.path().join("Scripts");
+            fs_err::create_dir_all(&stdlib_scripts)?;
+            fs_err::create_dir_all(&scripts)?;
+            for name in [
+                "python.exe",
+                "pythonw.exe",
+                "venvlauncher.exe",
+                "venvwlauncher.exe",
+                "venvlaunchert.exe",
+                "venvwlaunchert.exe",
+            ] {
+                fs_err::write(stdlib_scripts.join(name), b"release")?;
+            }
+            let base_python = temp.path().join("python_d.exe");
+            assert!(!copy_launcher_windows_shim(
+                executable,
+                (3, 13),
+                gil_disabled,
+                true,
+                &stdlib,
+                &base_python,
+                &scripts
+            )?);
+            fs_err::write(stdlib_scripts.join(source), b"debug")?;
+            assert!(copy_launcher_windows_shim(
+                executable,
+                (3, 13),
+                gil_disabled,
+                true,
+                &stdlib,
+                &base_python,
+                &scripts
+            )?);
+            assert_eq!(fs_err::read(scripts.join(destination))?, b"debug");
+        }
+        Ok(())
+    }
 }
