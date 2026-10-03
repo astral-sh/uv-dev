@@ -568,6 +568,11 @@ pub(crate) async fn pip_compile(
         } else {
             None
         })
+        .required_environments(if universal {
+            required_environments.clone()
+        } else {
+            SupportedEnvironments::default()
+        })
         .build();
 
     // Resolve the requirements.
