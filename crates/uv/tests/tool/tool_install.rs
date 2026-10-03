@@ -21,6 +21,8 @@ use sha2::{Digest, Sha256};
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
+use wiremock::matchers::path;
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::packse::{
     PackseServer, generate_wheel, generate_wheel_with_files, scenario::Scenario,
@@ -3568,6 +3570,89 @@ fn tool_install_unnamed_conflict() {
     ----- stderr -----
     error: Package name (`iniconfig`) provided with `--from` does not match install request (`black`)
     ");
+}
+
+/// Inferring a complete archive name does not need the configured flat index.
+#[tokio::test]
+async fn tool_install_unnamed_conflict_without_find_links() {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    Mock::given(path("/flat"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    for filename in ["anyio-4.3.0-py3-none-any.whl", "anyio-4.3.0.tar.gz"] {
+        context
+            .tool_install()
+            .arg("different-name")
+            .arg("--from")
+            .arg(format!("{}/{filename}", server.uri()))
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(format!("{}/flat", server.uri()))
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(
+                "Package name (`anyio`) provided with `--from` does not match install request (`different-name`)",
+            ));
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+/// An already-installed bare wheel URL can be checked without fetching the flat index again.
+#[tokio::test]
+async fn tool_install_unnamed_already_installed_without_find_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let (filename, wheel) = generate_wheel(
+        &"network-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["network-tool".to_string()],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    wheel_path.write_binary(&wheel)?;
+    let wheel_url = url::Url::from_file_path(wheel_path.path()).unwrap();
+    let server = MockServer::start().await;
+    Mock::given(path("/flat"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .insert_header("cache-control", "no-store")
+                .set_body_string("<html></html>"),
+        )
+        .mount(&server)
+        .await;
+
+    let install = || {
+        let mut command = context.tool_install();
+        command
+            .arg(wheel_url.as_str())
+            .arg("--no-preview")
+            .arg("--no-index")
+            .arg("--find-links")
+            .arg(format!("{}/flat", server.uri()));
+        command
+    };
+    install().assert().success();
+
+    server.reset().await;
+    Mock::given(path("/flat"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    install()
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("`network-tool @ file://"))
+        .stderr(predicate::str::contains("` is already installed"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+    Ok(())
 }
 
 /// Test installing a tool with a bare URL requirement using `--from`.
