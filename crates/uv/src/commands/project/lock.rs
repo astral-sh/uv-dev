@@ -10,6 +10,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use tracing::debug;
 
 use uv_cache::{Cache, Refresh};
+use uv_cli::LockFormat;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
@@ -49,6 +50,7 @@ use uv_workspace::{
 
 use crate::commands::locked_requirements::{LockedRequirements, read_lock_requirements};
 use crate::commands::pip::loggers::{DefaultResolveLogger, ResolveLogger, SummaryResolveLogger};
+use crate::commands::project::lock_report::{LockReason, LockReport, ReasonCode};
 use crate::commands::project::lock_target::{LockTarget, find_lock_format_error};
 use crate::commands::project::{
     MissingLockfileSource, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectError,
@@ -90,6 +92,7 @@ impl LockResult {
 pub(crate) async fn lock(
     project_dir: &Path,
     lock_check: LockCheck,
+    output_format: LockFormat,
     frozen: Option<FrozenSource>,
     dry_run: DryRun,
     refresh: Refresh,
@@ -107,6 +110,72 @@ pub(crate) async fn lock(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
+) -> anyhow::Result<ExitStatus> {
+    let mut report = match output_format {
+        LockFormat::Text => None,
+        LockFormat::Json => {
+            if !preview.is_enabled(PreviewFeature::JsonOutput) {
+                warn_user!(
+                    "The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features {}` to disable this warning.",
+                    PreviewFeature::JsonOutput
+                );
+            }
+            Some(LockReport::new(lock_check, frozen, dry_run))
+        }
+    };
+    let result = Box::pin(lock_inner(
+        project_dir,
+        lock_check,
+        frozen,
+        dry_run,
+        refresh,
+        python,
+        install_mirrors,
+        settings,
+        client_builder,
+        script,
+        python_preference,
+        python_downloads,
+        concurrency,
+        config_discovery,
+        cache,
+        workspace_cache,
+        printer,
+        preview,
+        report.as_mut(),
+    ))
+    .await;
+    if let Some(mut report) = report {
+        report.finish(&result);
+        writeln!(
+            printer.stdout_important(),
+            "{}",
+            serde_json::to_string_pretty(&report)?
+        )?;
+    }
+    result
+}
+
+async fn lock_inner(
+    project_dir: &Path,
+    lock_check: LockCheck,
+    frozen: Option<FrozenSource>,
+    dry_run: DryRun,
+    refresh: Refresh,
+    python: Option<String>,
+    install_mirrors: PythonInstallMirrors,
+    settings: ResolverSettings,
+    client_builder: BaseClientBuilder<'_>,
+    script: Option<ScriptPath>,
+    python_preference: PythonPreference,
+    python_downloads: PythonDownloads,
+    concurrency: Concurrency,
+    config_discovery: ConfigDiscovery,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    printer: Printer,
+    preview: Preview,
+    mut report: Option<&mut LockReport>,
 ) -> anyhow::Result<ExitStatus> {
     // If necessary, initialize the PEP 723 script.
     let script = match script {
@@ -146,6 +215,9 @@ pub(crate) async fn lock(
         .await?;
         LockTarget::Workspace(workspace.workspace())
     };
+    if let Some(report) = report.as_deref_mut() {
+        report.set_path(&target.lock_path());
+    }
 
     // Determine the lock mode.
     let interpreter;
@@ -212,7 +284,7 @@ pub(crate) async fn lock(
     let state = UniversalState::default();
 
     // Perform the lock operation.
-    match Box::pin(
+    let result = Box::pin(
         LockOperation::new(
             mode,
             &settings,
@@ -230,10 +302,17 @@ pub(crate) async fn lock(
             matches!(&refresh, Refresh::All(..))
                 && preview.is_enabled(PreviewFeature::LockfileFormatCheck),
         )
+        .with_report(report.as_deref_mut())
         .execute(target),
     )
-    .await
-    {
+    .await;
+    if let Some(report) = report {
+        match &result {
+            Ok(lock) => report.operation_success(&mode, lock),
+            Err(error) => report.operation_error(error),
+        }
+    }
+    match result {
         Ok(lock) => {
             if let Some(frozen_source) = frozen {
                 warn_user!(
@@ -299,6 +378,7 @@ pub(crate) struct LockOperation<'env> {
     first_party_exclusions: BTreeSet<PackageName>,
     refresh: Option<&'env Refresh>,
     check_lockfile_contents: bool,
+    report: Option<&'env mut LockReport>,
     settings: &'env ResolverSettings,
     client_builder: &'env BaseClientBuilder<'env>,
     state: &'env UniversalState,
@@ -330,6 +410,7 @@ impl<'env> LockOperation<'env> {
             first_party_exclusions: BTreeSet::new(),
             refresh: None,
             check_lockfile_contents: false,
+            report: None,
             settings,
             client_builder,
             state,
@@ -373,8 +454,18 @@ impl<'env> LockOperation<'env> {
         self
     }
 
+    /// Record the reason the existing lock could not be reused.
+    #[must_use]
+    fn with_report(mut self, report: Option<&'env mut LockReport>) -> Self {
+        self.report = report;
+        self
+    }
+
     /// Perform a [`LockOperation`].
-    pub(crate) async fn execute(self, target: LockTarget<'_>) -> Result<LockResult, ProjectError> {
+    pub(crate) async fn execute(
+        mut self,
+        target: LockTarget<'_>,
+    ) -> Result<LockResult, ProjectError> {
         if !matches!(&self.mode, LockMode::Frozen(_)) {
             target.validate_upgrade_groups(&self.settings.upgrade)?;
         }
@@ -413,6 +504,7 @@ impl<'env> LockOperation<'env> {
                     Some(existing),
                     self.mode,
                     check_lockfile_contents,
+                    self.report,
                     self.constraints,
                     self.first_party_exclusions,
                     self.refresh,
@@ -445,7 +537,12 @@ impl<'env> LockOperation<'env> {
                     Ok(Some((existing, existing_contents))) => {
                         (Some(existing), Some(existing_contents))
                     }
-                    Ok(None) => (None, None),
+                    Ok(None) => {
+                        if let Some(report) = self.report.as_deref_mut() {
+                            report.stale(LockReason::new(ReasonCode::MissingLockfile));
+                        }
+                        (None, None)
+                    }
                     Err(ProjectError::Lock(err)) => {
                         warn_user!(
                             "Failed to read existing lockfile; ignoring locked requirements: {err}"
@@ -468,6 +565,7 @@ impl<'env> LockOperation<'env> {
                     existing,
                     self.mode,
                     check_lockfile_contents,
+                    self.report,
                     self.constraints,
                     self.first_party_exclusions,
                     self.refresh,
@@ -503,6 +601,7 @@ async fn do_lock(
     existing_lock: Option<Lock>,
     mode: LockMode<'_>,
     check_lockfile_contents: Option<String>,
+    mut report: Option<&mut LockReport>,
     external: Vec<NameRequirementSpecification>,
     first_party_exclusions: BTreeSet<PackageName>,
     refresh: Option<&Refresh>,
@@ -1018,6 +1117,7 @@ async fn do_lock(
             &database,
             preview,
             printer,
+            report.as_deref_mut(),
         ))
         .await
         {
@@ -1037,6 +1137,9 @@ async fn do_lock(
                 return Err(ProjectError::Lock(err));
             }
             Err(err) => {
+                if let Some(report) = report {
+                    report.validation_error(&err);
+                }
                 warn_user_with_chain!(
                     anyhow::Error::from(err)
                         .context("Failed to validate existing lockfile")
@@ -1298,12 +1401,19 @@ impl ValidatedLock {
         database: &DistributionDatabase<'_, Context>,
         preview: Preview,
         printer: Printer,
+        mut report: Option<&mut LockReport>,
     ) -> Result<Self, ProjectError> {
         // Perform checks in a deliberate order, such that the most extreme conditions are tested
         // first (i.e., every check that returns `Self::Unusable`, followed by every check that
         // returns `Self::Versions`, followed by every check that returns `Self::Preferable`, and
         // finally `Self::Satisfies`).
         if lock.resolution_mode() != options.resolution_mode {
+            if let Some(report) = report.as_deref_mut() {
+                report.stale(
+                    LockReason::new(ReasonCode::ResolutionModeChanged)
+                        .values([options.resolution_mode], [lock.resolution_mode()]),
+                );
+            }
             let _ = writeln!(
                 printer.stderr(),
                 "Ignoring existing lockfile due to change in resolution mode: `{}` vs. `{}`",
@@ -1313,6 +1423,12 @@ impl ValidatedLock {
             return Ok(Self::Unusable(lock));
         }
         if lock.fork_strategy() != options.fork_strategy {
+            if let Some(report) = report.as_deref_mut() {
+                report.stale(
+                    LockReason::new(ReasonCode::ForkStrategyChanged)
+                        .values([options.fork_strategy], [lock.fork_strategy()]),
+                );
+            }
             let _ = writeln!(
                 printer.stderr(),
                 "Ignoring existing lockfile due to change in fork strategy: `{}` vs. `{}`",
@@ -1328,6 +1444,9 @@ impl ValidatedLock {
             // If a relative value is used, we won't invalidate on every tick of the clock unless
             // the span duration changed or some other operation causes a new resolution
             if !change.is_relative_timestamp_change() {
+                if let Some(report) = report.as_deref_mut() {
+                    report.stale(LockReason::exclude_newer(&change));
+                }
                 let _ = writeln!(
                     printer.stderr(),
                     "Resolving despite existing lockfile due to {change}",
@@ -1351,6 +1470,9 @@ impl ValidatedLock {
         // bunk, then we shouldn't return a result that indicates we should try
         // to re-use the existing fork markers.
         if let Err((fork_markers_union, environments_union)) = lock.check_marker_coverage() {
+            if let Some(report) = report.as_deref_mut() {
+                report.stale(LockReason::new(ReasonCode::MarkerCoverageChanged));
+            }
             warn_user!(
                 "Resolving despite existing lockfile due to fork markers not covering the supported environments: `{}` vs `{}`",
                 fork_markers_union
@@ -1368,6 +1490,9 @@ impl ValidatedLock {
         if let Err((fork_markers_union, requires_python_marker)) =
             lock.requires_python_coverage(requires_python)
         {
+            if let Some(report) = report.as_deref_mut() {
+                report.stale(LockReason::new(ReasonCode::PythonCoverageChanged));
+            }
             warn_user!(
                 "Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `{}` vs `{}`",
                 fork_markers_union
@@ -1390,6 +1515,9 @@ impl ValidatedLock {
             .map(|marker| lock.simplify_environment(marker))
             .collect::<Vec<_>>();
         if expected != actual {
+            if let Some(report) = report.as_deref_mut() {
+                report.stale(LockReason::new(ReasonCode::EnvironmentsChanged));
+            }
             debug!(
                 "Resolving despite existing lockfile due to change in supported environments: `{:?}` vs. `{:?}`",
                 expected, actual
@@ -1407,6 +1535,9 @@ impl ValidatedLock {
             .map(|marker| lock.simplify_environment(marker))
             .collect::<Vec<_>>();
         if expected != actual {
+            if let Some(report) = report.as_deref_mut() {
+                report.stale(LockReason::new(ReasonCode::RequiredEnvironmentsChanged));
+            }
             debug!(
                 "Resolving despite existing lockfile due to change in supported environments: `{:?}` vs. `{:?}`",
                 expected, actual
@@ -1426,6 +1557,9 @@ impl ValidatedLock {
 
         // If the conflicting group config has changed, we have to perform a clean resolution.
         if conflicts != lock.conflicts() {
+            if let Some(report) = report.as_deref_mut() {
+                report.stale(LockReason::new(ReasonCode::ConflictsChanged));
+            }
             debug!(
                 "Resolving despite existing lockfile due to change in conflicting groups: `{:?}` vs. `{:?}`",
                 conflicts,
@@ -1437,6 +1571,12 @@ impl ValidatedLock {
         // If the Requires-Python bound has changed, we have to perform a clean resolution, since
         // the set of `resolution-markers` may no longer cover the entire supported Python range.
         if lock.requires_python().range() != requires_python.range() {
+            if let Some(report) = report.as_deref_mut() {
+                report.stale(
+                    LockReason::new(ReasonCode::RequiresPythonChanged)
+                        .values([requires_python], [lock.requires_python()]),
+                );
+            }
             debug!(
                 "Resolving despite existing lockfile due to change in Python requirement: `{}` vs. `{}`",
                 lock.requires_python(),
@@ -1452,6 +1592,9 @@ impl ValidatedLock {
         // If the pre-release mode has changed, we have to re-resolve, but can retain the existing
         // versions and forks.
         if lock.prerelease() != &options.prerelease {
+            if let Some(report) = report.as_deref_mut() {
+                report.stale(LockReason::new(ReasonCode::PrereleaseChanged));
+            }
             if lock.prerelease_mode() != options.prerelease.global {
                 let _ = writeln!(
                     printer.stderr(),
@@ -1477,6 +1620,9 @@ impl ValidatedLock {
         }
 
         if !lock.satisfies_hash_algorithms(install_path, index_locations)? {
+            if let Some(report) = report.as_deref_mut() {
+                report.stale(LockReason::new(ReasonCode::HashAlgorithmsChanged));
+            }
             debug!("Resolving despite existing lockfile due to mismatched hash algorithm");
             return Ok(Self::Preferable(lock));
         }
@@ -1501,7 +1647,7 @@ impl ValidatedLock {
         };
 
         // Determine whether the lockfile satisfies the workspace requirements.
-        match lock
+        let satisfies = lock
             .satisfies(
                 install_path,
                 packages,
@@ -1525,8 +1671,13 @@ impl ValidatedLock {
                 database,
                 preview.is_enabled(PreviewFeature::LockWithoutMetadata),
             )
-            .await?
+            .await?;
+        if let Some(report) = report
+            && let Some(reason) = LockReason::from_satisfies(&satisfies)
         {
+            report.stale(reason);
+        }
+        match satisfies {
             SatisfiesResult::Satisfied => {
                 debug!("Existing `uv.lock` satisfies workspace requirements");
                 Ok(Self::Satisfies(lock))

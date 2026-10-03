@@ -81,6 +81,7 @@ pub(crate) mod format;
 pub(crate) mod init;
 pub(crate) mod install_target;
 pub(crate) mod lock;
+pub(crate) mod lock_report;
 pub(crate) mod lock_target;
 pub(super) mod lockfile;
 pub(crate) mod remove;
