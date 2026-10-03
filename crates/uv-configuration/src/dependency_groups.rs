@@ -19,7 +19,7 @@ pub struct DependencyGroupsInner {
     ///
     /// If true, users of this API should refrain from looking at packages
     /// that *aren't* specified by the dependency-groups. This is exposed
-    /// via [`DependencyGroupsInner::prod`][].
+    /// via [`DependencyGroupsInner::includes_non_group_dependencies`][].
     only_groups: bool,
     /// The "raw" flags/settings we were passed for diagnostics.
     history: DependencyGroupsHistory,
@@ -153,15 +153,14 @@ impl std::ops::Deref for DependencyGroups {
 }
 
 impl DependencyGroupsInner {
-    /// Returns `true` if packages other than the ones referenced by these
-    /// dependency-groups should be considered.
+    /// Returns `true` if packages outside the selected dependency groups should be considered.
     ///
-    /// That is, if I tell you to install a project and this is false,
-    /// you should ignore the project itself and all its dependencies,
-    /// and instead just install the dependency-groups.
+    /// This includes root projects, their regular and extra dependencies, and requirements
+    /// attached directly to a lock target, such as a PEP 723 script. Installation options can
+    /// still exclude an enabled project itself.
     ///
-    /// (This is really just asking if an --only flag was passed.)
-    pub fn prod(&self) -> bool {
+    /// Returns `false` if an `--only` group flag was passed.
+    pub fn includes_non_group_dependencies(&self) -> bool {
         !self.only_groups
     }
 
