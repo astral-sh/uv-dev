@@ -274,6 +274,24 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         }
     }
 
+    /// Resolve a selected [`SourceDist`]'s complete isolated build environment.
+    ///
+    /// Runs backend requirement hooks even when static or cached metadata would otherwise bypass
+    /// build setup.
+    #[instrument(skip_all, fields(%source))]
+    pub async fn resolve_build_requirements(
+        &self,
+        source: &SourceDist,
+        hashes: ArchiveHashPolicy<'_>,
+    ) -> Result<(), Error> {
+        SourceDistributionBuilder::new(self.build_context)
+            .with_build_requirements()
+            .download_and_build_metadata(&BuildableSource::Dist(source), hashes, &self.client)
+            .boxed_local()
+            .await?;
+        Ok(())
+    }
+
     /// Fetch a wheel from the cache or download it from the index.
     ///
     /// Applicable hash checks are enforced before newly fetched wheels are published to the cache.
