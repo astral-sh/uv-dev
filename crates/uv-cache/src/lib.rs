@@ -1044,177 +1044,23 @@ pub trait CleanReporter: Send + Sync {
 /// are subdirectories of the cache root.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum CacheBucket {
-    /// Wheels (excluding built wheels), alongside their metadata and cache policy.
+    /// Downloaded wheels and their metadata.
     ///
-    /// There are three kinds from cache entries: Wheel metadata and policy as `MsgPack` files, the
-    /// wheels themselves, and the unzipped wheel archives. If a wheel file is over an in-memory
-    /// size threshold, we first download the zip file into the cache, then unzip it into a
-    /// directory with the same name (exclusive of the `.whl` extension).
-    ///
-    /// Cache structure:
-    ///  * `wheel-metadata-v0/pypi/foo/{foo-1.0.0-py3-none-any.msgpack, foo-1.0.0-py3-none-any.whl}`
-    ///  * `wheel-metadata-v0/<digest(index-url)>/foo/{foo-1.0.0-py3-none-any.msgpack, foo-1.0.0-py3-none-any.whl}`
-    ///  * `wheel-metadata-v0/url/<digest(url)>/foo/{foo-1.0.0-py3-none-any.msgpack, foo-1.0.0-py3-none-any.whl}`
-    ///
-    /// See `uv_client::RegistryClient::wheel_metadata` for information on how wheel metadata
-    /// is fetched.
-    ///
-    /// # Example
-    ///
-    /// Consider the following `requirements.in`:
-    /// ```text
-    /// # pypi wheel
-    /// pandas
-    /// # url wheel
-    /// flask @ https://files.pythonhosted.org/packages/36/42/015c23096649b908c809c69388a805a571a3bea44362fe87e33fc3afa01f/flask-3.0.0-py3-none-any.whl
-    /// ```
-    ///
-    /// When we run `pip compile`, it will only fetch and cache the metadata (and cache policy), it
-    /// doesn't need the actual wheels yet:
-    /// ```text
-    /// wheel-v0
-    /// ├── pypi
-    /// │   ...
-    /// │   ├── pandas
-    /// │   │   └── pandas-2.1.3-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.msgpack
-    /// │   ...
-    /// └── url
-    ///     └── 4b8be67c801a7ecb
-    ///         └── flask
-    ///             └── flask-3.0.0-py3-none-any.msgpack
-    /// ```
-    ///
-    /// We get the following `requirement.txt` from `pip compile`:
-    ///
-    /// ```text
-    /// [...]
-    /// flask @ https://files.pythonhosted.org/packages/36/42/015c23096649b908c809c69388a805a571a3bea44362fe87e33fc3afa01f/flask-3.0.0-py3-none-any.whl
-    /// [...]
-    /// pandas==2.1.3
-    /// [...]
-    /// ```
-    ///
-    /// If we run `pip sync` on `requirements.txt` on a different machine, it also fetches the
-    /// wheels:
-    ///
-    /// TODO(konstin): This is still wrong, we need to store the cache policy too!
-    /// ```text
-    /// wheel-v0
-    /// ├── pypi
-    /// │   ...
-    /// │   ├── pandas
-    /// │   │   ├── pandas-2.1.3-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-    /// │   │   ├── pandas-2.1.3-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64
-    /// │   ...
-    /// └── url
-    ///     └── 4b8be67c801a7ecb
-    ///         └── flask
-    ///             └── flask-3.0.0-py3-none-any.whl
-    ///                 ├── flask
-    ///                 │   └── ...
-    ///                 └── flask-3.0.0.dist-info
-    ///                     └── ...
-    /// ```
-    ///
-    /// If we run first `pip compile` and then `pip sync` on the same machine, we get both:
-    ///
-    /// ```text
-    /// wheels-v0
-    /// ├── pypi
-    /// │   ├── ...
-    /// │   ├── pandas
-    /// │   │   ├── pandas-2.1.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.msgpack
-    /// │   │   ├── pandas-2.1.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-    /// │   │   └── pandas-2.1.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64
-    /// │   │       ├── pandas
-    /// │   │       │   ├── ...
-    /// │   │       ├── pandas-2.1.3.dist-info
-    /// │   │       │   ├── ...
-    /// │   │       └── pandas.libs
-    /// │   ├── ...
-    /// └── url
-    ///     └── 4b8be67c801a7ecb
-    ///         └── flask
-    ///             ├── flask-3.0.0-py3-none-any.msgpack
-    ///             ├── flask-3.0.0-py3-none-any.msgpack
-    ///             └── flask-3.0.0-py3-none-any
-    ///                 ├── flask
-    ///                 │   └── ...
-    ///                 └── flask-3.0.0.dist-info
-    ///                     └── ...
+    /// [`WheelCache`] groups entries by their origin and package name. Wheel metadata can be
+    /// cached independently of the wheel payload. Downloaded and locally loaded wheel entries
+    /// record freshness and content hashes, and point to extracted contents in
+    /// [`CacheBucket::Archive`]. Those contents can share files through [`CacheBucket::Files`].
     Wheels,
-    /// Source distributions, wheels built from source distributions, their extracted metadata, and the
-    /// cache policy of the source distribution.
+    /// Source distributions and the wheels built from them.
     ///
-    /// The structure is similar of that of the `Wheel` bucket, except we have an additional layer
-    /// for the source distribution filename and the metadata is at the source distribution-level,
-    /// not at the wheel level.
+    /// [`WheelCache`] groups registry sources by index, package, and version; direct URLs and
+    /// local paths by source URL; and Git sources by repository URL and commit. HTTP and local
+    /// revisions identify the current source state. Build settings, extra build dependencies, and
+    /// build variables can add a further shard.
     ///
-    /// TODO(konstin): The cache policy should be on the source distribution level, the metadata we
-    /// can put next to the wheels as in the `Wheels` bucket.
-    ///
-    /// The unzipped source distribution is stored in a directory matching the source distribution
-    /// archive name.
-    ///
-    /// Source distributions are built into zipped wheel files (as PEP 517 specifies) and unzipped
-    /// lazily before installing. So when resolving, we only build the wheel and store the archive
-    /// file in the cache, when installing, we unpack it under the same name (exclusive of the
-    /// `.whl` extension). You may find a mix of wheel archive zip files and unzipped wheel
-    /// directories in the cache.
-    ///
-    /// Cache structure:
-    ///  * `built-wheels-v0/pypi/foo/34a17436ed1e9669/{manifest.msgpack, metadata.msgpack, foo-1.0.0.zip, foo-1.0.0-py3-none-any.whl, ...other wheels}`
-    ///  * `built-wheels-v0/<digest(index-url)>/foo/foo-1.0.0.zip/{manifest.msgpack, metadata.msgpack, foo-1.0.0-py3-none-any.whl, ...other wheels}`
-    ///  * `built-wheels-v0/url/<digest(url)>/foo/foo-1.0.0.zip/{manifest.msgpack, metadata.msgpack, foo-1.0.0-py3-none-any.whl, ...other wheels}`
-    ///  * `built-wheels-v0/git/<digest(url)>/<git sha>/foo/foo-1.0.0.zip/{metadata.msgpack, foo-1.0.0-py3-none-any.whl, ...other wheels}`
-    ///
-    /// But the url filename does not need to be a valid source dist filename
-    /// (<https://github.com/search?q=path%3A**%2Frequirements.txt+master.zip&type=code>),
-    /// so it could also be the following and we have to take any string as filename:
-    ///  * `built-wheels-v0/url/<sha256(url)>/master.zip/metadata.msgpack`
-    ///
-    /// # Example
-    ///
-    /// The following requirements:
-    /// ```text
-    /// # git source dist
-    /// pydantic-extra-types @ git+https://github.com/pydantic/pydantic-extra-types.git
-    /// # pypi source dist
-    /// django_allauth==0.51.0
-    /// # url source dist
-    /// werkzeug @ https://files.pythonhosted.org/packages/0d/cc/ff1904eb5eb4b455e442834dabf9427331ac0fa02853bf83db817a7dd53d/werkzeug-3.0.1.tar.gz
-    /// ```
-    ///
-    /// ...may be cached as:
-    /// ```text
-    /// built-wheels-v4/
-    /// ├── git
-    /// │   └── 2122faf3e081fb7a
-    /// │       └── 7a2d650a4a7b4d04
-    /// │           ├── metadata.msgpack
-    /// │           └── pydantic_extra_types-2.9.0-py3-none-any.whl
-    /// ├── pypi
-    /// │   └── django-allauth
-    /// │       └── 0.51.0
-    /// │           ├── 0gH-_fwv8tdJ7JwwjJsUc
-    /// │           │   ├── django-allauth-0.51.0.tar.gz
-    /// │           │   │   └── [UNZIPPED CONTENTS]
-    /// │           │   ├── django_allauth-0.51.0-py3-none-any.whl
-    /// │           │   └── metadata.msgpack
-    /// │           └── revision.http
-    /// └── url
-    ///     └── 6781bd6440ae72c2
-    ///         ├── APYY01rbIfpAo_ij9sCY6
-    ///         │   ├── metadata.msgpack
-    ///         │   ├── werkzeug-3.0.1-py3-none-any.whl
-    ///         │   └── werkzeug-3.0.1.tar.gz
-    ///         │       └── [UNZIPPED CONTENTS]
-    ///         └── revision.http
-    /// ```
-    ///
-    /// Structurally, the `manifest.msgpack` is empty, and only contains the caching information
-    /// needed to invalidate the cache. The `metadata.msgpack` contains the metadata of the source
-    /// distribution.
+    /// Source trees, distribution metadata, hashes, and compressed built wheels are stored in
+    /// the appropriate source or build shard. Unpacked built wheels are persisted in
+    /// [`CacheBucket::Archive`] and referenced from this bucket.
     SourceDistributions,
     /// Flat index responses, a format very similar to the simple metadata API.
     ///
