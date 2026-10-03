@@ -96,6 +96,10 @@ pub(crate) async fn metadata(
     let groups = DependencyGroupsWithDefaults::none();
     let state = UniversalState::default();
 
+    // Keep an existing environment discovered for locking so it can be reused after resolution.
+    // New environments must not be created until the lock operation has succeeded.
+    let mut environment = None;
+
     let resolved_lock;
     let lock: &Lock = match &source {
         MetadataSource::Lockfile(workspace) => workspace.lock(),
@@ -106,7 +110,7 @@ pub(crate) async fn metadata(
                 LockMode::Frozen(frozen_source.into())
             } else {
                 interpreter = match target {
-                    LockTarget::Script(script) => ScriptInterpreter::discover(
+                    LockTarget::Script(script) => match ScriptInterpreter::discover(
                         script.into(),
                         python.as_deref().map(PythonRequest::parse),
                         &client_builder,
@@ -121,7 +125,14 @@ pub(crate) async fn metadata(
                         printer,
                     )
                     .await?
-                    .into_interpreter(),
+                    {
+                        ScriptInterpreter::Interpreter(interpreter) => interpreter,
+                        ScriptInterpreter::Environment(discovered) => {
+                            let interpreter = discovered.interpreter().clone();
+                            environment = Some(discovered);
+                            interpreter
+                        }
+                    },
                     LockTarget::Workspace(workspace) => {
                         let workspace_python = WorkspacePython::from_request(
                             python.as_deref().map(PythonRequest::parse),
@@ -131,7 +142,7 @@ pub(crate) async fn metadata(
                             config_discovery,
                         )
                         .await?;
-                        ProjectInterpreter::discover(
+                        match ProjectInterpreter::discover(
                             ProjectEnvironmentTarget::from(workspace),
                             &groups,
                             workspace_python,
@@ -150,7 +161,14 @@ pub(crate) async fn metadata(
                             printer,
                         )
                         .await?
-                        .into_interpreter()
+                        {
+                            ProjectInterpreter::Interpreter(interpreter) => interpreter,
+                            ProjectInterpreter::Environment(discovered) => {
+                                let interpreter = discovered.interpreter().clone();
+                                environment = Some(discovered);
+                                interpreter
+                            }
+                        }
                     }
                 };
 
@@ -208,8 +226,9 @@ pub(crate) async fn metadata(
         },
     };
     let mut export = metadata_for_target(install_target);
-    let environment = if sync.is_some() {
-        Some(match &source {
+    let environment = match environment {
+        Some(environment) => Some(environment),
+        None if sync.is_some() => Some(match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
                 ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(*workspace),
@@ -272,9 +291,8 @@ pub(crate) async fn metadata(
             )
             .await?
             .into_environment()?,
-        })
-    } else {
-        match &source {
+        }),
+        None => match &source {
             MetadataSource::Manifest(LockTarget::Workspace(workspace)) => {
                 ProjectInterpreter::discover_existing(workspace.install_path(), active, cache)?
             }
@@ -284,7 +302,7 @@ pub(crate) async fn metadata(
             MetadataSource::Lockfile(workspace) => {
                 ProjectInterpreter::discover_existing(workspace.root(), active, cache)?
             }
-        }
+        },
     };
 
     if let Some(environment) = environment {
