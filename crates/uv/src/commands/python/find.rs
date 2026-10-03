@@ -25,14 +25,13 @@ use crate::commands::{
 use crate::printer::Printer;
 
 /// Find a Python interpreter.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn find(
     project_dir: &Path,
     request: Option<String>,
     show_version: bool,
     resolve_links: bool,
     no_project: bool,
-    system: bool,
+    environment_preference: EnvironmentPreference,
     config_discovery: ConfigDiscovery,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
@@ -42,12 +41,6 @@ pub(crate) async fn find(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
 ) -> Result<ExitStatus> {
-    let environment_preference = if system {
-        EnvironmentPreference::OnlySystem
-    } else {
-        EnvironmentPreference::Any
-    };
-
     let project = if no_project {
         None
     } else {
