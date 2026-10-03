@@ -110,6 +110,11 @@ By default, `uv init` creates a packaged project using the [uv build backend](..
 The `--build-backend` option can be provided to select an alternative build backend, and
 `--no-package` can be provided to create a flat, unpackaged project instead.
 
+The available `--build-backend` choices are initialization templates, not a restriction on the build
+backends uv supports. Existing projects can use any
+[PEP 517](https://peps.python.org/pep-0517/)-compatible backend, which uv invokes as a
+[build frontend](./build.md).
+
 !!! note
 
     While uv will not build and install the current project without a build system definition,
