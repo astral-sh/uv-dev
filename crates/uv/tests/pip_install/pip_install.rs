@@ -4527,6 +4527,171 @@ fn no_deps() {
     context.assert_command("import flask").failure();
 }
 
+/// Direct wheels with `--no-deps` do not consult unrelated find-links locations.
+#[tokio::test]
+async fn no_deps_direct_wheels_skip_find_links() -> Result<()> {
+    for compile in [false, true] {
+        for (remote, named) in [(false, false), (false, true), (true, false), (true, true)] {
+            let context = uv_test::test_context!("3.12");
+            let server = MockServer::start().await;
+            let (filename, wheel) = generate_wheel(
+                &"network-wheel".parse()?,
+                &"1.0.0".parse()?,
+                &["missing-runtime==1.0".parse()?],
+                &BTreeMap::new(),
+                None,
+                "py3-none-any",
+                &[],
+            );
+            context.temp_dir.child(&filename).write_binary(&wheel)?;
+            Mock::given(method("HEAD"))
+                .and(path(format!("/files/{filename}")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("Content-Length", wheel.len().to_string()),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/files/{filename}")))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/flat"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+            let location = if remote {
+                format!("{}/files/{filename}", server.uri())
+            } else {
+                Url::from_file_path(context.temp_dir.child(&filename).path())
+                    .unwrap()
+                    .to_string()
+            };
+            let requirement = if named {
+                format!("network-wheel @ {location}")
+            } else {
+                location
+            };
+            let mut command = if compile {
+                context
+                    .temp_dir
+                    .child("requirements.in")
+                    .write_str(&requirement)?;
+                let mut command = context.pip_compile();
+                command.arg("requirements.in");
+                command
+            } else {
+                let mut command = context.pip_install();
+                command.arg(requirement);
+                command
+            };
+            command
+                .args([
+                    "--no-deps",
+                    "--no-index",
+                    "--find-links",
+                    &format!("{}/flat", server.uri()),
+                ])
+                .env(EnvVars::UV_HTTP_RETRIES, "0")
+                .assert()
+                .success();
+            if !compile {
+                context.assert_installed("network_wheel", "1.0.0");
+            }
+            server.verify().await;
+        }
+    }
+    Ok(())
+}
+
+/// Registry overrides still need find-links even when the original requirement is a wheel.
+#[tokio::test]
+async fn no_deps_direct_wheels_registry_override() -> Result<()> {
+    for compile in [false, true] {
+        let context = uv_test::test_context!("3.12");
+        let server = MockServer::start().await;
+        let (original, wheel) = generate_wheel(
+            &"network-wheel".parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        context.temp_dir.child(&original).write_binary(&wheel)?;
+        let (replacement, wheel) = generate_wheel(
+            &"network-wheel".parse()?,
+            &"2.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        Mock::given(method("GET"))
+            .and(path("/flat"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                format!("<a href='/files/{replacement}'>{replacement}</a>"),
+                "text/html",
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("HEAD"))
+            .and(path(format!("/files/{replacement}")))
+            .respond_with(
+                ResponseTemplate::new(200).insert_header("Content-Length", wheel.len().to_string()),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{replacement}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+            .mount(&server)
+            .await;
+        context
+            .temp_dir
+            .child("requirements.in")
+            .write_str(&format!(
+                "network-wheel @ {}",
+                Url::from_file_path(context.temp_dir.child(&original).path()).unwrap()
+            ))?;
+        context
+            .temp_dir
+            .child("overrides.txt")
+            .write_str("network-wheel==2.0.0")?;
+        let mut command = if compile {
+            context.pip_compile()
+        } else {
+            let mut command = context.pip_install();
+            command.arg("-r");
+            command
+        };
+        command
+            .args([
+                "requirements.in",
+                "--override",
+                "overrides.txt",
+                "--no-deps",
+                "--no-index",
+                "--find-links",
+                &format!("{}/flat", server.uri()),
+            ])
+            .env(EnvVars::UV_HTTP_RETRIES, "0")
+            .assert()
+            .success();
+        if !compile {
+            context.assert_installed("network_wheel", "2.0.0");
+        }
+        server.verify().await;
+    }
+    Ok(())
+}
+
 /// Ignore unsatisfied dependencies when checking an installed package with `--no-deps`, while
 /// retaining diagnostics in strict mode.
 #[test]
