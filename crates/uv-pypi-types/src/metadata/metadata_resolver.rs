@@ -38,45 +38,27 @@ pub struct ResolutionMetadata {
     pub dynamic: bool,
 }
 
+struct ResolutionMetadataFields {
+    name: PackageName,
+    version: Version,
+    requires_dist: Box<[Requirement<VerbatimParsedUrl>]>,
+    requires_python: Option<VersionSpecifiers>,
+    provides_extra: Box<[ExtraName]>,
+}
+
 /// From <https://github.com/PyO3/python-pkginfo-rs/blob/d719988323a0cfea86d4737116d7917f30e819e2/src/metadata.rs#LL78C2-L91C26>
 impl ResolutionMetadata {
     /// Parse the [`ResolutionMetadata`] from a `METADATA` file, as included in a built distribution (wheel).
     pub fn parse_metadata(content: &[u8]) -> Result<Self, MetadataError> {
         let headers = Headers::parse(content)?;
 
-        let name = PackageName::from_owned(
-            headers
-                .get_first_value("Name")
-                .ok_or(MetadataError::FieldNotFound("Name"))?,
-        )?;
-        let version = Version::from_str(
-            &headers
-                .get_first_value("Version")
-                .ok_or(MetadataError::FieldNotFound("Version"))?,
-        )
-        .map_err(MetadataError::Pep440VersionError)?;
-        let requires_dist = headers
-            .get_all_values("Requires-Dist")
-            .map(|requires_dist| LenientRequirement::from_str(&requires_dist))
-            .map_ok(Requirement::from)
-            .collect::<Result<Box<_>, _>>()?;
-        let requires_python = headers
-            .get_first_value("Requires-Python")
-            .map(|requires_python| LenientVersionSpecifiers::from_str(&requires_python))
-            .transpose()?
-            .map(VersionSpecifiers::from);
-        let provides_extra = headers
-            .get_all_values("Provides-Extra")
-            .filter_map(
-                |provides_extra| match ExtraName::from_owned(provides_extra) {
-                    Ok(extra_name) => Some(extra_name),
-                    Err(err) => {
-                        warn!("Ignoring invalid extra: {err}");
-                        None
-                    }
-                },
-            )
-            .collect::<Box<_>>();
+        let ResolutionMetadataFields {
+            name,
+            version,
+            requires_dist,
+            requires_python,
+            provides_extra,
+        } = Self::parse_fields(&headers)?;
         let dynamic = headers
             .get_all_values("Dynamic")
             .any(|field| field == "Version");
@@ -121,7 +103,25 @@ impl ResolutionMetadata {
             }
         }
 
-        // The `Name` and `Version` fields are required, and can't be dynamic.
+        let ResolutionMetadataFields {
+            name,
+            version,
+            requires_dist,
+            requires_python,
+            provides_extra,
+        } = Self::parse_fields(&headers)?;
+
+        Ok(Self {
+            name,
+            version,
+            requires_dist,
+            requires_python,
+            provides_extra,
+            dynamic,
+        })
+    }
+
+    fn parse_fields(headers: &Headers<'_>) -> Result<ResolutionMetadataFields, MetadataError> {
         let name = PackageName::from_owned(
             headers
                 .get_first_value("Name")
@@ -133,8 +133,6 @@ impl ResolutionMetadata {
                 .ok_or(MetadataError::FieldNotFound("Version"))?,
         )
         .map_err(MetadataError::Pep440VersionError)?;
-
-        // The remaining fields are required to be present.
         let requires_dist = headers
             .get_all_values("Requires-Dist")
             .map(|requires_dist| LenientRequirement::from_str(&requires_dist))
@@ -158,13 +156,12 @@ impl ResolutionMetadata {
             )
             .collect::<Box<_>>();
 
-        Ok(Self {
+        Ok(ResolutionMetadataFields {
             name,
             version,
             requires_dist,
             requires_python,
             provides_extra,
-            dynamic,
         })
     }
 
@@ -339,6 +336,153 @@ mod tests {
         assert_eq!(meta.name, PackageName::from_str("asdf").unwrap());
         assert_eq!(meta.version, Version::new([1, 0]));
         assert_eq!(*meta.requires_dist, ["foo".parse().unwrap()]);
+    }
+
+    #[test]
+    fn shared_resolution_fields() {
+        let contents = concat!(
+            "Metadata-Version: 2.3\n",
+            "NAME: Demo_Project\n",
+            "Version: 1.2.0\n",
+            "Requires-Dist: first>=1\n",
+            "requires-dist: UNKNOWN\n",
+            "Requires-Dist: second (>=2.0.*)\n",
+            "Requires-Dist: first>=1\n",
+            "Requires-Python: >=3.8,\n",
+            "Provides-Extra: Test_Feature\n",
+            "Provides-Extra: UNKNOWN\n",
+            "Provides-Extra: not an extra\n",
+            "Provides-extra: test.feature\n",
+            "Dynamic: version\n",
+            "Dynamic: Version\n",
+        );
+        for metadata in [
+            ResolutionMetadata::parse_metadata(contents.as_bytes()).unwrap(),
+            ResolutionMetadata::parse_pkg_info(contents.as_bytes()).unwrap(),
+        ] {
+            assert_eq!(
+                metadata.name,
+                PackageName::from_str("demo-project").unwrap()
+            );
+            assert_eq!(metadata.version, Version::new([1, 2, 0]));
+            assert_eq!(
+                *metadata.requires_dist,
+                [
+                    "first>=1".parse().unwrap(),
+                    "second>=2.0".parse().unwrap(),
+                    "first>=1".parse().unwrap(),
+                ]
+            );
+            assert_eq!(metadata.requires_python, Some(">=3.8".parse().unwrap()));
+            assert_eq!(
+                *metadata.provides_extra,
+                [
+                    "test-feature".parse().unwrap(),
+                    "test-feature".parse().unwrap()
+                ]
+            );
+            assert!(metadata.dynamic);
+        }
+
+        let contents = concat!(
+            "Metadata-Version: 2.2\n",
+            "Name: example\n",
+            "Version: 1.0\n",
+            "Requires-Dist: UNKNOWN\n",
+            "Requires-Python: UNKNOWN\n",
+            "Provides-Extra: UNKNOWN\n",
+            "Dynamic: version\n",
+            "Dynamic: requires-dist\n",
+        );
+        for metadata in [
+            ResolutionMetadata::parse_metadata(contents.as_bytes()).unwrap(),
+            ResolutionMetadata::parse_pkg_info(contents.as_bytes()).unwrap(),
+        ] {
+            assert!(metadata.requires_dist.is_empty());
+            assert!(metadata.requires_python.is_none());
+            assert!(metadata.provides_extra.is_empty());
+            assert!(!metadata.dynamic);
+        }
+    }
+
+    #[test]
+    fn metadata_error_order() {
+        let parse_both = |contents: &str| {
+            [
+                ResolutionMetadata::parse_metadata(contents.as_bytes()),
+                ResolutionMetadata::parse_pkg_info(contents.as_bytes()),
+            ]
+        };
+
+        let contents = "Metadata-Version: 2.3\nVersion: invalid\nRequires-Dist: first ???\nRequires-Python: ??";
+        for result in parse_both(contents) {
+            assert_matches!(result, Err(MetadataError::FieldNotFound("Name")));
+        }
+
+        let contents = "Metadata-Version: 2.3\nName: invalid name\nVersion: invalid\nRequires-Dist: first ???\nRequires-Python: ??";
+        for result in parse_both(contents) {
+            assert_matches!(result, Err(MetadataError::InvalidName(_)));
+        }
+
+        let contents =
+            "Metadata-Version: 2.3\nName: example\nRequires-Dist: first ???\nRequires-Python: ??";
+        for result in parse_both(contents) {
+            assert_matches!(result, Err(MetadataError::FieldNotFound("Version")));
+        }
+
+        let contents = "Metadata-Version: 2.3\nName: example\nVersion: invalid\nRequires-Dist: first ???\nRequires-Python: ??";
+        for result in parse_both(contents) {
+            assert_matches!(result, Err(MetadataError::Pep440VersionError(_)));
+        }
+
+        let contents = "Metadata-Version: 2.3\nName: example\nVersion: 1.0\nRequires-Dist: first ???\nRequires-Dist: second ???\nRequires-Python: ??";
+        for result in parse_both(contents) {
+            assert_matches!(result, Err(MetadataError::Pep508Error(error)) if error.input == "first ???");
+        }
+
+        let contents = "Metadata-Version: 2.3\nName: example\nVersion: 1.0\nRequires-Dist: first>=1\nRequires-Python: ??";
+        for result in parse_both(contents) {
+            assert_matches!(result, Err(MetadataError::Pep440Error(_)));
+        }
+
+        let contents = "Name: invalid name\nDynamic: Requires-Dist";
+        assert_matches!(
+            ResolutionMetadata::parse_pkg_info(contents.as_bytes()),
+            Err(MetadataError::FieldNotFound("Metadata-Version"))
+        );
+
+        let contents = "Metadata-Version: invalid\nName: invalid name\nDynamic: Requires-Dist";
+        assert_matches!(
+            ResolutionMetadata::parse_pkg_info(contents.as_bytes()),
+            Err(MetadataError::InvalidMetadataVersion(version)) if version == "invalid"
+        );
+
+        for version in ["2.1", "3.0"] {
+            let contents =
+                format!("Metadata-Version: {version}\nName: invalid name\nDynamic: Requires-Dist");
+            assert_matches!(
+                ResolutionMetadata::parse_pkg_info(contents.as_bytes()),
+                Err(MetadataError::UnsupportedMetadataVersion(actual)) if actual == version
+            );
+        }
+
+        for (first, second) in [
+            ("Requires-Python", "Requires-Dist"),
+            ("Requires-Dist", "Provides-Extra"),
+            ("Provides-Extra", "Requires-Python"),
+        ] {
+            let contents = format!(
+                "Metadata-Version: 2.3\nName: invalid name\nVersion: invalid\nDynamic: version\nDynamic: {first}\nDynamic: {second}"
+            );
+            assert_matches!(
+                ResolutionMetadata::parse_pkg_info(contents.as_bytes()),
+                Err(MetadataError::DynamicField(field)) if field == first
+            );
+            assert_matches!(
+                ResolutionMetadata::parse_metadata(contents.as_bytes()),
+                Err(MetadataError::InvalidName(_))
+            );
+        }
     }
 
     #[test]
