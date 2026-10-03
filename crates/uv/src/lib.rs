@@ -2357,6 +2357,7 @@ async fn run_project(
                 project_dir,
                 script,
                 command,
+                args.profile,
                 requirements,
                 args.show_resolution || globals.verbose > 0,
                 args.lock_check,
