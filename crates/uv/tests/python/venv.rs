@@ -1662,6 +1662,71 @@ fn verify_pyvenv_cfg() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn reports_pyvenv_cfg_flush_errors() -> Result<()> {
+    use std::io::{BufWriter, Read};
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let _preview = uv_preview::test::with_features(&[]);
+    let cache = uv_cache::Cache::from_path(context.cache_dir.path());
+    let source_python = fs_err::canonicalize(&context.python_versions[0].1)?;
+    let interpreter = uv_python::Interpreter::query(&source_python, &cache)?;
+
+    let control = context.temp_dir.child("flush-control");
+    let failure = context.temp_dir.child("flush-error");
+    assert!(!source_python.starts_with(control.path()));
+    assert!(!source_python.starts_with(failure.path()));
+    let create = |path: &std::path::Path| {
+        uv_virtualenv::create_venv(
+            path,
+            interpreter.clone(),
+            uv_virtualenv::Prompt::None,
+            false,
+            uv_virtualenv::OnExisting::Allow,
+            false,
+            uv_virtualenv::Seed::Disabled,
+            false,
+        )
+    };
+
+    create(control.path())?;
+    let control_cfg = control.child("pyvenv.cfg");
+    let metadata = fs_err::symlink_metadata(control_cfg.path())?;
+    assert!(metadata.file_type().is_file());
+    let capacity = u64::try_from(BufWriter::new(std::io::sink()).capacity())?;
+    assert!(metadata.len() > 0 && metadata.len() < capacity);
+    let mut contents = String::new();
+    fs_err::File::open(control_cfg.path())?
+        .take(capacity)
+        .read_to_string(&mut contents)?;
+    assert_eq!(u64::try_from(contents.len())?, metadata.len());
+    assert!(contents.contains("include-system-site-packages = false\n"));
+
+    let full = fs_err::metadata("/dev/full")?;
+    assert!(full.file_type().is_char_device());
+    assert_eq!(full.rdev(), nix::libc::makedev(1, 7));
+    failure.create_dir_all()?;
+    let failure_cfg = failure.child("pyvenv.cfg");
+
+    // Reading `/dev/full` never reaches EOF. This fixture is only safe while
+    // `create_venv` does not query the new interpreter; unlink before inspecting
+    // the result.
+    symlink("/dev/full", failure_cfg.path())?;
+    let result = create(failure.path());
+    fs_err::remove_file(failure_cfg.path())?;
+
+    let uv_virtualenv::Error::Io(error) =
+        result.expect_err("a failed pyvenv.cfg flush should fail creation")
+    else {
+        panic!("expected an I/O error");
+    };
+    assert_eq!(error.kind(), std::io::ErrorKind::StorageFull);
+    assert!(error.to_string().contains("pyvenv.cfg"));
+    Ok(())
+}
+
+#[test]
 fn verify_pyvenv_cfg_relocatable() {
     let context = uv_test::test_context!("3.12");
     let prompt = "résumé \"quoted\"\\path\n";
