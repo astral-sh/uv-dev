@@ -27,6 +27,17 @@ To lock dependencies declared in a `requirements.in`:
 $ uv pip compile requirements.in -o requirements.txt
 ```
 
+To create a requirements file that can be used across platforms and Python versions:
+
+```console
+$ uv pip compile requirements.in --universal --python-version 3.10 -o requirements.txt
+```
+
+In universal mode, `--python-version` sets the minimum supported Python version. If omitted, uv uses
+the current Python version as the lower bound. The output retains environment markers to select the
+appropriate dependencies for each environment. See the
+[universal resolution](../concepts/resolution.md#universal-resolution) documentation for details.
+
 To lock dependencies declared in multiple files:
 
 ```console
