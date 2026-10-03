@@ -2229,16 +2229,17 @@ fn workspace_members_with_leading_dot_slash() -> Result<()> {
     "#);
 
     // Test syncing from within foo works correctly
-    uv_snapshot!(context.filters(), context.sync().current_dir(workspace.join("packages").join("foo")), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").current_dir(workspace.join("packages").join("foo")), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: [TEMP_DIR]/workspace/.venv
+    Would create project environment at: [TEMP_DIR]/workspace/.venv
     Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + bar==0.1.0 (from file://[TEMP_DIR]/workspace/packages/bar)
-     + foo==0.1.0 (from file://[TEMP_DIR]/workspace/packages/foo)
+    Found up-to-date lockfile at: [TEMP_DIR]/workspace/uv.lock
+    Would download 2 packages
+    Would install 2 packages
+     + bar @ file://[TEMP_DIR]/workspace/packages/bar
+     + foo @ file://[TEMP_DIR]/workspace/packages/foo
     "
     );
 
