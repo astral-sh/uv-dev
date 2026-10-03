@@ -100,8 +100,9 @@ impl GlobDirFilter {
         // Paths aren't necessarily UTF-8, which we can gloss over since the globs match bytes only
         // anyway.
         let byte_path = path.as_os_str().as_encoded_bytes();
-        for b in byte_path {
-            state = dfa.next_state(state, *b);
+        for &b in byte_path {
+            let b = if cfg!(windows) && b == b'/' { b'\\' } else { b };
+            state = dfa.next_state(state, b);
         }
         // Say we're looking at a directory `foo/bar`. We want to continue if either `foo/bar` is
         // a match, e.g., from `foo/*`, or a path below it can match, e.g., from `foo/bar/*`.
@@ -158,6 +159,56 @@ mod tests {
         assert!(matcher.match_directory(&Path::new("path3").join("dir3")));
         assert!(matcher.match_directory(&Path::new("path4").join("dir4")));
         assert!(!matcher.match_directory(&Path::new("path5").join("dir5")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn mixed_windows_path_separators() {
+        let matcher = GlobDirFilter::from_globs(vec![
+            PortableGlobParser::Pep639
+                .parse("foo/bar/baz/file.txt")
+                .unwrap(),
+        ])
+        .unwrap();
+
+        for directory in [
+            r"foo\bar",
+            "foo/bar",
+            r"foo\bar\baz",
+            r"foo/bar\baz",
+            r"foo\bar/baz",
+            "foo/bar/baz",
+        ] {
+            assert!(matcher.match_directory(Path::new(directory)), "{directory}");
+        }
+        for directory in [r"foo\other", "foo/other", r"foo/bar\other"] {
+            assert!(
+                !matcher.match_directory(Path::new(directory)),
+                "{directory}"
+            );
+        }
+        assert!(matcher.match_path(Path::new(r"foo/bar\baz/file.txt")));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn backslashes_are_not_separators() {
+        let matcher = GlobDirFilter::from_globs(vec![
+            PortableGlobParser::Pep639
+                .parse("foo/bar/baz/file.txt")
+                .unwrap(),
+        ])
+        .unwrap();
+
+        for directory in ["foo/bar", "foo/bar/baz"] {
+            assert!(matcher.match_directory(Path::new(directory)), "{directory}");
+        }
+        for directory in [r"foo\bar", r"foo/bar\baz", r"foo\bar/baz"] {
+            assert!(
+                !matcher.match_directory(Path::new(directory)),
+                "{directory}"
+            );
+        }
     }
 
     /// Check that we skip directories that can never match.
