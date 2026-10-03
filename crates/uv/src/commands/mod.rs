@@ -169,6 +169,7 @@ impl From<project::ProjectError> for UvError {
             error @ (project::ProjectError::LockMismatch(..)
             | project::ProjectError::LockFormat(..)
             | project::ProjectError::MissingLockfile(..)
+            | project::ProjectError::ParentLock(..)
             | project::ProjectError::LockWorkspaceMismatch(..)) => Self::user(error),
             project::ProjectError::Operation(error) => Self::from(error),
             project::ProjectError::Requirements(error) => {

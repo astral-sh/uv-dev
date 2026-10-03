@@ -87,6 +87,7 @@ pub(crate) mod install_target;
 pub(crate) mod lock;
 pub(crate) mod lock_target;
 pub(super) mod lockfile;
+pub(crate) mod parent_lock;
 mod python;
 pub(crate) mod remove;
 pub(crate) mod run;
@@ -318,6 +319,9 @@ pub(crate) enum ProjectError {
 
     #[error(transparent)]
     Lock(#[from] uv_lock::LockError),
+
+    #[error(transparent)]
+    ParentLock(#[from] parent_lock::ParentLockError),
 
     #[error(transparent)]
     Operation(#[from] pip::operations::Error),

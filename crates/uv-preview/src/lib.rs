@@ -263,6 +263,8 @@ pub enum PreviewFeature {
     WorkspaceDir,
     /// Allows using `uv workspace list`.
     WorkspaceList,
+    /// Allows independently locked child workspaces to prefer their parent workspace's lockfile.
+    NestedWorkspaces,
     /// Allows using `uv export --format=cyclonedx1.5`.
     SbomExport,
     /// Allows using `uv auth helper` as a credential helper for external tools.
