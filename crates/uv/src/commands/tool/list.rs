@@ -44,11 +44,7 @@ pub(crate) async fn list(
     let installed_tools = InstalledTools::from_settings()?;
     let _lock = match installed_tools.lock().await {
         Ok(lock) => lock,
-        Err(err)
-            if err
-                .as_io_error()
-                .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
-        {
+        Err(uv_tool::Error::ToolsDirectoryNotFound { .. }) => {
             writeln!(printer.stderr(), "No tools installed")?;
             return Ok(ExitStatus::Success);
         }
