@@ -884,6 +884,34 @@ pub struct BrokenLink {
     pub venv: bool,
 }
 
+impl BrokenLink {
+    /// Return the absolute missing target of a broken symlink, if it can be determined.
+    ///
+    /// This is best-effort: cyclic, excessively long, repaired, or unreadable chains have no
+    /// missing target to display. Windows trampolines do not expose a symlink target.
+    pub fn missing_target(&self) -> Option<PathBuf> {
+        if !self.unix {
+            return None;
+        }
+
+        let mut path = std::path::absolute(&self.path).ok()?;
+        for depth in 0..=40 {
+            match fs::read_link(&path) {
+                Ok(target) if depth < 40 => {
+                    // Resolve relative targets against the link, not the working directory. Do
+                    // not collapse `..` lexically, since the parent may contain symlinks.
+                    path = path.parent()?.join(target);
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound && depth > 0 => {
+                    return Some(path);
+                }
+                Ok(_) | Err(_) => return None,
+            }
+        }
+        None
+    }
+}
+
 impl Display for BrokenLink {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if self.unix {
@@ -1371,7 +1399,67 @@ mod tests {
     use uv_cache_info::Timestamp;
     use uv_pep440::Version;
 
-    use crate::Interpreter;
+    use crate::{BrokenLink, Interpreter};
+
+    #[test]
+    fn broken_link_missing_target() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let link = BrokenLink {
+            path: temp_dir.path().join("python"),
+            unix: true,
+            venv: true,
+        };
+        let missing = temp_dir.path().join("missing");
+        fs::os::unix::fs::symlink("intermediate", &link.path)?;
+        fs::os::unix::fs::symlink(&missing, temp_dir.path().join("intermediate"))?;
+
+        assert_eq!(link.missing_target(), Some(missing.clone()));
+
+        // A repaired chain no longer has a missing target.
+        fs::write(missing, "")?;
+        assert_eq!(link.missing_target(), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn broken_link_missing_target_cycles() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let link = BrokenLink {
+            path: temp_dir.path().join("python"),
+            unix: true,
+            venv: true,
+        };
+        fs::os::unix::fs::symlink("intermediate", &link.path)?;
+        fs::os::unix::fs::symlink("python", temp_dir.path().join("intermediate"))?;
+
+        assert_eq!(link.missing_target(), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn broken_link_missing_target_depth_limit() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let link = BrokenLink {
+            path: temp_dir.path().join("0"),
+            unix: true,
+            venv: true,
+        };
+        for index in 0..40 {
+            fs::os::unix::fs::symlink(
+                (index + 1).to_string(),
+                temp_dir.path().join(index.to_string()),
+            )?;
+        }
+
+        assert_eq!(link.missing_target(), Some(temp_dir.path().join("40")));
+
+        fs::os::unix::fs::symlink("41", temp_dir.path().join("40"))?;
+        assert_eq!(link.missing_target(), None);
+
+        Ok(())
+    }
 
     fn mocked_interpreter_response() -> &'static str {
         indoc! {r##"
