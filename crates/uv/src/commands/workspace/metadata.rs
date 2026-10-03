@@ -213,6 +213,7 @@ pub(crate) async fn metadata(
                 ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(*workspace),
                     None,
+                    None,
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,
@@ -254,6 +255,7 @@ pub(crate) async fn metadata(
                     lock,
                 },
                 Some(install_target),
+                None,
                 &groups,
                 python.as_deref().map(PythonRequest::parse),
                 &install_mirrors,
