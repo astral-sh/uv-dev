@@ -265,7 +265,6 @@ fn pip_compile_baseline() {
                         [],
                     ),
                     exclude: [],
-                    only_extras: false,
                     history: ExtrasSpecificationHistory {
                         extra: [],
                         only_extra: [],
@@ -642,7 +641,6 @@ fn pip_install_baseline() {
                         [],
                     ),
                     exclude: [],
-                    only_extras: false,
                     history: ExtrasSpecificationHistory {
                         extra: [],
                         only_extra: [],
