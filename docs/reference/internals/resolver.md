@@ -2,93 +2,78 @@
 
 !!! tip
 
-    This document focuses on the internal workings of uv's resolver. For using uv, see the
-    [resolution concept](../../concepts/resolution.md) documentation.
+    This document describes how uv's resolver works. The
+    [resolution concept documentation](../../concepts/resolution.md) describes how to use uv.
 
 ## Resolver
 
-As defined in a textbook, resolution, or finding a set of version to install from a given set of
-requirements, is equivalent to the
-[SAT problem](https://en.wikipedia.org/wiki/Boolean_satisfiability_problem) and thereby NP-complete:
-in the worst case you have to try all possible combinations of all versions of all packages and
-there are no general, fast algorithms. In practice, this is misleading for a number of reasons:
+Resolution finds package versions that satisfy a set of requirements. It is equivalent to the
+[SAT problem](https://en.wikipedia.org/wiki/Boolean_satisfiability_problem), so it is NP-complete.
+In the worst case, a resolver must try every combination of package versions. However, practical
+resolution differs from this theoretical model:
 
-- The slowest part of resolution in uv is loading package and version metadata, even if it's cached.
-- There are many possible solutions, but some are preferable to others. For example, we generally
-  prefer using the latest version of packages.
-- Package dependencies are complex, e.g., there are contiguous versions ranges — not arbitrary
-  boolean inclusion/exclusions of versions, adjacent releases often have the same or similar
-  requirements, etc.
-- For most resolutions, the resolver doesn't need to backtrack, picking versions iteratively is
-  sufficient. If there are version preferences from a previous resolution, barely any work needs to
-  be done.
-- When resolution fails, more information is needed than a message that there is no solution (as is
-  seen in SAT solvers). Instead, the resolver should produce an understandable error trace that
-  states which packages are involved in away to allows a user to remove the conflict.
-- The most important heuristic for performance and user experience is determining the order in which
-  decisions are made through prioritization.
+- Loading package and version metadata is the slowest part, even when metadata is cached.
+- Some valid solutions are better than others. uv generally prefers the latest package versions.
+- Package dependencies have useful structure. Version ranges are usually continuous, and nearby
+  releases often have similar requirements.
+- Most resolutions do not require backtracking. Previous version preferences can further reduce the
+  work.
+- Failures need clear error messages that identify conflicting packages and explain the cause.
+- The order in which the resolver selects packages strongly affects performance and results.
 
 uv uses [pubgrub-rs](https://github.com/pubgrub-rs/pubgrub), the Rust implementation of
-[PubGrub](https://nex3.medium.com/pubgrub-2fb6470504f), an incremental version solver. PubGrub in uv
-works in the following steps:
+[PubGrub](https://nex3.medium.com/pubgrub-2fb6470504f), an incremental version solver. uv uses the
+following process:
 
-- Start with a partial solution that declares which packages versions have been selected and which
-  are undecided. Initially, only a virtual root package is decided.
-- The highest priority package is selected from the undecided packages. Roughly, packages with URLs
-  (including file, git, etc.) have the highest priority, then those with more exact specifiers (such
-  as `==`), then those with less strict specifiers. Inside each category, packages are ordered by
-  when they were first seen (i.e. order in a file), making the resolution deterministic.
-- A version is picked for the selected package. The version must works with all specifiers from the
-  requirements in the partial solution and must not be previously marked as incompatible. The
-  resolver prefers versions from a lockfile (`uv.lock` or `-o requirements.txt`) and those installed
-  in the current environment. Versions are checked from highest to lowest (unless using an
-  alternative [resolution strategy](../../concepts/resolution.md#resolution-strategy)).
-- All requirements of the selected package version are added to the undecided packages. uv
-  prefetches their metadata in the background to improve performance.
-- The process is either repeated with the next package unless a conflict is detected, in which the
-  resolver will backtrack. For example, the partial solution contains, among other packages, `a 2`
-  then `b 2` with the requirements `a 2 -> c 1` and `b 2 -> c 2`. No compatible version of `c` can
-  be found. PubGrub can determine this was caused by `a 2` and `b 2` and add the incompatibility
-  `{a 2, b 2}`, meaning that when either is picked, the other cannot be selected. The partial
-  solution is restored to `a 2` with the tracked incompatibility and the resolver attempts to pick a
-  new version for `b`.
+- A partial solution records selected and undecided package versions. Initially, only the virtual
+  root package is selected.
+- The resolver selects the highest-priority undecided package. URL dependencies have the highest
+  priority, followed by exact specifiers such as `==`, then less strict specifiers. Within each
+  category, the resolver uses the order in which packages first appeared. This keeps the result
+  deterministic.
+- The resolver selects a compatible package version that is not already marked incompatible. It
+  prefers versions from a lockfile, such as `uv.lock` or `-o requirements.txt`, and versions already
+  installed in the environment. Unless another
+  [resolution strategy](../../concepts/resolution.md#resolution-strategy) applies, it checks
+  versions from highest to lowest.
+- The resolver adds the selected version's requirements to the undecided packages. uv fetches their
+  metadata in the background.
+- The process continues until the resolver detects a conflict. For example, `a 2 -> c 1` and
+  `b 2 -> c 2` require incompatible versions of `c`. PubGrub records `{a 2, b 2}` as an
+  incompatibility, restores the partial solution to `a 2`, and selects another version of `b`.
 
-Eventually, the resolver either picks compatible versions for all packages (a successful resolution)
-or there is an incompatibility including the virtual "root" package which defines the versions
-requested by the user. An incompatibility with the root package indicates that whatever versions of
-the root dependencies and their transitive dependencies are picked, there will always be a conflict.
-From the incompatibilities tracked in PubGrub, an error message is constructed to enumerate the
-involved packages.
+Resolution succeeds when the resolver selects compatible versions for all packages. It fails when an
+incompatibility includes the virtual root package. This means no combination of direct and indirect
+dependencies can satisfy the requested versions. PubGrub uses recorded incompatibilities to identify
+the packages involved in its error message.
 
 !!! tip
 
-    For more details on the PubGrub algorithm, see [Internals of the PubGrub
-    algorithm](https://pubgrub-rs-guide.pages.dev/internals/intro).
+    [Internals of the PubGrub algorithm](https://pubgrub-rs-guide.pages.dev/internals/intro)
+    describes the algorithm in more detail.
 
-In addition to PubGrub's base algorithm, we also use a heuristic that backtracks and switches the
-order of two packages if they have been conflicting too much.
+uv also changes the order of two packages when they conflict repeatedly.
 
 ## Forking
 
-Python resolvers historically didn't support backtracking, and even with backtracking, resolution
-was usually limited to single environment, which one specific architecture, operating system, Python
-version, and Python implementation. Some packages use contradictory requirements for different
-environments, for example:
+Historically, Python resolvers did not support backtracking. Even with backtracking, resolution
+often covered only one architecture, operating system, Python version, and Python implementation.
+Some packages require different versions in different environments:
 
 ```
 numpy>=2,<3 ; python_version >= "3.11"
 numpy>=1.16,<2 ; python_version < "3.11"
 ```
 
-Since Python only allows one version of each package, a naive resolver would error here. Inspired by
-[Poetry](https://github.com/python-poetry/poetry), uv uses a forking resolver: whenever there are
-multiple requirements for a package with different markers, the resolution is split.
+Because Python allows only one installed version of each package, a simple resolver would reject
+these requirements. Inspired by [Poetry](https://github.com/python-poetry/poetry), uv splits the
+resolution when requirements for the same package have different markers.
 
-In the above example, the partial solution would be split into two resolutions, one for
-`python_version >= "3.11"` and one for `python_version < "3.11"`.
+In this example, the partial solution splits into one resolution for `python_version >= "3.11"` and
+another for `python_version < "3.11"`.
 
-If markers overlap or are missing a part of the marker space, the resolver splits additional times —
-there can be many forks per package. For example, given:
+If markers overlap or do not cover all environments, the resolver creates additional forks. For
+example:
 
 ```
 flask > 1 ; sys_platform == 'darwin'
@@ -96,241 +81,205 @@ flask > 2 ; sys_platform == 'win32'
 flask
 ```
 
-A fork would be created for `sys_platform == 'darwin'`, for `sys_platform == 'win32'`, and for
+This creates forks for `sys_platform == 'darwin'`, `sys_platform == 'win32'`, and
 `sys_platform != 'darwin' and sys_platform != 'win32'`.
 
-Forks can be nested, e.g., each fork is dependent on any previous forks that occurred. Forks with
-identical packages are merged to keep the number of forks low.
+Forks can be nested and depend on earlier forks. uv merges forks with identical packages to limit
+their number.
 
 !!! tip
 
-    Forking can be observed in the logs of `uv lock -v` by looking for
-    `Splitting resolution on ...`, `Solving split ... (requires-python: ...)` and `Split ... resolution
-    took ...`.
+    The logs from `uv lock -v` show forks through `Splitting resolution on ...`,
+    `Solving split ... (requires-python: ...)`, and `Split ... resolution took ...` messages.
 
-One difficulty in a forking resolver is that where splits occur is dependent on the order packages
-are seen, which is in turn dependent on the preferences, e.g., from `uv.lock`. So it is possible for
-the resolver to solve the requirements with specific forks, write this to the lockfile, and when the
-resolver is invoked again, a different solution is found because the preferences result in different
-fork points. To avoid this, the `resolution-markers` of each fork and each package that diverges
-between forks is written to the lockfile. When performing a new resolution, the forks from the
-lockfile are used to ensure the resolution is stable. When requirements change, new forks may be
-added to the saved forks.
+Split points depend on the order in which the resolver finds packages. Lockfile preferences can
+change that order and produce different forks during the next resolution. To keep resolutions
+stable, uv records `resolution-markers` for each fork and each package that differs between forks.
+Later resolutions reuse the saved forks. Changed requirements can add new forks.
 
 ## Wheel tags
 
-While uv's resolution is universal with respect to environment markers, this doesn't extend to wheel
-tags. Wheel tags can encode the Python version, Python implementation, operating system, and
-architecture. For example, `torch-2.4.0-cp312-cp312-manylinux2014_aarch64.whl` is only compatible
-with CPython 3.12 on arm64 Linux with `glibc>=2.17` (per the `manylinux2014` policy), while
-`tqdm-4.66.4-py3-none-any.whl` works with all Python 3 versions and interpreters on any operating
-system and architecture. Most projects have a universally compatible source distribution that can be
-used when attempted to install a package that has no compatible wheel, but some packages, such as
-`torch`, don't publish a source distribution. In this case an installation on, e.g., Python 3.13, an
-uncommon operating system, or architecture, will fail and complain that there is no matching wheel.
+uv resolves environment markers universally, but wheel tags remain platform-specific. A wheel tag
+can identify the Python version, Python implementation, operating system, and architecture. For
+example, `torch-2.4.0-cp312-cp312-manylinux2014_aarch64.whl` only supports CPython 3.12 on arm64
+Linux with `glibc>=2.17`, as required by the `manylinux2014` policy. In contrast,
+`tqdm-4.66.4-py3-none-any.whl` supports all Python 3 versions and interpreters on every operating
+system and architecture.
+
+Most projects provide a source distribution that uv can build when no compatible wheel exists.
+However, some packages, such as `torch`, do not publish source distributions. Installation then
+fails on any Python version, operating system, or architecture without a matching wheel.
 
 ## Marker and wheel tag filtering
 
-In every fork, we know what markers are possible. In non-universal resolution, we know their exact
-values. In universal mode, we know at least a constraint for the python requirement, e.g.,
-`requires-python = ">=3.12"` means that `importlib_metadata; python_version < "3.10"` can be
-discarded because it can never be installed. If additionally `tool.uv.environments` is set, we can
-filter out requirements with markers disjoint with those environments. Inside each fork, we can
-additionally filter by the fork markers.
+Each fork has a known set of possible markers. Non-universal resolution knows their exact values.
+Universal resolution knows at least the Python version constraint. For example,
+`requires-python = ">=3.12"` excludes `importlib_metadata; python_version < "3.10"` because that
+dependency cannot apply. The `tool.uv.environments` setting can exclude requirements for other
+environments. Each fork can also exclude requirements that conflict with its own markers.
 
-There is some redundancy in the marker expressions, where the value of one marker field implies the
-value of another field. Internally, we normalize `python_version` and `python_full_version` as well
-as known values of `platform_system` and `sys_platform` to a shared canonical representation, so
-they can match against each other.
+Some marker values imply the values of other markers. uv normalizes `python_version` and
+`python_full_version`, along with known `platform_system` and `sys_platform` values, into shared
+representations. This lets equivalent markers match.
 
-When we selected a version with a local tag (e.g.,`1.2.3+localtag`) and the wheels don't cover
-support for Windows, Linux and macOS, and there is a base version without tag (e.g.,`1.2.3`) with
-support for a missing platform, we fork trying to extend the platform support by using both the
-version with local tag and without local tag depending on the platform. This helps with packages
-that use the local tag for different hardware accelerators such as torch. While there is no 1:1
-mapping between wheel tags and markers, we can do a mapping for well-known platforms, including
-Windows, Linux and macOS.
+A version with a local tag, such as `1.2.3+localtag`, may not provide wheels for every platform. If
+the base version, such as `1.2.3`, supports a missing platform, uv can fork and select the
+appropriate version for each platform. This helps packages such as torch that use local tags for
+different hardware accelerators. Wheel tags and markers do not have a one-to-one correspondence, but
+uv can map common Windows, Linux, and macOS platforms.
 
 ## Metadata consistency
 
-uv, similar to poetry, requires that wheels of a single version of a package in a specific index
-have the same dependencies (`Requires-Dist` in `METADATA`), including wheels build from a source
-distribution. More generally, uv assumes that each wheel has the same `METADATA` file in its
-dist-info directory.
+Like Poetry, uv requires every wheel for a specific package version and index to declare the same
+dependencies in `Requires-Dist`. This includes wheels built from source distributions. More
+generally, uv expects each wheel to contain the same `METADATA` file in its `dist-info` directory.
 
-numpy 2.3.2 for example has 73 wheels. Without this assumption, uv would have to make 73 network
-requests to fetch its metadata, instead of a single one. Another problem we would have without
-metadata consistency is the lack of a 1:1 mapping between markers and wheel tags. Wheel tags can
-include the glibc version while the PEP 508 markers cannot represent it. If wheels had different
-metadata, a universal resolver would have to track two dimensions simultaneously, PEP 508 markers
-and wheel tags. This would increase complexity a lot, and the correspondence between the two is not
-properly specified. PEP 508 markers have been introduced specifically to allow different
-dependencies between different platform, i.e. to have a single dependency declaration for all
-wheels, such as `project.[optional-]dependencies`. If the markers are not sufficient, we should
-extend PEP 508 markers instead of using a parallel system of wheel tags.
+For example, numpy 2.3.2 has 73 wheels. Consistent metadata lets uv fetch metadata once instead of
+making 73 requests. It also avoids tracking both PEP 508 markers and wheel tags. These systems do
+not map directly: a wheel tag can include a glibc version, but a PEP 508 marker cannot represent it.
+Tracking both would add significant complexity without a well-defined correspondence.
 
-Another aspect of metadata consistency is that a source distribution must build into a wheel with
-the same metadata as the wheels, or if there are no wheels, into the same metadata each time. If
-this assumption is violated, sound dependency locking becomes impossible: Consider a package A has a
-source distribution. During resolution, we build A v1 and obtain the dependencies `B>=2,<3`. We lock
-`A==1` and `B==2`. When installing the lockfile on the target machine, we build again and obtain
-dependencies `B>=3,<4` and `C>=1,<2`. The lockfile fails to install: Due to the changed constraints,
-the locked version of `B` is incompatible, and there's no locked candidate for `C`. Re-resolving
-after this would both be a reproducibility problem (the lockfile is effectively ignored) and a
-security concern (`C` has not been reviewed, neither was `B==3`). It's possible to fail on
-installation if that happens, but a late error, possibly during deployment, is a bad user
-experience. There is already a case where uv fails on installation, packages with no source
-distribution and only platform specific wheels incompatible with the current platform. While uv has
-[required environments](../../concepts/resolution.md#required-environments) as mitigation, this
-requires a not well known configuration option, and questions around (un)supported environments are
-one of the most common problem for uv users. A similar situation with source distributions should be
-avoided.
+PEP 508 markers already let one dependency declaration apply to multiple platforms, including
+`project.[optional-]dependencies`. If existing markers cannot express a platform difference,
+extending PEP 508 markers is preferable to using wheel tags as a separate dependency system.
 
-While older versions of torch and tensorflow had inconsistent metadata, all recent versions have
-consistent metadata, and we are not aware of any major package with inconsistent metadata. There is
-however no requirement in the Python packaging standards that metadata must be consistent, and
-requests to enforce this in the standards have been rejected
+A source distribution must also produce metadata that matches published wheels. If no wheels exist,
+repeated builds must produce the same metadata. Without this guarantee, dependency locking is not
+reliable. For example, a build of package `A` may first declare `B>=2,<3`, producing a lockfile with
+`A==1` and `B==2`. If a later build declares `B>=3,<4` and `C>=1,<2`, the locked `B` version is
+incompatible and the lockfile has no candidate for `C`.
+
+Resolving dependencies again would bypass the lockfile and introduce unreviewed packages, including
+`C` and `B==3`. This creates reproducibility and security risks. Failing during installation also
+creates problems when the failure occurs during deployment. uv can already fail when a package has
+no source distribution and its wheels do not support the current platform. Although
+[required environments](../../concepts/resolution.md#required-environments) can reduce this risk,
+the setting is not widely known. Source distributions should not create the same problem.
+
+Older torch and TensorFlow versions had inconsistent metadata, but recent versions are consistent.
+No major package is known to have inconsistent metadata. However, Python packaging standards do not
+require consistency, and proposals to enforce it were rejected
 (https://discuss.python.org/t/enforcing-consistent-metadata-for-packages/50008).
 
-There are packages that have native code that links against the native code in another package, such
-as torch. These package may support building against a range of torch versions, but once built, they
-are constrained to a specific torch version, and the runtime torch version must match the build-time
-version. These are currently a pain point across all package managers, as all major package managers
-from pip to uv cache source distribution builds. uv supports multiple builds depending on the
-version of the already installed package using
+Some packages contain native code that links to native code in another package, such as torch. They
+may build against multiple torch versions, but each build requires the same torch version at
+runtime. This causes problems because major package managers, including pip and uv, cache source
+distribution builds. uv supports separate builds for the installed dependency version through
 [ `tool.uv.extra-build-dependencies`](../../concepts/projects/config.md#augmenting-build-dependencies)
-with `match-runtime = true`. This is a workaround that needs to be made on the user side for each
-affected package, instead of library developers declaring this requirement, which would be possible
-with native standards support.
+with `match-runtime = true`. Users must configure this workaround for each affected package because
+current standards do not let package authors declare this requirement directly.
 
 ## Requires-python
 
-To ensure that a resolution with `requires-python = ">=3.9"` can actually be installed for the
-included Python versions, uv requires that all dependencies have the same minimum Python version.
-Package versions that declare a higher minimum Python version, e.g., `requires-python = ">=3.10"`,
-are rejected, because a resolution with that version can't be installed on Python 3.9. This ensures
-that when you are on an old Python version, you can install old packages, instead of getting newer
-packages that require newer Python syntax or standard library features.
+uv ensures that a resolution supports every Python version declared by the project. For example, a
+project with `requires-python = ">=3.9"` cannot use a dependency that requires Python 3.10 or later.
+Rejecting that dependency keeps the resolution installable on Python 3.9 and avoids packages that
+require newer syntax or standard library features.
 
-uv ignores upper-bounds on `requires-python`, with special handling for packages with only
-ABI-specific wheels. For example, if a package declares `requires-python = ">=3.8,<4"`, the `<4`
-part is ignored. There is a detailed discussion with drawbacks and alternatives in
+uv ignores upper bounds on `requires-python`, with special handling for packages that only provide
+ABI-specific wheels. For example, it ignores `<4` in `requires-python = ">=3.8,<4"`. Issue
 [#4022](https://github.com/astral-sh/uv/issues/4022) and this
-[DPO thread](https://discuss.python.org/t/requires-python-upper-limits/12663), this section
-summarizes the aspects most relevant to uv's design.
+[DPO thread](https://discuss.python.org/t/requires-python-upper-limits/12663) discuss the tradeoffs
+and alternatives.
 
-For most projects, it's not possible to determine whether they will be compatible with a new version
-before it's released, so blocking newer versions in advance would block users from upgrading or
-testing newer Python versions. The exceptions are packages which use the unstable C ABI or internals
-of CPython such as its bytecode format.
+Most projects cannot determine whether they support a new Python version before its release. Upper
+bounds would prevent users from upgrading to or testing these versions. Exceptions include packages
+that depend on the unstable C ABI or CPython internals, such as its bytecode format.
 
-Introducing a `requires-python` upper bound to a project that previously wasn't using one will not
-prevent the project from being used on a too recent Python version. Instead of failing, the resolver
-will pick an older version without the bound, circumventing the bound.
+Adding a `requires-python` upper bound does not prevent installation on newer Python versions when
+older package releases lack that bound. A resolver can select an older release instead.
 
-For the resolution to be as universally installable as possible, uv ensures that the selected
-dependency versions are compatible with the `requires-python` range of the project. For example, for
-a project with `requires-python = ">=3.12"`, uv will not use a dependency version with
-`requires-python = ">=3.13"`, as otherwise the resolution is not installable on Python 3.12, which
-the project declares to support. Applying the same logic to upper bounds means that bumping the
-upper Python version bound on a project makes it compatible with less dependency versions,
-potentially failing to resolve when no version of a dependency supports the required range. (Bumping
-the lower Python version bound has the inverse effect, it only increases the set of supported
-dependency versions.)
+uv selects dependency versions that support the entire `requires-python` range of the project. For
+example, a project that requires Python 3.12 or later cannot use a dependency that requires Python
+3.13 or later. The result would not support Python 3.12.
 
-Note that this is different for Conda, as the Conda solver also determines the Python version, so it
-can choose a lower Python version instead. Conda can also change metadata after a release, so it can
-update compatibility for a new Python version, while metadata on PyPI cannot be changed once
-published.
+Applying the same rule to upper bounds would reduce the compatible dependency versions whenever a
+project raised its upper bound. Resolution could then fail if no dependency version supported the
+full range. Raising a lower bound has the opposite effect: it increases the set of compatible
+dependency versions.
 
-Ignoring an upper bound is a problem for packages such as numpy which use the version-dependent C
-API of CPython. As of writing, each numpy release support 4 Python minor versions, e.g., numpy 2.0.0
-has wheels for CPython 3.9 through 3.12 and declares `requires-python = ">=3.9"`, while numpy 2.1.0
-has wheels for CPython 3.10 through 3.13 and declares `requires-python = ">=3.10"`. This means that
-when uv resolves a `numpy>=2,<3` requirement in a project with `requires-python = ">=3.9"`, it
-selects numpy 2.0.0 and the lockfile doesn't install on Python 3.13 or newer. To alleviate this,
-whenever uv rejects a version that requires a newer Python version, we fork by splitting the
-resolution markers on that Python version. This behavior can be controlled by `--fork-strategy`. In
-the example case, upon encountering numpy 2.1.0 we fork into Python versions `>=3.9,<3.10` and
-`>=3.10` and resolve two different numpy versions:
+Conda works differently because its solver also selects the Python version and can choose an older
+one. Conda can also update package metadata after release. PyPI metadata cannot change after
+publication.
+
+Ignoring upper bounds causes problems for packages such as numpy that use the version-specific
+CPython C API. Each numpy release supports four Python minor versions. For example, numpy 2.0.0
+provides wheels for CPython 3.9 through 3.12 and requires Python 3.9 or later. numpy 2.1.0 provides
+wheels for CPython 3.10 through 3.13 and requires Python 3.10 or later.
+
+Without forking, a project with `requires-python = ">=3.9"` and `numpy>=2,<3` would select numpy
+2.0.0. That lockfile would not install on Python 3.13 or later. To avoid this, uv forks when it
+rejects a package version that requires a newer Python version. The `--fork-strategy` option
+controls this behavior. In this example, uv creates separate resolutions for Python `>=3.9,<3.10`
+and `>=3.10`:
 
 ```
 numpy==2.0.0; python_version >= "3.9" and python_version < "3.10"
 numpy==2.1.0; python_version >= "3.10"
 ```
 
-There's one case where uv does consider the upper bound: When the project uses an upper bound on
-requires Python, such as `requires-python = "==3.13.*"` for an application that only deploys to
-Python 3.13. uv prunes wheels from the lockfile that are outside the range (e.g., `cp312` and
-`cp314`) in a post-processing step, which does not influence the resolution itself.
+uv does consider a project-level upper bound when removing unused wheels from the lockfile. For
+example, `requires-python = "==3.13.*"` excludes `cp312` and `cp314` wheels. This happens after
+resolution and does not affect package selection.
 
 ## URL dependencies
 
-In uv, a dependency can either be a registry dependency, a package with a version specifier or the
-plain package name, or a URL dependency. All requirements in the form `{name} @ {url}` are URL
-dependencies, and also all dependencies that have a `git`,` url`, `path`, or `workspace` source.
+A dependency can come from a package registry or a URL. Registry dependencies use a package name and
+an optional version specifier. URL dependencies include requirements in the form `{name} @ {url}`
+and dependencies with a `git`, `url`, `path`, or `workspace` source.
 
-When a URL is declared for a package, uv pins the package to this URL, and the version this URL
-implies. If there are two conflicting URLs for a package, the resolver errors, as a URL can only be
-declared as something akin to an exact `==` pin, and not as list of URLs. A list of URLs is
-supported through [flat indexes](../../concepts/indexes.md#flat-indexes) instead.
+A package URL fixes both the package source and its implied version. Two different URLs for the same
+package produce a resolution error because each URL acts like an exact version pin. A
+[flat index](../../concepts/indexes.md#flat-indexes) can provide multiple URLs instead.
 
-uv requires that URLs are either declared directly (in the project, in a
+uv requires URLs to appear directly in the project, a
 [workspace member](../../concepts/projects/workspaces.md), in a
 [constraint](../../concepts/resolution.md#dependency-constraints), or in an
-[override](../../concepts/resolution.md#dependency-overrides), any location that is discovered
-directly), or by other URL dependencies. uv discovers all URL dependencies and their transitive URL
-dependencies ahead of the resolution and pins all packages to the URLs and the versions they imply.
+[override](../../concepts/resolution.md#dependency-overrides). Another URL dependency can also
+declare a URL. Before resolution, uv discovers all direct and transitive URL dependencies and fixes
+their package sources and versions.
 
-uv does not allow URLs in index packages. This has two reasons: One is a security and predictability
-aspect, that forbids registry distributions to point to non-registry distributions and helps
-auditing which URLs can be accessed. For example, when only using one index URL and no URL
-dependencies, uv will not install any package from outside the index.
+uv does not allow index packages to declare URL dependencies for two reasons. First, this
+restriction improves security and predictability. Registry distributions cannot point to external
+distributions, which makes accessed URLs easier to audit. For example, when a project uses one index
+and no URL dependencies, uv only installs packages from that index.
 
-The other is that URLs can add additional versions to the resolution. Say the root package depends
-on foo, bar, and baz, all registry dependencies. foo depends on `bar >= 2`, but bar only has version
-1 on the index. With the incremental approach, this is an error: foo cannot be fulfilled, there is a
-resolver error. If URLs on index packages were allowed, it could be that there is a version of baz
-declares a dependency on baz-core and that has a version that declares
-`bar @ https://example.com/bar-2-py3-none-any.whl` adding a version of bar that makes requirements
-resolve. If a dependency can add new versions, discarding any version in the resolver would require
-looking at all possible versions of all direct and transitive dependencies. This breaks the core
-assumption incremental resolvers make that the set of versions for a package is static and would
-require to always fetch the metadata for all possibly reachable version.
+Second, URL dependencies can introduce package versions that do not exist in the index. For example,
+suppose a project depends on `foo`, `bar`, and `baz`. If `foo` requires `bar >= 2` but the index
+only contains `bar` version 1, resolution should fail. However, a transitive `baz` dependency could
+add `bar @ https://example.com/bar-2-py3-none-any.whl` and make the requirements resolve.
+
+Allowing this would require uv to inspect every reachable package version before rejecting any
+candidate. That breaks the incremental resolver assumption that the available versions of a package
+do not change during resolution.
 
 ## Prioritization
 
-Prioritization is important for both performance and for better resolutions.
+Prioritization improves resolution speed and package selection.
 
-If we try many versions we have to later discard, resolution is slow, both because we have to read
-metadata we didn't need and because we have to track a lot of (conflict) information for this
-discarded subtree.
+Trying versions that the resolver later rejects requires extra metadata requests and additional
+conflict tracking.
 
-There are expectations about which solution uv should choose, even if the version constraints allow
-multiple solutions. Generally, a desirable solution prioritizes use the highest versions for direct
-dependencies over those for indirect dependencies, it avoids backtracking to very old versions and
-can be installed on a target machine.
+When multiple solutions satisfy the version constraints, uv prefers newer direct dependencies over
+newer indirect dependencies. It also avoids very old package versions and selects packages that can
+be installed on the target platform.
 
-Internally, uv represent each package with a given package name as a number of virtual packages, for
-example, one package for each activated extra, for dependency groups, or for having a marker. While
-PubGrub needs to choose a version for each virtual package, uv's prioritization works on the package
-name level.
+Internally, uv represents one package name with several virtual packages. These can represent active
+extras, dependency groups, or markers. PubGrub selects a version for each virtual package, but uv
+assigns priorities by package name.
 
-Whenever we encounter a requirement on a package, we match it to a priority. The root package and
-URL requirements have the highest priority, then singleton requirements with the `==` operator, as
-their version can be directly determined, then highly conflicting packages (next paragraph), and
-finally all other packages. Inside each category, packages are sorted by when they were first
-encountered, creating a breadth first search that prioritizes direct dependencies including
-workspace dependencies over transitive dependencies.
+The root package and URL requirements have the highest priority. Exact requirements with `==` come
+next because their versions are known. Packages that conflict frequently follow, then all remaining
+packages. Within each category, uv uses the order in which it first found each package. This creates
+a breadth-first search that prioritizes direct and workspace dependencies over transitive
+dependencies.
 
-A common problem is that we have a package A with a higher priority than package B, and B is only
-compatible with older versions of A. We decide the latest version for package A. Each time we decide
-a version for B, it is immediately discarded due to the conflict with A. We have to try all possible
-versions of B, until we have either exhausted the possible range (slow), pick a very old version
-that doesn't depend on A, but most likely isn't compatible with the project either (bad) or fail to
-build a very old version (bad). Once we see such conflict happen five time, we set A and B to
-special highly-conflicting priority levels, and set them so that B is decided before A. We then
-manually backtrack to a state before deciding A, in the next iteration now deciding B instead of A.
-See [#8157](https://github.com/astral-sh/uv/issues/8157) and
-[#9843](https://github.com/astral-sh/uv/pull/9843) for a more detailed description with real world
-examples.
+A common conflict occurs when package `A` has a higher priority than package `B`, but `B` only
+supports older versions of `A`. After uv selects the latest `A` version, it rejects each `B` version
+that conflicts with it. This can require many attempts, select an unsuitable old version, or fail
+while building an old package.
+
+After five such conflicts, uv gives both packages special priorities and selects `B` before `A`. It
+then backtracks to the state before selecting `A` and continues with the new order. Issue
+[#8157](https://github.com/astral-sh/uv/issues/8157) and pull request
+[#9843](https://github.com/astral-sh/uv/pull/9843) describe real-world examples.

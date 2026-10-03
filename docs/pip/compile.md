@@ -1,67 +1,64 @@
 # Locking environments
 
-Locking is to take a dependency, e.g., `ruff`, and write an exact version to use to a file. When
-working with many dependencies, it is useful to lock the exact versions so the environment can be
-reproduced. Without locking, the versions of dependencies could change over time, when using a
-different tool, or across platforms.
+Locking records an exact version of each dependency, such as `ruff`, in a file. Lock dependency
+versions to create reproducible environments. Without locking, dependency versions can change over
+time, across tools, or across platforms.
 
 ## Locking requirements
 
-uv allows dependencies to be locked in the `requirements.txt` format. It is recommended to use the
-standard `pyproject.toml` to define dependencies, but other dependency formats are supported as
-well. See the documentation on [declaring dependencies](dependencies.md) for more details on how to
-define dependencies.
+uv locks dependencies in the `requirements.txt` format. Define dependencies in a standard
+`pyproject.toml` file when possible. uv also supports other dependency formats. See the
+documentation on [declaring dependencies](dependencies.md) for details.
 
-To lock dependencies declared in a `pyproject.toml`:
+Lock dependencies from a `pyproject.toml` file:
 
 ```console
 $ uv pip compile pyproject.toml -o requirements.txt
 ```
 
-Note by default the `uv pip compile` output is just displayed and `--output-file` / `-o` argument is
-needed to write to a file.
+By default, `uv pip compile` displays its output. Use `--output-file` or `-o` to write the output to
+a file.
 
-To lock dependencies declared in a `requirements.in`:
+Lock dependencies from a `requirements.in` file:
 
 ```console
 $ uv pip compile requirements.in -o requirements.txt
 ```
 
-To lock dependencies declared in multiple files:
+Lock dependencies from multiple files:
 
 ```console
 $ uv pip compile pyproject.toml requirements-dev.in -o requirements-dev.txt
 ```
 
-uv also supports legacy `setup.py` and `setup.cfg` formats. To lock dependencies declared in a
-`setup.py`:
+uv also supports the legacy `setup.py` and `setup.cfg` formats. Lock dependencies from a `setup.py`
+file:
 
 ```console
 $ uv pip compile setup.py -o requirements.txt
 ```
 
-To lock dependencies from stdin, use `-`:
+Use `-` to lock dependencies from stdin:
 
 ```console
 $ echo "ruff" | uv pip compile -
 ```
 
-To lock with optional dependencies enabled, e.g., the "foo" extra:
+Include optional dependencies, such as the "foo" extra:
 
 ```console
 $ uv pip compile pyproject.toml --extra foo
 ```
 
-To lock with all optional dependencies enabled:
+Include all optional dependencies:
 
 ```console
 $ uv pip compile pyproject.toml --all-extras
 ```
 
-Note extras are not supported with the `requirements.in` format.
+The `requirements.in` format does not support extras.
 
-To lock a dependency group in the current project directory's `pyproject.toml`, for example the
-group `foo`:
+Lock a dependency group, such as `foo`, from the current project's `pyproject.toml` file:
 
 ```console
 $ uv pip compile --group foo
@@ -69,15 +66,17 @@ $ uv pip compile --group foo
 
 !!! important
 
-    A `--group` flag has to be added to pip-tools' `pip compile`, [although they're considering it](https://github.com/jazzband/pip-tools/issues/2062). We expect to support whatever syntax and semantics they adopt.
+    pip-tools does not support a `--group` flag for `pip compile`, but
+    [the maintainers are considering it](https://github.com/jazzband/pip-tools/issues/2062). uv
+    expects to support the syntax and behavior that pip-tools adopts.
 
-To specify the project directory where groups should be sourced from:
+Specify the project directory that contains the dependency groups:
 
 ```console
 $ uv pip compile --project some/path/ --group foo --group bar
 ```
 
-Alternatively, you can specify a path to a `pyproject.toml` for each group:
+Alternatively, specify a `pyproject.toml` path for each group:
 
 ```console
 $ uv pip compile --group some/path/pyproject.toml:foo --group other/pyproject.toml:bar
@@ -85,14 +84,14 @@ $ uv pip compile --group some/path/pyproject.toml:foo --group other/pyproject.to
 
 !!! note
 
-    `--group` flags do not apply to other specified sources. For instance,
-    `uv pip compile some/path/pyproject.toml --group foo` sources `foo`
-    from `./pyproject.toml` and **not** `some/path/pyproject.toml`.
+    `--group` flags do not apply to other specified sources. For example,
+    `uv pip compile some/path/pyproject.toml --group foo` reads `foo` from `./pyproject.toml`,
+    **not** `some/path/pyproject.toml`.
 
 ## Upgrading requirements
 
-When using an output file, uv will consider the versions pinned in an existing output file. If a
-dependency is pinned it will not be upgraded on a subsequent compile run. For example:
+When an output file already exists, uv uses the versions pinned in that file. Later compilation does
+not upgrade a pinned dependency. For example:
 
 ```console
 $ echo "ruff==0.3.0" > requirements.txt
@@ -102,32 +101,31 @@ $ echo "ruff" | uv pip compile - -o requirements.txt
 ruff==0.3.0
 ```
 
-To upgrade a dependency, use the `--upgrade-package` flag:
+Use the `--upgrade-package` flag to upgrade a dependency:
 
 ```console
 $ uv pip compile - -o requirements.txt --upgrade-package ruff
 ```
 
-To upgrade all dependencies, there is an `--upgrade` flag.
+Use the `--upgrade` flag to upgrade all dependencies.
 
 ## Syncing an environment
 
-Dependencies can be installed directly from their definition files or from compiled
-`requirements.txt` files with `uv pip install`. See the documentation on
-[installing packages from files](packages.md#installing-packages-from-files) for more details.
+Use `uv pip install` to install dependencies from their definition files or compiled
+`requirements.txt` files. See the documentation on
+[installing packages from files](packages.md#installing-packages-from-files) for details.
 
-When installing with `uv pip install`, packages that are already installed will not be removed
-unless they conflict with the lockfile. This means that the environment can have dependencies that
-aren't declared in the lockfile, which isn't great for reproducibility. To ensure the environment
-exactly matches the lockfile, use `uv pip sync` instead.
+`uv pip install` does not remove installed packages unless they conflict with the lockfile. As a
+result, the environment can contain packages not declared in the lockfile. Use `uv pip sync` to make
+the environment match the lockfile exactly.
 
-To sync an environment with a `requirements.txt` file:
+Sync an environment with a `requirements.txt` file:
 
 ```console
 $ uv pip sync requirements.txt
 ```
 
-To sync an environment with a [PEP 751](https://peps.python.org/pep-0751/) `pylock.toml` file:
+Sync an environment with a [PEP 751](https://peps.python.org/pep-0751/) `pylock.toml` file:
 
 ```console
 $ uv pip sync pylock.toml
@@ -135,38 +133,37 @@ $ uv pip sync pylock.toml
 
 ## Adding constraints
 
-Constraints files are `requirements.txt`-like files that only control the _version_ of a requirement
-that's installed. However, including a package in a constraints file will _not_ trigger the
-installation of that package. Constraints can be used to add bounds to dependencies that are not
-dependencies of the current project.
+Constraints files use a format similar to `requirements.txt`. They control only the _version_ of an
+installed requirement. Adding a package to a constraints file does _not_ install that package. Use
+constraints to add version bounds to packages that the current project does not directly depend on.
 
-To define a constraint, define a bound for a package:
+Define a constraint by setting a version bound for a package:
 
 ```requirements title="constraints.txt"
 pydantic<2.0
 ```
 
-To use a constraints file:
+Use a constraints file:
 
 ```console
 $ uv pip compile requirements.in --constraint constraints.txt
 ```
 
-Note that multiple constraints can be defined in each file and multiple files can be used.
+A file can contain multiple constraints. A command can use multiple constraints files.
 
-uv will also read `constraint-dependencies` from the `pyproject.toml` at the workspace root, and
-append them to those specified in the constraints file.
+uv also reads `constraint-dependencies` from the workspace root's `pyproject.toml` file. It adds
+these dependencies to the constraints from the constraints file.
 
 ## Adding build constraints
 
-Similar to `constraints`, but specifically for build-time dependencies, including those required
-when building runtime dependencies.
+Build constraints control build-time dependencies, including those required to build runtime
+dependencies.
 
-Build constraint files are `requirements.txt`-like files that only control the _version_ of a
-build-time requirement. However, including a package in a build constraints file will _not_ trigger
-its installation at build time; instead, constraints apply only when the package is required as a
-direct or transitive build-time dependency. Build constraints can be used to add bounds to
-dependencies that are not explicitly declared as build-time dependencies of the current project.
+Build constraints files use a format similar to `requirements.txt`. They control only the _version_
+of a build-time requirement. Adding a package to a build constraints file does _not_ install it. The
+constraint applies only when a direct or transitive build-time dependency requires that package. Use
+build constraints to add bounds to build-time dependencies that the current project does not
+explicitly declare.
 
 For example, if a package defines its build dependencies as follows:
 
@@ -176,43 +173,41 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 ```
 
-Build constraints could be used to ensure that a specific version of `setuptools` is used for every
-package in the workspace:
+Use a build constraint to select one `setuptools` version for every package in the workspace:
 
 ```requirements title="build-constraints.txt"
 setuptools==75.0.0
 ```
 
-uv will also read `build-constraint-dependencies` from the `pyproject.toml` at the workspace root,
-and append them to those specified in the build constraints file.
+uv also reads `build-constraint-dependencies` from the workspace root's `pyproject.toml` file. It
+adds these dependencies to the constraints from the build constraints file.
 
 ## Overriding dependency versions
 
-Overrides files are `requirements.txt`-like files that force a specific version of a requirement to
-be installed, regardless of the requirements declared by any constituent package, and regardless of
-whether this would be considered an invalid resolution.
+Overrides files use a format similar to `requirements.txt`. They force the installation of a
+specific requirement version. They ignore requirements from other packages, even if the resulting
+resolution would otherwise be invalid.
 
-While constraints are _additive_, in that they're combined with the requirements of the constituent
-packages, overrides are _absolute_, in that they completely replace the requirements of the
-constituent packages.
+Constraints are _additive_: uv combines them with package requirements. Overrides are _absolute_:
+they replace package requirements.
 
-Overrides are most often used to remove upper bounds from a transitive dependency. For example, if
-`a` requires `c>=1.0,<2.0` and `b` requires `c>=2.0` and the current project requires `a` and `b`
-then the dependencies cannot be resolved.
+Overrides often remove upper bounds from a transitive dependency. For example, suppose `a` requires
+`c>=1.0,<2.0` and `b` requires `c>=2.0`. A project that requires both `a` and `b` cannot resolve
+these requirements.
 
-To define an override, define the new requirement for the problematic package:
+Define an override with a new requirement for the conflicting package:
 
 ```requirements title="overrides.txt"
 c>=2.0
 ```
 
-To use an overrides file:
+Use an overrides file:
 
 ```console
 $ uv pip compile requirements.in --override overrides.txt
 ```
 
-Now, resolution can succeed. However, note that if `a` is _correct_ that it does not support
-`c>=2.0` then a runtime error will likely be encountered when using the packages.
+Resolution can now succeed. However, if `a` does not support `c>=2.0`, the packages can fail at
+runtime.
 
-Note that multiple overrides can be defined in each file and multiple files can be used.
+A file can contain multiple overrides. A command can use multiple overrides files.
