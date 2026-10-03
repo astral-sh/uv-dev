@@ -222,7 +222,7 @@ pub(crate) async fn sync(
             identify_installation_target(&target, workspace.lock(), all_packages, &package);
         install_target.validate_extras(&extras)?;
         install_target.validate_groups(&groups)?;
-        detect_conflicts(&install_target, &extras, &groups)?;
+        detect_conflicts(&install_target, &extras, &groups, None)?;
     }
 
     // Discover or create the virtual environment.
@@ -989,15 +989,15 @@ pub(crate) async fn do_sync<'a>(
         ));
     }
 
+    // Determine the markers to use for resolution.
+    let marker_env = resolution_markers(None, python_platform, venv.interpreter());
+
     // Validate that the set of requested extras and development groups are compatible.
-    detect_conflicts(&target, extras, groups)?;
+    detect_conflicts(&target, extras, groups, Some(&marker_env))?;
 
     // Validate that the set of requested extras and development groups are defined in the lockfile.
     target.validate_extras(extras)?;
     target.validate_groups(groups)?;
-
-    // Determine the markers to use for resolution.
-    let marker_env = resolution_markers(None, python_platform, venv.interpreter());
 
     // Validate that the platform is supported by the lockfile.
     let environments = target.lock().supported_environments();
