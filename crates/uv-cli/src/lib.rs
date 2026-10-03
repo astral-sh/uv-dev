@@ -1749,7 +1749,7 @@ pub struct PipCompileArgs {
     )]
     pub python: Option<Maybe<String>>,
 
-    /// Install packages into the system Python environment.
+    /// Install packages into the system Python environment [env: `UV_SYSTEM_PYTHON`=]
     ///
     /// By default, uv uses the virtual environment in the current working directory or any parent
     /// directory, falling back to searching for a Python executable in `PATH`. The `--system`
@@ -1757,7 +1757,6 @@ pub struct PipCompileArgs {
     /// the system path.
     #[arg(
         long,
-        env = EnvVars::UV_SYSTEM_PYTHON,
         value_parser = clap::builder::BoolishValueParser::new(),
         overrides_with("no_system")
     )]
@@ -2032,7 +2031,7 @@ pub struct PipSyncArgs {
     )]
     pub python: Option<Maybe<String>>,
 
-    /// Install packages into the system Python environment.
+    /// Install packages into the system Python environment [env: `UV_SYSTEM_PYTHON`=]
     ///
     /// By default, uv installs into the virtual environment in the current working directory or any
     /// parent directory. The `--system` option instructs uv to instead use the first Python found
@@ -2042,7 +2041,6 @@ pub struct PipSyncArgs {
     /// should be used with caution, as it can modify the system Python installation.
     #[arg(
         long,
-        env = EnvVars::UV_SYSTEM_PYTHON,
         value_parser = clap::builder::BoolishValueParser::new(),
         overrides_with("no_system")
     )]
@@ -2386,7 +2384,7 @@ pub struct PipInstallArgs {
     )]
     pub python: Option<Maybe<String>>,
 
-    /// Install packages into the system Python environment.
+    /// Install packages into the system Python environment [env: `UV_SYSTEM_PYTHON`=]
     ///
     /// By default, uv installs into the virtual environment in the current working directory or any
     /// parent directory. The `--system` option instructs uv to instead use the first Python found
@@ -2396,7 +2394,6 @@ pub struct PipInstallArgs {
     /// should be used with caution, as it can modify the system Python installation.
     #[arg(
         long,
-        env = EnvVars::UV_SYSTEM_PYTHON,
         value_parser = clap::builder::BoolishValueParser::new(),
         overrides_with("no_system")
     )]
@@ -2621,7 +2618,7 @@ pub struct PipUninstallArgs {
     #[arg(long, value_enum, env = EnvVars::UV_KEYRING_PROVIDER)]
     pub keyring_provider: Option<KeyringProviderType>,
 
-    /// Use the system Python to uninstall packages.
+    /// Use the system Python to uninstall packages [env: `UV_SYSTEM_PYTHON`=]
     ///
     /// By default, uv uninstalls from the virtual environment in the current working directory or
     /// any parent directory. The `--system` option instructs uv to instead use the first Python
@@ -2631,7 +2628,6 @@ pub struct PipUninstallArgs {
     /// should be used with caution, as it can modify the system Python installation.
     #[arg(
         long,
-        env = EnvVars::UV_SYSTEM_PYTHON,
         value_parser = clap::builder::BoolishValueParser::new(),
         overrides_with("no_system")
     )]
@@ -2711,14 +2707,13 @@ pub struct PipFreezeArgs {
     #[arg(long("path"), value_parser = parse_file_path, value_hint = ValueHint::DirPath)]
     pub paths: Option<Vec<PathBuf>>,
 
-    /// List packages in the system Python environment.
+    /// List packages in the system Python environment [env: `UV_SYSTEM_PYTHON`=]
     ///
     /// Disables discovery of virtual environments.
     ///
     /// See `uv help python` for details on Python discovery.
     #[arg(
         long,
-        env = EnvVars::UV_SYSTEM_PYTHON,
         value_parser = clap::builder::BoolishValueParser::new(),
         overrides_with("no_system")
     )]
@@ -2794,14 +2789,13 @@ pub struct PipListArgs {
     )]
     pub python: Option<Maybe<String>>,
 
-    /// List packages in the system Python environment.
+    /// List packages in the system Python environment [env: `UV_SYSTEM_PYTHON`=]
     ///
     /// Disables discovery of virtual environments.
     ///
     /// See `uv help python` for details on Python discovery.
     #[arg(
         long,
-        env = EnvVars::UV_SYSTEM_PYTHON,
         value_parser = clap::builder::BoolishValueParser::new(),
         overrides_with("no_system")
     )]
@@ -2840,14 +2834,13 @@ pub struct PipCheckArgs {
     )]
     pub python: Option<Maybe<String>>,
 
-    /// Check packages in the system Python environment.
+    /// Check packages in the system Python environment [env: `UV_SYSTEM_PYTHON`=]
     ///
     /// Disables discovery of virtual environments.
     ///
     /// See `uv help python` for details on Python discovery.
     #[arg(
         long,
-        env = EnvVars::UV_SYSTEM_PYTHON,
         value_parser = clap::builder::BoolishValueParser::new(),
         overrides_with("no_system")
     )]
@@ -2918,14 +2911,13 @@ pub struct PipShowArgs {
     )]
     pub python: Option<Maybe<String>>,
 
-    /// Show a package in the system Python environment.
+    /// Show a package in the system Python environment [env: `UV_SYSTEM_PYTHON`=]
     ///
     /// Disables discovery of virtual environments.
     ///
     /// See `uv help python` for details on Python discovery.
     #[arg(
         long,
-        env = EnvVars::UV_SYSTEM_PYTHON,
         value_parser = clap::builder::BoolishValueParser::new(),
         overrides_with("no_system")
     )]
@@ -2982,14 +2974,13 @@ pub struct PipTreeArgs {
     )]
     pub python: Option<Maybe<String>>,
 
-    /// List packages in the system Python environment.
+    /// List packages in the system Python environment [env: `UV_SYSTEM_PYTHON`=]
     ///
     /// Disables discovery of virtual environments.
     ///
     /// See `uv help python` for details on Python discovery.
     #[arg(
         long,
-        env = EnvVars::UV_SYSTEM_PYTHON,
         value_parser = clap::builder::BoolishValueParser::new(),
         overrides_with("no_system")
     )]
@@ -3171,12 +3162,11 @@ pub struct VenvArgs {
     )]
     pub python: Option<Maybe<String>>,
 
-    /// Ignore virtual environments when searching for the Python interpreter.
+    /// Ignore virtual environments when searching for the Python interpreter [env: `UV_SYSTEM_PYTHON`=]
     ///
     /// This is the default behavior and has no effect.
     #[arg(
         long,
-        env = EnvVars::UV_SYSTEM_PYTHON,
         value_parser = clap::builder::BoolishValueParser::new(),
         overrides_with("no_system"),
         hide = true,
@@ -6581,7 +6571,7 @@ pub struct PythonFindArgs {
     )]
     pub no_project: bool,
 
-    /// Only find system Python interpreters.
+    /// Only find system Python interpreters [env: `UV_SYSTEM_PYTHON`=]
     ///
     /// By default, uv will report the first Python interpreter it would use, including those in an
     /// active virtual environment or a virtual environment in the current working directory or any
@@ -6591,7 +6581,6 @@ pub struct PythonFindArgs {
     /// restrict its search to the system path.
     #[arg(
         long,
-        env = EnvVars::UV_SYSTEM_PYTHON,
         value_parser = clap::builder::BoolishValueParser::new(),
         overrides_with("no_system")
     )]
