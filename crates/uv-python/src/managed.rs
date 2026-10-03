@@ -474,11 +474,6 @@ impl ManagedPythonInstallation {
         self.key.version()
     }
 
-    /// Return the implementation in the key without interpreting Emscripten as Pyodide.
-    pub(crate) fn key_implementation(&self) -> ImplementationName {
-        self.implementation
-    }
-
     pub fn implementation(&self) -> ImplementationName {
         if self.key.os().is_emscripten() {
             ImplementationName::Pyodide
