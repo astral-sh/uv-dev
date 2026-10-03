@@ -82,6 +82,12 @@ When the environment is synced, uv will install the project (and other workspace
 _editable_ packages, such that re-syncing is not necessary for changes to be reflected in the
 environment.
 
+Some editable installations depend on generated files, such as version files or compiled extension
+modules. If these files are deleted and the installation stops working, reinstall the affected
+package with `uv sync --reinstall-package <package>`. See
+[dynamic metadata](../cache.md#dynamic-metadata) for how uv decides when to rebuild local
+dependencies.
+
 To opt-out of this behavior, use the `--no-editable` option.
 
 !!! note
