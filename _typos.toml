@@ -23,6 +23,9 @@ extend-ignore-re = [
 [default.extend-identifiers]
 seeked = "seeked" # special term used for streams
 CPY_VERSION_RE = "CPY_VERSION_RE" # CPython version regex
+RtoAlgorithm = "RtoAlgorithm" # Linux TCP MIB gauge
+RtoMin = "RtoMin" # Linux TCP MIB gauge
+RtoMax = "RtoMax" # Linux TCP MIB gauge
 
 [default.extend-words]
 certifi = "certifi" # Python package name

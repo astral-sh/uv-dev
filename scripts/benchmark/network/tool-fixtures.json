@@ -1,0 +1,12 @@
+[
+  {
+    "kind": "raw",
+    "filename": "ruff-x86_64-unknown-linux-gnu.tar.gz",
+    "url": "https://github.com/astral-sh/ruff/releases/download/0.15.1/ruff-x86_64-unknown-linux-gnu.tar.gz",
+    "sha256": "f63d467b81ef1a7a8552fef001784215bb2fc4d7a7e32216c48aaa3bad066779",
+    "size": 10810342,
+    "paths": [
+      "/github/ruff/releases/download/0.15.1/ruff-x86_64-unknown-linux-gnu.tar.gz"
+    ]
+  }
+]
