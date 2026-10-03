@@ -1228,9 +1228,10 @@ impl<'a> From<&'a http::HeaderMap> for ResponseHeaders {
     }
 }
 
+/// An opaque HTTP entity tag.
 #[derive(Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
-struct ETag {
+pub struct ETag {
     /// The actual `ETag` validator value.
     ///
     /// This is received in the response, recorded as part of the cache policy
@@ -1263,7 +1264,7 @@ impl ETag {
     /// where as [RFC 9110 S8.8.3] is a bit more restrictive.
     ///
     /// [RFC 9110 S8.8.3]: https://www.rfc-editor.org/rfc/rfc9110#section-8.8.3
-    fn parse(header_value: &[u8]) -> Self {
+    pub fn parse(header_value: &[u8]) -> Self {
         let (value, weak) = if header_value.starts_with(b"W/") {
             (&header_value[2..], true)
         } else {
@@ -1273,6 +1274,16 @@ impl ETag {
             value: value.to_vec(),
             weak,
         }
+    }
+
+    /// Returns the validator bytes without the leading `W/` prefix for weak tags.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.value
+    }
+
+    /// Returns whether this is a weak validator.
+    pub fn is_weak(&self) -> bool {
+        self.weak
     }
 }
 
