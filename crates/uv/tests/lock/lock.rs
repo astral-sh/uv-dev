@@ -16272,6 +16272,72 @@ fn lock_migrate() -> Result<()> {
     Ok(())
 }
 
+/// A targeted upgrade reorders existing resolution markers by their lower Python bound.
+#[test]
+fn lock_upgrade_package_reorders_resolution_markers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+        "#})?;
+
+    let lock = indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "python_full_version >= '3.14' and platform_machine == 'ARM64' and sys_platform == 'win32'",
+            "python_full_version < '3.14' and platform_machine == 'ARM64' and sys_platform == 'win32'",
+            "(python_full_version >= '3.14' and platform_machine != 'ARM64') or (python_full_version >= '3.14' and sys_platform != 'win32')",
+            "(python_full_version < '3.14' and platform_machine != 'ARM64') or (python_full_version < '3.14' and sys_platform != 'win32')",
+        ]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+    "#};
+    context.temp_dir.child("uv.lock").write_str(lock)?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--upgrade-package")
+        .arg("project")
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    let new_lock = context.read("uv.lock");
+    let diff = diff_snapshot(lock, &new_lock, 3);
+
+    // Rewriting an otherwise unchanged lockfile is undesirable; see astral-sh/uv#22040.
+    assert_snapshot!(diff, @r#"
+    --- old
+    +++ new
+    @@ -3,8 +3,8 @@
+     requires-python = ">=3.12"
+     resolution-markers = [
+         "python_full_version >= '3.14' and platform_machine == 'ARM64' and sys_platform == 'win32'",
+    +    "(python_full_version >= '3.14' and platform_machine != 'ARM64') or (python_full_version >= '3.14' and sys_platform != 'win32')",
+         "python_full_version < '3.14' and platform_machine == 'ARM64' and sys_platform == 'win32'",
+    -    "(python_full_version >= '3.14' and platform_machine != 'ARM64') or (python_full_version >= '3.14' and sys_platform != 'win32')",
+         "(python_full_version < '3.14' and platform_machine != 'ARM64') or (python_full_version < '3.14' and sys_platform != 'win32')",
+     ]
+    "#);
+
+    Ok(())
+}
+
 /// Upgrade a specific package with `--upgrade-package`.
 #[cfg(feature = "test-universal")]
 #[test]
