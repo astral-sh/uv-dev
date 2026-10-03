@@ -77,6 +77,107 @@ fn list_editable_non_file_url() -> Result<()> {
 }
 
 #[test]
+fn list_ignores_malformed_direct_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let dist_info = ChildPath::new(context.site_packages()).child("project-1.0.0.dist-info");
+    dist_info.create_dir_all()?;
+    dist_info
+        .child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: project\nVersion: 1.0.0\n")?;
+    dist_info
+        .child("WHEEL")
+        .write_str("Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")?;
+    dist_info.child("direct_url.json").write_str("invalid")?;
+
+    uv_snapshot!(context.pip_list(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Package Version
+    ------- -------
+    project 1.0.0
+
+    ----- stderr -----
+    warning: Ignoring invalid `direct_url.json` for `project`: expected value at line 1 column 1
+    "
+    );
+    uv_snapshot!(context.pip_freeze(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    project==1.0.0
+
+    ----- stderr -----
+    warning: Ignoring invalid `direct_url.json` for `project`: expected value at line 1 column 1
+    "
+    );
+    uv_snapshot!(context.filters(), context.pip_show().arg("project"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Name: project
+    Version: 1.0.0
+    Location: [SITE_PACKAGES]/
+    Requires:
+    Required-by:
+
+    ----- stderr -----
+    warning: Ignoring invalid `direct_url.json` for `project`: expected value at line 1 column 1
+    "
+    );
+    uv_snapshot!(context.pip_check(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Ignoring invalid `direct_url.json` for `project`: expected value at line 1 column 1
+    Checked 1 package in [TIME]
+    All installed packages are compatible
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn install_warns_once_for_each_malformed_direct_url() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    for name in ["first", "second"] {
+        let dist_info =
+            ChildPath::new(context.site_packages()).child(format!("{name}-1.0.0.dist-info"));
+        dist_info.create_dir_all()?;
+        dist_info.child("METADATA").write_str(&format!(
+            "Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\n"
+        ))?;
+        dist_info
+            .child("WHEEL")
+            .write_str("Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")?;
+        dist_info.child("direct_url.json").write_str("invalid")?;
+    }
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(context.workspace_root.join("test/links/ok-1.0.0-py3-none-any.whl"))
+        .arg("--strict"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: Ignoring invalid `direct_url.json` for `first`: expected value at line 1 column 1
+    warning: Ignoring invalid `direct_url.json` for `second`: expected value at line 1 column 1
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0 (from file://[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl)
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
 #[cfg(feature = "test-pypi")]
 fn list_single_no_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
