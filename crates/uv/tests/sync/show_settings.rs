@@ -3961,6 +3961,7 @@ fn preview_features() {
     +            MinimumLibcVersion,
     +            BuildDependencyCheck,
     +            BuildLazyImports,
+    +            IncludeGroupWorkspace,
     +        ],
          },
          python_preference: Managed,
