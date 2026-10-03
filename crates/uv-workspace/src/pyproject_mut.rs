@@ -7,7 +7,8 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use toml_edit::{
-    Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TomlError, Value,
+    Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TableLike, TomlError,
+    Value,
 };
 
 use uv_cache_key::CanonicalUrl;
@@ -66,8 +67,21 @@ pub enum Error {
         package_name: PackageName,
         requirements: Vec<Requirement>,
     },
+    #[error("Cannot update `{0}` because it has scoped sources in `tool.uv.sources`")]
+    AmbiguousSource(PackageName),
     #[error("Unknown bound king {0}")]
     UnknownBoundKind(String),
+}
+
+impl uv_errors::Hint for Error {
+    fn hints(&self) -> uv_errors::Hints<'_> {
+        match self {
+            Self::AmbiguousSource(name) => uv_errors::Hints::from(format!(
+                "Edit or remove the existing `{name}` entry in `tool.uv.sources` before retrying."
+            )),
+            _ => uv_errors::Hints::none(),
+        }
+    }
 }
 
 /// The result of editing an array in a TOML document.
@@ -1098,6 +1112,25 @@ impl PyProjectTomlMut {
             .ok_or(Error::MalformedSources)?;
 
         if let Some(key) = find_source(name, sources) {
+            if sources.get(&key).is_some_and(|source| {
+                source
+                    .as_table_like()
+                    .is_some_and(|source| !is_unscoped_source(source))
+                    || source.as_array().is_some_and(|sources| {
+                        sources.len() > 1
+                            || sources.iter().any(|source| {
+                                source
+                                    .as_inline_table()
+                                    .is_some_and(|source| !is_unscoped_source(source))
+                            })
+                    })
+                    || source.as_array_of_tables().is_some_and(|sources| {
+                        sources.len() > 1
+                            || sources.iter().any(|source| !is_unscoped_source(source))
+                    })
+            }) {
+                return Err(Error::AmbiguousSource(name.clone()));
+            }
             sources.remove(&key);
         }
         add_source(name, source, sources)?;
@@ -1818,6 +1851,16 @@ fn find_source(name: &PackageName, sources: &Table) -> Option<String> {
         }
     }
     None
+}
+
+fn is_unscoped_source(source: &dyn TableLike) -> bool {
+    !source.contains_key("extra")
+        && !source.contains_key("group")
+        && source.get("marker").is_none_or(|marker| {
+            marker
+                .as_str()
+                .is_some_and(|marker| MarkerTree::from_str(marker).is_ok_and(MarkerTree::is_true))
+        })
 }
 
 // Add a source to `tool.uv.sources`.
