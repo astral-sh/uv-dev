@@ -49,6 +49,9 @@ $ uv lock --check
 
 This is equivalent to the `--locked` flag for other commands.
 
+The [`uv-lock` pre-commit hook](../../guides/integration/pre-commit.md) can automatically update
+`uv.lock` when `pyproject.toml` changes.
+
 !!! important
 
     uv will not consider lockfiles outdated when new versions of packages are released — the lockfile
