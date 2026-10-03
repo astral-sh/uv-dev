@@ -42,7 +42,7 @@ pub struct VulnerabilityID(SmallString);
 impl VulnerabilityID {
     /// Create a new vulnerability ID from a string.
     pub fn new(id: impl Into<SmallString>) -> Self {
-        Self(id.into())
+        Self(sanitize_terminal_text(id.into().as_ref()).into())
     }
 
     /// Get the string representation of this vulnerability ID.
@@ -101,6 +101,13 @@ pub struct Vulnerability {
     pub modified: Option<Timestamp>,
 }
 
+fn sanitize_terminal_text(text: &str) -> String {
+    text.trim()
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect()
+}
+
 impl Vulnerability {
     pub(crate) fn new(
         dependency: Dependency,
@@ -113,9 +120,10 @@ impl Vulnerability {
         published: Option<Timestamp>,
         modified: Option<Timestamp>,
     ) -> Self {
-        // Vulnerability summaries often contain excess whitespace, as well as newlines.
-        // We normalize these out.
-        let summary = summary.map(|summary| summary.trim().replace('\n', ""));
+        // Vulnerability text comes from a remote service and may be rendered directly to the
+        // terminal. Normalize whitespace and strip control characters before storing it.
+        let summary = summary.map(|summary| sanitize_terminal_text(&summary));
+        let description = description.map(|description| sanitize_terminal_text(&description));
 
         Self {
             dependency,
@@ -151,6 +159,69 @@ impl Vulnerability {
                     || id.as_str().starts_with("CVE-")
             })
             .unwrap_or(&self.id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_normalize::PackageName;
+    use uv_pep440::Version;
+
+    use crate::types::{Dependency, Vulnerability, VulnerabilityID};
+
+    #[test]
+    fn vulnerability_id_strips_control_characters() {
+        let vulnerability_id = VulnerabilityID::new("  GHSA-1\u{1b}[31m  ");
+
+        assert_eq!(vulnerability_id.as_str(), "GHSA-1[31m");
+    }
+
+    #[test]
+    fn vulnerability_summary_strips_control_characters() {
+        let dependency = Dependency::new(
+            PackageName::from_owned("example".to_string()).expect("valid package name"),
+            Version::new([1, 0, 0]),
+        );
+        let vulnerability = Vulnerability::new(
+            dependency,
+            VulnerabilityID::new("OSV-1"),
+            Some("  hello\u{1b}]52;c;spoof\u{7}world\n\t  ".to_string()),
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        );
+
+        assert_eq!(
+            vulnerability.summary.as_deref(),
+            Some("hello]52;c;spoofworld")
+        );
+    }
+
+    #[test]
+    fn vulnerability_description_strips_control_characters() {
+        let dependency = Dependency::new(
+            PackageName::from_owned("example".to_string()).expect("valid package name"),
+            Version::new([1, 0, 0]),
+        );
+        let vulnerability = Vulnerability::new(
+            dependency,
+            VulnerabilityID::new("OSV-1"),
+            None,
+            Some("  line 1\nline 2\u{1b}[31m  ".to_string()),
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        );
+
+        assert_eq!(
+            vulnerability.description.as_deref(),
+            Some("line 1line 2[31m")
+        );
     }
 }
 
