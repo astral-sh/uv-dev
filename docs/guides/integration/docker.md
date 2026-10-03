@@ -345,6 +345,11 @@ commands within the Dockerfile compile bytecode:
 ENV UV_COMPILE_BYTECODE=1
 ```
 
+`UV_COMPILE_BYTECODE` also applies when `uv run` synchronizes a project at container startup. If the
+image already contains an up-to-date environment, use `uv run --no-sync` (or set
+[`UV_NO_SYNC`](../../reference/environment.md#uv_no_sync)) to skip that synchronization, or
+[run the installed command directly](#using-the-environment).
+
 !!! note
 
      uv will only compile the standard library of _managed_ Python versions during
