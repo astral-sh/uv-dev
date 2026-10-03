@@ -1,8 +1,9 @@
 use std::convert::Infallible;
+use std::fmt::Write as _;
 use std::future::ready;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -248,6 +249,226 @@ where
         });
     });
     (server, shutdown_tx)
+}
+
+#[derive(Clone, Copy)]
+enum WheelArchivePrefetch {
+    NoRanges,
+    Sidecars,
+    Ranges,
+    Pinned,
+}
+
+async fn check_wheel_archive_prefetch(kind: WheelArchivePrefetch) -> Result<()> {
+    let (advertised, ranges, pinned) = match kind {
+        WheelArchivePrefetch::NoRanges => (false, false, false),
+        WheelArchivePrefetch::Sidecars => (true, false, false),
+        WheelArchivePrefetch::Ranges => (false, true, false),
+        WheelArchivePrefetch::Pinned => (false, false, true),
+    };
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let choice_requested = Arc::new(AtomicBool::new(false));
+    for (name, versions) in [("root", 1), ("gate", 1), ("choice", 2)] {
+        let mut files = Vec::new();
+        for number in 1..=versions {
+            let version = format!("{number}.0").parse()?;
+            let requirements = match name {
+                "root" => vec![
+                    "gate==1.0".parse()?,
+                    if pinned { "choice==2.0" } else { "choice" }.parse()?,
+                ],
+                "gate" => vec![if pinned { "choice==2.0" } else { "choice==1.0" }.parse()?],
+                _ => Vec::new(),
+            };
+            let (filename, wheel) = uv_test::packse::generate_wheel(
+                &name.parse()?,
+                &version,
+                &requirements,
+                &std::collections::BTreeMap::new(),
+                None,
+                "py3-none-any",
+                &[],
+            );
+            let sidecar = name == "gate" || (name == "choice" && advertised);
+            let mut metadata = format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n");
+            for requirement in &requirements {
+                writeln!(metadata, "Requires-Dist: {requirement}")?;
+            }
+            files.push(json!({
+                "filename": filename,
+                "url": format!("/files/{filename}"),
+                "hashes": {"sha256": hex::encode(Sha256::digest(&wheel))},
+                "size": wheel.len(),
+                "core-metadata": sidecar,
+                "upload-time": "2024-01-01T00:00:00Z",
+            }));
+            let mut head = ResponseTemplate::new(200)
+                .insert_header(CONTENT_LENGTH, wheel.len().to_string())
+                .insert_header("Cache-Control", "public, max-age=3600");
+            if ranges {
+                head = head.insert_header(ACCEPT_RANGES, "bytes");
+            }
+            Mock::given(method("HEAD"))
+                .and(wiremock::matchers::path(format!("/files/{filename}")))
+                .respond_with(head)
+                .mount(&server)
+                .await;
+            let requested = choice_requested.clone();
+            Mock::given(method("GET"))
+                .and(wiremock::matchers::path(format!("/files/{filename}")))
+                .respond_with(move |request: &Request| {
+                    if name == "choice" && number == 2 {
+                        requested.store(true, Ordering::Relaxed);
+                    }
+                    if ranges && let Some(range) = request.headers.get(RANGE) {
+                        let (start, end) = range
+                            .to_str()
+                            .expect("ASCII range")
+                            .strip_prefix("bytes=")
+                            .expect("byte range")
+                            .split_once('-')
+                            .expect("range bounds");
+                        let start: usize = start.parse().expect("range start");
+                        let end: usize = if end.is_empty() {
+                            wheel.len() - 1
+                        } else {
+                            end.parse().expect("range end")
+                        };
+                        return ResponseTemplate::new(206)
+                            .insert_header(
+                                CONTENT_RANGE,
+                                format!("bytes {start}-{end}/{}", wheel.len()),
+                            )
+                            .insert_header("Cache-Control", "public, max-age=3600")
+                            .set_body_bytes(wheel[start..=end].to_vec());
+                    }
+                    ResponseTemplate::new(200)
+                        .insert_header("Cache-Control", "public, max-age=3600")
+                        .set_body_bytes(wheel.clone())
+                })
+                .mount(&server)
+                .await;
+            let mut response = ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "public, max-age=3600")
+                .set_body_raw(metadata, "text/plain");
+            if name == "gate" {
+                response = response.set_delay(Duration::from_millis(300));
+            }
+            let requested = choice_requested.clone();
+            Mock::given(method("GET"))
+                .and(wiremock::matchers::path(format!(
+                    "/files/{filename}.metadata"
+                )))
+                .respond_with(move |_: &Request| {
+                    // The exact wheel must begin downloading while the gate is unresolved.
+                    if pinned && name == "gate" && !requested.load(Ordering::Relaxed) {
+                        ResponseTemplate::new(503)
+                    } else {
+                        response.clone()
+                    }
+                })
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path(format!("/simple/{name}/")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=3600")
+                    .set_body_raw(
+                        json!({"name": name, "files": files}).to_string(),
+                        "application/vnd.pypi.simple.v1+json",
+                    ),
+            )
+            .mount(&server)
+            .await;
+    }
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("root==1.0\n")?;
+    for (run, refresh) in [false, false, true].into_iter().enumerate() {
+        let before = server.received_requests().await.unwrap().len();
+        let mut command = context.pip_compile();
+        command
+            .arg("--no-header")
+            .arg("--no-annotate")
+            .arg("--default-index")
+            .arg(format!("{}/simple", server.uri()))
+            .arg("requirements.in");
+        if refresh {
+            command.arg("--refresh");
+        }
+        let output = command.output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout)?,
+            format!(
+                "choice=={}.0\ngate==1.0\nroot==1.0\n",
+                if pinned { 2 } else { 1 }
+            )
+        );
+        let requests = server.received_requests().await.unwrap();
+        let requests = &requests[before..];
+        if run == 0 {
+            assert!(
+                requests
+                    .iter()
+                    .any(|request| request.method.as_str() == "HEAD"
+                        && request.url.path() == "/files/root-1.0-py3-none-any.whl")
+            );
+            assert_eq!(
+                requests
+                    .iter()
+                    .any(|request| request.url.path() == "/files/choice-2.0-py3-none-any.whl"),
+                pinned || ranges,
+            );
+            assert_eq!(
+                requests
+                    .iter()
+                    .any(|request| request.url.path()
+                        == "/files/choice-2.0-py3-none-any.whl.metadata"),
+                advertised,
+            );
+        }
+        if !pinned && !ranges {
+            assert!(
+                !requests
+                    .iter()
+                    .any(|request| request.url.path() == "/files/choice-2.0-py3-none-any.whl")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A registry without range requests does not trigger speculative whole-wheel streams.
+#[tokio::test]
+async fn resolver_does_not_prefetch_no_range_wheels() -> Result<()> {
+    check_wheel_archive_prefetch(WheelArchivePrefetch::NoRanges).await
+}
+
+/// A registry without range requests can still serve cheap metadata sidecars.
+#[tokio::test]
+async fn resolver_prefetches_no_range_wheel_sidecars() -> Result<()> {
+    check_wheel_archive_prefetch(WheelArchivePrefetch::Sidecars).await
+}
+
+/// Successful range access enables speculative metadata requests.
+#[tokio::test]
+async fn resolver_prefetches_range_supported_wheels() -> Result<()> {
+    check_wheel_archive_prefetch(WheelArchivePrefetch::Ranges).await
+}
+
+/// An exact wheel requirement can download while another dependency is unresolved.
+#[tokio::test]
+async fn resolver_prefetches_pinned_no_range_wheels() -> Result<()> {
+    check_wheel_archive_prefetch(WheelArchivePrefetch::Pinned).await
 }
 
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
