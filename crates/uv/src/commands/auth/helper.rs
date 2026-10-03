@@ -44,7 +44,7 @@ impl TryFrom<Credentials> for BazelCredentialResponse {
     fn try_from(creds: Credentials) -> Result<Self> {
         let header_str = creds
             .to_header_value()
-            .context("Invalid authorization header")?
+            .context("Invalid credentials")?
             .to_str()
             // TODO: this is infallible in practice
             .context("Failed to convert header value to string")?
