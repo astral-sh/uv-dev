@@ -202,3 +202,52 @@ pub enum PythonRequirementSource {
     /// The discovered Python interpreter.
     Interpreter,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ops::Bound;
+
+    use uv_distribution_types::RequiresPython;
+    use uv_pep440::Version;
+
+    use super::{PythonRequirement, PythonRequirementSource};
+
+    fn requires_python(specifiers: &str) -> RequiresPython {
+        RequiresPython::from_specifiers(
+            specifiers.parse().expect("valid Python version specifiers"),
+        )
+    }
+
+    #[test]
+    fn cached_marker_tracks_target() {
+        let target = requires_python(">=3.9, <3.14");
+        let original = PythonRequirement::new(
+            PythonRequirementSource::PythonVersion,
+            "3.13rc1".parse().expect("valid Python version"),
+            requires_python(">=3.13"),
+            target.clone(),
+        );
+        assert_eq!(original.target(), &target);
+        assert_eq!(original.to_marker_tree(), target.to_marker_tree());
+
+        let narrowed_target = requires_python(">=3.11, <3.13");
+        let narrowed = original
+            .narrow(narrowed_target.range())
+            .expect("strictly narrower Python range");
+        let (lower, upper) = original
+            .split(Bound::Included(Version::new([3, 11])))
+            .expect("interior split point");
+        for (requirement, expected) in [
+            (narrowed, narrowed_target),
+            (lower, requires_python(">=3.9, <3.11")),
+            (upper, requires_python(">=3.11, <3.14")),
+        ] {
+            assert_eq!(requirement.target(), &expected);
+            assert_ne!(requirement.to_marker_tree(), original.to_marker_tree());
+            assert_eq!(requirement.to_marker_tree(), expected.to_marker_tree());
+            assert_eq!(requirement.exact(), original.exact());
+            assert_eq!(requirement.installed(), original.installed());
+            assert_eq!(requirement.source(), original.source());
+        }
+    }
+}
