@@ -295,20 +295,10 @@ impl From<GitUrl> for DisplaySafeUrl {
         if let Some(precise) = git.precise {
             let path = format!("{}@{}", url.path(), precise);
             url.set_path(&path);
-        } else {
+        } else if let Some(rev) = git.reference.as_url_rev() {
             // Otherwise, add the branch or tag name.
-            match git.reference {
-                GitReference::Branch(rev)
-                | GitReference::Tag(rev)
-                | GitReference::BranchOrTag(rev)
-                | GitReference::NamedRef(rev)
-                | GitReference::BranchOrTagOrCommit(rev) => {
-                    let rev = GitReference::encode_rev(&rev);
-                    let path = format!("{}@{}", url.path(), rev);
-                    url.set_path(&path);
-                }
-                GitReference::DefaultBranch => {}
-            }
+            let path = format!("{}@{}", url.path(), rev);
+            url.set_path(&path);
         }
 
         url
@@ -447,21 +437,58 @@ mod tests {
     }
 
     #[test]
+    fn display_reference_precedence() -> Result<(), Box<dyn std::error::Error>> {
+        let url = DisplaySafeUrl::parse("https://example.com/pkg.git")?;
+        for (reference, expected_path) in [
+            (GitReference::DefaultBranch, "/pkg.git"),
+            (
+                GitReference::BranchOrTag("HEAD".to_string()),
+                "/pkg.git@HEAD",
+            ),
+            (GitReference::BranchOrTag(String::new()), "/pkg.git@"),
+        ] {
+            let git = GitUrl::from_reference(url.clone(), reference, GitLfs::Disabled)?;
+            assert_eq!(DisplaySafeUrl::from(git).path(), expected_path);
+        }
+
+        let precise = "0dacfd662c64cb4ceb16e6cf65a157a8b715b979".parse::<GitOid>()?;
+        let expected_path = format!("/pkg.git@{precise}");
+        for reference in [
+            GitReference::DefaultBranch,
+            GitReference::BranchOrTag("ignored@?#%".to_string()),
+        ] {
+            let git = GitUrl::from_commit(url.clone(), reference, precise, GitLfs::Disabled)?;
+            assert_eq!(DisplaySafeUrl::from(git).path(), expected_path.as_str());
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn display_percent_encodes_reference() -> Result<(), Box<dyn std::error::Error>> {
-        let git = GitUrl::from_reference(
-            DisplaySafeUrl::parse("https://example.com/pkg.git")?,
-            GitReference::from_rev("refs/pull/493/head@1#2%".to_string()),
-            GitLfs::Disabled,
-        )?;
-        let url = DisplaySafeUrl::from(git);
+        let revision = "refs/pull/493/head@1#2%";
+        for reference in [
+            GitReference::Branch(revision.to_string()),
+            GitReference::Tag(revision.to_string()),
+            GitReference::BranchOrTag(revision.to_string()),
+            GitReference::BranchOrTagOrCommit(revision.to_string()),
+            GitReference::NamedRef(revision.to_string()),
+        ] {
+            let git = GitUrl::from_reference(
+                DisplaySafeUrl::parse("https://example.com/pkg.git")?,
+                reference,
+                GitLfs::Disabled,
+            )?;
+            let url = DisplaySafeUrl::from(git);
 
-        assert_eq!(
-            url.as_str(),
-            "https://example.com/pkg.git@refs/pull/493/head%401%232%25"
-        );
+            assert_eq!(
+                url.as_str(),
+                "https://example.com/pkg.git@refs/pull/493/head%401%232%25"
+            );
 
-        let git = GitUrl::try_from(url)?;
-        assert_eq!(git.reference().as_str(), Some("refs/pull/493/head@1#2%"));
+            let git = GitUrl::try_from(url)?;
+            assert_eq!(git.reference().as_str(), Some(revision));
+        }
 
         Ok(())
     }
