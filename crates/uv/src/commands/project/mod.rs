@@ -74,6 +74,7 @@ pub(crate) mod add;
 pub(crate) mod audit;
 pub(crate) mod check;
 pub(super) mod discovery;
+pub(crate) mod download;
 mod edit;
 pub(crate) mod environment;
 pub(crate) mod export;
