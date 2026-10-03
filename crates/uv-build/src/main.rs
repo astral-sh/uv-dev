@@ -106,17 +106,7 @@ fn main() -> Result<()> {
             // Tell the build frontend about the name of the artifact we built
             writeln!(&mut std::io::stdout(), "{filename}").context("stdout is closed")?;
         }
-        "prepare-metadata-for-build-wheel" => {
-            let wheel_directory = PathBuf::from(args.next().context("Missing wheel directory")?);
-            let filename = uv_build_backend::metadata(
-                &env::current_dir()?,
-                &wheel_directory,
-                uv_version::version(),
-            )?;
-            // Tell the build frontend about the name of the artifact we built
-            writeln!(&mut std::io::stdout(), "{filename}").context("stdout is closed")?;
-        }
-        "prepare-metadata-for-build-editable" => {
+        "prepare-metadata-for-build-wheel" | "prepare-metadata-for-build-editable" => {
             let wheel_directory = PathBuf::from(args.next().context("Missing wheel directory")?);
             let filename = uv_build_backend::metadata(
                 &env::current_dir()?,
