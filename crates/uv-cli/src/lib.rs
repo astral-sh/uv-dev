@@ -3469,6 +3469,8 @@ pub struct InitArgs {
 
     /// Initialize a build-backend of choice for the project.
     ///
+    /// Defaults to `uv` for packaged projects.
+    ///
     /// Implicitly sets `--package`.
     #[arg(long, value_enum, conflicts_with_all=["script", "no_package"], env = EnvVars::UV_INIT_BUILD_BACKEND)]
     pub build_backend: Option<ProjectBuildBackend>,
