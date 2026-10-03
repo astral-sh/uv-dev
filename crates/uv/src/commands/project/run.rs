@@ -21,8 +21,8 @@ use uv_cache::Cache;
 use uv_cli::{ExternalCommand, GlobalArgs};
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DryRun, EditableMode, EnvFile,
-    ExtrasSpecification, InstallOptions, RequirementsInput, TargetTriple,
+    ActiveEnvironment, ConcurrencyState, Constraints, DependencyGroups, DryRun, EditableMode,
+    EnvFile, ExtrasSpecification, InstallOptions, RequirementsInput, TargetTriple,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::NameRequirementSpecification;
@@ -115,7 +115,7 @@ pub(crate) async fn run(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,

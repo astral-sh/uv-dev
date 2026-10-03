@@ -4,7 +4,7 @@ use anyhow::Result;
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun, ExtrasSpecification,
+    ConcurrencyState, DependencyGroups, DependencyGroupsWithDefaults, DryRun, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions, Reinstall,
 };
 use uv_distribution_types::{Dist, Name, ResolvedDist};
@@ -39,7 +39,7 @@ pub(crate) async fn collect_module_owners(
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
     state: &UniversalState,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     preview: Preview,

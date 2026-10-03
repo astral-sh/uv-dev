@@ -15,9 +15,10 @@ use uv_cache::Cache;
 use uv_cli::SyncFormat;
 use uv_client::{BaseClientBuilder, CachedClient, RegistryClientBuilder};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DependencyGroupsWithDefaults,
-    DryRun, EditableMode, ExtrasSpecification, ExtrasSpecificationWithDefaults, HashCheckingMode,
-    InstallOptions, InstallTarget as InstallOptionTarget, TargetTriple, Upgrade,
+    ActiveEnvironment, ConcurrencyState, Constraints, DependencyGroups,
+    DependencyGroupsWithDefaults, DryRun, EditableMode, ExtrasSpecification,
+    ExtrasSpecificationWithDefaults, HashCheckingMode, InstallOptions,
+    InstallTarget as InstallOptionTarget, TargetTriple, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::LoweredExtraBuildDependencies;
@@ -91,7 +92,7 @@ pub(crate) async fn sync(
     client_builder: BaseClientBuilder<'_>,
     script: Option<Pep723Script>,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -853,7 +854,7 @@ pub(crate) async fn do_sync<'a>(
     state: &PlatformState,
     logger: Box<dyn InstallLogger>,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     dry_run: DryRun,
@@ -1225,7 +1226,7 @@ impl<'a> From<&'a MalwareCheckSettings> for MalwareCheckContext<'a> {
 pub(super) async fn check_resolution_malware(
     resolution: &Resolution,
     client_builder: &BaseClientBuilder<'_>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     malware_settings: &MalwareCheckSettings,
     cache: &Cache,
     preview: Preview,
@@ -1274,7 +1275,7 @@ async fn maybe_check_malware(
     target: &InstallTarget<'_>,
     resolution: &Resolution,
     client_builder: &BaseClientBuilder<'_>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     preview: Preview,
     malware_context: &MalwareCheckContext<'_>,
@@ -1306,7 +1307,7 @@ async fn check_malware(
     resolution: &Resolution,
     checked_dependencies: &FxHashSet<Dependency>,
     client_builder: &BaseClientBuilder<'_>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     malware_check_url: Option<DisplaySafeUrl>,
     cache: &Cache,
 ) -> Result<(), ProjectError> {
@@ -1359,7 +1360,7 @@ async fn check_malware_dependencies(
     dependencies: &[Dependency],
     installed_dependencies: &FxHashSet<Dependency>,
     client_builder: &BaseClientBuilder<'_>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     malware_check_url: Option<DisplaySafeUrl>,
     cache: &Cache,
 ) -> Result<(), ProjectError> {

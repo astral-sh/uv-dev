@@ -8,7 +8,7 @@ use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_cli::TreeFormat;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
-use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroups, TargetTriple};
+use uv_configuration::{ActiveEnvironment, ConcurrencyState, DependencyGroups, TargetTriple};
 use uv_distribution_types::IndexCapabilities;
 use uv_lock::{PackageMap, TreeDisplay, TreeJsonTarget};
 use uv_normalize::DefaultGroups;
@@ -75,7 +75,7 @@ pub(crate) async fn tree(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -322,7 +322,7 @@ pub(crate) async fn tree(
             .index_locations(index_locations.clone())
             .keyring(*keyring_provider)
             .build()?;
-            let download_concurrency = concurrency.downloads_semaphore.clone();
+            let download_concurrency = concurrency.downloads_semaphore();
 
             let exclude_newer = lock.exclude_newer();
 
@@ -352,7 +352,7 @@ pub(crate) async fn tree(
                     };
                     Ok::<Option<_>, Error>(Some((package, filename.into_version())))
                 })
-                .buffer_unordered(concurrency.downloads);
+                .buffer_unordered(concurrency.limits().downloads);
 
             let mut map = PackageMap::default();
             while let Some(entry) = fetches.next().await.transpose()? {

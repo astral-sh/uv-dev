@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
-use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun};
+use uv_configuration::{ActiveEnvironment, ConcurrencyState, DependencyGroupsWithDefaults, DryRun};
 use uv_lock::{Lock, Metadata, Package};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python::{
@@ -56,7 +56,7 @@ pub(crate) async fn metadata(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
