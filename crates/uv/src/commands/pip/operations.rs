@@ -78,15 +78,17 @@ pub(crate) async fn read_requirements(
     }
 
     // Read all requirements from the provided sources.
-    Ok(RequirementsSpecification::from_sources(
-        requirements,
-        constraints,
-        overrides,
-        excludes,
-        groups,
-        client_builder,
+    Ok(
+        crate::commands::pylock::read_requirements_with_pylock_constraints(
+            requirements,
+            constraints,
+            overrides,
+            excludes,
+            groups,
+            client_builder,
+        )
+        .await?,
     )
-    .await?)
 }
 
 /// Resolve a set of constraints.
@@ -95,9 +97,16 @@ pub(crate) async fn read_constraints(
     client_builder: &BaseClientBuilder<'_>,
 ) -> Result<Vec<NameRequirementSpecification>, Error> {
     Ok(
-        RequirementsSpecification::from_sources(&[], constraints, &[], &[], None, client_builder)
-            .await?
-            .constraints,
+        crate::commands::pylock::read_requirements_with_pylock_constraints(
+            &[],
+            constraints,
+            &[],
+            &[],
+            None,
+            client_builder,
+        )
+        .await?
+        .constraints,
     )
 }
 
