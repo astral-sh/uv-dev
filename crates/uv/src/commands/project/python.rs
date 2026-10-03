@@ -82,6 +82,10 @@ pub(crate) struct ProjectPythonRequest {
 }
 
 impl ProjectPythonRequest {
+    pub(super) fn source(&self) -> &PythonRequestSource {
+        &self.source
+    }
+
     /// Determine the Python request and requirement from a frozen lockfile.
     pub(super) async fn from_lockfile(
         python_request: Option<PythonRequest>,
