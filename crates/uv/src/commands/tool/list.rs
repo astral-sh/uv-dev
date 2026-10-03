@@ -25,15 +25,36 @@ use crate::commands::reporters::LatestVersionReporter;
 use crate::printer::Printer;
 use crate::settings::ResolverInstallerSettings;
 
+/// Whether to list all installed tools or only those with available updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolListMode {
+    /// List all installed tools.
+    All,
+    /// List only tools with available updates.
+    Outdated,
+}
+
+impl From<bool> for ToolListMode {
+    fn from(outdated: bool) -> Self {
+        if outdated { Self::Outdated } else { Self::All }
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub(crate) struct ToolListOutput: u8 {
+        const PATHS = 1 << 0;
+        const VERSION_SPECIFIERS = 1 << 1;
+        const WITH = 1 << 2;
+        const EXTRAS = 1 << 3;
+        const PYTHON = 1 << 4;
+    }
+}
+
 /// List installed tools.
-#[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn list(
-    show_paths: bool,
-    show_version_specifiers: bool,
-    show_with: bool,
-    show_extras: bool,
-    show_python: bool,
-    outdated: bool,
+    output: ToolListOutput,
+    mode: ToolListMode,
     args: ResolverInstallerOptions,
     filesystem: ResolverInstallerOptions,
     client_builder: BaseClientBuilder<'_>,
@@ -114,7 +135,7 @@ pub(crate) async fn list(
     }
 
     // Determine the latest version for each tool when `--outdated` is requested.
-    let latest: FxHashMap<PackageName, Option<DistFilename>> = if outdated
+    let latest: FxHashMap<PackageName, Option<DistFilename>> = if mode == ToolListMode::Outdated
         && !valid_tools.is_empty()
     {
         let download_concurrency = concurrency.downloads_semaphore.clone();
@@ -185,7 +206,7 @@ pub(crate) async fn list(
 
     for (name, tool, tool_env, version) in valid_tools {
         // If `--outdated` is set, skip tools that are up-to-date.
-        if outdated {
+        if mode == ToolListMode::Outdated {
             let is_outdated = latest
                 .get(&name)
                 .and_then(Option::as_ref)
@@ -195,7 +216,8 @@ pub(crate) async fn list(
             }
         }
 
-        let version_specifier = show_version_specifiers
+        let version_specifier = output
+            .contains(ToolListOutput::VERSION_SPECIFIERS)
             .then(|| {
                 tool.requirements()
                     .iter()
@@ -211,7 +233,8 @@ pub(crate) async fn list(
             })
             .unwrap_or_default();
 
-        let extra_requirements = show_extras
+        let extra_requirements = output
+            .contains(ToolListOutput::EXTRAS)
             .then(|| {
                 tool.requirements()
                     .iter()
@@ -226,7 +249,7 @@ pub(crate) async fn list(
             })
             .unwrap_or_default();
 
-        let python_version = if show_python {
+        let python_version = if output.contains(ToolListOutput::PYTHON) {
             let interpreter = tool_env.environment().interpreter();
             let implementation = LenientImplementationName::from(interpreter.implementation_name());
             format!(
@@ -238,7 +261,8 @@ pub(crate) async fn list(
             String::new()
         };
 
-        let with_requirements = show_with
+        let with_requirements = output
+            .contains(ToolListOutput::WITH)
             .then(|| {
                 tool.requirements()
                     .iter()
@@ -254,7 +278,7 @@ pub(crate) async fn list(
             })
             .unwrap_or_default();
 
-        let latest_version = if outdated {
+        let latest_version = if mode == ToolListMode::Outdated {
             latest
                 .get(&name)
                 .and_then(Option::as_ref)
@@ -264,7 +288,7 @@ pub(crate) async fn list(
             String::new()
         };
 
-        if show_paths {
+        if output.contains(ToolListOutput::PATHS) {
             writeln!(
                 printer.stdout(),
                 "{} ({})",
@@ -287,7 +311,7 @@ pub(crate) async fn list(
 
         // Output tool entrypoints
         for entrypoint in tool.entrypoints() {
-            if show_paths {
+            if output.contains(ToolListOutput::PATHS) {
                 writeln!(printer.stdout(), "- {}", entrypoint.to_string().cyan())?;
             } else {
                 writeln!(printer.stdout(), "- {}", entrypoint.name)?;
