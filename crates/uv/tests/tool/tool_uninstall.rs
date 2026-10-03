@@ -1,5 +1,7 @@
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::PathChild;
+use assert_fs::fixture::{PathChild, PathCreateDir};
+use url::Url;
 
 use uv_static::EnvVars;
 
@@ -48,6 +50,149 @@ fn tool_uninstall() {
      + platformdirs==4.2.0
     Installed 2 executables: black, blackd
     ");
+}
+
+#[test]
+fn tool_uninstall_preserves_replaced_executable() {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let launcher_requirement = format!(
+        "simple-launcher @ {}",
+        Url::from_file_path(&launcher).expect("Failed to convert launcher path to file URL")
+    );
+
+    context
+        .tool_install()
+        .arg(&launcher)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    context
+        .tool_install()
+        .arg(&app)
+        .arg("--with-executables-from")
+        .arg(&launcher_requirement)
+        .arg("--force")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Removed environment for `simple-launcher`
+    ");
+
+    assert!(
+        bin_dir
+            .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+            .exists()
+    );
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("basic-app")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Uninstalled 2 executables: basic-app, simple_launcher
+    ");
+
+    #[cfg(unix)]
+    {
+        context
+            .tool_install()
+            .arg(&launcher)
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+            .assert()
+            .success();
+
+        context
+            .tool_install()
+            .arg(&app)
+            .arg("--with-executables-from")
+            .arg(&launcher_requirement)
+            .arg("--force")
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+            .assert()
+            .success();
+
+        uv_snapshot!(context.filters(), context.tool_uninstall().arg("basic-app")
+            .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+            .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @"
+        success: true
+        exit_code: 0
+        ----- stdout -----
+
+        ----- stderr -----
+        Uninstalled 2 executables: basic-app, simple_launcher
+        ");
+
+        assert!(
+            !bin_dir
+                .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+                .exists()
+        );
+    }
+}
+
+#[test]
+fn tool_uninstall_validates_other_tools_before_removing_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let bin_dir = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+
+    context
+        .tool_install()
+        .arg(&launcher)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    tool_dir.child(".tmp-invalid").create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str()), @r#"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    error: Not a valid package or extra name: ".tmp-invalid". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+    "#);
+
+    assert!(tool_dir.child("simple-launcher").exists());
+    assert!(
+        bin_dir
+            .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+            .exists()
+    );
+
+    Ok(())
 }
 
 #[test]
