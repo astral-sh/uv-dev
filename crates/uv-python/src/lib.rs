@@ -105,9 +105,6 @@ pub enum Error {
 
     #[error(transparent)]
     InvalidEnvironment(#[from] environment::InvalidEnvironment),
-
-    #[error(transparent)]
-    RetryParsing(#[from] uv_client::RetryParsingError),
 }
 
 /// The reason a managed Python download could not be used.
