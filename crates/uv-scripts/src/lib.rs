@@ -7,6 +7,7 @@ use std::sync::LazyLock;
 
 use memchr::memmem::Finder;
 use serde::Deserialize;
+use serde_json::Value;
 use thiserror::Error;
 use tracing::instrument;
 use url::Url;
@@ -274,6 +275,7 @@ impl Pep723Script {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| Pep723Error::InvalidFilename(file.to_string_lossy().to_string()))?;
+        let greeting = Value::String(format!("Hello from {script_name}!"));
 
         let default_metadata = indoc::formatdoc! {r#"
             requires-python = "{requires_python}"
@@ -309,14 +311,14 @@ impl Pep723Script {
             {metadata}
 
             def main() -> None:
-                print("Hello from {name}!")
+                print({greeting})
 
 
             if __name__ == "__main__":
                 main()
         "#,
                 metadata = metadata,
-                name = script_name,
+                greeting = greeting,
             }
         };
 
