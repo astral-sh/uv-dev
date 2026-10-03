@@ -84,6 +84,7 @@ pub(crate) mod lock;
 pub(crate) mod lock_target;
 pub(super) mod lockfile;
 pub(crate) mod remove;
+mod report;
 pub(crate) mod run;
 pub(crate) mod sync;
 mod toolchain;
