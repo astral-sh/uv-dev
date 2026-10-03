@@ -1132,12 +1132,14 @@ fn tool_run_requirements_txt() {
         .with_filtered_counts()
         .with_tool_dirs();
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
+    let requirements_dir = context.temp_dir.child("has,comma");
+    requirements_dir.create_dir_all().unwrap();
+    let requirements_txt = requirements_dir.child("requirements.txt");
     requirements_txt.write_str("iniconfig").unwrap();
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--with-requirements")
-        .arg("requirements.txt")
+        .arg(requirements_txt.path())
         .arg("--with")
         .arg("typing-extensions")
         .arg("flask")
