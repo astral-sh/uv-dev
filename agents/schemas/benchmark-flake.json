@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "uri": { "type": "string" },
+          "mode": { "type": "string", "enum": ["Simulation", "Walltime"] },
+          "decision": {
+            "type": "string",
+            "enum": ["create", "duplicate", "ignore"]
+          },
+          "reason": { "type": "string" },
+          "issue": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "title": { "type": "string" },
+              "body": { "type": "string" }
+            },
+            "required": ["title", "body"]
+          }
+        },
+        "required": ["uri", "mode", "decision", "reason", "issue"]
+      }
+    }
+  },
+  "required": ["findings"]
+}
