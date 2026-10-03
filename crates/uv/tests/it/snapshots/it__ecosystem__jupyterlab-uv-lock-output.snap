@@ -4,4 +4,4 @@ expression: snapshot
 ---
 exit_code: 0 (success)
 ----- stderr -----
-Resolved 214 packages in [TIME]
+Resolved 215 packages in [TIME]
