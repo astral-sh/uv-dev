@@ -1463,6 +1463,10 @@ impl ProjectInterpreter {
             }
         }
 
+        // Avoid downloading a pinned interpreter when its version range cannot satisfy the
+        // project's Python requirement.
+        project_python.validate_request()?;
+
         let reporter = PythonDownloadReporter::single(printer);
 
         // Locate the Python interpreter to use in the environment.
