@@ -56,6 +56,7 @@ hex = { workspace = true }
 h2 = { workspace = true }
 html-escape = { workspace = true }
 http = { workspace = true }
+httpdate = { workspace = true }
 itertools = { workspace = true }
 jiff = { workspace = true }
 owo-colors = { workspace = true }

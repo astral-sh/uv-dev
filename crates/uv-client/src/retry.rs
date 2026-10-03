@@ -1,13 +1,18 @@
 use std::error::Error;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, SystemTimeError};
 use std::{io, iter};
 
+use http::header::RETRY_AFTER;
 use http::status::StatusCode;
+use http::{Extensions, HeaderMap};
 use itertools::Itertools;
-use reqwest::Response;
+use reqwest::{Request, Response};
+use reqwest_middleware::{Middleware, Next};
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{
-    RetryPolicy, Retryable, RetryableStrategy, default_on_request_error, default_on_request_success,
+    RetryDecision, RetryPolicy, RetryTransientMiddleware, Retryable, RetryableStrategy,
+    default_on_request_error, default_on_request_success,
 };
 use rustls::{AlertDescription, Error as RustlsError};
 use tracing::{debug, trace};
@@ -19,7 +24,7 @@ use crate::{RequestBuilder, WrappedReqwestError};
 
 /// An extension over [`DefaultRetryableStrategy`] that logs transient request failures and
 /// adds additional retry cases.
-pub(crate) struct UvRetryableStrategy;
+struct UvRetryableStrategy;
 
 impl RetryableStrategy for UvRetryableStrategy {
     fn handle(&self, res: &Result<Response, reqwest_middleware::Error>) -> Option<Retryable> {
@@ -55,6 +60,104 @@ impl RetryableStrategy for UvRetryableStrategy {
         }
         retryable
     }
+}
+
+/// Retry transient requests using server advice within the configured retry limits.
+pub(crate) struct UvRetryMiddleware {
+    policy: ExponentialBackoff,
+}
+
+impl UvRetryMiddleware {
+    pub(crate) fn new(policy: ExponentialBackoff) -> Self {
+        Self { policy }
+    }
+}
+
+#[async_trait::async_trait]
+impl Middleware for UvRetryMiddleware {
+    async fn handle(
+        &self,
+        request: Request,
+        extensions: &mut Extensions,
+        next: Next<'_>,
+    ) -> reqwest_middleware::Result<Response> {
+        // The retry library passes responses to its strategy and timing decisions to its policy.
+        // Keep their shared state local to this request, including all of its retry attempts.
+        let retry_after = Arc::new(Mutex::new(None));
+        RetryTransientMiddleware::new_with_policy_and_strategy(
+            RetryAfterPolicy {
+                policy: self.policy,
+                retry_after: retry_after.clone(),
+            },
+            RetryAfterStrategy {
+                max_delay: self.policy.max_retry_interval,
+                retry_after,
+            },
+        )
+        .handle(request, extensions, next)
+        .await
+    }
+}
+
+struct RetryAfterPolicy {
+    policy: ExponentialBackoff,
+    retry_after: Arc<Mutex<Option<SystemTime>>>,
+}
+
+impl RetryPolicy for RetryAfterPolicy {
+    fn should_retry(&self, start: SystemTime, past_retries: u32) -> RetryDecision {
+        match self.policy.should_retry(start, past_retries) {
+            decision @ RetryDecision::DoNotRetry => decision,
+            decision @ RetryDecision::Retry { .. } => self
+                .retry_after
+                .lock()
+                .expect("Retry-After state poisoned")
+                .take()
+                .map_or(decision, |execute_after| RetryDecision::Retry {
+                    execute_after,
+                }),
+        }
+    }
+}
+
+struct RetryAfterStrategy {
+    max_delay: Duration,
+    retry_after: Arc<Mutex<Option<SystemTime>>>,
+}
+
+impl RetryableStrategy for RetryAfterStrategy {
+    fn handle(&self, response: &reqwest_middleware::Result<Response>) -> Option<Retryable> {
+        let retryable = UvRetryableStrategy.handle(response);
+        let execute_after = if retryable == Some(Retryable::Transient) {
+            response.as_ref().ok().and_then(|response| {
+                let now = SystemTime::now();
+                retry_after(response.headers(), now, self.max_delay)
+                    .and_then(|delay| now.checked_add(delay))
+            })
+        } else {
+            None
+        };
+        *self.retry_after.lock().expect("Retry-After state poisoned") = execute_after;
+        retryable
+    }
+}
+
+/// Parse `Retry-After` without allowing an origin to exceed the client's maximum retry delay.
+fn retry_after(headers: &HeaderMap, now: SystemTime, max_delay: Duration) -> Option<Duration> {
+    let mut values = headers.get_all(RETRY_AFTER).iter();
+    let value = values.next()?.to_str().ok()?.trim();
+    if values.next().is_some() {
+        return None;
+    }
+    let duration = if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        Duration::from_secs(value.parse::<u64>().unwrap_or(u64::MAX))
+    } else {
+        httpdate::parse_http_date(value)
+            .ok()?
+            .duration_since(now)
+            .unwrap_or_default()
+    };
+    Some(duration.min(max_delay))
 }
 
 /// Per-request retry state and policy.
@@ -405,7 +508,154 @@ mod tests {
     use wiremock::matchers::path;
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    use crate::{UvRetryableStrategy, retryable_on_request_failure};
+    use crate::retryable_on_request_failure;
+
+    #[test]
+    fn retry_after_values() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let maximum = Duration::from_secs(30);
+        for (value, expected) in [
+            ("0".to_owned(), Some(Duration::ZERO)),
+            ("7".to_owned(), Some(Duration::from_secs(7))),
+            (u64::MAX.to_string(), Some(maximum)),
+            ("18446744073709551616".to_owned(), Some(maximum)),
+            (
+                httpdate::fmt_http_date(now + Duration::from_secs(10)),
+                Some(Duration::from_secs(10)),
+            ),
+            (
+                httpdate::fmt_http_date(now - Duration::from_secs(10)),
+                Some(Duration::ZERO),
+            ),
+            ("+1".to_owned(), None),
+            ("-1".to_owned(), None),
+            ("1.5".to_owned(), None),
+            ("invalid".to_owned(), None),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(RETRY_AFTER, value.parse().unwrap());
+            assert_eq!(retry_after(&headers, now, maximum), expected, "{value}");
+            if expected.is_some() {
+                assert_eq!(
+                    retry_after(&headers, now, Duration::ZERO),
+                    Some(Duration::ZERO)
+                );
+            }
+        }
+        let mut headers = HeaderMap::new();
+        assert_eq!(retry_after(&headers, now, maximum), None);
+        headers.append(RETRY_AFTER, "1".parse().unwrap());
+        headers.append(RETRY_AFTER, "2".parse().unwrap());
+        assert_eq!(retry_after(&headers, now, maximum), None);
+    }
+
+    #[test]
+    fn retry_after_keeps_the_retry_budget_and_clears_stale_advice() {
+        let now = SystemTime::now();
+        let retry_after = Arc::new(Mutex::new(Some(now)));
+        let policy = RetryAfterPolicy {
+            policy: ExponentialBackoff::builder()
+                .jitter(reqwest_retry::Jitter::None)
+                .retry_bounds(Duration::from_secs(2), Duration::from_secs(30))
+                .build_with_max_retries(1),
+            retry_after: retry_after.clone(),
+        };
+        assert!(matches!(
+            policy.should_retry(now, 1),
+            RetryDecision::DoNotRetry
+        ));
+        assert!(
+            matches!(policy.should_retry(now, 0), RetryDecision::Retry { execute_after } if execute_after == now)
+        );
+        *retry_after.lock().unwrap() = Some(now);
+        let strategy = RetryAfterStrategy {
+            max_delay: Duration::from_secs(30),
+            retry_after: retry_after.clone(),
+        };
+        let response = http::Response::builder()
+            .status(503)
+            .body("")
+            .unwrap()
+            .into();
+        assert!(matches!(
+            strategy.handle(&Ok(response)),
+            Some(Retryable::Transient)
+        ));
+        assert!(retry_after.lock().unwrap().is_none());
+        assert!(
+            matches!(policy.should_retry(now, 0), RetryDecision::Retry { execute_after } if execute_after.duration_since(now).unwrap() >= Duration::from_secs(2))
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_after_is_request_scoped() -> Result<()> {
+        let server = MockServer::start().await;
+        for (name, header) in [("immediate", Some("0")), ("regular", None)] {
+            let mut response = ResponseTemplate::new(503);
+            if let Some(header) = header {
+                response = response.insert_header("Retry-After", header);
+            }
+            Mock::given(path(format!("/{name}")))
+                .respond_with(response)
+                .up_to_n_times(1)
+                .with_priority(1)
+                .mount(&server)
+                .await;
+            Mock::given(path(format!("/{name}")))
+                .respond_with(ResponseTemplate::new(200))
+                .with_priority(2)
+                .mount(&server)
+                .await;
+        }
+        let client = reqwest_middleware::ClientBuilder::new(Client::new())
+            .with(UvRetryMiddleware::new(
+                ExponentialBackoff::builder()
+                    .jitter(reqwest_retry::Jitter::None)
+                    .retry_bounds(Duration::from_secs(60), Duration::from_secs(60))
+                    .build_with_max_retries(1),
+            ))
+            .build();
+        let regular = {
+            let client = client.clone();
+            let url = format!("{}/regular", server.uri());
+            tokio::spawn(async move { client.get(url).send().await })
+        };
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if server
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .any(|request| request.url.path() == "/regular")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        let response = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.get(format!("{}/immediate", server.uri())).send(),
+        )
+        .await??;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .extensions()
+                .get::<reqwest_retry::RetryCount>()
+                .map(|count| count.value()),
+            Some(1)
+        );
+        assert!(
+            !regular.is_finished(),
+            "Retry-After leaked to another request"
+        );
+        regular.abort();
+        let _ = regular.await;
+        Ok(())
+    }
 
     #[tokio::test]
     #[traced_test]
