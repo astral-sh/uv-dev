@@ -39,6 +39,18 @@ $ uv run --with httpx==0.25.0 python -c "import httpx; print(httpx.__version__)"
 The requested version will be respected regardless of the project's requirements. For example, even
 if the project requires `httpx==0.24.0`, the output above would be the same.
 
+### Interactive tools
+
+You can use `--with` to run an interactive tool with access to the project without adding it as a
+project dependency. For example, to start an IPython session for the project:
+
+```console
+$ uv run --with ipython ipython
+```
+
+The session can import the project and its dependencies. For notebooks, see the
+[Jupyter integration guide](../../guides/integration/jupyter.md).
+
 ## Running scripts
 
 Scripts that declare inline metadata are automatically executed in environments isolated from the
