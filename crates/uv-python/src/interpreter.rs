@@ -70,7 +70,33 @@ impl Interpreter {
     /// Detect the interpreter info for the given Python executable.
     pub fn query(executable: impl AsRef<Path>, cache: &Cache) -> Result<Self, Error> {
         let executable = executable.as_ref();
-        let info = InterpreterInfo::query_cached(executable, cache)?;
+        let mut info = InterpreterInfo::query_cached(executable, cache)?;
+
+        // A copied virtual environment executable can report a base executable with the same
+        // name under `home`, even when that executable belongs to another Python installation.
+        // Prefer the interpreter recorded by `venv` only when the reported base is incompatible
+        // and the recorded executable matches the virtual environment.
+        if info.sys_prefix != info.sys_base_prefix
+            && let Some(base_executable) = info.sys_base_executable.as_ref()
+            && !is_same_file(&info.sys_executable, base_executable).unwrap_or(false)
+            && let Ok(configuration) =
+                PyVenvConfiguration::parse(info.sys_prefix.join("pyvenv.cfg"))
+            && let Some(configured_executable) = configuration.executable
+            && let Ok(base_info) = InterpreterInfo::query_cached(base_executable, cache)
+            && !info.matches_interpreter(&base_info)
+            && let Ok(configured_info) =
+                InterpreterInfo::query_cached(&configured_executable, cache)
+            && info.matches_interpreter(&configured_info)
+        {
+            debug!(
+                "Base interpreter {} is Python {}, which does not match virtual environment Python {}; using configured executable {}",
+                base_executable.user_display(),
+                base_info.markers.python_full_version(),
+                info.markers.python_full_version(),
+                configured_executable.user_display(),
+            );
+            info.sys_base_executable = Some(configured_executable);
+        }
 
         debug_assert!(
             info.sys_executable.is_absolute(),
@@ -972,6 +998,16 @@ struct InterpreterInfo {
 }
 
 impl InterpreterInfo {
+    /// Return whether another interpreter has the same Python implementation and ABI.
+    fn matches_interpreter(&self, other: &Self) -> bool {
+        self.markers.python_full_version() == other.markers.python_full_version()
+            && self.markers.implementation_name() == other.markers.implementation_name()
+            && self.markers.implementation_version() == other.markers.implementation_version()
+            && self.platform == other.platform
+            && self.gil_disabled == other.gil_disabled
+            && self.debug_enabled == other.debug_enabled
+    }
+
     /// Return the resolved [`InterpreterInfo`] for the given Python executable.
     fn query(interpreter: &Path, cache: &Cache) -> Result<Self, Error> {
         let tempdir = tempfile::tempdir_in(cache.root())?;
