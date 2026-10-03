@@ -8,6 +8,7 @@ pub use site_packages::{
 };
 pub use uninstall::{UninstallError, uninstall};
 
+mod compatibility;
 mod compile;
 mod preparer;
 
