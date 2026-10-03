@@ -363,7 +363,7 @@ impl CompatArgs for PipInstallCompatArgs {
 
         if self.user {
             return Err(anyhow!(
-                "pip's `--user` is unsupported (use a virtual environment instead)"
+                "pip's `--user` is unsupported (use `uv venv` to create a virtual environment, or use `uv tool install` to install a command-line tool)"
             ));
         }
 
