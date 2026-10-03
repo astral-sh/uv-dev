@@ -167,15 +167,14 @@ pub enum HashCollection {
     All,
 }
 
-/// Read a URL's declared hash for resolution, excluding MD5, which `--require-hashes` rejects.
+/// Read a URL's supported hash for resolution.
 pub fn parse_url_hashes(url: &DisplaySafeUrl) -> Option<HashDigests> {
     let hashes = url
         .fragment()?
         .split('&')
         .find_map(|fragment| Hashes::parse_fragment(fragment).ok())?;
     let hashes = HashDigests::from(hashes);
-    let contains_md5 = hashes.iter().any(|hash| matches!(hash, HashDigest::Md5(_)));
-    (!contains_md5).then_some(hashes)
+    (!hashes.is_empty()).then_some(hashes)
 }
 
 pub trait Hashed {
