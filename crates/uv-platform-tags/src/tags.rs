@@ -228,23 +228,18 @@ impl Tags {
         // 2. abi3/abi3t and no abi (e.g. executable binary)
         if let Implementation::CPython { variant } = implementation {
             // Emit `abi3t` everywhere we'd emit `abi3` for non-free-threaded builds.
+            let stable_abi = if variant.contains(CPythonAbiVariants::Freethreading) {
+                AbiTag::Abi3T
+            } else {
+                AbiTag::Abi3
+            };
             for minor in (2..=python_version.1).rev() {
-                if variant.contains(CPythonAbiVariants::Freethreading) {
-                    for platform_tag in &platform_tags {
-                        tags.push((
-                            implementation.language_tag((python_version.0, minor)),
-                            AbiTag::Abi3T,
-                            platform_tag.clone(),
-                        ));
-                    }
-                } else {
-                    for platform_tag in &platform_tags {
-                        tags.push((
-                            implementation.language_tag((python_version.0, minor)),
-                            AbiTag::Abi3,
-                            platform_tag.clone(),
-                        ));
-                    }
+                for platform_tag in &platform_tags {
+                    tags.push((
+                        implementation.language_tag((python_version.0, minor)),
+                        stable_abi,
+                        platform_tag.clone(),
+                    ));
                 }
                 // Only include `none` tags for the current CPython version
                 if minor == python_version.1 {
