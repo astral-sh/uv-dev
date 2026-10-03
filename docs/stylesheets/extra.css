@@ -208,6 +208,11 @@ because the nav is in a hamburger menu anyway
   user-select: none;
 }
 
+/* Distinguish console prompts from output. */
+.highlight .gp {
+  color: var(--md-code-hl-special-color);
+}
+
 /* Styling for the generated CLI reference page */
 .cli-reference dd {
   margin-top: 0.1em;
