@@ -1199,7 +1199,7 @@ impl RegistryClient {
         };
 
         // Attempt to fetch via a range request.
-        if index.is_none_or(|index| capabilities.supports_range_requests(index)) {
+        if capabilities.supports_range_requests(url) {
             let req = self
                 .uncached_client(url)
                 .head(Url::from(url.clone()))
@@ -1282,10 +1282,8 @@ impl RegistryClient {
                         // for the METADATA file.
                         warn!("Range requests not supported for `{filename}`; streaming wheel");
 
-                        // Mark the index as not supporting range requests.
-                        if let Some(index) = index {
-                            capabilities.set_no_range_requests(index.clone());
-                        }
+                        // Other artifact hosts linked by this index may still support ranges.
+                        capabilities.set_no_range_requests(url);
                     } else {
                         return Err(err);
                     }
