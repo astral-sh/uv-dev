@@ -57,7 +57,9 @@ pub(crate) async fn login(
     if token.is_some() {
         if let Some(username) = &username {
             if username != "__token__" {
-                bail!("When using `--token`, a username cannot not be provided; found: {username}");
+                bail!(
+                    "When using `--token`, a username other than `__token__` cannot be provided; found: {username}"
+                );
             }
         }
     }
