@@ -1,12 +1,18 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(feature = "test-git")]
+use std::process::Command;
 
 use anyhow::Result;
+#[cfg(feature = "test-git")]
+use anyhow::anyhow;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 #[cfg(unix)]
 use fs_err::{metadata, set_permissions};
 use indoc::indoc;
+#[cfg(feature = "test-git")]
+use url::Url;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
@@ -921,6 +927,80 @@ fn tool_run_git() {
     ----- stderr -----
     Resolved [N] packages in [TIME]
     ");
+}
+
+/// Test running a tool from a Git repository whose name ends in `.py`.
+#[test]
+#[cfg(feature = "test-git")]
+fn tool_run_git_repository_ending_in_py() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_counts();
+    let repository = context.temp_dir.child("fixturetool.py");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "fixturetool"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.scripts]
+        fixturetool = "fixturetool:main"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+        "#})?;
+    repository
+        .child("src/fixturetool/__init__.py")
+        .write_str("def main():\n    print('fixturetool')\n")?;
+
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("add")
+        .arg(".")
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .arg("-c")
+        .arg("user.name=ferris")
+        .arg("-c")
+        .arg("user.email=ferris@example.com")
+        .arg("commit")
+        .arg("-m")
+        .arg("Initial commit")
+        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+        .assert()
+        .success();
+
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let requirement = format!("git+{}", repository_url.as_str().trim_end_matches('/'));
+
+    // This valid Git requirement is mistaken for a Python script because its URL ends in `.py`,
+    // preventing both supported tool invocation forms from running it. See astral-sh/uv#21141.
+    uv_snapshot!(context.filters(), context.tool_run().arg(&requirement), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Not a valid package or extra name: "git+file://[TEMP_DIR]/fixturetool.py". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+    "#);
+
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--from")
+        .arg(&requirement)
+        .arg("fixturetool"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Not a valid package or extra name: "git+file://[TEMP_DIR]/fixturetool.py". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters.
+    "#);
+
+    Ok(())
 }
 
 /// Test that running a tool from Git uses statically available `requires-python` metadata before
