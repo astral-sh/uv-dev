@@ -94,6 +94,7 @@ pub(crate) async fn metadata(
 
     // Don't enable any groups' requires-python for interpreter discovery.
     let groups = DependencyGroupsWithDefaults::none();
+    let mut script_interpreter_request = None;
     let state = UniversalState::default();
 
     let resolved_lock;
@@ -106,22 +107,30 @@ pub(crate) async fn metadata(
                 LockMode::Frozen(frozen_source.into())
             } else {
                 interpreter = match target {
-                    LockTarget::Script(script) => ScriptInterpreter::discover(
-                        script.into(),
-                        python.as_deref().map(PythonRequest::parse),
-                        &client_builder,
-                        python_preference,
-                        python_arch,
-                        python_downloads,
-                        &install_mirrors,
-                        false,
-                        config_discovery,
-                        active,
-                        cache,
-                        printer,
-                    )
-                    .await?
-                    .into_interpreter(),
+                    LockTarget::Script(script) => {
+                        let interpreter = ScriptInterpreter::discover(
+                            script.into(),
+                            python.as_deref().map(PythonRequest::parse),
+                            &client_builder,
+                            python_preference,
+                            python_arch,
+                            python_downloads,
+                            &install_mirrors,
+                            false,
+                            config_discovery,
+                            active,
+                            cache,
+                            printer,
+                        )
+                        .await?
+                        .into_interpreter();
+                        // Keep environment discovery consistent with the interpreter used for
+                        // resolution. The environment itself is still rediscovered under its lock.
+                        script_interpreter_request = Some(PythonRequest::File(
+                            interpreter.sys_executable().to_path_buf(),
+                        ));
+                        interpreter
+                    }
                     LockTarget::Workspace(workspace) => {
                         let workspace_python = WorkspacePython::from_request(
                             python.as_deref().map(PythonRequest::parse),
@@ -235,6 +244,7 @@ pub(crate) async fn metadata(
             MetadataSource::Manifest(LockTarget::Script(script)) => ScriptEnvironment::get_or_init(
                 (*script).into(),
                 python.as_deref().map(PythonRequest::parse),
+                script_interpreter_request,
                 &client_builder,
                 python_preference,
                 python_arch,
