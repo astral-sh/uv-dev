@@ -13,6 +13,8 @@ on:
         type: boolean
         default: false
 
+cache-mode: none
+
 env:
   ACTIONS_CACHE_MODE: none
   DEPOT_PROJECT_PROD_UV: 7hd4vdzmw5 # prod/uv
