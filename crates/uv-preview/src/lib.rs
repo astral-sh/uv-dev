@@ -21,7 +21,7 @@ enum PreviewState {
 /// Indicates how the preview was initialised, to distinguish between normal
 /// code and unit tests.
 enum PreviewMode {
-    /// Initialised by a call to [`init`].
+    /// Initialised by a call to [`set`].
     Normal(Mutex<PreviewState>),
     /// Initialised by a call to [`test::with_features`].
     #[cfg(feature = "testing")]
@@ -47,9 +47,9 @@ pub enum PreviewError {
     InTest(&'static str),
 }
 
-/// Initialize the global preview configuration.
+/// Initialize or replace the global preview configuration.
 ///
-/// This should be called once at startup with the resolved preview settings.
+/// The configuration can be replaced until [`finalize`] succeeds.
 pub fn set(preview: Preview) -> Result<(), PreviewError> {
     let mode = PREVIEW.get_or_init(|| {
         PreviewMode::Normal(Mutex::new(PreviewState::Provisional(Preview::default())))
@@ -72,6 +72,10 @@ pub fn set(preview: Preview) -> Result<(), PreviewError> {
     }
 }
 
+/// Finalize the global preview configuration, preventing further changes through [`set`].
+///
+/// Returns an error if the configuration has not been initialized, is already finalized, or is in
+/// test mode.
 pub fn finalize() -> Result<(), PreviewError> {
     match PREVIEW.get().ok_or(PreviewError::NotInitialized)? {
         PreviewMode::Normal(mutex) => {
@@ -95,8 +99,8 @@ pub fn finalize() -> Result<(), PreviewError> {
 ///
 /// # Panics
 ///
-/// When called before [`init`] or (with the `testing` feature) when the
-/// current thread does not hold a [`test::with_features`] guard.
+/// When the preview configuration has not been initialized or (with the `testing` feature) when
+/// it is in test mode and the current thread does not hold a [`test::with_features`] guard.
 fn get() -> Preview {
     match PREVIEW.get() {
         Some(PreviewMode::Normal(mutex)) => match *mutex.lock().unwrap() {
@@ -120,7 +124,7 @@ fn get() -> Preview {
         }
         #[cfg(feature = "testing")]
         None => panic!(
-            "The preview configuration has not been initialized\nHint: Use `{}::init` or `{}::test::with_features` to initialize it",
+            "The preview configuration has not been initialized\nHint: Use `{}::set` or `{}::test::with_features` to initialize it",
             module_path!(),
             module_path!()
         ),
@@ -197,7 +201,7 @@ pub mod test {
             }
             PreviewMode::Normal(_) => {
                 panic!(
-                    "Cannot use `{}::with_features` after `uv_preview::init` has been called",
+                    "Cannot use `{}::with_features` after `uv_preview::set` has been called",
                     module_path!()
                 );
             }
