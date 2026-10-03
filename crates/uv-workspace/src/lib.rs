@@ -1,3 +1,5 @@
+pub use uv_normalize::PackageName;
+
 pub use workspace::{
     DefaultGroupsError, DiscoveryOptions, Editability, MemberDiscovery,
     ProjectEnvironmentSelection, ProjectWorkspace, RequiresPythonDeclaration,

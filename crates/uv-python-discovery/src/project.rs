@@ -13,7 +13,6 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::DependencyGroupsWithDefaults;
 use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
-use uv_normalize::PackageName;
 use uv_pep440::TildeVersionSpecifier;
 use uv_python_interpreter::{Interpreter, RequestedInterpreter};
 use uv_python_types::{
@@ -21,7 +20,7 @@ use uv_python_types::{
 };
 use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user_once;
-use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources, Workspace};
+use uv_workspace::{PackageName, RequiresPythonDeclaration, RequiresPythonSources, Workspace};
 
 use crate::PythonDownloadReporter;
 use crate::PythonSelectionError;
