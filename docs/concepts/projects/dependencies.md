@@ -162,6 +162,13 @@ $ uv add "numpy; python_version >= '3.11'"
 See Python's [environment marker](https://peps.python.org/pep-0508/#environment-markers)
 documentation for a complete enumeration of the available markers and operators.
 
+The plural
+[`extras` and `dependency_groups` marker variables](https://packaging.python.org/en/latest/specifications/dependency-specifiers/#environment-markers)
+are only valid in
+[`packages.marker`](https://packaging.python.org/en/latest/specifications/pylock-toml/#packages-marker)
+fields in standardized [`pylock.toml`](./layout.md#relationship-to-pylocktoml) files. They are not
+valid in `pyproject.toml` dependency declarations, even when the project has a `uv.lock` file.
+
 !!! tip
 
     Dependency sources can also be [changed per-platform](#platform-specific-sources).
