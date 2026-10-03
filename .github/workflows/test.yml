@@ -29,7 +29,10 @@ jobs:
 
   cargo-test-linux:
     timeout-minutes: 10
-    runs-on: depot-ubuntu-24.04-16
+    runs-on:
+      - nscloud-ubuntu-24.04-amd64-32x64-with-features
+      - namespace-features:container.privileged=true
+      - namespace-features:compute.configuration=d0
     name: "cargo test on linux"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,20 +68,31 @@ jobs:
 
       - name: "Install secret service"
         run: |
-          # Try the next configured mirror after the first failed download.
-          cat /etc/apt/apt-mirrors.txt
+          # Try the next configured mirror after the first failed download, rather
+          # than exhausting the job's time limit retrying a failing mirror.
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            cat /etc/apt/apt-mirrors.txt
+          fi
           printf '%s\n' \
             'Acquire::Retries "0";' \
             'Acquire::http::Timeout "10";' \
             'Acquire::https::Timeout "10";' \
             | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
-          sudo apt install -y --no-install-recommends gnome-keyring
+          # Refresh the image's package lists to avoid requesting obsolete versions.
+          sudo apt update
+          sudo apt install -y --no-install-recommends dbus-daemon gnome-keyring
 
       - name: "Start gnome-keyring"
         # run gnome-keyring with 'foobar' as password for the login keyring
         # this will create a new login keyring and unlock it
         # the login password doesn't matter, but the keyring must be unlocked for the tests to work
-        run: gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+        run: |
+          # Namespace's containerized runners have no login session bus. Start one
+          # for gnome-keyring and share its address with the secret-service tests.
+          DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --fork --print-address=1)"
+          export DBUS_SESSION_BUS_ADDRESS
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
 
       - name: "Create btrfs filesystem"
         run: |
@@ -95,16 +109,34 @@ jobs:
           sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
           sudo chown "$(id -u):$(id -g)" /tmpfs
 
-      - name: "Create minix filesystem (low hardlink limit)"
+      - name: "Create filesystem with a low hardlink limit"
         run: |
-          truncate -s 16M /tmp/minix.img
-          mkfs.minix /tmp/minix.img
-          sudo mkdir /minix
-          sudo mount -o loop /tmp/minix.img /minix
-          sudo chown "$(id -u):$(id -g)" /minix
+          # Prefer minix for its lower hardlink limit. Namespace kernels may lack
+          # minix support, so fall back to ext4 when it cannot be loaded.
+          if grep -qw minix /proc/filesystems || sudo modprobe minix; then
+            filesystem=minix
+            truncate -s 16M /tmp/minix.img
+            mkfs.minix /tmp/minix.img
+          else
+            filesystem=ext4
+            truncate -s 128M /tmp/ext4.img
+            mkfs.ext4 -F /tmp/ext4.img
+          fi
+          sudo mkdir "/$filesystem"
+          sudo mount -o loop "/tmp/$filesystem.img" "/$filesystem"
+          sudo chown "$(id -u):$(id -g)" "/$filesystem"
+          echo "UV_INTERNAL__TEST_LOWLINKS_FS=/$filesystem" >> "$GITHUB_ENV"
+
+      - name: "Create temporary test directory"
+        run: |
+          # Keep test scratch I/O in memory with a bounded tmpfs. TMPDIR uses this
+          # mount independently of the filesystems used by specific tests.
+          mkdir -p /tmp/uv-tests
+          sudo mount -t tmpfs -o size=16G,mode=1777 tmpfs /tmp/uv-tests
 
       - name: "Cargo test"
         env:
+          TMPDIR: /tmp/uv-tests
           # Retry more than default to reduce flakes in CI
           UV_HTTP_RETRIES: 5
           RUST_BACKTRACE: 1
@@ -112,7 +144,6 @@ jobs:
           UV_INTERNAL__TEST_COW_FS: /btrfs
           UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
           UV_INTERNAL__TEST_ALT_FS: /tmpfs
-          UV_INTERNAL__TEST_LOWLINKS_FS: /minix
           # Write pending snapshots to a separate directory for artifact upload
           INSTA_UPDATE: new
           INSTA_PENDING_DIR: ${{ github.workspace }}/pending-snapshots
