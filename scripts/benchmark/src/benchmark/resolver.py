@@ -1258,6 +1258,39 @@ class UvProject(Suite):
         )
 
 
+def select_suites(args: argparse.Namespace) -> list[Suite]:
+    suite_types = (
+        ("pip_sync", PipSync),
+        ("pip_compile", PipCompile),
+        ("poetry", Poetry),
+        ("pdm", Pdm),
+        ("uv_pip", UvPip),
+        ("uv_project", UvProject),
+    )
+    suites = []
+    for option, suite_type in suite_types:
+        if getattr(args, option):
+            suites.append(suite_type(python=args.python))
+    for option, suite_type in suite_types:
+        for path in getattr(args, f"{option}_path") or []:
+            suites.append(suite_type(python=args.python, path=path))
+    if not suites:
+        suites = [suite_type(python=args.python) for _, suite_type in suite_types]
+    return suites
+
+
+def select_benchmarks(
+    requested: list[str] | None, requirements_file: str
+) -> list[Benchmark]:
+    if requested is not None:
+        return [Benchmark(benchmark) for benchmark in requested]
+    if requirements_file.endswith(".in"):
+        return [Benchmark.RESOLVE_COLD, Benchmark.RESOLVE_WARM]
+    if requirements_file.endswith(".txt"):
+        return [Benchmark.INSTALL_COLD, Benchmark.INSTALL_WARM]
+    return list(Benchmark)
+
+
 def main():
     """Run the benchmark."""
     parser = argparse.ArgumentParser(
@@ -1381,7 +1414,6 @@ def main():
 
     verbose = args.verbose
     json = args.json
-    python = args.python
     warmup = args.warmup
     runs = args.runs
     min_runs = args.min_runs
@@ -1394,54 +1426,11 @@ def main():
         raise ValueError(f"File not found: {requirements_file}")
 
     # Determine the tools to benchmark, based on the user-provided arguments.
-    suites = []
-    if args.pip_sync:
-        suites.append(PipSync(python=python))
-    if args.pip_compile:
-        suites.append(PipCompile(python=python))
-    if args.poetry:
-        suites.append(Poetry(python=python))
-    if args.pdm:
-        suites.append(Pdm(python=python))
-    if args.uv_pip:
-        suites.append(UvPip(python=python))
-    if args.uv_project:
-        suites.append(UvProject(python=python))
-    for path in args.pip_sync_path or []:
-        suites.append(PipSync(python=python, path=path))
-    for path in args.pip_compile_path or []:
-        suites.append(PipCompile(python=python, path=path))
-    for path in args.poetry_path or []:
-        suites.append(Poetry(python=python, path=path))
-    for path in args.pdm_path or []:
-        suites.append(Pdm(python=python, path=path))
-    for path in args.uv_pip_path or []:
-        suites.append(UvPip(python=python, path=path))
-    for path in args.uv_project_path or []:
-        suites.append(UvProject(python=python, path=path))
-
-    # If no tools were specified, benchmark all tools.
-    if not suites:
-        suites = [
-            PipSync(python=python),
-            PipCompile(python=python),
-            Poetry(python=python),
-            Pdm(python=python),
-            UvPip(python=python),
-            UvProject(python=python),
-        ]
+    suites = select_suites(args)
 
     # Determine the benchmarks to run, based on user input. If no benchmarks were
     # specified, infer an appropriate set based on the file extension.
-    benchmarks = (
-        [Benchmark(benchmark) for benchmark in args.benchmark]
-        if args.benchmark is not None
-        else [Benchmark.RESOLVE_COLD, Benchmark.RESOLVE_WARM]
-        if requirements_file.endswith(".in")
-        else [Benchmark.INSTALL_COLD, Benchmark.INSTALL_WARM]
-        if requirements_file.endswith(".txt")
-        else list(Benchmark)
-    )
+    benchmarks = select_benchmarks(args.benchmark, requirements_file)
 
     logger.info(f"Reading requirements from: {requirements_file}")
     logger.info("```")
