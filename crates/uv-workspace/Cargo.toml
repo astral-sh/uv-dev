@@ -61,6 +61,7 @@ tempfile = { workspace = true }
 schemars = [
   "dep:schemars",
   "uv-build-backend/schemars",
+  "uv-configuration/schemars",
   "uv-distribution-types/schemars",
   "uv-fs/schemars",
   "uv-normalize/schemars",
