@@ -3,6 +3,8 @@ use std::hash::Hash;
 use std::path::Path;
 use std::str::FromStr;
 
+use itertools::Itertools;
+
 use uv_fs::normalize_url_path;
 use uv_normalize::ExtraName;
 
@@ -129,15 +131,7 @@ impl<Url: UnnamedRequirementUrl> Display for UnnamedRequirement<Url> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.url)?;
         if !self.extras.is_empty() {
-            write!(
-                f,
-                "[{}]",
-                self.extras
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(",")
-            )?;
+            write!(f, "[{}]", self.extras.iter().format(","))?;
         }
         if let Some(marker) = self.marker.contents() {
             write!(f, " ; {marker}")?;
