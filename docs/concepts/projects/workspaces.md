@@ -157,6 +157,74 @@ albatross
 Since `seeds` was excluded in the `pyproject.toml`, the workspace has two members total: `albatross`
 (the root) and `bird-feeder`.
 
+## Alternative dependency environments
+
+Virtual workspace members can select different dependency versions for a shared application. Each
+virtual member depends on the application and adds a constraint, while a package conflict keeps the
+alternatives in separate resolutions within the same lockfile.
+
+!!! note
+
+    Package conflicts are a [preview feature](../preview.md). The example enables
+    `package-conflicts` in the workspace configuration.
+
+For example, an application that supports both `urllib3` 1.x and 2.x can define two virtual members:
+
+```toml title="pyproject.toml"
+[project]
+name = "application"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["urllib3>=1,<3"]
+
+[tool.uv]
+package = false
+preview-features = ["package-conflicts"]
+conflicts = [[{ package = "virtual-lib1" }, { package = "virtual-lib2" }]]
+
+[tool.uv.workspace]
+members = ["virtual-lib1", "virtual-lib2"]
+
+[tool.uv.sources]
+application = { workspace = true }
+```
+
+```toml title="virtual-lib1/pyproject.toml"
+[project]
+name = "virtual-lib1"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["application", "urllib3<2"]
+
+[tool.uv]
+package = false
+```
+
+```toml title="virtual-lib2/pyproject.toml"
+[project]
+name = "virtual-lib2"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["application", "urllib3>=2"]
+
+[tool.uv]
+package = false
+```
+
+The virtual members are not installed as Python packages. Select one with `--package` to install the
+application's dependencies under the corresponding constraint:
+
+```console
+$ uv lock
+$ uv sync --package virtual-lib1
+$ uv sync --package virtual-lib2
+```
+
+Both versions are recorded in `uv.lock`, and `uv sync --all-packages` is an error. The application
+and any other unconditional workspace members must remain compatible with each alternative. The
+virtual members select environments; they are not aliases that make incompatible requirements
+elsewhere in the workspace compatible.
+
 ## When (not) to use workspaces
 
 Workspaces are intended to facilitate the development of multiple interconnected packages within a
@@ -174,11 +242,12 @@ Other common use cases for workspaces include:
 - A library with a plugin system, where each plugin is a separate workspace package with a
   dependency on the root.
 
-Workspaces are _not_ suited for cases in which members have conflicting requirements, or desire a
-separate virtual environment for each member. In this case, path dependencies are often preferable.
-For example, rather than grouping `albatross` and its members in a workspace, you can always define
-each package as its own independent project, with inter-package dependencies defined as path
-dependencies in `tool.uv.sources`:
+Workspaces are _not_ suited for cases in which members have conflicting requirements that cannot be
+[declared as alternatives](#alternative-dependency-environments), or desire a separate virtual
+environment for each member. In this case, path dependencies are often preferable. For example,
+rather than grouping `albatross` and its members in a workspace, you can always define each package
+as its own independent project, with inter-package dependencies defined as path dependencies in
+`tool.uv.sources`:
 
 ```toml title="pyproject.toml"
 [project]
