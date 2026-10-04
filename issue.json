@@ -1,0 +1,1 @@
+{"author":{"id":"MDQ6VXNlcjEzMDkxNzc=","is_bot":false,"login":"charliermarsh","name":"Charlie Marsh"},"body":"It's no longer necessary to copy over the `pyproject.toml`, so we should update our Docker guide, etc.","number":22169,"title":"Document frozen lockfile support","url":"https://github.com/astral-sh/uv/issues/22169"}
