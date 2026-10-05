@@ -10,11 +10,10 @@ use itertools::Itertools;
 use owo_colors::OwoColorize;
 use which::which;
 
+use super::ExitStatus;
 use uv_cli::Cli;
 use uv_command_support::{ExitStatus, Printer};
 use uv_static::EnvVars;
-
-use super::ExitStatus;
 
 // hidden subcommands to show in the help command
 const SHOW_HIDDEN_COMMANDS: &[&str] = &["generate-shell-completion"];
