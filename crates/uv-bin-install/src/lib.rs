@@ -12,7 +12,8 @@ use std::str::FromStr;
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTimeError};
 
-use futures::{StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt};
+use reqwest::header::{ACCEPT_ENCODING, HeaderValue};
 use reqwest_retry::Retryable;
 use reqwest_retry::policies::ExponentialBackoff;
 use serde::Deserialize;
@@ -26,7 +27,10 @@ use uv_distribution_filename::SourceDistExtension;
 use uv_static::{astral_mirror_base_url, astral_mirror_url_from_env, custom_astral_mirror_url};
 
 use uv_cache::{Cache, CacheBucket, CacheEntry, Error as CacheError};
-use uv_client::{BaseClient, RetriableError, fetch_with_url_fallback};
+use uv_client::{
+    BaseClient, RetriableError, RetryState, fetch_with_url_fallback,
+    fetch_with_url_fallback_with_retry_state, resumable_bytes_stream,
+};
 use uv_extract::{Error as ExtractError, stream};
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_platform::Platform;
@@ -373,7 +377,7 @@ pub enum Error {
     Stream {
         url: DisplaySafeUrl,
         #[source]
-        source: reqwest::Error,
+        source: reqwest_middleware::Error,
     },
 
     #[error("Failed to parse URL: {url}")]
@@ -735,15 +739,16 @@ async fn bin_install_from_urls(
     let cache_dir = cache_entry.dir();
     fs_err::tokio::create_dir_all(&cache_dir).await?;
 
-    let path = fetch_with_url_fallback(
+    let path = fetch_with_url_fallback_with_retry_state(
         download_urls,
         *retry_policy,
         &format!("`{binary}`"),
-        |url| {
+        async |url, retry_state| {
             download_and_unpack(
                 binary,
                 version,
                 client,
+                retry_state,
                 cache,
                 reporter,
                 platform_name,
@@ -751,8 +756,10 @@ async fn bin_install_from_urls(
                 url,
                 &cache_entry,
             )
+            .await
         },
     )
+    .boxed_local()
     .await?;
 
     // Add executable bit
@@ -775,11 +782,12 @@ async fn bin_install_from_urls(
 
 /// Download and unpack a binary from a single URL.
 ///
-/// Use [`bin_install_from_urls`] (via [`fetch_with_url_fallback`]) to get URL-fallback and retry.
+/// Use [`bin_install_from_urls`] to share retries with URL fallback.
 async fn download_and_unpack(
     binary: Binary,
     version: &Version,
     client: &BaseClient,
+    retry_state: &mut RetryState,
     cache: &Cache,
     reporter: &dyn Reporter,
     platform_name: &str,
@@ -790,55 +798,7 @@ async fn download_and_unpack(
     // Create a temporary directory for extraction
     let temp_dir = tempfile::tempdir_in(cache.bucket(CacheBucket::Binaries))?;
 
-    let response = client
-        .for_host(&download_url)
-        .get(Url::from(download_url.clone()))
-        .send()
-        .await
-        .map_err(|err| Error::Download {
-            url: download_url.clone(),
-            source: err,
-        })?;
-
-    let inner_retries = response
-        .extensions()
-        .get::<reqwest_retry::RetryCount>()
-        .map(|retries| retries.value());
-
-    if let Err(status_error) = response.error_for_status_ref() {
-        let err = Error::Download {
-            url: download_url.clone(),
-            source: reqwest_middleware::Error::from(status_error),
-        };
-        if let Some(retries) = inner_retries {
-            return Err(Error::RetriedError {
-                err: Box::new(err),
-                retries,
-                // This value is overwritten in `download_and_unpack_with_retry`.
-                duration: Duration::default(),
-            });
-        }
-        return Err(err);
-    }
-
-    // Get the download size from headers if available
-    let size = response
-        .headers()
-        .get(reqwest::header::CONTENT_LENGTH)
-        .and_then(|val| val.to_str().ok())
-        .and_then(|val| val.parse::<u64>().ok());
-
-    // Stream download directly to extraction
-    let reader = response
-        .bytes_stream()
-        .map_err(|err| {
-            std::io::Error::other(Error::Stream {
-                url: download_url.clone(),
-                source: err,
-            })
-        })
-        .into_async_read()
-        .compat();
+    let (reader, size) = download_stream(client, &download_url, retry_state).await?;
 
     let id = reporter.on_download_start(binary.name(), version, size);
     let mut progress_reader = ProgressReader::new(reader, id, reporter);
@@ -872,6 +832,42 @@ async fn download_and_unpack(
     fs_err::tokio::rename(&extracted_binary, cache_entry.path()).await?;
 
     Ok(cache_entry.path().to_path_buf())
+}
+
+/// Read an archive while retaining validated bytes across interrupted responses.
+async fn download_stream<'a>(
+    client: &'a BaseClient,
+    url: &'a DisplaySafeUrl,
+    retry_state: &'a mut RetryState,
+) -> Result<(impl AsyncRead + Unpin + 'a, Option<u64>), Error> {
+    let client = client.for_host(url);
+    let response = retry_state
+        .send(
+            client
+                .get(Url::from(url.clone()))
+                .header(ACCEPT_ENCODING, HeaderValue::from_static("identity")),
+        )
+        .await
+        .map_err(|source| Error::Download {
+            url: url.clone(),
+            source,
+        })?
+        .error_for_status()
+        .map_err(|source| Error::Download {
+            url: url.clone(),
+            source: source.into(),
+        })?;
+    let size = response.content_length();
+    let reader = resumable_bytes_stream(response, client, url, retry_state)
+        .map_err(|source| {
+            io::Error::other(Error::Stream {
+                url: url.clone(),
+                source,
+            })
+        })
+        .into_async_read()
+        .compat();
+    Ok((reader, size))
 }
 
 /// Progress reporter for binary downloads.
@@ -923,15 +919,104 @@ where
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
+    use std::collections::BTreeMap;
 
     use serde_json::json;
     use std::io::Write;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
     use uv_client::{BaseClientBuilder, fetch_with_url_fallback, retryable_on_request_failure};
     use uv_redacted::DisplaySafeUrl;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+
+    type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+    async fn read_test_archive(
+        replies: Vec<&'static [u8]>,
+        retries: u32,
+    ) -> TestResult<(Result<Vec<u8>, Error>, Vec<BTreeMap<String, String>>)> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = DisplaySafeUrl::parse(&format!("http://{}/ruff.tar.gz", listener.local_addr()?))?;
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for reply in replies {
+                let (mut stream, _) = listener.accept().await?;
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(stream.read_u8().await?);
+                    if request.len() >= 16384 {
+                        return Err(io::Error::other("Request headers too large"));
+                    }
+                }
+                requests.push(
+                    String::from_utf8(request)
+                        .map_err(io::Error::other)?
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .map(|(name, value)| (name.to_ascii_lowercase(), value.trim().to_owned()))
+                        .collect(),
+                );
+                stream.write_all(reply).await?;
+                stream.shutdown().await?;
+            }
+            Ok::<_, io::Error>(requests)
+        });
+        let client = BaseClientBuilder::default()
+            .retries(retries)
+            .no_retry_delay(true)
+            .build()?;
+        let result = fetch_with_url_fallback_with_retry_state(
+            std::slice::from_ref(&url),
+            client.retry_policy(),
+            "Ruff archive",
+            async |url, retry_state| {
+                let (mut reader, size) = download_stream(&client, &url, retry_state).await?;
+                assert_eq!(size, Some(10));
+                let mut bytes = Vec::new();
+                reader.read_to_end(&mut bytes).await?;
+                Ok::<_, Error>(bytes)
+            },
+        )
+        .await;
+        let requests = tokio::time::timeout(Duration::from_secs(10), server).await???;
+        Ok((result, requests))
+    }
+
+    #[tokio::test]
+    async fn binary_archive_stream_resumes_at_the_last_byte() -> TestResult {
+        let (result, requests) = read_test_archive(
+            vec![
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 10\r\nAccept-Ranges: bytes\r\nETag: \"one\"\r\n\r\nabcd",
+                b"HTTP/1.1 206 Partial Content\r\nConnection: close\r\nContent-Length: 6\r\nContent-Range: bytes 4-9/10\r\nETag: \"one\"\r\n\r\nefghij",
+            ],
+            1,
+        )
+        .await?;
+        assert_eq!(result?, b"abcdefghij");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["accept-encoding"], "identity");
+        assert_eq!(requests[1]["range"], "bytes=4-");
+        assert_eq!(requests[1]["if-range"], "\"one\"");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn binary_archive_stream_shares_middleware_and_body_retry_budget() -> TestResult {
+        let (result, requests) = read_test_archive(
+            vec![
+                b"HTTP/1.1 503 Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+                b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 10\r\nAccept-Ranges: bytes\r\nETag: \"one\"\r\n\r\nabcd",
+            ],
+            1,
+        )
+        .await?;
+        assert_matches!(result, Err(Error::RetriedError { retries: 1, .. }));
+        assert_eq!(requests.len(), 2);
+        Ok(())
+    }
 
     async fn spawn_manifest_server(response: ResponseTemplate) -> (DisplaySafeUrl, MockServer) {
         let server = MockServer::start().await;
@@ -1363,7 +1448,7 @@ mod tests {
         let err = Error::Extract {
             source: ExtractError::Io(io::Error::other(Error::Stream {
                 url,
-                source: reqwest_err,
+                source: reqwest_err.into(),
             })),
         };
 
