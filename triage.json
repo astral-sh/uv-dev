@@ -1,0 +1,75 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 15357,
+        "title": "Stabilize conflicting modules warning",
+        "url": "https://github.com/astral-sh/uv/issues/15357",
+        "state": "open",
+        "reason": "Canonical tracker for detecting distributions that write the same module files; it explicitly covers broken installations and uninstallations and references astral-sh/uv#15238."
+      },
+      {
+        "kind": "issue",
+        "number": 15238,
+        "title": "`uv sync` removes necessary dependencies when two packages include the same module",
+        "url": "https://github.com/astral-sh/uv/issues/15238",
+        "state": "open",
+        "reason": "Tracks the same RECORD-based failure: uninstalling one overlapping distribution deletes files still required by another whose dist-info remains installed."
+      },
+      {
+        "kind": "issue",
+        "number": 16546,
+        "title": "report an error when installing a package that overrides another",
+        "url": "https://github.com/astral-sh/uv/issues/16546",
+        "state": "open",
+        "reason": "Tracks making module collisions an error and documents that preview detection may miss a conflict when one distribution was already installed."
+      },
+      {
+        "kind": "issue",
+        "number": 20907,
+        "title": "File collisions between two distributions are resolved silently, survive uninstall of both, and uv sync neither detects nor restores the missing files",
+        "url": "https://github.com/astral-sh/uv/issues/20907",
+        "state": "closed",
+        "reason": "Nearly identical compound report; maintainers closed it as a duplicate and redirected the collision and uninstall concerns to astral-sh/uv#15357 and astral-sh/uv#15238."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13437,
+        "title": "Warn when two packages write to the same module",
+        "url": "https://github.com/astral-sh/uv/pull/13437",
+        "state": "merged",
+        "reason": "Implemented the initial collision warning, limited to packages installed in the same operation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15253,
+        "title": "Move warnings for conflicting modules into preview",
+        "url": "https://github.com/astral-sh/uv/pull/15253",
+        "state": "merged",
+        "reason": "Moved collision warnings behind preview because the initial detector produced too many false positives."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17623,
+        "title": "Better detection for conflicting packages",
+        "url": "https://github.com/astral-sh/uv/pull/17623",
+        "state": "merged",
+        "reason": "Refined preview collision detection to distinguish namespace-style overlap from conflicting files."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19430,
+        "title": "Preserve files claimed by another package's RECORD on uninstall",
+        "url": "https://github.com/astral-sh/uv/pull/19430",
+        "state": "closed",
+        "reason": "Attempted the exact uninstall protection but was closed because retaining a shared path can preserve bytes from the removed distribution and silently leave the survivor incorrect."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including `xgboost-cpu`, `xgboost`, the reported AttributeError, and `RECORD`; conceptual terms including same module, top-level import, overlapping/shared files, package override, file ownership, namespace package, uninstall, and incomplete installation; and fix-oriented terms covering collision warnings, preview conflict detection, RECORD-aware uninstall, and environment repair. Inspected candidate comments and their referenced canonical discussions and implementation history. astral-sh/uv#16468 was ruled out because it concerns remove/re-add with a missing RECORD rather than two distributions sharing paths. astral-sh/uv#21968 concerns unexplained missing NCCL files after a possibly full filesystem, without an overlapping-distribution uninstall. astral-sh/uv#17645 is another instance of the same overlap pattern, but the selected trackers are more canonical."
+  },
+  "type": "duplicate",
+  "type_reason": "The two substantive behaviors are already tracked: astral-sh/uv#15357 covers detecting conflicting module providers, while astral-sh/uv#15238 covers deletion of shared files during uninstall. The xgboost/xgboost-cpu example is a new reproduction of those existing problems, not a regression of a completed fix; collision warnings remain intentionally preview-only, and the proposed uninstall fix in astral-sh/uv#19430 was not merged.",
+  "summary": "astral-sh/uv#15357 is the canonical collision-detection tracker, and astral-sh/uv#15238 tracks the same shared-file uninstall corruption. Historical pull requests explain why warnings remain preview-only and why the direct RECORD-preservation fix was rejected.",
+  "draft_response": "Thanks for the concrete reproduction. This is the same overlapping-distribution problem tracked in astral-sh/uv#15357, with the uninstall failure specifically tracked in astral-sh/uv#15238.\n\n`xgboost` and `xgboost-cpu` are distinct distribution names to the resolver, and their metadata does not declare that they conflict or substitute for one another. Their wheels nevertheless write overlapping paths in the `xgboost` import package. Removing `xgboost` deletes paths listed in its `RECORD`, including paths still needed by `xgboost-cpu`, leaving the latter's dist-info present but its module incomplete.\n\n`uv sync --reinstall-package xgboost-cpu` should restore the affected environment. Conflict detection currently remains a preview feature because some packages intentionally overlap, and it is most reliable when both distributions are installed in the same operation. We should centralize further work in astral-sh/uv#15357 and astral-sh/uv#15238, so this can be closed as a duplicate."
+}
