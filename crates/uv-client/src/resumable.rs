@@ -1,11 +1,12 @@
 use std::io;
+use std::time::Duration;
 
 use futures::stream::{self, BoxStream};
 use futures::{StreamExt, TryStreamExt};
 use http_content_range::ContentRange;
 use reqwest::header::{
-    ACCEPT_ENCODING, ACCEPT_RANGES, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, ETAG,
-    HeaderValue, IF_RANGE, RANGE,
+    ACCEPT_ENCODING, ACCEPT_RANGES, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, DATE, ETAG,
+    HeaderMap, HeaderValue, IF_RANGE, LAST_MODIFIED, RANGE,
 };
 use reqwest::{Response, StatusCode};
 use tokio_util::bytes::Bytes;
@@ -16,7 +17,7 @@ use uv_redacted::DisplaySafeUrl;
 
 use crate::{RedirectClientWithMiddleware, RetryState};
 
-/// Read a complete response, resuming an interrupted body when the server supplies a strong `ETag`.
+/// Read a complete response, resuming an interrupted body when it has a strong validator.
 ///
 /// The initial request must use identity encoding and have its middleware retries recorded in
 /// `retry_state`. Continuations consume the same retry budget. A resumed response must describe the
@@ -121,7 +122,7 @@ impl Download<'_> {
                     .get(Url::from(self.url.clone()))
                     .header(ACCEPT_ENCODING, HeaderValue::from_static("identity"))
                     .header(RANGE, format!("bytes={}-", self.offset))
-                    .header(IF_RANGE, representation.etag.clone()),
+                    .header(IF_RANGE, representation.validator.value().clone()),
             )
             .await?
             .error_for_status()?;
@@ -138,7 +139,7 @@ impl Download<'_> {
 }
 
 struct Representation {
-    etag: HeaderValue,
+    validator: Validator,
     size: u64,
 }
 
@@ -150,11 +151,7 @@ impl Representation {
         {
             return None;
         }
-        let etag = response.headers().get(ETAG)?;
-        let value = etag.as_bytes();
-        if value.len() < 2 || value.first() != Some(&b'"') || value.last() != Some(&b'"') {
-            return None;
-        }
+        let validator = Validator::from_headers(response.headers())?;
         let size = response
             .headers()
             .get(CONTENT_LENGTH)?
@@ -162,15 +159,12 @@ impl Representation {
             .ok()?
             .parse()
             .ok()?;
-        Some(Self {
-            etag: etag.clone(),
-            size,
-        })
+        Some(Self { validator, size })
     }
 
     fn range_end(&self, response: &Response, offset: u64) -> Option<u64> {
         if response.status() != StatusCode::PARTIAL_CONTENT
-            || response.headers().get(ETAG)? != self.etag
+            || !self.validator.matches(response.headers())
             || !identity_encoded(response)
         {
             return None;
@@ -193,6 +187,47 @@ impl Representation {
             return None;
         }
         Some(end)
+    }
+}
+
+enum Validator {
+    EntityTag(HeaderValue),
+    LastModified(HeaderValue),
+}
+
+impl Validator {
+    fn from_headers(headers: &HeaderMap) -> Option<Self> {
+        if let Some(etag) = headers.get(ETAG) {
+            let value = etag.as_bytes();
+            return (value.len() >= 2
+                && value.first() == Some(&b'"')
+                && value.last() == Some(&b'"'))
+            .then(|| Self::EntityTag(etag.clone()));
+        }
+
+        let modified = headers.get(LAST_MODIFIED)?;
+        let modified_at = httpdate::parse_http_date(modified.to_str().ok()?).ok()?;
+        let dated_at = httpdate::parse_http_date(headers.get(DATE)?.to_str().ok()?).ok()?;
+        // RFC 9110 permits a date validator only when there is no entity tag and the date is
+        // strong. A full minute between these server timestamps gives clock skew more margin
+        // than the minimum one-second separation.
+        if dated_at.duration_since(modified_at).ok()? < Duration::from_secs(60) {
+            return None;
+        }
+        Some(Self::LastModified(modified.clone()))
+    }
+
+    fn value(&self) -> &HeaderValue {
+        match self {
+            Self::EntityTag(value) | Self::LastModified(value) => value,
+        }
+    }
+
+    fn matches(&self, headers: &HeaderMap) -> bool {
+        match self {
+            Self::EntityTag(value) => headers.get(ETAG) == Some(value),
+            Self::LastModified(value) => headers.get(LAST_MODIFIED) == Some(value),
+        }
     }
 }
 
