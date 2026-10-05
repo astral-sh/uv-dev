@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22171,
+        "title": "Prune temporary build environments in `uv cache prune`",
+        "url": "https://github.com/astral-sh/uv/pull/22171",
+        "state": "open",
+        "reason": "Exact proposed fix created in response to this report. It confirms that SIGINT can leave `builds-v0/.tmp*` directories and that pruning omitted the Builds bucket."
+      },
+      {
+        "kind": "issue",
+        "number": 18962,
+        "title": "Improve `uv cache` cleanup and add global project and venv management",
+        "url": "https://github.com/astral-sh/uv/issues/18962",
+        "state": "open",
+        "reason": "Broadly requests cleanup of orphaned `.tmp*` cache directories after interruptions, but does not specifically track PEP 517 build environments or this `uv build` reproduction."
+      },
+      {
+        "kind": "issue",
+        "number": 20675,
+        "title": "Clean up ~/.local/share/uv/python/.temp",
+        "url": "https://github.com/astral-sh/uv/issues/20675",
+        "state": "open",
+        "reason": "Analogous bug involving Python-install scratch directories surviving failed or interrupted downloads, but it concerns a different directory and subsystem."
+      },
+      {
+        "kind": "issue",
+        "number": 5747,
+        "title": "`Ctrl-C` interruptes `uv python install` and leaves temporary files",
+        "url": "https://github.com/astral-sh/uv/issues/5747",
+        "state": "closed",
+        "reason": "Historical instance of Ctrl+C leaving temporary files during Python installation. It was addressed for that subsystem and is not evidence of a regression affecting build environments."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5787,
+        "title": "Use cache for Python install temporary directories",
+        "url": "https://github.com/astral-sh/uv/pull/5787",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#5747 by relocating Python-install temporary directories into the cache; it did not add pruning for `builds-v0`."
+      }
+    ],
+    "search_scope": "Authenticated GitHub searches covered open and closed issues and open, closed, and merged pull requests. Literal searches included `builds-v0`, `.tmp`, `Ctrl+C`, `SIGINT`, `uv build`, `cache prune`, `No unused entries found`, and `pyvenv.cfg`; conceptual searches covered interrupted builds and downloads, orphaned temporary directories, ephemeral or isolated environments, signal cleanup, and cache pruning. Version-oriented searches inspected earlier fixes for interrupted Python installation. astral-sh/uv#9082 was inspected but ruled out as canonical because it concerns a persistent project `.venv` left by `uv sync`, which a subsequent sync can recreate. No previously merged fix for this exact build-environment behavior was found."
+  },
+  "type": "bug",
+  "type_reason": "An ephemeral PEP 517 environment remains after its owning build terminates, and `uv cache prune` incorrectly ignores the orphan. Source inspection and astral-sh/uv#22171 confirm that these environments rely on destructor cleanup that SIGINT can bypass and that the Builds bucket is omitted from pruning. astral-sh/uv#18962 is broader rather than a sufficiently specific canonical report, while astral-sh/uv#22171 was opened in response to this issue and therefore does not make it a duplicate.",
+  "summary": "The behavior is confirmed and has an open targeted fix in astral-sh/uv#22171. astral-sh/uv#18962 overlaps as a broader cache-cleanup request; the remaining related reports concern different temporary-directory subsystems.",
+  "draft_response": "Thanks for the focused reproduction. This is confirmed: interrupted PEP 517 builds can leave `.tmp*` environments under `builds-v0`, and `uv cache prune` currently skips that bucket. astral-sh/uv#22171 proposes pruning those stale temporary build environments and adds regression coverage. That pull request is still open for review."
+}
