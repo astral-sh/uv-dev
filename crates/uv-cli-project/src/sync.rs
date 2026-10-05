@@ -1,29 +1,22 @@
 //! Project environment synchronization functionality.
 
-use std::borrow::Cow;
 use std::path::Path;
 
-use tracing::{debug, warn};
-
 use uv_cache::Cache;
-use uv_client::BaseClientBuilder;
-use uv_configuration::{Concurrency, Constraints, Preview};
+use uv_configuration::{Concurrency, Constraints};
 use uv_dispatch::{BuildDispatch, PlatformState};
-use uv_distribution::DistributionDatabase;
-use uv_distribution_types::{Name, Resolution};
-use uv_installer::{SatisfiesResult, SitePackages};
-use uv_pep440::Version;
-use uv_pypi_types::ConflictPackage;
+use uv_distribution_types::Resolution;
+use uv_lock::Lock;
+use uv_preview::Preview;
 use uv_python::{Interpreter, PythonEnvironment};
 use uv_requirements::RequirementsSpecification;
-use uv_resolver::{FlatIndex, Lock, Preference, ResolverOutput};
-use uv_types::{BuildIsolation, EmptyInstalledPackages, HashStrategy};
+use uv_resolver::{Preference, ResolverOutput};
 
 use crate::error::ProjectError;
 use uv_cli_common::printer::Printer;
 use uv_cli_common::settings::{NetworkSettings, ResolverSettings};
-use uv_cli_pip::loggers::{InstallLogger, ResolveLogger};
-use uv_cli_pip::operations::{Changelog, Modifications};
+use uv_cli_pip::loggers::ResolveLogger;
+use uv_cli_pip::operations::Modifications;
 
 /// The preference for resolving packages in an environment.
 #[derive(Debug, Clone)]

@@ -1,12 +1,12 @@
 //! Settings types for project operations.
 
-use uv_configuration::{
-    BuildOptions, ConfigSettings, ExcludeNewer, IndexStrategy, KeyringProviderType, LinkMode,
-    PackageConfigSettings, SourceStrategy,
+use uv_configuration::{BuildOptions, IndexStrategy, KeyringProviderType, NoSources, Reinstall};
+use uv_distribution_types::{
+    ConfigSettings, DependencyMetadata, IndexLocations, PackageConfigSettings,
 };
-use uv_distribution_types::{DependencyMetadata, IndexLocations};
-use uv_installer::Reinstall;
+use uv_install_wheel::LinkMode;
 use uv_normalize::PackageName;
+use uv_resolver::ExcludeNewer;
 
 /// Installer settings borrowed for use in project operations.
 #[derive(Debug, Clone)]
@@ -24,7 +24,7 @@ pub struct InstallerSettingsRef<'a> {
     pub compile_bytecode: bool,
     pub reinstall: &'a Reinstall,
     pub build_options: &'a BuildOptions,
-    pub sources: SourceStrategy,
+    pub sources: NoSources,
 }
 
 impl<'a> From<&'a uv_cli_common::settings::ResolverInstallerSettings> for InstallerSettingsRef<'a> {
@@ -43,7 +43,7 @@ impl<'a> From<&'a uv_cli_common::settings::ResolverInstallerSettings> for Instal
             compile_bytecode: settings.compile_bytecode,
             reinstall: &settings.reinstall,
             build_options: &settings.resolver.build_options,
-            sources: settings.resolver.source_strategy,
+            sources: settings.resolver.sources.clone(),
         }
     }
 }

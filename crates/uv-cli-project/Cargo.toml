@@ -9,6 +9,10 @@ authors = { workspace = true }
 license = { workspace = true }
 
 [dependencies]
+uv-lock = { workspace = true }
+uv-install-wheel = { workspace = true, default-features = false }
+uv-preview = { workspace = true }
+uv-cache-info = { workspace = true }
 anyhow = { workspace = true }
 itertools = { workspace = true }
 owo-colors = { workspace = true }

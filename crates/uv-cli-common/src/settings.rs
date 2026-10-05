@@ -1,9 +1,9 @@
 use uv_client::Connectivity;
-use uv_configuration::{
-    BuildOptions, ConfigSettings, IndexStrategy, KeyringProviderType, PackageConfigSettings,
-    Reinstall, SourceStrategy, Upgrade,
+use uv_configuration::NoSources;
+use uv_configuration::{BuildOptions, IndexStrategy, KeyringProviderType, Reinstall, Upgrade};
+use uv_distribution_types::{
+    ConfigSettings, DependencyMetadata, IndexLocations, PackageConfigSettings,
 };
-use uv_distribution_types::{DependencyMetadata, IndexLocations};
 use uv_resolver::{
     AnnotationStyle, DependencyMode, ExcludeNewer, FlatIndex, PrereleaseMode, ResolutionMode,
 };
@@ -32,7 +32,7 @@ pub struct ResolverSettings {
     pub prerelease_mode: PrereleaseMode,
     pub resolution_mode: ResolutionMode,
     pub annotation_style: AnnotationStyle,
-    pub source_strategy: SourceStrategy,
+    pub sources: NoSources,
     pub upgrade: Option<Upgrade>,
     // TODO: ExtrasResolver requires a generic BuildContext parameter
     // This needs to be handled differently in this crate

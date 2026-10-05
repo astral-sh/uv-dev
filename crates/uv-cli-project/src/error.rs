@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use uv_resolver::{Lock, ResolveError as ResolverError};
+use uv_lock::Lock;
+use uv_resolver::ResolveError as ResolverError;
 
 /// An error that occurs when operating on a project
 #[derive(Error, Debug)]
