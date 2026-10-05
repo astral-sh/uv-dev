@@ -50,19 +50,20 @@ use uv_workspace::WorkspaceCache;
 use uv_cli_common::child::run_to_completion;
 use uv_cli_common::exit_status::ExitStatus;
 
-use crate::commands::pip;
-use crate::commands::pip::latest::LatestClient;
-use crate::commands::{UvError, project::environment::CachedEnvironment, read_env_files};
 use crate::common::{ToolPython, matching_packages, refine_interpreter};
 use crate::target::{Target, ToolRequest};
 use uv_cli_common::printer::Printer;
 use uv_cli_common::reporters::PythonDownloadReporter;
 use uv_cli_common::settings::ResolverInstallerSettings;
 use uv_cli_common::settings::ResolverSettings;
+use uv_cli_common::{env_file::read_env_files, error::UvError};
+use uv_cli_pip as pip;
+use uv_cli_pip::latest::LatestClient;
 use uv_cli_pip::loggers::{
     DefaultInstallLogger, DefaultResolveLogger, SummaryInstallLogger, SummaryResolveLogger,
 };
 use uv_cli_pip::operations;
+use uv_cli_project::environment::CachedEnvironment;
 use uv_cli_project::{EnvironmentSpecification, ProjectError, resolve_names};
 
 /// The user-facing command used to invoke a tool run.

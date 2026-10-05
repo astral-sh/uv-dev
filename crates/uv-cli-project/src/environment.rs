@@ -217,7 +217,7 @@ impl CachedEnvironment {
         let malware_check_client_builder = client_builder
             .clone()
             .keyring(settings.resolver.keyring_provider);
-        crate::sync::check_resolution_malware(
+        crate::malware::check_resolution_malware(
             resolution,
             &malware_check_client_builder,
             concurrency,

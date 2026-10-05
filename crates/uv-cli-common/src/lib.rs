@@ -33,3 +33,14 @@ pub fn conjunction(names: Vec<String>) -> String {
         _ => String::new(),
     }
 }
+
+pub mod env_file;
+pub mod error;
+pub mod update_shell;
+pub fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}

@@ -32,13 +32,14 @@ use uv_tool::{InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
-use crate::commands::pip::{operations::Modifications, resolution_tags};
-use crate::commands::{ExitStatus, conjunction, tool::common::finalize_tool_install};
+use crate::common::finalize_tool_install;
 use crate::common::{ToolLock, remove_entrypoints, tool_environment_spec};
 use uv_cli_common::printer::Printer;
 use uv_cli_common::reporters::PythonDownloadReporter;
 use uv_cli_common::settings::ResolverInstallerSettings;
+use uv_cli_common::{conjunction, exit_status::ExitStatus};
 use uv_cli_pip::loggers::{DefaultInstallLogger, SummaryResolveLogger, UpgradeInstallLogger};
+use uv_cli_pip::{operations::Modifications, resolution_tags};
 use uv_cli_project::{
     EnvironmentResolution, EnvironmentUpdate, resolve_environment, sync_environment,
     update_environment,
@@ -62,7 +63,7 @@ pub async fn upgrade(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
-    render_error: fn(&anyhow::Error, Printer) -> std::fmt::Result,
+    write_error_chain: fn(&anyhow::Error, Printer) -> std::fmt::Result,
 ) -> Result<ExitStatus> {
     let installed_tools = InstalledTools::from_settings()?.init()?;
     let _lock = installed_tools.lock().await?;
@@ -183,7 +184,7 @@ pub async fn upgrade(
             .sorted_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b))
         {
             trace!("Error trace: {err:?}");
-            render_error(
+            write_error_chain(
                 &err.context(format!("Failed to upgrade {}", name.green())),
                 printer,
             )?;
@@ -671,3 +672,4 @@ fn pinned_version_from(requirements: &[Requirement], name: &PackageName) -> Opti
             _ => None,
         })
 }
+

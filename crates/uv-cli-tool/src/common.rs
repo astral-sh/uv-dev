@@ -54,7 +54,7 @@ use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
-use uv_resolve_operations::{Error as ResolveError, resolution_markers, resolution_tags};
+use uv_cli_pip as pip;
 
 /// An error raised when a tool package provides no executables.
 #[derive(Debug, Error)]

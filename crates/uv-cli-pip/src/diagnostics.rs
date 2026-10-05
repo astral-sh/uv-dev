@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 use version_ranges::Ranges;
 
 use uv_distribution_types::{DerivationChain, DerivationStep};
-use uv_errors::{Hinted, Hints};
+use uv_errors::Hints;
 use uv_normalize::PackageName;
 use uv_pep440::{Version, strip_local_version_sentinels};
 

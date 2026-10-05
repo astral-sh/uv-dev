@@ -8,56 +8,57 @@ repository = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }
 
-[dependencies]
-uv-static = { workspace = true }
-uv-redacted = { workspace = true }
-uv-preview = { workspace = true }
-uv-lock = { workspace = true }
-uv-git = { workspace = true }
-uv-errors = { workspace = true }
-uv-distribution-filename = { workspace = true }
-uv-console = { workspace = true }
-uv-cache-key = { workspace = true }
-uv-audit = { workspace = true }
-serde_json = { workspace = true }
-self-replace = { workspace = true }
-futures = { workspace = true }
-console = { workspace = true }
-anyhow = { workspace = true }
-itertools = { workspace = true }
-owo-colors = { workspace = true }
-rustc-hash = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
+[lints]
+workspace = true
 
+[dependencies]
+uv-audit = { workspace = true }
 uv-cache = { workspace = true }
+uv-cache-info = { workspace = true }
+uv-cache-key = { workspace = true }
+uv-cli = { workspace = true }
 uv-cli-common = { workspace = true }
 uv-cli-pip = { workspace = true }
 uv-cli-project = { workspace = true }
 uv-client = { workspace = true }
 uv-configuration = { workspace = true }
+uv-console = { workspace = true }
 uv-dispatch = { workspace = true }
 uv-distribution = { workspace = true }
+uv-distribution-filename = { workspace = true }
 uv-distribution-types = { workspace = true }
+uv-errors = { workspace = true }
 uv-fs = { workspace = true }
+uv-git = { workspace = true }
 uv-installer = { workspace = true }
+uv-lock = { workspace = true }
 uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
+uv-preview = { workspace = true }
 uv-pypi-types = { workspace = true }
 uv-python = { workspace = true }
+uv-redacted = { workspace = true }
 uv-requirements = { workspace = true }
 uv-resolver = { workspace = true }
-uv-scripts = { workspace = true }
 uv-settings = { workspace = true }
 uv-shell = { workspace = true }
+uv-static = { workspace = true }
 uv-tool = { workspace = true }
 uv-types = { workspace = true }
 uv-virtualenv = { workspace = true }
 uv-warnings = { workspace = true }
 uv-workspace = { workspace = true }
-uv-cache-info = { workspace = true }
-uv-cli = { workspace = true }
-anstream = { workspace = true }
+
+anyhow = { workspace = true }
+console = { workspace = true }
 fs-err = { workspace = true }
+futures = { workspace = true }
+itertools = { workspace = true }
+owo-colors = { workspace = true }
+rustc-hash = { workspace = true }
+self-replace = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

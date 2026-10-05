@@ -38,9 +38,6 @@ use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
-use crate::commands::pip::latest::LatestClient;
-use crate::commands::pip::{resolution_markers, resolution_tags};
-use crate::commands::{UvError, reporters::PythonDownloadReporter};
 use crate::common::{
     ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
     tool_environment_spec,
@@ -49,8 +46,11 @@ use crate::target::{Target, ToolRequest};
 use uv_cli_common::exit_status::ExitStatus;
 use uv_cli_common::printer::Printer;
 use uv_cli_common::settings::{ResolverInstallerSettings, ResolverSettings};
+use uv_cli_common::{error::UvError, reporters::PythonDownloadReporter};
+use uv_cli_pip::latest::LatestClient;
 use uv_cli_pip::loggers::{DefaultInstallLogger, DefaultResolveLogger, SummaryResolveLogger};
 use uv_cli_pip::operations::{self, Modifications};
+use uv_cli_pip::{resolution_markers, resolution_tags};
 use uv_cli_project::{
     EnvironmentResolution, EnvironmentSpecification, ProjectError, resolve_environment,
     resolve_names, sync_environment, update_environment,
