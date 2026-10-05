@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 8062,
+        "title": "Add `--show-urls` and `--only-downloads` to `uv python list`",
+        "url": "https://github.com/astral-sh/uv/pull/8062",
+        "state": "merged",
+        "reason": "Introduced the explicit `--only-downloads` mode that displays downloadable interpreters when the default listing omits them."
+      },
+      {
+        "kind": "issue",
+        "number": 7892,
+        "title": "[feat] `uv python upgrade` or `uv python install --upgrade`",
+        "url": "https://github.com/astral-sh/uv/issues/7892",
+        "state": "closed",
+        "reason": "Canonical historical discussion of broad Python requests being satisfied by an installed patch and requiring an explicit upgrade operation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16676,
+        "title": "Add support for `--upgrade` in `uv python install`",
+        "url": "https://github.com/astral-sh/uv/pull/16676",
+        "state": "merged",
+        "reason": "Added the applicable operation: `uv python install 3.14 --upgrade` installs the latest patch despite an older matching installation."
+      }
+    ],
+    "search_scope": "Authenticated searches covered exact identifiers and fragments (`3.14.8`, `python-downloads`, `manual`, `uv python list`, `uv python install 3`, `already installed`, macOS x86_64), conceptual availability and latest-patch terminology, and fix-oriented history across issues and pull requests in all states. Candidate comments and reference chains were inspected. astral-sh/uv#19788 was ruled out because it concerned a genuinely unavailable new build, whereas 3.14.8 is explicitly listable and installable here. astral-sh/uv#9437 concerns missing-interpreter error guidance rather than list visibility."
+  },
+  "type": "enhancement",
+  "type_reason": "Repository source and a maintainer comment confirm that this is intended behavior: with manual downloads, the default list omits download records unless `--only-downloads` is supplied, and broad install requests do not upgrade matching installations unless `--upgrade` is supplied. Since 3.14.8 is available, the remaining request is a usability or documentation improvement.",
+  "summary": "No duplicate tracks the primary request to reconsider download visibility under manual mode. The closest items establish the explicit listing and upgrade mechanisms; the superficially similar release-availability report astral-sh/uv#19788 has a different underlying problem.",
+  "draft_response": "This is not a missing x86_64 macOS build: `uv python list --only-downloads` and the successful exact install confirm that 3.14.8 is available. With `python-downloads = \"manual\"`, the default list intentionally requires `--only-downloads`, added in astral-sh/uv#8062, to show the download catalog. Likewise, an existing 3.14.7 satisfies `uv python install 3`; use `uv python install 3.14 --upgrade`, supported by astral-sh/uv#16676, to request the latest patch. We can keep this open as an enhancement to consider whether the listing behavior or its documentation should be clearer."
+}
