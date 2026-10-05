@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 5929,
+        "title": "Parent uv.toml configuration not used when pyproject.toml present",
+        "url": "https://github.com/astral-sh/uv/issues/5929",
+        "state": "closed",
+        "reason": "Establishes the same discovery rule: a child pyproject.toml without [tool.uv] is skipped so parent configuration can be found. It expected inheritance and concerned uv.toml, so it is not a duplicate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5931,
+        "title": "Search beyond workspace root when discovering configuration",
+        "url": "https://github.com/astral-sh/uv/pull/5931",
+        "state": "merged",
+        "reason": "Deliberately made configuration discovery continue above workspace roots and documented and tested that behavior, directly explaining the report."
+      },
+      {
+        "kind": "issue",
+        "number": 11070,
+        "title": "Inheriting [tool.uv] section from root-level `pyproject.toml` when desired",
+        "url": "https://github.com/astral-sh/uv/issues/11070",
+        "state": "open",
+        "reason": "Requests explicit inheritance when a child already defines [tool.uv], the inverse boundary case. It does not track stopping discovery across repositories."
+      },
+      {
+        "kind": "issue",
+        "number": 10353,
+        "title": "Repo wide uv.toml",
+        "url": "https://github.com/astral-sh/uv/issues/10353",
+        "state": "closed",
+        "reason": "Demonstrates the competing use case of independent nested projects intentionally discovering shared parent configuration."
+      }
+    ],
+    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests for [tool.uv] inheritance, dependency-metadata, uv lock --check, outdated locks, nested checkouts, parent pyproject.toml, configuration discovery, workspace roots, Git boundaries, independent projects, and traversal controls. Fix-oriented searches inspected astral-sh/uv#5929, astral-sh/uv#5931, and astral-sh/uv#4295. astral-sh/uv#9354 was ruled out because its concrete case concerns workspace and .python-version discovery; astral-sh/uv#12748 concerns environment discovery, and astral-sh/uv#16640 concerns nested workspace membership."
+  },
+  "type": "enhancement",
+  "type_reason": "The behavior is documented and covered by an integration test: pyproject.toml files without [tool.uv] are skipped, parent traversal continues, and an empty [tool.uv] stops it. Treating nested Git repositories as boundaries or adding a diagnostic would improve intentional behavior rather than correct an established regression.",
+  "summary": "No duplicate was found. astral-sh/uv#5929 and astral-sh/uv#5931 establish that upward discovery is intentional, while astral-sh/uv#11070 and astral-sh/uv#10353 show demand for shared parent configuration. This is a distinct repository-boundary enhancement.",
+  "draft_response": "Thanks for the report. This matches uv’s current configuration-discovery behavior: a pyproject.toml without [tool.uv] is skipped and uv continues searching parent directories, while an empty [tool.uv] acts as a local boundary. That behavior was made explicit by astral-sh/uv#5931 and is documented, so this is not a regression.\n\nThere are also users relying on parent configuration for independent nested projects, as in astral-sh/uv#10353, while astral-sh/uv#11070 requests more explicit inheritance controls. The distinct request here is for uv to recognize a nested Git checkout as a configuration boundary, or at least make external configuration visible when it affects locking. We can keep this open as an enhancement to evaluate those options and their effect on repository-wide configuration."
+}
