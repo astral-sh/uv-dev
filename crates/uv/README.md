@@ -26,7 +26,7 @@ The following uv workspace members are also available:
 - [uv-cache](https://crates.io/crates/uv-cache)
 - [uv-cache-info](https://crates.io/crates/uv-cache-info)
 - [uv-cache-key](https://crates.io/crates/uv-cache-key)
-- [uv-cli](https://crates.io/crates/uv-cli)
+- [uv-cli-arguments](https://crates.io/crates/uv-cli-arguments)
 - [uv-client](https://crates.io/crates/uv-client)
 - [uv-command-support](https://crates.io/crates/uv-command-support)
 - [uv-configuration](https://crates.io/crates/uv-configuration)

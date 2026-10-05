@@ -13,8 +13,8 @@ use criterion::{Criterion, criterion_group, criterion_main, measurement::WallTim
 
 use uv::GlobalInitialization;
 use uv_cache::Cache;
-use uv_cli::Cli;
-use uv_command_support::ExitStatus;
+use uv_cli_arguments::Cli;
+use uv_cli_types::exit::ExitStatus;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
 const EXCLUDE_NEWER: &str = "2024-08-08";

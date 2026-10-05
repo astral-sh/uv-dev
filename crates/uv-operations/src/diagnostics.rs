@@ -8,21 +8,18 @@ use rustc_hash::FxHashMap;
 use version_ranges::Ranges;
 
 use uv_cli_output::printer::Printer;
-use uv_distribution_types::DependencyMetadata;
-use uv_distribution_types::DerivationChain;
-use uv_distribution_types::DerivationStep;
-use uv_distribution_types::Diagnostic;
-use uv_distribution_types::ResolutionDiagnostic;
+use uv_distribution_types::{
+    DependencyMetadata, DerivationChain, DerivationStep, Diagnostic, ResolutionDiagnostic,
+};
 use uv_errors::Hints;
 use uv_installer::SitePackages;
 use uv_normalize::PackageName;
-use uv_pep440::Version;
-use uv_pep440::strip_local_version_sentinels;
+use uv_pep440::{Version, strip_local_version_sentinels};
 use uv_platform_tags::Tags;
 use uv_pypi_types::ResolverMarkerEnvironment;
-use uv_python::PythonEnvironment;
+use uv_python_interpreter::PythonEnvironment;
 
-use crate::Error;
+use crate::error::Error;
 
 /// Report any diagnostics on resolved distributions.
 pub fn diagnose_resolution(
@@ -85,7 +82,7 @@ static SUGGESTIONS: LazyLock<FxHashMap<PackageName, PackageName>> = LazyLock::ne
 });
 
 /// Format package context that should follow a distribution error as hints.
-pub fn dist_hints(
+pub(crate) fn dist_hints(
     name: &PackageName,
     version: Option<&Version>,
     chain: &DerivationChain,
