@@ -1,17 +1,23 @@
+use std::path::PathBuf;
+
 use owo_colors::OwoColorize;
 
-use uv_distribution_types::DerivationChain;
-use uv_distribution_types::Name;
-use uv_resolver::NoSolutionError;
-use uv_resolver::NoSolutionHeader;
-use uv_resolver::ResolveError;
+use uv_distribution_types::{DerivationChain, Name};
+use uv_fs::Simplified;
+use uv_resolver::{NoSolutionError, NoSolutionHeader, ResolveError};
 
 use crate::installation::Changelog;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("Failed to determine installation plan")]
+    Plan(#[source] uv_installer::PlanError),
+
     #[error(transparent)]
     Prepare(#[from] uv_installer::PrepareError),
+
+    #[error(transparent)]
+    Install(#[from] uv_installer::InstallError),
 
     #[error("{header}")]
     NoSolution {
@@ -25,6 +31,16 @@ pub enum Error {
 
     #[error(transparent)]
     Uninstall(#[from] uv_installer::UninstallError),
+
+    #[error("Failed to bytecode-compile Python file in: {}", path.user_display())]
+    CompileTree {
+        path: PathBuf,
+        #[source]
+        source: uv_installer::CompileError,
+    },
+
+    #[error("Failed to bytecode-compile installed packages")]
+    CompileFiles(#[source] uv_installer::CompileError),
 
     #[error(transparent)]
     Hash(#[from] uv_types::HashStrategyError),
@@ -59,9 +75,13 @@ impl Error {
             Self::NoSolution { source, .. } | Self::Resolve(ResolveError::NoSolution(source)) => {
                 Some(source)
             }
-            Self::Resolve(_)
+            Self::Plan(_)
+            | Self::Resolve(_)
             | Self::Prepare(_)
+            | Self::Install(_)
             | Self::Uninstall(_)
+            | Self::CompileTree { .. }
+            | Self::CompileFiles(_)
             | Self::Hash(_)
             | Self::Io(_)
             | Self::Fmt(_)
@@ -76,10 +96,14 @@ impl Error {
     pub fn outdated_environment(&self) -> Option<&Changelog> {
         match self {
             Self::OutdatedEnvironment(changelog) => Some(changelog),
-            Self::NoSolution { .. }
+            Self::Plan(_)
+            | Self::NoSolution { .. }
             | Self::Resolve(_)
             | Self::Prepare(_)
+            | Self::Install(_)
             | Self::Uninstall(_)
+            | Self::CompileTree { .. }
+            | Self::CompileFiles(_)
             | Self::Hash(_)
             | Self::Io(_)
             | Self::Fmt(_)
@@ -99,10 +123,14 @@ impl Error {
                 header: NoSolutionHeader::new(source.environment().clone()),
                 source,
             },
-            error @ (Self::Prepare(_)
+            error @ (Self::Plan(_)
+            | Self::Prepare(_)
+            | Self::Install(_)
             | Self::NoSolution { .. }
             | Self::Resolve(_)
             | Self::Uninstall(_)
+            | Self::CompileTree { .. }
+            | Self::CompileFiles(_)
             | Self::Hash(_)
             | Self::Io(_)
             | Self::Fmt(_)
@@ -124,9 +152,13 @@ impl Error {
             Self::Requirements(source) | Self::RequirementsWithContext { source, .. } => {
                 Self::RequirementsWithContext { context, source }
             }
-            error @ (Self::Prepare(_)
+            error @ (Self::Plan(_)
+            | Self::Prepare(_)
+            | Self::Install(_)
             | Self::Resolve(_)
             | Self::Uninstall(_)
+            | Self::CompileTree { .. }
+            | Self::CompileFiles(_)
             | Self::Hash(_)
             | Self::Io(_)
             | Self::Fmt(_)
@@ -145,7 +177,14 @@ impl Error {
             Self::Requirements(error) | Self::RequirementsWithContext { source: error, .. } => {
                 error.is_user_failure()
             }
-            Self::Uninstall(_) | Self::Io(_) | Self::Fmt(_) | Self::Anyhow(_) => false,
+            Self::Plan(_)
+            | Self::Install(_)
+            | Self::Uninstall(_)
+            | Self::CompileTree { .. }
+            | Self::CompileFiles(_)
+            | Self::Io(_)
+            | Self::Fmt(_)
+            | Self::Anyhow(_) => false,
         }
     }
 }
@@ -182,8 +221,12 @@ impl uv_errors::Hinted for Error {
                 }
                 uv_errors::Hints::none()
             }
-            Self::Prepare(_)
+            Self::Plan(_)
+            | Self::Prepare(_)
+            | Self::Install(_)
             | Self::Uninstall(_)
+            | Self::CompileTree { .. }
+            | Self::CompileFiles(_)
             | Self::Hash(_)
             | Self::Io(_)
             | Self::Fmt(_)
@@ -200,7 +243,7 @@ impl uv_errors::Hinted for Error {
     "Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file"
 )]
 pub struct ExtrasWithoutSourceError {
-    pub has_editable: bool,
+    pub(crate) has_editable: bool,
 }
 
 impl uv_errors::Hinted for ExtrasWithoutSourceError {

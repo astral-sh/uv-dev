@@ -1,65 +1,37 @@
 use std::collections::HashSet;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use anyhow::Context;
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use tracing::debug;
 
 use uv_cache::Cache;
 use uv_cli_output::printer::Printer;
-use uv_cli_output::reporters::InstallReporter;
-use uv_cli_output::reporters::PrepareReporter;
+use uv_cli_output::reporters::{InstallReporter, PrepareReporter};
 use uv_client::RegistryClient;
-use uv_configuration::BuildOptions;
-use uv_configuration::Concurrency;
-use uv_configuration::DryRun;
-use uv_configuration::Reinstall;
+use uv_configuration::{BuildOptions, Concurrency, DryRun, Reinstall};
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
-use uv_distribution_types::CachedDist;
-use uv_distribution_types::ConfigSettings;
-use uv_distribution_types::Dist;
-use uv_distribution_types::DistributionMetadata;
-use uv_distribution_types::ExtraBuildRequires;
-use uv_distribution_types::ExtraBuildVariables;
-use uv_distribution_types::IndexLocations;
-use uv_distribution_types::InstalledDist;
-use uv_distribution_types::InstalledMetadata;
-use uv_distribution_types::InstalledVersion;
-use uv_distribution_types::LocalDist;
-use uv_distribution_types::Name;
-use uv_distribution_types::PackageConfigSettings;
-use uv_distribution_types::Resolution;
-use uv_distribution_types::VersionOrUrlRef;
-use uv_fs::CWD;
-use uv_fs::Simplified;
-use uv_fs::normalize_path_under;
-use uv_install_wheel::LinkMode;
-use uv_install_wheel::installed_dist_info_path;
-use uv_install_wheel::read_record_into_iter;
-use uv_installer::InstallationStrategy;
-use uv_installer::Plan;
-use uv_installer::Planner;
-use uv_installer::Preparer;
-use uv_installer::SitePackages;
+use uv_distribution_types::{
+    CachedDist, ConfigSettings, Dist, DistributionMetadata, ExtraBuildRequires,
+    ExtraBuildVariables, IndexLocations, InstalledDist, InstalledMetadata, InstalledVersion,
+    LocalDist, Name, PackageConfigSettings, Resolution, VersionOrUrlRef,
+};
+use uv_fs::{CWD, Simplified, normalize_path_under};
+use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
+use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pep508::VerbatimUrl;
 use uv_platform_tags::Tags;
 use uv_preview::Preview;
-use uv_python::PythonEnvironment;
-use uv_types::BuildContext;
-use uv_types::HashStrategy;
-use uv_types::InFlight;
+use uv_python_interpreter::PythonEnvironment;
+use uv_types::{BuildContext, HashStrategy, InFlight};
 use uv_warnings::warn_user;
 
-use crate::Error;
-use crate::bytecode::compile_bytecode;
-use crate::bytecode::compile_bytecode_files;
+use crate::bytecode::{compile_bytecode, compile_bytecode_files};
+use crate::error::Error;
 use crate::loggers::InstallLogger;
 
 #[derive(Debug, Clone, Copy)]
@@ -126,7 +98,7 @@ impl std::fmt::Display for LongSpecifier<'_> {
 }
 
 impl ChangedDist {
-    pub fn short_specifier(&self) -> ShortSpecifier<'_> {
+    pub(crate) fn short_specifier(&self) -> ShortSpecifier<'_> {
         match self {
             Self::Local(dist) => ShortSpecifier::Version(dist.installed_version().version()),
             Self::Remote(dist) => match dist.version_or_url() {
@@ -136,7 +108,7 @@ impl ChangedDist {
         }
     }
 
-    pub fn long_specifier(&self) -> LongSpecifier<'_> {
+    pub(crate) fn long_specifier(&self) -> LongSpecifier<'_> {
         match self {
             Self::Local(dist) => LongSpecifier::InstalledVersion(dist.installed_version()),
             Self::Remote(dist) => match dist.version_or_url() {
@@ -269,7 +241,7 @@ impl InstallationPlan {
                 venv,
                 tags,
             )
-            .context("Failed to determine installation plan")?;
+            .map_err(Error::Plan)?;
 
         Ok(Self {
             plan,

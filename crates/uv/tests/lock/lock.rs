@@ -2113,8 +2113,7 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filtered_http_retries();
+        .with_filtered_exe_suffix();
     let server = MockServer::start().await;
     let archive_path = "/files/demo_pkg-1.0.0.tar.gz";
     let archive_url = format!("{}{archive_path}", server.uri());
@@ -2617,7 +2616,7 @@ fn lock_wheel_path_relock_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_url_relock_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -2756,7 +2755,7 @@ async fn lock_sdist_url_relock_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_registry_relock_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -2910,7 +2909,7 @@ async fn lock_sdist_registry_relock_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
 
@@ -3113,7 +3112,7 @@ async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_registry_hash_changes_require_upgrade() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -3221,7 +3220,7 @@ async fn lock_sdist_registry_hash_changes_require_upgrade() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_registry_missing_index_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -3290,7 +3289,7 @@ async fn lock_sdist_registry_missing_index_locked_hash_mismatch() -> Result<()> 
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_url_root_subdirectory_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -3352,7 +3351,7 @@ async fn lock_sdist_url_root_subdirectory_locked_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -3463,7 +3462,7 @@ async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_source_archive_url_equivalent_subdirectory_locked_hash_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
     let filename = "demo_pkg-1.0.0.tar.gz";
     let sentinel = context.temp_dir.child("backend-executed");
     let name = "demo-pkg".parse()?;
@@ -3683,8 +3682,7 @@ fn lock_sdist_path_rejected_archive_not_cached() -> Result<()> {
 async fn lock_sdist_url_cache_heal_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_file_counts()
-        .with_filtered_sizes_and_units()
-        .with_filtered_http_retries();
+        .with_filtered_sizes_and_units();
     let server = MockServer::start().await;
     let archive_path = "/files/demo_pkg-1.0.0.tar.gz";
     let archive_url = format!("{}{archive_path}", server.uri());
@@ -12739,7 +12737,7 @@ fn lock_metadata_free_new_extra_marker() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_invalid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13044,7 +13042,7 @@ fn lock_mixed_hashes() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_core_metadata_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
     let index_server = MockServer::start().await;
     let artifact_server = MockServer::start().await;
 
@@ -13312,7 +13310,7 @@ async fn lock_index_hash_algorithm() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[tokio::test]
 async fn lock_index_hash_algorithm_missing() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.13");
     let server = PackageServer::new(&"basic-package".parse()?).await;
     let wheel_filename = "basic_package-0.1.0-py3-none-any.whl";
 
@@ -15007,9 +15005,7 @@ async fn lock_redact_http() -> Result<()> {
     // which in turns means we don't use the test context cache location.
     // We should probably add a way to configure the `--no-cache` temporary
     // directory location during testing.
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_link_mode_warning()
-        .with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12").with_filtered_link_mode_warning();
     let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -22645,7 +22641,7 @@ fn lock_metadata_free_root_extra_project_conflicting_workspace_extra() -> Result
         .arg("--locked")
         .arg("--offline")
         .arg("--no-cache")
-        .env("RUST_LOG", "uv_lock_operations::validated_lock=debug"), @"
+        .env("RUST_LOG", "uv_project::lock=debug"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Existing `uv.lock` satisfies workspace requirements
@@ -22726,7 +22722,7 @@ fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<(
         .arg("--no-cache")
         .arg("--index-url")
         .arg(server.index_url())
-        .env("RUST_LOG", "uv_lock_operations::validated_lock=debug"), @"
+        .env("RUST_LOG", "uv_project::lock=debug"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Existing `uv.lock` satisfies workspace requirements
@@ -31634,7 +31630,7 @@ async fn lock_keyring_credentials_always_authenticate_unsupported_mode() -> Resu
         .assert()
         .success();
 
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
