@@ -7,14 +7,16 @@ use futures::{StreamExt as _, TryStreamExt as _, stream};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::OnceCell;
 
-use uv_audit::{Dependency, Finding, VulnerabilityID, VulnerabilityServiceFormat, osv};
+use uv_audit::{
+    Dependency, Finding, ProjectStatusAudit, VulnerabilityID, VulnerabilityServiceFormat, osv,
+};
 use uv_cache::Cache;
 use uv_cli::AuditOutputFormat;
 use uv_client::{BaseClient, BaseClientBuilder, CachedClient, RegistryClientBuilder};
 use uv_configuration::{
     Concurrency, DependencyGroupsWithDefaults, ExtrasSpecification, KeyringProviderType,
 };
-use uv_distribution_types::IndexLocations;
+use uv_distribution_types::{IndexCapabilities, IndexLocations};
 use uv_fs::Simplified;
 use uv_lock::{Lock, LockParseError};
 use uv_normalize::{DefaultExtras, PackageName};
@@ -275,6 +277,9 @@ pub(crate) async fn audit(
             registry_transport = Some(client.cached_client().uncached().clone());
             client
         };
+        let capabilities = IndexCapabilities::default();
+        let status_audit =
+            ProjectStatusAudit::new(&registry_client, &capabilities, concurrency.clone());
         let results = stream::iter(group.inputs)
             .map(async |input| {
                 let outcome = audit_lock(
@@ -283,7 +288,7 @@ pub(crate) async fn audit(
                     &extras,
                     &groups,
                     &input.settings.resolver,
-                    &registry_client,
+                    &status_audit,
                     async |selected| {
                         // One OSV query covers the selected tool lockfiles. Keep findings in
                         // each tool's dependency order, including shared dependencies.
@@ -312,7 +317,6 @@ pub(crate) async fn audit(
                             .cloned()
                             .collect())
                     },
-                    concurrency.clone(),
                     printer,
                     &ignore,
                     &ignore_until_fixed,
