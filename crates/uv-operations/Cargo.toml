@@ -26,33 +26,40 @@ uv-distribution-filename = { workspace = true }
 uv-distribution-types = { workspace = true }
 uv-errors = { workspace = true }
 uv-fs = { workspace = true }
+uv-git = { workspace = true }
 uv-install-wheel = { workspace = true, default-features = false }
 uv-installer = { workspace = true }
+uv-lock = { workspace = true }
 uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
 uv-platform-tags = { workspace = true }
 uv-preview = { workspace = true }
 uv-pypi-types = { workspace = true }
-uv-python = { workspace = true }
+uv-python-discovery = { workspace = true }
+uv-python-interpreter = { workspace = true }
+uv-python-managed = { workspace = true }
+uv-python-types = { workspace = true }
 uv-requirements = { workspace = true }
+uv-requirements-txt = { workspace = true }
 uv-resolver = { workspace = true }
 uv-tool = { workspace = true }
 uv-types = { workspace = true }
 uv-warnings = { workspace = true }
 
-fs-err = { workspace = true }
 anyhow = { workspace = true }
+fs-err = { workspace = true }
+insta = { workspace = true }
 itertools = { workspace = true }
 jiff = { workspace = true }
 owo-colors = { workspace = true }
 rkyv = { workspace = true }
 rustc-hash = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+toml = { workspace = true }
 tracing = { workspace = true }
-
-serde_json = { workspace = true }
 version-ranges = { workspace = true }
 
 [dev-dependencies]

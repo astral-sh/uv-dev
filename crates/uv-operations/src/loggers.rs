@@ -4,8 +4,7 @@ use std::fmt::Write;
 
 use itertools::Itertools;
 use owo_colors::OwoColorize;
-use rustc_hash::FxBuildHasher;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use uv_cli_output::format::elapsed;
 use uv_cli_output::printer::Printer;
@@ -13,9 +12,7 @@ use uv_configuration::DryRun;
 use uv_distribution_types::Name;
 use uv_normalize::PackageName;
 
-use crate::installation::ChangedDist;
-use crate::installation::Changelog;
-use crate::installation::ShortSpecifier;
+use crate::installation::{ChangedDist, Changelog, ShortSpecifier};
 
 /// A trait to handle logging during install operations.
 pub trait InstallLogger {

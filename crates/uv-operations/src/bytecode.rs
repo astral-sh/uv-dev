@@ -1,7 +1,6 @@
 use std::fmt::Write;
 use std::path::PathBuf;
 
-use anyhow::Context;
 use owo_colors::OwoColorize;
 use tracing::debug;
 
@@ -10,21 +9,19 @@ use uv_cli_output::format::elapsed;
 use uv_cli_output::printer::Printer;
 use uv_configuration::Concurrency;
 use uv_fs::CWD;
-use uv_fs::Simplified;
-use uv_installer::compile_files;
-use uv_installer::compile_tree;
-use uv_python::PythonEnvironment;
+use uv_installer::{compile_files, compile_tree};
+use uv_python_interpreter::PythonEnvironment;
 
 /// Compile all Python source files in site-packages to bytecode, to speed up the
 /// initial run of any subsequent executions.
 ///
 /// See the `--compile` option on `pip sync` and `pip install`.
-pub async fn compile_bytecode(
+pub(crate) async fn compile_bytecode(
     venv: &PythonEnvironment,
     concurrency: &Concurrency,
     cache: &Cache,
     printer: Printer,
-) -> anyhow::Result<()> {
+) -> Result<(), crate::error::Error> {
     let start = std::time::Instant::now();
     let mut files = 0;
     for site_packages in venv.site_packages() {
@@ -43,11 +40,9 @@ pub async fn compile_bytecode(
             cache.root(),
         )
         .await
-        .with_context(|| {
-            format!(
-                "Failed to bytecode-compile Python file in: {}",
-                site_packages.user_display()
-            )
+        .map_err(|source| crate::error::Error::CompileTree {
+            path: site_packages,
+            source,
         })?;
     }
     write_bytecode_summary(files, start, printer)?;
@@ -55,17 +50,17 @@ pub async fn compile_bytecode(
 }
 
 /// Compile the given Python source files to bytecode.
-pub async fn compile_bytecode_files(
+pub(crate) async fn compile_bytecode_files(
     files: impl IntoIterator<Item = anyhow::Result<PathBuf>>,
     venv: &PythonEnvironment,
     concurrency: &Concurrency,
     cache: &Cache,
     printer: Printer,
-) -> anyhow::Result<()> {
+) -> Result<(), crate::error::Error> {
     let start = std::time::Instant::now();
     let files = compile_files(files, venv.python_executable(), concurrency, cache.root())
         .await
-        .context("Failed to bytecode-compile installed packages")?;
+        .map_err(crate::error::Error::CompileFiles)?;
     if files == 0 {
         return Ok(());
     }

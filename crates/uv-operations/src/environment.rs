@@ -7,10 +7,9 @@ use tracing::debug;
 use uv_cache::Cache;
 use uv_cli_output::printer::Printer;
 use uv_fs::Simplified;
-use uv_python::PythonEnvironment;
-use uv_python::PythonInstallation;
-use uv_python::managed::ManagedPythonInstallation;
-use uv_python::managed::PythonMinorVersionLink;
+use uv_python_discovery::PythonInstallation;
+use uv_python_interpreter::PythonEnvironment;
+use uv_python_managed::{ManagedPythonInstallation, PythonMinorVersionLink};
 use uv_tool::InstalledTools;
 
 /// Display a message about the interpreter that was selected for the operation.

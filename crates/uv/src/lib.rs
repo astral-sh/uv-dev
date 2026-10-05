@@ -18,29 +18,25 @@ use futures::FutureExt;
 use owo_colors::OwoColorize;
 use tokio::task::spawn_blocking;
 use tracing::{debug, instrument, trace};
+use uv_cli_settings::PipTreeSettings;
 
 #[cfg(not(feature = "self-update"))]
 use crate::install_source::InstallSource;
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
-use uv_cli::settings;
-use uv_cli::settings::{
-    CacheSettings, GlobalSettings, PipCheckSettings, PipCompileSettings, PipFreezeSettings,
-    PipInstallSettings, PipListSettings, PipShowSettings, PipSyncSettings, PipTreeSettings,
-    PipUninstallSettings, PublishSettings, resolve_color,
-};
-
 #[cfg(feature = "self-update")]
-use uv_cli::SelfUpdateArgs;
-use uv_cli::{
+use uv_cli_arguments::SelfUpdateArgs;
+use uv_cli_arguments::compat::CompatArgs;
+use uv_cli_arguments::options::ArgumentError;
+use uv_cli_arguments::{
     AuthCommand, AuthHelperCommand, AuthNamespace, BuildBackendCommand, CacheCommand,
     CacheNamespace, CacheSizeOutputFormat, Cli, Commands, PipCommand, PipNamespace, ProjectCommand,
-    PythonCommand, PythonNamespace, SelfCommand, SelfNamespace, ToolCommand, ToolNamespace,
-    TopLevelArgs, WorkspaceCommand, WorkspaceNamespace, compat::CompatArgs, options::ArgumentError,
+    PythonCommand, PythonNamespace, SelfCommand, SelfNamespace,
+};
+use uv_cli_arguments::{
+    ToolCommand, ToolNamespace, TopLevelArgs, WorkspaceCommand, WorkspaceNamespace,
 };
 use uv_client::BaseClientBuilder;
-use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_configuration::{PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
@@ -59,36 +55,23 @@ use uv_threads::{RAYON_PARALLELISM, min_stack_size};
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
-use crate::commands::{ParsedRunCommand, RunCommand, ScriptPath};
+use uv_cli_error::UvError;
+use uv_cli_output::printer::Printer;
+use uv_cli_settings::{
+    CacheSettings, GlobalSettings, PipCheckSettings, PipCompileSettings, PipFreezeSettings,
+    PipInstallSettings, PipListSettings, PipShowSettings, PipSyncSettings, PipUninstallSettings,
+    PublishSettings, base_client_builder, resolve_color,
+};
+use uv_cli_types::exit::ExitStatus;
+use uv_cli_types::script::ScriptPath;
+use uv_cli_types::tool::ToolRunCommand;
+use uv_project::ProjectError;
+use uv_run_command::run::{ParsedRunCommand, RunCommand};
 
-mod commands;
+mod diagnostics;
 #[cfg(not(feature = "self-update"))]
 mod install_source;
 mod logging;
-
-/// Construct the shared HTTP client builder from the resolved global settings.
-fn base_client_builder<'a>(globals: &GlobalSettings) -> BaseClientBuilder<'a> {
-    let client_builder = BaseClientBuilder::new(
-        globals.network_settings.connectivity,
-        globals.network_settings.system_certs,
-        globals.network_settings.allow_insecure_host.clone(),
-        globals.preview,
-        globals.network_settings.read_timeout,
-        globals.network_settings.connect_timeout,
-        globals.network_settings.retries,
-    )
-    .metadata_range_request(globals.network_settings.metadata_range_request)
-    .cache_read_concurrency(globals.concurrency.cache_reads)
-    .http_proxy(globals.network_settings.http_proxy.clone())
-    .https_proxy(globals.network_settings.https_proxy.clone())
-    .no_proxy(globals.network_settings.no_proxy.clone());
-
-    if let Some(certificates) = &globals.network_settings.custom_certificates {
-        client_builder.custom_certificates(certificates.clone())
-    } else {
-        client_builder
-    }
-}
 
 /// Whether to initialize process-global state.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -155,7 +138,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
 
     // Parse the external command, if necessary.
     let parsed_run_command = if let Commands::Project(command) = &*cli.command
-        && let ProjectCommand::Run(uv_cli::RunArgs {
+        && let ProjectCommand::Run(uv_cli_arguments::RunArgs {
             command: Some(ref command),
             module,
             script,
@@ -177,7 +160,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     let environment = EnvironmentOptions::new()?;
 
     // Resolve preview flags before config discovery for decisions that affect the discovery root.
-    let early_preview = settings::resolve_preview(&cli.top_level.global_args, None, &environment)?;
+    let early_preview =
+        uv_cli_settings::resolve_preview(&cli.top_level.global_args, None, &environment)?;
 
     if global_initialization.needs_initialization() {
         // Make the early preview flags globally available.
@@ -371,11 +355,11 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         match &**command {
             // For `uv add --script` and `uv lock --script`, we'll create a PEP 723 tag if it
             // doesn't already exist.
-            ProjectCommand::Add(uv_cli::AddArgs {
+            ProjectCommand::Add(uv_cli_arguments::AddArgs {
                 script: Some(script),
                 ..
             })
-            | ProjectCommand::Lock(uv_cli::LockArgs {
+            | ProjectCommand::Lock(uv_cli_arguments::LockArgs {
                 script: Some(script),
                 ..
             }) => match Pep723Script::read(script).await {
@@ -384,27 +368,27 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 Err(err) => return Err(err.into()),
             },
             // For the remaining commands, the PEP 723 tag must exist already.
-            ProjectCommand::Remove(uv_cli::RemoveArgs {
+            ProjectCommand::Remove(uv_cli_arguments::RemoveArgs {
                 script: Some(script),
                 ..
             })
-            | ProjectCommand::Sync(uv_cli::SyncArgs {
+            | ProjectCommand::Sync(uv_cli_arguments::SyncArgs {
                 script: Some(script),
                 ..
             })
-            | ProjectCommand::Tree(uv_cli::TreeArgs {
+            | ProjectCommand::Tree(uv_cli_arguments::TreeArgs {
                 script: Some(script),
                 ..
             })
-            | ProjectCommand::Export(uv_cli::ExportArgs {
+            | ProjectCommand::Export(uv_cli_arguments::ExportArgs {
                 script: Some(script),
                 ..
             })
-            | ProjectCommand::Audit(uv_cli::AuditArgs {
+            | ProjectCommand::Audit(uv_cli_arguments::AuditArgs {
                 script: Some(script),
                 ..
             })
-            | ProjectCommand::Check(uv_cli::CheckArgs {
+            | ProjectCommand::Check(uv_cli_arguments::CheckArgs {
                 script: Some(script),
                 ..
             }) => match Pep723Script::read(script).await {
@@ -450,9 +434,9 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             }
             Err(err) => return Err(err.into()),
         }
-    } else if let Commands::Python(uv_cli::PythonNamespace {
+    } else if let Commands::Python(uv_cli_arguments::PythonNamespace {
         command:
-            PythonCommand::Find(uv_cli::PythonFindArgs {
+            PythonCommand::Find(uv_cli_arguments::PythonFindArgs {
                 script: Some(script),
                 ..
             }),
@@ -517,7 +501,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             .map_err(|()| anyhow::anyhow!("Flags are already initialized"))?;
     }
 
-    debug!("uv {}", uv_cli::version::uv_self_version());
+    debug!("uv {}", uv_cli_arguments::version::uv_self_version());
     if let Some(config_file) = cli.top_level.config_file.as_ref() {
         debug!("Using configuration file: {}", config_file.user_display());
     }
@@ -651,10 +635,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: AuthCommand::Login(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::AuthLoginSettings::resolve(args);
+            let args = uv_cli_settings::AuthLoginSettings::resolve(args);
             show_settings!(args);
 
-            commands::auth_login(
+            uv_auth_command::login::login(
                 args.service,
                 args.username,
                 args.password,
@@ -668,30 +652,32 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: AuthCommand::Logout(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::AuthLogoutSettings::resolve(args);
+            let args = uv_cli_settings::AuthLogoutSettings::resolve(args);
             show_settings!(args);
 
-            commands::auth_logout(args.service, args.username, printer, globals.preview).await
+            uv_auth_command::logout::logout(args.service, args.username, printer, globals.preview)
+                .await
         }
         Commands::Auth(AuthNamespace {
             command: AuthCommand::Token(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::AuthTokenSettings::resolve(args);
+            let args = uv_cli_settings::AuthTokenSettings::resolve(args);
             show_settings!(args);
 
-            commands::auth_token(args.service, args.username, printer, globals.preview).await
+            uv_auth_command::token::token(args.service, args.username, printer, globals.preview)
+                .await
         }
         Commands::Auth(AuthNamespace {
             command: AuthCommand::Dir,
         }) => {
-            commands::auth_dir(printer)?;
+            uv_auth_command::dir::dir(printer)?;
             Ok(ExitStatus::Success)
         }
         Commands::Auth(AuthNamespace {
             command: AuthCommand::Helper(args),
         }) => {
-            use uv_cli::AuthHelperProtocol;
+            use uv_cli_arguments::AuthHelperProtocol;
 
             // Validate protocol (currently only Bazel is supported)
             match args.protocol {
@@ -699,10 +685,12 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             }
 
             match args.command {
-                AuthHelperCommand::Get => commands::auth_helper(globals.preview, printer).await,
+                AuthHelperCommand::Get => {
+                    uv_auth_command::helper::helper(globals.preview, printer).await
+                }
             }
         }
-        Commands::Help(args) => commands::help(
+        Commands::Help(args) => uv_help_command::help::help(
             args.command.unwrap_or_default().as_slice(),
             printer,
             args.no_pager,
@@ -759,7 +747,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 groups: args.settings.groups,
             };
 
-            Box::pin(commands::pip_compile(
+            Box::pin(uv_pip_command::compile::pip_compile(
                 &requirements,
                 &constraints,
                 &overrides,
@@ -872,7 +860,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 groups: args.settings.groups,
             };
 
-            Box::pin(commands::pip_sync(
+            Box::pin(uv_pip_command::sync::pip_sync(
                 &requirements,
                 &constraints,
                 &build_constraints,
@@ -1027,7 +1015,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     .combine(Refresh::from(args.settings.upgrade.clone())),
             );
 
-            Box::pin(commands::pip_install(
+            Box::pin(uv_pip_command::install::pip_install(
                 &requirements,
                 &constraints,
                 &overrides,
@@ -1112,7 +1100,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     .map(RequirementsSource::from_requirements_file)
                     .collect::<Result<Vec<_>, _>>()?,
             );
-            commands::pip_uninstall(
+            uv_pip_command::uninstall::pip_uninstall(
                 globals.python_arch,
                 &sources,
                 args.settings.python,
@@ -1139,7 +1127,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            commands::pip_freeze(
+            uv_pip_command::freeze::pip_freeze(
                 globals.python_arch,
                 args.exclude_editable,
                 &args.exclude,
@@ -1167,7 +1155,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            commands::pip_list(
+            uv_pip_command::list::pip_list(
                 globals.python_arch,
                 args.editable,
                 &args.exclude,
@@ -1202,7 +1190,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            commands::pip_show(
+            uv_pip_command::show::pip_show(
                 globals.python_arch,
                 args.package,
                 args.settings.strict,
@@ -1227,7 +1215,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            commands::pip_tree(
+            uv_pip_command::tree::pip_tree(
                 globals.python_arch,
                 args.show_version_specifiers,
                 args.depth,
@@ -1263,7 +1251,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            commands::pip_check(
+            uv_pip_command::check::pip_check(
                 globals.python_arch,
                 args.settings.python.as_deref(),
                 args.settings.system,
@@ -1285,19 +1273,33 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         })
         | Commands::Clean(args) => {
             show_settings!(args);
-            commands::cache_clean(&args.package, args.force, cache, printer, globals.preview).await
+            uv_cache_command::cache_clean::cache_clean(
+                &args.package,
+                args.force,
+                cache,
+                printer,
+                globals.preview,
+            )
+            .await
         }
         Commands::Cache(CacheNamespace {
             command: CacheCommand::Prune(args),
         }) => {
             show_settings!(args);
-            commands::cache_prune(args.ci, args.force, cache, printer, globals.preview).await
+            uv_cache_command::cache_prune::cache_prune(
+                args.ci,
+                args.force,
+                cache,
+                printer,
+                globals.preview,
+            )
+            .await
         }
         Commands::Cache(CacheNamespace {
             command: CacheCommand::Dir,
         }) => {
             show_settings!();
-            commands::cache_dir(&cache, printer)
+            uv_cache_command::cache_dir::cache_dir(&cache, printer)
         }
         Commands::Cache(CacheNamespace {
             command: CacheCommand::Size(args),
@@ -1308,11 +1310,16 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             } else {
                 args.output_format
             };
-            commands::cache_size(&cache, output_format, printer, globals.preview)
+            uv_cache_command::cache_size::cache_size(
+                &cache,
+                output_format,
+                printer,
+                globals.preview,
+            )
         }
         Commands::Build(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::BuildSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::BuildSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
@@ -1333,7 +1340,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 .map(RequirementsSource::from_constraints_txt)
                 .collect::<Result<Vec<_>, _>>()?;
 
-            commands::build_frontend(
+            uv_build_command::build_frontend::build_frontend(
                 &project_dir,
                 args.skip_dependency_check,
                 args.src,
@@ -1363,7 +1370,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 &workspace_cache,
                 printer,
                 globals.preview,
-                commands::diagnostics::write_error_chain,
+                crate::diagnostics::hints_for_error,
             )
             .await
         }
@@ -1383,7 +1390,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             }
 
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::VenvSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::VenvSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
@@ -1421,7 +1428,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 },
             );
 
-            Box::pin(commands::venv(
+            Box::pin(uv_venv_command::venv::venv(
                 &project_dir,
                 args.path,
                 python_request,
@@ -1481,7 +1488,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     dry_run,
                 }),
         }) => {
-            commands::self_update(
+            uv_self_update_command::self_update::self_update(
                 target_version,
                 token,
                 dry_run,
@@ -1497,7 +1504,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     output_format,
                 },
         }) => {
-            commands::self_version(short, output_format, printer)?;
+            uv_version_command::version::self_version(short, output_format, printer)?;
             Ok(ExitStatus::Success)
         }
         #[cfg(not(feature = "self-update"))]
@@ -1546,7 +1553,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             }
 
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ToolRunSettings::resolve(
+            let args = uv_cli_settings::ToolRunSettings::resolve(
                 args,
                 filesystem,
                 invocation_source,
@@ -1608,7 +1615,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 }
             };
 
-            Box::pin(commands::tool_run(
+            Box::pin(uv_tool_command::run::run(
                 args.command,
                 args.from,
                 &requirements,
@@ -1643,7 +1650,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: ToolCommand::Install(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ToolInstallSettings::resolve(args, filesystem, environment)?;
+            let args =
+                uv_cli_settings::ToolInstallSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
@@ -1709,7 +1717,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 .map(RequirementsSource::from_constraints_txt)
                 .collect::<Result<Vec<_>, _>>()?;
 
-            Box::pin(commands::tool_install(
+            Box::pin(uv_tool_command::install::install(
                 args.package,
                 args.editable,
                 args.from,
@@ -1745,13 +1753,13 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: ToolCommand::List(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ToolListSettings::resolve(args, filesystem)?;
+            let args = uv_cli_settings::ToolListSettings::resolve(args, filesystem)?;
             show_settings!(args);
 
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            commands::tool_list(
+            uv_tool_command::list::list(
                 args.show_paths,
                 args.show_version_specifiers,
                 args.show_with,
@@ -1770,12 +1778,12 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         Commands::Tool(ToolNamespace {
             command: ToolCommand::Audit(args),
         }) => {
-            let args = settings::ToolAuditSettings::resolve(args, filesystem);
+            let args = uv_cli_settings::ToolAuditSettings::resolve(args, filesystem);
             show_settings!(args);
 
             let cache = cache.init().await?;
 
-            commands::tool_audit(
+            uv_tool_command::audit::audit(
                 args.names,
                 args.output_format,
                 args.service_format,
@@ -1795,7 +1803,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: ToolCommand::Upgrade(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ToolUpgradeSettings::resolve(args, filesystem, &environment)?;
+            let args =
+                uv_cli_settings::ToolUpgradeSettings::resolve(args, filesystem, &environment)?;
             show_settings!(args);
 
             // Initialize the cache.
@@ -1804,7 +1813,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 .await?
                 .with_refresh(Refresh::All(Timestamp::now()));
 
-            Box::pin(commands::tool_upgrade(
+            Box::pin(uv_tool_command::upgrade::upgrade(
                 args.names,
                 args.python,
                 args.python_platform,
@@ -1821,7 +1830,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 &workspace_cache,
                 printer,
                 globals.preview,
-                commands::diagnostics::write_error_chain,
+                crate::diagnostics::write_error_chain,
             ))
             .await
         }
@@ -1829,38 +1838,38 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: ToolCommand::Uninstall(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ToolUninstallSettings::resolve(args, filesystem);
+            let args = uv_cli_settings::ToolUninstallSettings::resolve(args, filesystem);
             show_settings!(args);
 
-            commands::tool_uninstall(args.name, printer).await
+            uv_tool_command::uninstall::uninstall(args.name, printer).await
         }
         Commands::Tool(ToolNamespace {
             command: ToolCommand::UpdateShell,
         }) => {
-            commands::tool_update_shell(printer).await?;
+            uv_tool_command::update_shell::update_shell(printer).await?;
             Ok(ExitStatus::Success)
         }
         Commands::Tool(ToolNamespace {
             command: ToolCommand::Dir(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ToolDirSettings::resolve(args, filesystem);
+            let args = uv_cli_settings::ToolDirSettings::resolve(args, filesystem);
             show_settings!(args);
 
-            commands::tool_dir(args.bin, globals.preview, printer)?;
+            uv_tool_command::dir::dir(args.bin, globals.preview, printer)?;
             Ok(ExitStatus::Success)
         }
         Commands::Python(PythonNamespace {
             command: PythonCommand::List(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::PythonListSettings::resolve(args, filesystem, environment);
+            let args = uv_cli_settings::PythonListSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            commands::python_list(
+            uv_python_command::list::list(
                 args.request,
                 args.kinds,
                 args.all_versions,
@@ -1882,13 +1891,14 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: PythonCommand::Install(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::PythonInstallSettings::resolve(args, filesystem, environment)?;
+            let args =
+                uv_cli_settings::PythonInstallSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            commands::python_install(
+            uv_python_command::install::install(
                 &project_dir,
                 args.install_dir,
                 args.targets,
@@ -1915,14 +1925,17 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: PythonCommand::Upgrade(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::PythonUpgradeSettings::resolve(args, filesystem, environment)?;
+            let args =
+                uv_cli_settings::PythonUpgradeSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
-            let upgrade = PythonUpgrade::Enabled(PythonUpgradeSource::Upgrade);
+            let upgrade = uv_cli_types::python::PythonUpgrade::Enabled(
+                uv_cli_types::python::PythonUpgradeSource::Upgrade,
+            );
 
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            commands::python_install(
+            uv_python_command::install::install(
                 &project_dir,
                 args.install_dir,
                 args.targets,
@@ -1949,23 +1962,29 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: PythonCommand::Uninstall(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::PythonUninstallSettings::resolve(args, filesystem);
+            let args = uv_cli_settings::PythonUninstallSettings::resolve(args, filesystem);
             show_settings!(args);
 
-            commands::python_uninstall(args.install_dir, args.targets, args.all, printer).await
+            uv_python_command::uninstall::uninstall(
+                args.install_dir,
+                args.targets,
+                args.all,
+                printer,
+            )
+            .await
         }
         Commands::Python(PythonNamespace {
             command: PythonCommand::Find(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::PythonFindSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::PythonFindSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Initialize the cache.
             let cache = cache.init().await?;
 
             if let Some(Pep723Item::Script(script)) = script {
-                commands::python_find_script(
+                uv_python_command::find::find_script(
                     (&script).into(),
                     args.show_version,
                     args.resolve_links,
@@ -1980,7 +1999,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 )
                 .await
             } else {
-                commands::python_find(
+                uv_python_command::find::find(
                     &project_dir,
                     args.request,
                     args.show_version,
@@ -2003,13 +2022,13 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: PythonCommand::Pin(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::PythonPinSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::PythonPinSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            Box::pin(commands::python_pin(
+            Box::pin(uv_python_command::pin::pin(
                 &project_dir,
                 args.request,
                 args.resolved,
@@ -2031,16 +2050,16 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             command: PythonCommand::Dir(args),
         }) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::PythonDirSettings::resolve(args, filesystem);
+            let args = uv_cli_settings::PythonDirSettings::resolve(args, filesystem);
             show_settings!(args);
 
-            commands::python_dir(args.bin, printer)?;
+            uv_python_command::dir::dir(args.bin, printer)?;
             Ok(ExitStatus::Success)
         }
         Commands::Python(PythonNamespace {
             command: PythonCommand::UpdateShell,
         }) => {
-            commands::python_update_shell(printer).await?;
+            uv_python_command::update_shell::update_shell(printer).await?;
             Ok(ExitStatus::Success)
         }
         Commands::Publish(args) => {
@@ -2072,7 +2091,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 index_locations,
             } = args;
 
-            commands::publish(
+            uv_publish_command::publish::publish(
                 files,
                 publish_url,
                 trusted_publishing,
@@ -2094,7 +2113,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         Commands::Workspace(WorkspaceNamespace { command }) => match command {
             WorkspaceCommand::Metadata(args) => {
                 // Resolve the settings from the command-line arguments and workspace configuration.
-                let args = settings::MetadataSettings::resolve(args, filesystem, environment)?;
+                let args =
+                    uv_cli_settings::MetadataSettings::resolve(args, filesystem, environment)?;
                 show_settings!(args);
 
                 // Check for conflicts between offline and refresh.
@@ -2114,7 +2134,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     Pep723Item::Remote(..) | Pep723Item::Stdin(..) => None,
                 });
 
-                Box::pin(commands::metadata(
+                Box::pin(uv_workspace_command::metadata::metadata(
                     &project_dir,
                     args.lock_check,
                     args.frozen,
@@ -2141,7 +2161,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             }
             WorkspaceCommand::Dir(args) => {
                 show_settings!(args);
-                commands::dir(
+                uv_workspace_command::dir::dir(
                     args.package,
                     &project_dir,
                     &cache,
@@ -2152,7 +2172,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             }
             WorkspaceCommand::List(args) => {
                 show_settings!(args);
-                commands::list(
+                uv_workspace_command::list::list(
                     &project_dir,
                     args.paths,
                     args.scripts,
@@ -2166,36 +2186,38 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         },
         Commands::BuildBackend { command } => spawn_blocking(move || match command {
             BuildBackendCommand::BuildSdist { sdist_directory } => {
-                commands::build_backend::build_sdist(&sdist_directory)
+                uv_build_command::build_backend::build_sdist(&sdist_directory)
             }
             BuildBackendCommand::BuildWheel {
                 wheel_directory,
                 metadata_directory,
-            } => commands::build_backend::build_wheel(
+            } => uv_build_command::build_backend::build_wheel(
                 &wheel_directory,
                 metadata_directory.as_deref(),
             ),
             BuildBackendCommand::BuildEditable {
                 wheel_directory,
                 metadata_directory,
-            } => commands::build_backend::build_editable(
+            } => uv_build_command::build_backend::build_editable(
                 &wheel_directory,
                 metadata_directory.as_deref(),
             ),
             BuildBackendCommand::GetRequiresForBuildSdist => {
-                commands::build_backend::get_requires_for_build_sdist()
+                uv_build_command::build_backend::get_requires_for_build_sdist()
             }
             BuildBackendCommand::GetRequiresForBuildWheel => {
-                commands::build_backend::get_requires_for_build_wheel()
+                uv_build_command::build_backend::get_requires_for_build_wheel()
             }
             BuildBackendCommand::PrepareMetadataForBuildWheel { wheel_directory } => {
-                commands::build_backend::prepare_metadata_for_build_wheel(&wheel_directory)
+                uv_build_command::build_backend::prepare_metadata_for_build_wheel(&wheel_directory)
             }
             BuildBackendCommand::GetRequiresForBuildEditable => {
-                commands::build_backend::get_requires_for_build_editable()
+                uv_build_command::build_backend::get_requires_for_build_editable()
             }
             BuildBackendCommand::PrepareMetadataForBuildEditable { wheel_directory } => {
-                commands::build_backend::prepare_metadata_for_build_editable(&wheel_directory)
+                uv_build_command::build_backend::prepare_metadata_for_build_editable(
+                    &wheel_directory,
+                )
             }
         })
         .await
@@ -2281,7 +2303,7 @@ async fn run_project(
     match *project_command {
         ProjectCommand::Init(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::InitSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::InitSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // The `--project` argument is not supported for `init`.
@@ -2299,7 +2321,7 @@ async fn run_project(
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            Box::pin(commands::init(
+            Box::pin(uv_init_command::init::init(
                 project_dir,
                 args.path,
                 args.name,
@@ -2327,7 +2349,7 @@ async fn run_project(
         }
         ProjectCommand::Run(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::RunSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::RunSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
@@ -2358,7 +2380,7 @@ async fn run_project(
                     .collect::<Result<Vec<_>, _>>()?,
             );
 
-            Box::pin(commands::run(
+            Box::pin(uv_run_command::run::run(
                 project_dir,
                 script,
                 command,
@@ -2401,7 +2423,7 @@ async fn run_project(
         }
         ProjectCommand::Sync(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::SyncSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::SyncSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
@@ -2423,7 +2445,7 @@ async fn run_project(
                 Pep723Item::Remote(..) => unreachable!("`uv lock` does not support remote files"),
             });
 
-            Box::pin(commands::sync(
+            Box::pin(uv_sync_command::sync::sync(
                 project_dir,
                 args.lock_check,
                 args.frozen,
@@ -2459,7 +2481,7 @@ async fn run_project(
         }
         ProjectCommand::Lock(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::LockSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::LockSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
@@ -2487,7 +2509,7 @@ async fn run_project(
                 .map(ScriptPath::Script)
                 .or(args.script.map(ScriptPath::Path));
 
-            Box::pin(commands::lock(
+            Box::pin(uv_lock_command::lock::lock(
                 project_dir,
                 args.lock_check,
                 args.frozen,
@@ -2512,7 +2534,7 @@ async fn run_project(
         }
         ProjectCommand::Upgrade(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::UpgradeSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::UpgradeSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Initialize the cache.
@@ -2521,7 +2543,7 @@ async fn run_project(
                 .await?
                 .with_refresh(Refresh::from(args.settings.upgrade.clone()));
 
-            Box::pin(commands::upgrade(
+            Box::pin(uv_upgrade_command::upgrade::upgrade(
                 project_dir,
                 args.packages,
                 args.exclude,
@@ -2542,7 +2564,7 @@ async fn run_project(
         }
         ProjectCommand::Add(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let mut args = settings::AddSettings::resolve(args, filesystem, environment)?;
+            let mut args = uv_cli_settings::AddSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // If the script already exists, use it; otherwise, propagate the file path and we'll
@@ -2629,7 +2651,7 @@ async fn run_project(
                 .map(RequirementsSource::from_constraints_txt)
                 .collect::<Result<Vec<_>, _>>()?;
 
-            Box::pin(commands::add(
+            Box::pin(uv_add_command::add::add(
                 project_dir,
                 args.lock_check,
                 args.frozen,
@@ -2678,7 +2700,7 @@ async fn run_project(
         }
         ProjectCommand::Remove(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::RemoveSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::RemoveSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
@@ -2700,7 +2722,7 @@ async fn run_project(
                 Pep723Item::Remote(..) => unreachable!("`uv remove` does not support remote files"),
             });
 
-            Box::pin(commands::remove(
+            Box::pin(uv_remove_command::remove::remove(
                 project_dir,
                 args.lock_check,
                 args.frozen,
@@ -2729,7 +2751,7 @@ async fn run_project(
         }
         ProjectCommand::Version(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::VersionSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::VersionSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
@@ -2749,7 +2771,7 @@ async fn run_project(
                     .combine(Refresh::from(args.settings.resolver.upgrade.clone())),
             );
 
-            Box::pin(commands::project_version(
+            Box::pin(uv_version_command::version::project_version(
                 args.value,
                 args.bump,
                 args.short,
@@ -2782,7 +2804,7 @@ async fn run_project(
         }
         ProjectCommand::Tree(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::TreeSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::TreeSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Initialize the cache.
@@ -2795,7 +2817,7 @@ async fn run_project(
                 Pep723Item::Remote(..) => unreachable!("`uv tree` does not support remote files"),
             });
 
-            Box::pin(commands::tree(
+            Box::pin(uv_tree_command::tree::tree(
                 project_dir,
                 args.groups,
                 args.lock_check,
@@ -2830,7 +2852,7 @@ async fn run_project(
         }
         ProjectCommand::Export(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::ExportSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::ExportSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Initialize the cache.
@@ -2843,7 +2865,7 @@ async fn run_project(
                 Pep723Item::Remote(..) => unreachable!("`uv export` does not support remote files"),
             });
 
-            commands::export(
+            uv_export_command::export::export(
                 project_dir,
                 args.format,
                 args.all_packages,
@@ -2883,13 +2905,13 @@ async fn run_project(
         }
         ProjectCommand::Format(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::FormatSettings::resolve(args, filesystem, environment);
+            let args = uv_cli_settings::FormatSettings::resolve(args, filesystem, environment);
             show_settings!(args);
 
             // Initialize the cache.
             let cache = cache.init().await?;
 
-            Box::pin(commands::format(
+            Box::pin(uv_format_command::format::format(
                 project_dir,
                 args.ruff_path,
                 args.check,
@@ -2909,7 +2931,7 @@ async fn run_project(
         }
         ProjectCommand::Check(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = settings::CheckSettings::resolve(args, filesystem, environment)?;
+            let args = uv_cli_settings::CheckSettings::resolve(args, filesystem, environment)?;
             show_settings!(args);
 
             // Check for conflicts between offline and refresh.
@@ -2929,7 +2951,7 @@ async fn run_project(
                 Pep723Item::Remote(..) | Pep723Item::Stdin(..) => None,
             });
 
-            Box::pin(commands::check(
+            Box::pin(uv_check_command::check::check(
                 project_dir,
                 args.ty_path,
                 args.fix,
@@ -2967,7 +2989,8 @@ async fn run_project(
             .await
         }
         ProjectCommand::Audit(audit_args) => {
-            let args = settings::AuditSettings::resolve(audit_args, filesystem, environment)?;
+            let args =
+                uv_cli_settings::AuditSettings::resolve(audit_args, filesystem, environment)?;
             show_settings!(args);
 
             // Initialize the cache.
@@ -2980,7 +3003,7 @@ async fn run_project(
                 Pep723Item::Remote(..) => unreachable!("`uv audit` does not support remote files"),
             });
 
-            Box::pin(commands::audit(
+            Box::pin(uv_audit_command::audit::audit(
                 project_dir,
                 args.extras,
                 args.groups,
@@ -3141,16 +3164,24 @@ where
             let error = match err.downcast::<UvError>() {
                 Ok(error) => error,
                 Err(err) if err.is::<ArgumentError>() => UvError::argument(err),
+                Err(err)
+                    if matches!(
+                        err.downcast_ref::<ProjectError>(),
+                        Some(ProjectError::LockFormat(..))
+                    ) =>
+                {
+                    UvError::User(err)
+                }
                 Err(err) => UvError::unexpected(err),
             };
             match error {
                 UvError::User(err) => {
-                    commands::diagnostics::write_error_chain(&err, printer)
+                    crate::diagnostics::write_error_chain(&err, printer)
                         .expect("writing to stderr should not fail");
                     ExitStatus::Failure.into()
                 }
                 UvError::Argument(err) => {
-                    commands::diagnostics::write_error_chain(&err, printer)
+                    crate::diagnostics::write_error_chain(&err, printer)
                         .expect("writing to stderr should not fail");
                     ExitStatus::Error.into()
                 }
@@ -3162,7 +3193,7 @@ where
                     if err.backtrace().status() == std::backtrace::BacktraceStatus::Captured {
                         trace!("Error backtrace:\n{}", err.backtrace());
                     }
-                    commands::diagnostics::write_error_chain(&err, printer)
+                    crate::diagnostics::write_error_chain(&err, printer)
                         .expect("writing to stderr should not fail");
                     ExitStatus::Error.into()
                 }

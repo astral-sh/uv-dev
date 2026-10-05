@@ -16,18 +16,48 @@ authors = ["uv"]
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+uv-add-command = { version = "0.0.92", path = "crates/uv-add-command" }
+uv-audit-command = { version = "0.0.92", path = "crates/uv-audit-command" }
+uv-auth-command = { version = "0.0.92", path = "crates/uv-auth-command" }
+uv-build-command = { version = "0.0.92", path = "crates/uv-build-command" }
+uv-cache-command = { version = "0.0.92", path = "crates/uv-cache-command" }
+uv-check-command = { version = "0.0.92", path = "crates/uv-check-command" }
+uv-child-process = { version = "0.0.92", path = "crates/uv-child-process" }
+uv-cli-error = { version = "0.0.92", path = "crates/uv-cli-error" }
+uv-cli-report = { version = "0.0.92", path = "crates/uv-cli-report" }
+uv-cli-settings = { version = "0.0.92", path = "crates/uv-cli-settings" }
+uv-cli-types = { version = "0.0.92", path = "crates/uv-cli-types" }
+uv-export-command = { version = "0.0.92", path = "crates/uv-export-command" }
+uv-format-command = { version = "0.0.92", path = "crates/uv-format-command" }
+uv-help-command = { version = "0.0.92", path = "crates/uv-help-command" }
+uv-init-command = { version = "0.0.92", path = "crates/uv-init-command" }
+uv-lock-command = { version = "0.0.92", path = "crates/uv-lock-command" }
+uv-pip-command = { version = "0.0.92", path = "crates/uv-pip-command" }
+uv-project = { version = "0.0.92", path = "crates/uv-project" }
+uv-publish-command = { version = "0.0.92", path = "crates/uv-publish-command" }
+uv-pylock-command = { version = "0.0.92", path = "crates/uv-pylock-command" }
+uv-python-command = { version = "0.0.92", path = "crates/uv-python-command" }
+uv-remove-command = { version = "0.0.92", path = "crates/uv-remove-command" }
+uv-run-command = { version = "0.0.92", path = "crates/uv-run-command" }
+uv-self-update-command = { version = "0.0.92", path = "crates/uv-self-update-command" }
+uv-sync-command = { version = "0.0.92", path = "crates/uv-sync-command" }
+uv-tool-command = { version = "0.0.92", path = "crates/uv-tool-command" }
+uv-tree-command = { version = "0.0.92", path = "crates/uv-tree-command" }
+uv-upgrade-command = { version = "0.0.92", path = "crates/uv-upgrade-command" }
+uv-venv-command = { version = "0.0.92", path = "crates/uv-venv-command" }
+uv-version-command = { version = "0.0.92", path = "crates/uv-version-command" }
+uv-workspace-command = { version = "0.0.92", path = "crates/uv-workspace-command" }
+uv-cli-arguments = { version = "0.0.92", path = "crates/uv-cli-arguments" }
 uv = { version = "0.13.0", path = "crates/uv", default-features = false }
 uv-audit = { version = "0.0.92", path = "crates/uv-audit" }
 uv-audit-operations = { version = "0.0.92", path = "crates/uv-audit-operations" }
 uv-auth = { version = "0.0.92", path = "crates/uv-auth" }
 uv-bin-install = { version = "0.0.92", path = "crates/uv-bin-install" }
 uv-build-backend = { version = "0.0.92", path = "crates/uv-build-backend" }
-uv-build-commands = { version = "0.0.92", path = "crates/uv-build-commands" }
 uv-build-frontend = { version = "0.0.92", path = "crates/uv-build-frontend" }
 uv-cache = { version = "0.0.92", path = "crates/uv-cache" }
 uv-cache-info = { version = "0.0.92", path = "crates/uv-cache-info" }
 uv-cache-key = { version = "0.0.92", path = "crates/uv-cache-key" }
-uv-cli = { version = "0.0.92", path = "crates/uv-cli" }
 uv-cli-output = { version = "0.0.92", path = "crates/uv-cli-output" }
 uv-client = { version = "0.0.92", path = "crates/uv-client" }
 uv-command-support = { version = "0.0.92", path = "crates/uv-command-support" }
@@ -77,10 +107,8 @@ uv-pip-commands = { version = "0.0.92", path = "crates/uv-pip-commands" }
 uv-platform = { version = "0.0.92", path = "crates/uv-platform" }
 uv-platform-tags = { version = "0.0.92", path = "crates/uv-platform-tags" }
 uv-preview = { version = "0.0.92", path = "crates/uv-preview" }
-uv-project-commands = { version = "0.0.92", path = "crates/uv-project-commands" }
 uv-project-edit = { version = "0.0.92", path = "crates/uv-project-edit" }
 uv-publish = { version = "0.0.92", path = "crates/uv-publish" }
-uv-publish-commands = { version = "0.0.92", path = "crates/uv-publish-commands" }
 uv-pypi-types = { version = "0.0.92", path = "crates/uv-pypi-types" }
 uv-python-commands = { version = "0.0.92", path = "crates/uv-python-commands" }
 uv-python-discovery = { version = "0.0.92", path = "crates/uv-python-discovery" }
@@ -496,7 +524,7 @@ panic = "abort"
 # But compile times with `lto = true` are completely untenable:
 #
 #     $ cargo b --profile profiling -p uv
-#        Compiling uv-cli v0.0.1 (/home/andrew/astral/uv/crates/uv-cli)
+#        Compiling uv-cli-arguments v0.0.1 (/home/andrew/astral/uv/crates/uv-cli-arguments)
 #        Compiling uv v0.2.34 (/home/andrew/astral/uv/crates/uv)
 #         Finished `profiling` profile [optimized + debuginfo] target(s) in 3m 47s
 #

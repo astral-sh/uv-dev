@@ -5793,11 +5793,8 @@ dependencies = [
  "byteorder",
  "bytes",
  "clap",
- "console",
- "diskus",
  "dunce",
  "embed-manifest",
- "etcetera",
  "filetime",
  "flate2",
  "fs-err",
@@ -5807,21 +5804,20 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "indicatif",
+ "indexmap",
  "indoc",
  "insta",
  "itertools 0.14.0",
+ "jiff",
  "owo-colors",
  "predicates",
  "regex",
  "reqwest",
- "self-replace",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "tar-codec",
  "tempfile",
- "textwrap",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -5833,75 +5829,132 @@ dependencies = [
  "tracing-subscriber",
  "tracing-tree",
  "url",
- "uv-auth",
- "uv-bin-install",
+ "uv-add-command",
+ "uv-audit-command",
+ "uv-auth-command",
  "uv-build-backend",
- "uv-build-commands",
+ "uv-build-command",
  "uv-build-frontend",
  "uv-cache",
+ "uv-cache-command",
  "uv-cache-info",
  "uv-cache-key",
- "uv-cli",
+ "uv-check-command",
+ "uv-cli-arguments",
+ "uv-cli-error",
  "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
  "uv-client",
- "uv-command-support",
  "uv-configuration",
- "uv-console",
- "uv-dispatch",
  "uv-distribution",
- "uv-distribution-types",
- "uv-environment-operations",
  "uv-errors",
+ "uv-export-command",
  "uv-extract",
  "uv-flags",
+ "uv-format-command",
  "uv-fs",
- "uv-install-operations",
+ "uv-help-command",
+ "uv-init-command",
  "uv-install-wheel",
  "uv-installer",
  "uv-lock",
- "uv-lock-operations",
+ "uv-lock-command",
  "uv-logging",
  "uv-normalize",
  "uv-operations",
  "uv-pep440",
  "uv-pep508",
  "uv-performance-memory-allocator",
- "uv-pip-commands",
+ "uv-pip-command",
  "uv-platform",
  "uv-preview",
- "uv-project-commands",
- "uv-publish",
- "uv-publish-commands",
+ "uv-project",
+ "uv-publish-command",
+ "uv-pylock-command",
  "uv-pypi-types",
- "uv-python-commands",
+ "uv-python-command",
  "uv-python-discovery",
  "uv-python-interpreter",
  "uv-python-managed",
  "uv-python-types",
  "uv-redacted",
+ "uv-remove-command",
  "uv-requirements",
  "uv-requirements-txt",
- "uv-resolve-operations",
  "uv-resolver",
+ "uv-run-command",
  "uv-scripts",
+ "uv-self-update-command",
  "uv-settings",
- "uv-shell",
  "uv-static",
+ "uv-sync-command",
  "uv-test",
  "uv-threads",
- "uv-tool-commands",
+ "uv-tool-command",
  "uv-trampoline-builder",
- "uv-types",
+ "uv-tree-command",
  "uv-unix",
+ "uv-upgrade-command",
+ "uv-venv-command",
  "uv-version",
+ "uv-version-command",
  "uv-virtualenv",
  "uv-warnings",
  "uv-windows",
  "uv-workspace",
- "uv-workspace-commands",
+ "uv-workspace-command",
  "walkdir",
  "which",
  "wiremock",
+]
+
+[[package]]
+name = "uv-add-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "fs-err",
+ "itertools 0.14.0",
+ "owo-colors",
+ "rustc-hash",
+ "thiserror",
+ "tracing",
+ "uv-auth",
+ "uv-cache",
+ "uv-cache-key",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution",
+ "uv-distribution-types",
+ "uv-errors",
+ "uv-fs",
+ "uv-git",
+ "uv-lock-command",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep508",
+ "uv-preview",
+ "uv-project",
+ "uv-project-edit",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-types",
+ "uv-redacted",
+ "uv-requirements",
+ "uv-resolver",
+ "uv-scripts",
+ "uv-settings",
+ "uv-static",
+ "uv-sync-command",
+ "uv-types",
+ "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]
@@ -5933,6 +5986,35 @@ dependencies = [
  "uv-redacted",
  "uv-small-str",
  "wiremock",
+]
+
+[[package]]
+name = "uv-audit-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "uv-audit",
+ "uv-cache",
+ "uv-cli-arguments",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-lock-command",
+ "uv-normalize",
+ "uv-operations",
+ "uv-preview",
+ "uv-project",
+ "uv-python-discovery",
+ "uv-python-types",
+ "uv-redacted",
+ "uv-scripts",
+ "uv-settings",
+ "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]
@@ -6000,6 +6082,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-auth-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "console",
+ "owo-colors",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uv-auth",
+ "uv-cli-output",
+ "uv-cli-types",
+ "uv-console",
+ "uv-distribution-types",
+ "uv-fs",
+ "uv-pep508",
+ "uv-preview",
+ "uv-redacted",
+ "uv-warnings",
+]
+
+[[package]]
 name = "uv-bench"
 version = "0.0.92"
 dependencies = [
@@ -6021,7 +6125,8 @@ dependencies = [
  "toml",
  "uv",
  "uv-cache",
- "uv-cli",
+ "uv-cli-arguments",
+ "uv-cli-types",
  "uv-client",
  "uv-command-support",
  "uv-configuration",
@@ -6141,7 +6246,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "uv-build-commands"
+name = "uv-build-command"
 version = "0.0.92"
 dependencies = [
  "anyhow",
@@ -6157,8 +6262,10 @@ dependencies = [
  "uv-build-backend",
  "uv-build-frontend",
  "uv-cache",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
  "uv-client",
- "uv-command-support",
  "uv-configuration",
  "uv-dispatch",
  "uv-distribution",
@@ -6171,13 +6278,14 @@ dependencies = [
  "uv-install-wheel",
  "uv-installer",
  "uv-normalize",
+ "uv-operations",
  "uv-pep440",
  "uv-preview",
+ "uv-project",
  "uv-python-discovery",
  "uv-python-interpreter",
  "uv-python-types",
  "uv-requirements",
- "uv-resolve-operations",
  "uv-resolver",
  "uv-settings",
  "uv-types",
@@ -6253,6 +6361,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-cache-command"
+version = "0.0.92"
+dependencies = [
+ "anstream",
+ "anyhow",
+ "diskus",
+ "owo-colors",
+ "tracing",
+ "uv-cache",
+ "uv-cli-arguments",
+ "uv-cli-output",
+ "uv-cli-types",
+ "uv-console",
+ "uv-distribution",
+ "uv-fs",
+ "uv-normalize",
+ "uv-preview",
+ "uv-warnings",
+ "walkdir",
+]
+
+[[package]]
 name = "uv-cache-info"
 version = "0.0.92"
 dependencies = [
@@ -6282,27 +6412,77 @@ dependencies = [
 ]
 
 [[package]]
-name = "uv-cli"
+name = "uv-check-command"
 version = "0.0.92"
 dependencies = [
+ "anyhow",
+ "jiff",
+ "tokio",
+ "tracing",
+ "uv-bin-install",
+ "uv-cache",
+ "uv-child-process",
+ "uv-cli-arguments",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-fs",
+ "uv-lock-command",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep440",
+ "uv-preview",
+ "uv-project",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-types",
+ "uv-scripts",
+ "uv-settings",
+ "uv-shell",
+ "uv-static",
+ "uv-sync-command",
+ "uv-virtualenv",
+ "uv-warnings",
+ "uv-workspace",
+]
+
+[[package]]
+name = "uv-child-process"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "nix 0.31.3",
+ "tokio",
+ "tracing",
+ "uv-cli-types",
+ "uv-fs",
+ "uv-warnings",
+]
+
+[[package]]
+name = "uv-cli-arguments"
+version = "0.0.92"
+dependencies = [
+ "anstream",
  "anyhow",
  "clap",
  "clap_complete_command",
  "fs-err",
  "insta",
- "jiff",
- "rustc-hash",
  "serde",
  "url",
  "uv-audit",
  "uv-auth",
  "uv-cache",
- "uv-client",
  "uv-configuration",
  "uv-distribution-types",
  "uv-install-wheel",
  "uv-normalize",
- "uv-pep440",
  "uv-pep508",
  "uv-preview",
  "uv-pypi-types",
@@ -6317,16 +6497,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-cli-error"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "thiserror",
+ "uv-operations",
+]
+
+[[package]]
 name = "uv-cli-output"
 version = "0.0.92"
 dependencies = [
  "anstream",
+ "anyhow",
  "fs-err",
  "indicatif",
  "owo-colors",
  "rustc-hash",
+ "tokio",
+ "tracing",
  "uv-bin-install",
  "uv-cache",
+ "uv-cli-types",
  "uv-console",
  "uv-distribution",
  "uv-distribution-filename",
@@ -6336,10 +6529,67 @@ dependencies = [
  "uv-normalize",
  "uv-pep440",
  "uv-publish",
- "uv-python",
+ "uv-python-managed",
+ "uv-python-types",
  "uv-redacted",
  "uv-resolver",
+ "uv-shell",
  "uv-static",
+]
+
+[[package]]
+name = "uv-cli-report"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "uv-cli-arguments",
+ "uv-cli-output",
+ "uv-configuration",
+ "uv-distribution-types",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep440",
+]
+
+[[package]]
+name = "uv-cli-settings"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "jiff",
+ "rustc-hash",
+ "uv-audit",
+ "uv-auth",
+ "uv-cache",
+ "uv-cli-arguments",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-distribution-types",
+ "uv-install-wheel",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep440",
+ "uv-pep508",
+ "uv-preview",
+ "uv-pypi-types",
+ "uv-python-types",
+ "uv-redacted",
+ "uv-resolver",
+ "uv-settings",
+ "uv-static",
+ "uv-torch",
+ "uv-warnings",
+ "uv-workspace",
+]
+
+[[package]]
+name = "uv-cli-types"
+version = "0.0.92"
+dependencies = [
+ "uv-scripts",
 ]
 
 [[package]]
@@ -6437,6 +6687,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "uv-cli-output",
  "uv-console",
  "uv-fs",
  "uv-redacted",
@@ -6524,7 +6775,7 @@ dependencies = [
  "tracing-durations-export",
  "tracing-subscriber",
  "uv-cache",
- "uv-cli",
+ "uv-cli-arguments",
  "uv-client",
  "uv-configuration",
  "uv-distribution-filename",
@@ -6782,6 +7033,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-export-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "clap",
+ "fs-err",
+ "itertools 0.14.0",
+ "owo-colors",
+ "rustc-hash",
+ "serde",
+ "toml",
+ "uv-cache",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution-types",
+ "uv-fs",
+ "uv-lock",
+ "uv-lock-command",
+ "uv-normalize",
+ "uv-operations",
+ "uv-preview",
+ "uv-project",
+ "uv-python-discovery",
+ "uv-python-types",
+ "uv-requirements",
+ "uv-scripts",
+ "uv-settings",
+ "uv-warnings",
+ "uv-workspace",
+]
+
+[[package]]
 name = "uv-extract"
 version = "0.0.92"
 dependencies = [
@@ -6828,6 +7116,25 @@ name = "uv-flags"
 version = "0.0.92"
 dependencies = [
  "bitflags 2.13.1",
+]
+
+[[package]]
+name = "uv-format-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "jiff",
+ "tokio",
+ "tracing",
+ "uv-bin-install",
+ "uv-cache",
+ "uv-child-process",
+ "uv-cli-output",
+ "uv-cli-types",
+ "uv-client",
+ "uv-preview",
+ "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]
@@ -6918,6 +7225,57 @@ dependencies = [
  "tracing",
  "uv-errors",
  "walkdir",
+]
+
+[[package]]
+name = "uv-help-command"
+version = "0.0.92"
+dependencies = [
+ "anstream",
+ "anyhow",
+ "clap",
+ "itertools 0.14.0",
+ "owo-colors",
+ "uv-cli-arguments",
+ "uv-cli-output",
+ "uv-cli-types",
+ "uv-static",
+ "which",
+]
+
+[[package]]
+name = "uv-init-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "fs-err",
+ "indoc",
+ "owo-colors",
+ "toml_edit",
+ "tracing",
+ "uv-cache",
+ "uv-cli-arguments",
+ "uv-cli-output",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-distribution-types",
+ "uv-fs",
+ "uv-git",
+ "uv-install-wheel",
+ "uv-normalize",
+ "uv-pep440",
+ "uv-project",
+ "uv-project-edit",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-types",
+ "uv-scripts",
+ "uv-settings",
+ "uv-static",
+ "uv-version",
+ "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]
@@ -7113,6 +7471,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-lock-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "owo-colors",
+ "rustc-hash",
+ "tracing",
+ "uv-cache",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution",
+ "uv-distribution-types",
+ "uv-git",
+ "uv-git-types",
+ "uv-lock",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep440",
+ "uv-preview",
+ "uv-project",
+ "uv-pypi-types",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-types",
+ "uv-requirements",
+ "uv-resolver",
+ "uv-scripts",
+ "uv-settings",
+ "uv-types",
+ "uv-warnings",
+ "uv-workspace",
+]
+
+[[package]]
 name = "uv-lock-operations"
 version = "0.0.92"
 dependencies = [
@@ -7239,6 +7636,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "toml",
  "tracing",
  "uv-cache",
  "uv-cli-output",
@@ -7250,16 +7648,22 @@ dependencies = [
  "uv-distribution-types",
  "uv-errors",
  "uv-fs",
+ "uv-git",
  "uv-install-wheel",
  "uv-installer",
+ "uv-lock",
  "uv-normalize",
  "uv-pep440",
  "uv-pep508",
  "uv-platform-tags",
  "uv-preview",
  "uv-pypi-types",
- "uv-python",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-managed",
+ "uv-python-types",
  "uv-requirements",
+ "uv-requirements-txt",
  "uv-resolver",
  "uv-tool",
  "uv-types",
@@ -7323,6 +7727,62 @@ version = "0.0.92"
 dependencies = [
  "mimalloc",
  "tikv-jemallocator",
+]
+
+[[package]]
+name = "uv-pip-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "fs-err",
+ "futures",
+ "itertools 0.14.0",
+ "owo-colors",
+ "petgraph",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "textwrap",
+ "thiserror",
+ "tracing",
+ "unicode-width 0.2.2",
+ "uv-cache",
+ "uv-cache-info",
+ "uv-cli-arguments",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-report",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution",
+ "uv-distribution-filename",
+ "uv-distribution-types",
+ "uv-errors",
+ "uv-fs",
+ "uv-git",
+ "uv-install-wheel",
+ "uv-installer",
+ "uv-lock",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep440",
+ "uv-pep508",
+ "uv-preview",
+ "uv-pylock-command",
+ "uv-pypi-types",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-types",
+ "uv-requirements",
+ "uv-resolver",
+ "uv-settings",
+ "uv-static",
+ "uv-torch",
+ "uv-types",
+ "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]
@@ -7432,20 +7892,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "uv-project-commands"
+name = "uv-project"
 version = "0.0.92"
 dependencies = [
- "anstream",
  "anyhow",
- "astral_async_zip",
- "clap",
  "ctrlc",
  "fs-err",
- "futures",
- "indicatif",
- "indoc",
  "itertools 0.14.0",
- "jiff",
  "owo-colors",
  "rustc-hash",
  "serde",
@@ -7455,51 +7908,49 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
+ "toml_parser",
  "tracing",
- "url",
  "uv-audit",
- "uv-audit-operations",
  "uv-auth",
- "uv-bin-install",
  "uv-cache",
  "uv-cache-info",
  "uv-cache-key",
+ "uv-cli-arguments",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
  "uv-client",
- "uv-command-support",
  "uv-configuration",
  "uv-dispatch",
  "uv-distribution",
  "uv-distribution-types",
- "uv-environment-operations",
  "uv-errors",
  "uv-fs",
  "uv-git",
- "uv-git-types",
- "uv-install-operations",
- "uv-install-wheel",
  "uv-installer",
  "uv-lock",
- "uv-lock-operations",
  "uv-normalize",
+ "uv-operations",
  "uv-pep440",
  "uv-pep508",
+ "uv-platform-tags",
  "uv-preview",
  "uv-project-edit",
  "uv-pypi-types",
  "uv-python-discovery",
  "uv-python-interpreter",
+ "uv-python-managed",
  "uv-python-types",
  "uv-redacted",
  "uv-requirements",
- "uv-resolve-operations",
  "uv-resolver",
  "uv-scripts",
  "uv-settings",
- "uv-shell",
  "uv-static",
- "uv-trampoline-builder",
+ "uv-tool",
+ "uv-torch",
  "uv-types",
- "uv-unix",
  "uv-version",
  "uv-virtualenv",
  "uv-warnings",
@@ -7573,23 +8024,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "uv-publish-commands"
+name = "uv-publish-command"
 version = "0.0.92"
 dependencies = [
  "anyhow",
  "console",
- "indicatif",
  "insta",
  "owo-colors",
  "tokio",
  "tracing",
  "uv-auth",
  "uv-cache",
+ "uv-cli-output",
+ "uv-cli-types",
  "uv-client",
- "uv-command-support",
  "uv-configuration",
  "uv-console",
- "uv-distribution-filename",
  "uv-distribution-types",
  "uv-errors",
  "uv-publish",
@@ -7597,6 +8047,31 @@ dependencies = [
  "uv-settings",
  "uv-static",
  "uv-warnings",
+]
+
+[[package]]
+name = "uv-pylock-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "fs-err",
+ "thiserror",
+ "toml",
+ "tracing",
+ "url",
+ "uv-client",
+ "uv-configuration",
+ "uv-distribution-types",
+ "uv-errors",
+ "uv-fs",
+ "uv-lock",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep440",
+ "uv-platform-tags",
+ "uv-python-interpreter",
+ "uv-python-types",
+ "uv-types",
 ]
 
 [[package]]
@@ -7630,6 +8105,51 @@ dependencies = [
  "uv-pep508",
  "uv-redacted",
  "uv-small-str",
+]
+
+[[package]]
+name = "uv-python-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "dunce",
+ "fs-err",
+ "futures",
+ "indexmap",
+ "itertools 0.14.0",
+ "owo-colors",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uv-cache",
+ "uv-cli-arguments",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-errors",
+ "uv-fs",
+ "uv-installer",
+ "uv-pep440",
+ "uv-platform",
+ "uv-platform-tags",
+ "uv-preview",
+ "uv-project",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-managed",
+ "uv-python-types",
+ "uv-scripts",
+ "uv-settings",
+ "uv-shell",
+ "uv-trampoline-builder",
+ "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]
@@ -7838,6 +8358,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-remove-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "fs-err",
+ "owo-colors",
+ "thiserror",
+ "tracing",
+ "uv-add-command",
+ "uv-cache",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-errors",
+ "uv-fs",
+ "uv-lock-command",
+ "uv-normalize",
+ "uv-operations",
+ "uv-preview",
+ "uv-project",
+ "uv-project-edit",
+ "uv-python-discovery",
+ "uv-python-types",
+ "uv-scripts",
+ "uv-settings",
+ "uv-sync-command",
+ "uv-warnings",
+ "uv-workspace",
+]
+
+[[package]]
 name = "uv-requirements"
 version = "0.0.92"
 dependencies = [
@@ -8023,6 +8578,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-run-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "astral_async_zip",
+ "fs-err",
+ "futures",
+ "itertools 0.14.0",
+ "owo-colors",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "uv-cache",
+ "uv-child-process",
+ "uv-cli-arguments",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution",
+ "uv-distribution-types",
+ "uv-errors",
+ "uv-fs",
+ "uv-installer",
+ "uv-lock",
+ "uv-lock-command",
+ "uv-normalize",
+ "uv-operations",
+ "uv-preview",
+ "uv-project",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-types",
+ "uv-redacted",
+ "uv-requirements",
+ "uv-resolver",
+ "uv-scripts",
+ "uv-settings",
+ "uv-shell",
+ "uv-static",
+ "uv-sync-command",
+ "uv-trampoline-builder",
+ "uv-types",
+ "uv-unix",
+ "uv-virtualenv",
+ "uv-warnings",
+ "uv-workspace",
+]
+
+[[package]]
 name = "uv-scripts"
 version = "0.0.92"
 dependencies = [
@@ -8047,6 +8658,35 @@ dependencies = [
  "uv-settings",
  "uv-warnings",
  "uv-workspace",
+]
+
+[[package]]
+name = "uv-self-update-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "axoupdater",
+ "etcetera",
+ "fs-err",
+ "http",
+ "owo-colors",
+ "self-replace",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "uv-bin-install",
+ "uv-cli-output",
+ "uv-cli-types",
+ "uv-client",
+ "uv-fs",
+ "uv-pep440",
+ "uv-redacted",
+ "uv-static",
+ "uv-version",
 ]
 
 [[package]]
@@ -8128,6 +8768,52 @@ version = "0.0.92"
 dependencies = [
  "thiserror",
  "uv-macros",
+]
+
+[[package]]
+name = "uv-sync-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "itertools 0.14.0",
+ "owo-colors",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uv-cache",
+ "uv-cli-arguments",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-report",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution",
+ "uv-distribution-types",
+ "uv-fs",
+ "uv-git",
+ "uv-installer",
+ "uv-lock",
+ "uv-lock-command",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep508",
+ "uv-preview",
+ "uv-project",
+ "uv-pypi-types",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-types",
+ "uv-requirements",
+ "uv-resolver",
+ "uv-scripts",
+ "uv-settings",
+ "uv-types",
+ "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]
@@ -8224,6 +8910,67 @@ dependencies = [
  "uv-static",
  "uv-virtualenv",
  "uv-warnings",
+]
+
+[[package]]
+name = "uv-tool-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "console",
+ "fs-err",
+ "futures",
+ "itertools 0.14.0",
+ "owo-colors",
+ "rustc-hash",
+ "self-replace",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uv-audit",
+ "uv-cache",
+ "uv-cache-info",
+ "uv-cache-key",
+ "uv-child-process",
+ "uv-cli-arguments",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-console",
+ "uv-dispatch",
+ "uv-distribution",
+ "uv-distribution-filename",
+ "uv-distribution-types",
+ "uv-errors",
+ "uv-fs",
+ "uv-git",
+ "uv-installer",
+ "uv-lock",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep440",
+ "uv-pep508",
+ "uv-preview",
+ "uv-project",
+ "uv-pypi-types",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-types",
+ "uv-redacted",
+ "uv-requirements",
+ "uv-resolver",
+ "uv-settings",
+ "uv-shell",
+ "uv-static",
+ "uv-tool",
+ "uv-types",
+ "uv-virtualenv",
+ "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]
@@ -8327,6 +9074,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-tree-command"
+version = "0.0.92"
+dependencies = [
+ "anstream",
+ "anyhow",
+ "futures",
+ "uv-cache",
+ "uv-cache-info",
+ "uv-cli-arguments",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution-types",
+ "uv-lock",
+ "uv-lock-command",
+ "uv-normalize",
+ "uv-operations",
+ "uv-preview",
+ "uv-project",
+ "uv-python-discovery",
+ "uv-python-types",
+ "uv-scripts",
+ "uv-settings",
+ "uv-warnings",
+ "uv-workspace",
+]
+
+[[package]]
 name = "uv-types"
 version = "0.0.92"
 dependencies = [
@@ -8359,8 +9138,117 @@ dependencies = [
 ]
 
 [[package]]
+name = "uv-upgrade-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "fs-err",
+ "itertools 0.14.0",
+ "thiserror",
+ "tracing",
+ "uv-cache",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution",
+ "uv-distribution-types",
+ "uv-lock",
+ "uv-lock-command",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep440",
+ "uv-pep508",
+ "uv-preview",
+ "uv-project",
+ "uv-project-edit",
+ "uv-pypi-types",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-types",
+ "uv-redacted",
+ "uv-resolver",
+ "uv-settings",
+ "uv-workspace",
+]
+
+[[package]]
+name = "uv-venv-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "fs-err",
+ "owo-colors",
+ "textwrap",
+ "thiserror",
+ "tracing",
+ "uv-cache",
+ "uv-cli-output",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution-types",
+ "uv-fs",
+ "uv-install-wheel",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep508",
+ "uv-preview",
+ "uv-project",
+ "uv-python-discovery",
+ "uv-python-types",
+ "uv-resolver",
+ "uv-settings",
+ "uv-shell",
+ "uv-types",
+ "uv-virtualenv",
+ "uv-warnings",
+ "uv-workspace",
+]
+
+[[package]]
 name = "uv-version"
 version = "0.13.0"
+
+[[package]]
+name = "uv-version-command"
+version = "0.0.92"
+dependencies = [
+ "anyhow",
+ "fs-err",
+ "owo-colors",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "uv-add-command",
+ "uv-cache",
+ "uv-cli-arguments",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-errors",
+ "uv-fs",
+ "uv-lock-command",
+ "uv-normalize",
+ "uv-operations",
+ "uv-pep440",
+ "uv-preview",
+ "uv-project",
+ "uv-project-edit",
+ "uv-python-discovery",
+ "uv-python-types",
+ "uv-settings",
+ "uv-sync-command",
+ "uv-workspace",
+]
 
 [[package]]
 name = "uv-virtualenv"
@@ -8442,6 +9330,44 @@ dependencies = [
  "uv-static",
  "uv-toml",
  "uv-warnings",
+]
+
+[[package]]
+name = "uv-workspace-command"
+version = "0.0.92"
+dependencies = [
+ "anstream",
+ "anyhow",
+ "fs-err",
+ "owo-colors",
+ "thiserror",
+ "tracing",
+ "uv-cache",
+ "uv-cli-error",
+ "uv-cli-output",
+ "uv-cli-settings",
+ "uv-cli-types",
+ "uv-client",
+ "uv-configuration",
+ "uv-dispatch",
+ "uv-distribution-types",
+ "uv-fs",
+ "uv-installer",
+ "uv-lock",
+ "uv-lock-command",
+ "uv-normalize",
+ "uv-operations",
+ "uv-preview",
+ "uv-project",
+ "uv-pypi-types",
+ "uv-python-discovery",
+ "uv-python-interpreter",
+ "uv-python-types",
+ "uv-scripts",
+ "uv-settings",
+ "uv-sync-command",
+ "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]

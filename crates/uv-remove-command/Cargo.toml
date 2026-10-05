@@ -1,0 +1,44 @@
+[package]
+name = "uv-remove-command"
+version = "0.0.92"
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+uv-add-command = { workspace = true }
+uv-cache = { workspace = true }
+uv-cli-error = { workspace = true }
+uv-cli-output = { workspace = true }
+uv-cli-settings = { workspace = true }
+uv-cli-types = { workspace = true }
+uv-client = { workspace = true }
+uv-configuration = { workspace = true }
+uv-dispatch = { workspace = true }
+uv-errors = { workspace = true }
+uv-fs = { workspace = true }
+uv-lock-command = { workspace = true }
+uv-normalize = { workspace = true }
+uv-operations = { workspace = true }
+uv-preview = { workspace = true }
+uv-project = { workspace = true }
+uv-project-edit = { workspace = true }
+uv-python-discovery = { workspace = true }
+uv-python-types = { workspace = true }
+uv-scripts = { workspace = true }
+uv-settings = { workspace = true }
+uv-sync-command = { workspace = true }
+uv-warnings = { workspace = true }
+uv-workspace = { workspace = true }
+
+anyhow = { workspace = true }
+fs-err = { workspace = true }
+owo-colors = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

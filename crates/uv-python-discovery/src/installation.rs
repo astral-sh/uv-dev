@@ -34,7 +34,7 @@ pub struct PythonInstallation {
 
 impl PythonInstallation {
     /// Create a new [`PythonInstallation`] from a source and interpreter.
-    pub(crate) fn new(source: PythonSource, interpreter: Interpreter) -> Self {
+    pub fn new(source: PythonSource, interpreter: Interpreter) -> Self {
         Self {
             source,
             interpreter,
