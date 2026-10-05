@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22195,
+        "title": "Handle non-blocking stdio and retry on EAGAIN in printer",
+        "url": "https://github.com/astral-sh/uv/pull/22195",
+        "state": "closed",
+        "reason": "Opened specifically to fix astral-sh/uv#22170 by retrying WouldBlock writes. It was closed unmerged after review questioned supporting inherited O_NONBLOCK and identified Bun as the likely source; it is not a duplicate basis."
+      },
+      {
+        "kind": "issue",
+        "number": 12244,
+        "title": "uv panics when resizing terminal window",
+        "url": "https://github.com/astral-sh/uv/issues/12244",
+        "state": "open",
+        "reason": "An adjacent output-write panic where a closed stdout pipe produces EPIPE/BrokenPipe during completion generation. It differs from the new printer stderr EAGAIN failure."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18584,
+        "title": "fix: handle BrokenPipe in shell completion generation",
+        "url": "https://github.com/astral-sh/uv/pull/18584",
+        "state": "open",
+        "reason": "Proposes explicit BrokenPipe handling for astral-sh/uv#12244, but does not handle WouldBlock in the shared printer."
+      },
+      {
+        "kind": "issue",
+        "number": 21935,
+        "title": "Race condition in SIGPIPE causes network errors to kill uv run",
+        "url": "https://github.com/astral-sh/uv/issues/21935",
+        "state": "open",
+        "reason": "Concerns EPIPE/SIGPIPE from a uv-owned write being forwarded to a child. It is related to pipe failure handling but differs from the double-panic SIGABRT caused by stderr EAGAIN."
+      }
+    ],
+    "search_scope": "Literal searches covered EAGAIN, \"Resource temporarily unavailable\", \"failed printing to stderr\", O_NONBLOCK, WouldBlock, SIGABRT, socketpair, non-blocking stderr, and printer.rs. Conceptual and fix-oriented searches covered output-write panics, pipe backpressure, child-process stdio, BrokenPipe/EPIPE, SIGPIPE, retrying writes, and printer fixes across open and closed issues and open, closed, and merged pull requests. astral-sh/uv#21337 was ruled out because its subprocess SIGABRT was traced to workspace discovery. astral-sh/uv#3150 and astral-sh/uv#14462 were ruled out because their similar error text came from Rayon thread-pool creation. No pre-existing tracker covers this exact stderr EAGAIN failure."
+  },
+  "type": "bug",
+  "type_reason": "The blocking/non-blocking comparison and syscall trace establish that a transient stderr EAGAIN reaches printer.rs, triggers a panic, and causes a second failed panic write followed by SIGABRT. The checked-in printer still delegates to print macros at that location. Although inherited O_NONBLOCK may originate in the parent runtime—and Bun merged oven-sh/bun#43868 to clear it for spawned children—the demonstrated abort remains incorrect behavior. This is not a duplicate because astral-sh/uv#22195 was opened in response to this report and closed unmerged.",
+  "summary": "No earlier issue tracks the exact failure. The closest item is the closed, unmerged response PR astral-sh/uv#22195; the other items cover distinct BrokenPipe or SIGPIPE paths. The issue-context README remains unchanged because the active read-only filesystem sandbox rejected the required write.",
+  "draft_response": "Thanks for the detailed reproduction. The syscall trace and current printer implementation confirm that a transient EAGAIN from stderr reaches the print path, which panics; the panic hook then tries the same full stream and the process aborts. astral-sh/uv#22195 proposed retrying these writes, but it was closed unmerged because inherited O_NONBLOCK was viewed as a caller-side stdio problem. For Bun specifically, oven-sh/bun#43868 now clears O_NONBLOCK for spawned children; Node's spawn already gives children blocking stdio. Could you share the exact Bun spawn code and confirm whether this still reproduces with a Bun build containing oven-sh/bun#43868? The standalone Python reproduction remains useful for deciding whether uv should also handle EAGAIN defensively."
+}
