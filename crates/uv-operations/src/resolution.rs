@@ -3,69 +3,41 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Context;
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use itertools::Itertools;
 
 use uv_cli_output::printer::Printer;
 use uv_cli_output::reporters::ResolverReporter;
 use uv_client::RegistryClient;
-use uv_configuration::Concurrency;
-use uv_configuration::Constraints;
-use uv_configuration::DependencyGroups;
-use uv_configuration::DependencyModifiers;
-use uv_configuration::ExcludeDependency;
-use uv_configuration::Excludes;
-use uv_configuration::ExtrasSpecification;
-use uv_configuration::Override;
-use uv_configuration::Overrides;
-use uv_configuration::Reinstall;
-use uv_configuration::TargetTriple;
-use uv_configuration::Upgrade;
+use uv_configuration::{
+    Concurrency, Constraints, DependencyGroups, DependencyModifiers, ExcludeDependency, Excludes,
+    ExtrasSpecification, Override, Overrides, Reinstall, TargetTriple, Upgrade,
+};
 use uv_dispatch::BuildDispatch;
-use uv_distribution::DistributionDatabase;
-use uv_distribution::SourcedDependencyGroups;
-use uv_distribution_types::NameRequirementSpecification;
-use uv_distribution_types::Requirement;
-use uv_distribution_types::RequirementScope;
-use uv_distribution_types::RequirementSource;
-use uv_distribution_types::ResolutionRecorder;
-use uv_distribution_types::UnresolvedRequirement;
-use uv_distribution_types::UnresolvedRequirementSpecification;
+use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
+use uv_distribution_types::{
+    NameRequirementSpecification, Requirement, RequirementScope, RequirementSource,
+    ResolutionRecorder, UnresolvedRequirement, UnresolvedRequirementSpecification,
+};
 use uv_fs::Simplified;
 use uv_installer::SitePackages;
 use uv_normalize::PackageName;
-use uv_pep508::MarkerEnvironment;
-use uv_pep508::RequirementOrigin;
-use uv_platform_tags::Tags;
-use uv_platform_tags::TagsError;
-use uv_platform_tags::TagsOptions;
-use uv_pypi_types::Conflicts;
-use uv_pypi_types::ResolverMarkerEnvironment;
-use uv_python::Interpreter;
-use uv_python::PythonVersion;
-use uv_requirements::LookaheadResolver;
-use uv_requirements::NamedRequirementsResolver;
-use uv_requirements::SourceTree;
-use uv_requirements::SourceTreeResolution;
-use uv_requirements::SourceTreeResolver;
-use uv_resolver::DependencyMode;
-use uv_resolver::Exclusions;
-use uv_resolver::FlatIndex;
-use uv_resolver::InMemoryIndex;
-use uv_resolver::Manifest;
-use uv_resolver::Options;
-use uv_resolver::Preference;
-use uv_resolver::Preferences;
-use uv_resolver::PythonRequirement;
-use uv_resolver::Resolver;
-use uv_resolver::ResolverEnvironment;
-use uv_resolver::ResolverOutput;
-use uv_resolver::UpgradePackages;
-use uv_types::BuildContext;
-use uv_types::HashStrategy;
+use uv_pep508::{MarkerEnvironment, RequirementOrigin};
+use uv_platform_tags::{Tags, TagsError, TagsOptions};
+use uv_pypi_types::{Conflicts, ResolverMarkerEnvironment};
+use uv_python_interpreter::Interpreter;
+use uv_python_types::PythonVersion;
+use uv_requirements::{
+    LookaheadResolver, NamedRequirementsResolver, SourceTree, SourceTreeResolution,
+    SourceTreeResolver,
+};
+use uv_resolver::{
+    DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
+    Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput, UpgradePackages,
+};
+use uv_types::{BuildContext, HashStrategy};
 
-use crate::Error;
+use crate::error::Error;
 use crate::loggers::ResolveLogger;
 
 /// Resolve a set of requirements, similar to running `pip compile`.

@@ -1,12 +1,9 @@
 use uv_client::BaseClientBuilder;
 use uv_configuration::ExtrasSpecification;
 use uv_distribution_types::NameRequirementSpecification;
-use uv_requirements::GroupsSpecification;
-use uv_requirements::RequirementsSource;
-use uv_requirements::RequirementsSpecification;
+use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
 
-use crate::Error;
-use crate::error::ExtrasWithoutSourceError;
+use crate::error::{Error, ExtrasWithoutSourceError};
 
 /// Consolidate the requirements for an installation.
 pub async fn read_requirements(
