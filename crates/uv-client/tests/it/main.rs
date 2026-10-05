@@ -1,3 +1,5 @@
+mod auth_error_bodies;
+mod auth_retry_connections;
 mod cached_client;
 mod connection_pool;
 mod core_metadata_cache;
