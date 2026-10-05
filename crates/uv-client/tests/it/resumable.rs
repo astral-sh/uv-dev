@@ -261,3 +261,119 @@ async fn rejects_changed_or_invalid_continuations() -> Result<()> {
     }
     Ok(())
 }
+
+const LAST_MODIFIED: &str = "Wed, 30 Sep 2026 12:00:00 GMT";
+const STRONG_DATES: &str =
+    "Last-Modified: Wed, 30 Sep 2026 12:00:00 GMT\r\nDate: Wed, 30 Sep 2026 12:01:00 GMT\r\n";
+
+fn date_interrupted() -> Reply {
+    reply(
+        200,
+        &format!("Accept-Ranges: bytes\r\n{STRONG_DATES}"),
+        10,
+        b"abcd",
+    )
+}
+
+#[tokio::test]
+async fn continues_with_a_strong_last_modified_date() -> Result<()> {
+    let (bytes, error, requests) = download(
+        vec![
+            date_interrupted(),
+            reply(
+                206,
+                &format!("{STRONG_DATES}Content-Range: bytes 4-6/10\r\n"),
+                3,
+                b"efg",
+            ),
+            reply(
+                206,
+                &format!("Last-Modified: {LAST_MODIFIED}\r\nContent-Range: bytes 7-9/10\r\n"),
+                3,
+                b"hij",
+            ),
+        ],
+        1,
+    )
+    .await?;
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(bytes, b"abcdefghij");
+    assert_eq!(requests.len(), 3);
+    for request in &requests[1..] {
+        assert_eq!(request["if-range"], LAST_MODIFIED);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn prefers_entity_tags_and_rejects_weak_dates() -> Result<()> {
+    let (bytes, error, requests) = download(
+        vec![
+            reply(
+                200,
+                &format!("Accept-Ranges: bytes\r\nETag: \"one\"\r\n{STRONG_DATES}"),
+                10,
+                b"abcd",
+            ),
+            range("Content-Range: bytes 4-9/10\r\n", 6, b"efghij"),
+        ],
+        1,
+    )
+    .await?;
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(bytes, b"abcdefghij");
+    assert_eq!(requests[1]["if-range"], "\"one\"");
+
+    for headers in [
+        format!("ETag: W/\"one\"\r\n{STRONG_DATES}"),
+        format!("ETag: invalid\r\n{STRONG_DATES}"),
+        format!("Last-Modified: {LAST_MODIFIED}\r\n"),
+        format!("Last-Modified: {LAST_MODIFIED}\r\nDate: Wed, 30 Sep 2026 12:00:59 GMT\r\n"),
+        format!("Last-Modified: {LAST_MODIFIED}\r\nDate: Wed, 30 Sep 2026 11:59:00 GMT\r\n"),
+        format!("Last-Modified: {LAST_MODIFIED}\r\nDate: invalid\r\n"),
+        "Last-Modified: invalid\r\nDate: Wed, 30 Sep 2026 12:01:00 GMT\r\n".to_owned(),
+    ] {
+        let (bytes, error, requests) = download(
+            vec![reply(
+                200,
+                &format!("Accept-Ranges: bytes\r\n{headers}"),
+                10,
+                b"abcd",
+            )],
+            1,
+        )
+        .await?;
+        assert!(error.is_some(), "{headers:?}");
+        assert_eq!(bytes, b"abcd");
+        assert_eq!(requests.len(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_changed_or_missing_last_modified_dates() -> Result<()> {
+    for headers in [
+        "Last-Modified: Wed, 30 Sep 2026 12:00:01 GMT\r\n",
+        "Last-Modified: invalid\r\n",
+        "ETag: \"new\"\r\n",
+        "",
+    ] {
+        let (bytes, error, requests) = download(
+            vec![
+                date_interrupted(),
+                reply(
+                    206,
+                    &format!("{headers}Content-Range: bytes 4-9/10\r\n"),
+                    6,
+                    b"efghij",
+                ),
+            ],
+            1,
+        )
+        .await?;
+        assert!(error.is_some(), "{headers:?}");
+        assert_eq!(bytes, b"abcd");
+        assert_eq!(requests.len(), 2);
+    }
+    Ok(())
+}
