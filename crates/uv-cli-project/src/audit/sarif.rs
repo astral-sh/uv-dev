@@ -10,7 +10,6 @@ use serde::Serialize;
 use serde_json::Value;
 use uv_audit::{AdverseStatus, ProjectStatus, Vulnerability};
 use uv_normalize::PackageName;
-use uv_version::version;
 
 use super::AuditResults;
 

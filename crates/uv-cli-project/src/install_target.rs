@@ -290,7 +290,7 @@ impl<'lock> InstallTarget<'lock> {
     pub fn python_requirement(
         &self,
         groups: &DependencyGroupsWithDefaults,
-    ) -> Result<ProjectPythonRequirement, EnvironmentError> {
+    ) -> Result<ProjectPythonRequirement, ProjectError> {
         let lock = self.lock();
         let mut group_requirements = RequiresPythonSources::new();
 
@@ -331,7 +331,7 @@ impl<'lock> InstallTarget<'lock> {
         let Some(requires_python) = RequiresPython::intersection(
             std::iter::once(lock.requires_python().specifiers()).chain(group_requirements.values()),
         ) else {
-            return Err(EnvironmentError::DisjointLockedRequiresPython {
+            return Err(ProjectError::DisjointLockedRequiresPython {
                 locked: lock.requires_python().clone(),
                 groups: group_requirements,
             });
@@ -650,13 +650,14 @@ impl<'lock> InstallTarget<'lock> {
                 for extra in extras.explicit_names() {
                     if !known_extras.contains(extra) {
                         return match self {
-                            Self::Project { name, .. } => Err(
-                                EnvironmentError::MissingExtraProject(extra.clone(), name.clone()),
-                            ),
+                            Self::Project { name, .. } => Err(ProjectError::MissingExtraProject(
+                                extra.clone(),
+                                name.clone(),
+                            )),
                             Self::Projects { .. } => {
-                                Err(EnvironmentError::MissingExtraProjects(extra.clone()))
+                                Err(ProjectError::MissingExtraProjects(extra.clone()))
                             }
-                            _ => Err(EnvironmentError::MissingExtraProjects(extra.clone())),
+                            _ => Err(ProjectError::MissingExtraProjects(extra.clone())),
                         };
                     }
                 }
@@ -668,7 +669,7 @@ impl<'lock> InstallTarget<'lock> {
                     .next()
                     .expect("non-empty extras")
                     .clone();
-                return Err(EnvironmentError::MissingExtraScript(extra));
+                return Err(ProjectError::MissingExtraScript(extra));
             }
         }
 
@@ -679,7 +680,7 @@ impl<'lock> InstallTarget<'lock> {
     pub fn validate_groups(
         self,
         groups: &DependencyGroupsWithDefaults,
-    ) -> Result<(), EnvironmentError> {
+    ) -> Result<(), ProjectError> {
         // If no groups were specified, short-circuit.
         if groups.explicit_names().next().is_none() {
             return Ok(());
@@ -711,12 +712,12 @@ impl<'lock> InstallTarget<'lock> {
                     if !known_groups.contains(group) {
                         return match selection {
                             PackageSelection::Projects([_]) => {
-                                Err(EnvironmentError::MissingGroupProject(group.clone()))
+                                Err(ProjectError::MissingGroupProject(group.clone()))
                             }
                             PackageSelection::Projects(_)
                             | PackageSelection::Workspace
                             | PackageSelection::NonProjectWorkspace => {
-                                Err(EnvironmentError::MissingGroupProjects(group.clone()))
+                                Err(ProjectError::MissingGroupProjects(group.clone()))
                             }
                         };
                     }
@@ -768,16 +769,16 @@ impl<'lock> InstallTarget<'lock> {
                     if !known_groups.contains(group) {
                         return match self {
                             Self::Project { .. } => {
-                                Err(EnvironmentError::MissingGroupProject(group.clone()))
+                                Err(ProjectError::MissingGroupProject(group.clone()))
                             }
-                            _ => Err(EnvironmentError::MissingGroupProjects(group.clone())),
+                            _ => Err(ProjectError::MissingGroupProjects(group.clone())),
                         };
                     }
                 }
             }
             Self::Script { .. } => {
                 if let Some(group) = groups.explicit_names().next() {
-                    return Err(EnvironmentError::MissingGroupScript(group.clone()));
+                    return Err(ProjectError::MissingGroupScript(group.clone()));
                 }
             }
         }

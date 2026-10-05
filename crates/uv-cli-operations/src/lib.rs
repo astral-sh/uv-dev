@@ -1,4 +1,4 @@
-//! pip-specific CLI functionality for uv.
+//! Shared resolution and installation workflows for uv commands.
 
 pub mod changelog;
 mod diagnostics;
@@ -12,7 +12,8 @@ use std::borrow::Cow;
 use uv_configuration::TargetTriple;
 use uv_platform_tags::{Tags, TagsError, TagsOptions};
 use uv_pypi_types::ResolverMarkerEnvironment;
-use uv_python::{Interpreter, PythonVersion};
+use uv_python_interpreter::Interpreter;
+use uv_python_types::PythonVersion;
 
 pub fn resolution_markers(
     python_version: Option<&PythonVersion>,

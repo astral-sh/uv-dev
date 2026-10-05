@@ -2,7 +2,6 @@ use std::fmt::Write;
 use std::str::FromStr;
 use uv_dispatch::PlatformState;
 use uv_distribution_types::RequirementScope;
-use uv_python_discovery::PythonDownloadReporter;
 
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
@@ -13,7 +12,7 @@ use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, DryRun, Excludes, GitLfsSetting,
-    HashCheckingMode, Modifications, Overrides, Reinstall, TargetTriple, Upgrade,
+    HashCheckingMode, Overrides, Reinstall, TargetTriple, Upgrade,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
@@ -42,15 +41,18 @@ use crate::common::{
     ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
     tool_environment_spec,
 };
+use crate::error::ToolLockError;
 use crate::target::{Target, ToolRequest};
 use uv_cli_common::exit_status::ExitStatus;
 use uv_cli_common::printer::Printer;
 use uv_cli_common::settings::{ResolverInstallerSettings, ResolverSettings};
 use uv_cli_common::{error::UvError, reporters::PythonDownloadReporter};
-use uv_cli_pip::latest::LatestClient;
-use uv_cli_pip::loggers::{DefaultInstallLogger, DefaultResolveLogger, SummaryResolveLogger};
-use uv_cli_pip::operations::{self, Modifications};
-use uv_cli_pip::{resolution_markers, resolution_tags};
+use uv_cli_operations::latest::LatestClient;
+use uv_cli_operations::loggers::{
+    DefaultInstallLogger, DefaultResolveLogger, SummaryResolveLogger,
+};
+use uv_cli_operations::operations::{self, Modifications};
+use uv_cli_operations::{resolution_markers, resolution_tags};
 use uv_cli_project::{
     EnvironmentResolution, EnvironmentSpecification, ProjectError, resolve_environment,
     resolve_names, sync_environment, update_environment,
@@ -554,7 +556,7 @@ pub async fn install(
             .await
             {
                 Ok(lock) => Some(lock),
-                Err(ToolLockError::Validation(LockValidationError::Lock(err)))
+                Err(ToolLockError::Validation(ProjectError::Lock(err)))
                     if err.is_resolution() || err.is_no_build() =>
                 {
                     return Err(err.into());
@@ -943,8 +945,7 @@ pub async fn install(
             let (resolution, interpreter) = match resolution {
                 Ok(resolution) => (resolution, interpreter),
                 Err(err) => match err {
-                    EnvironmentError::Resolve(err) => {
-                        let err = *err;
+                    ProjectError::Operation(err) => {
                         // If the resolution failed due to the discovered interpreter not satisfying the
                         // `requires-python` constraint, we can try to refine the interpreter.
                         //
@@ -966,7 +967,7 @@ pub async fn install(
                         .await
                         .ok()
                         .flatten() else {
-                            return Err(UvError::from(err).into());
+                            return Err(UvError::from(*err).into());
                         };
 
                         debug!(

@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use tracing::debug;
 
 use crate::{
@@ -6,18 +8,21 @@ use crate::{
 };
 use uv_cli_common::printer::Printer;
 use uv_cli_common::settings::ResolverInstallerSettings;
-use uv_cli_pip::loggers::{InstallLogger, ResolveLogger};
-use uv_cli_pip::operations::Modifications;
+use uv_cli_operations::loggers::{InstallLogger, ResolveLogger};
+use uv_cli_operations::operations::Modifications;
 
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_info::CacheInfo;
 use uv_cache_key::{cache_digest, hash_digest};
 use uv_client::BaseClientBuilder;
+use uv_configuration::{Concurrency, Constraints, HashCheckingMode, TargetTriple};
+use uv_dispatch::PlatformState;
 use uv_distribution_types::{
     BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
 };
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment, canonicalize_executable};
+use uv_python_managed::UpgradePolicy;
 use uv_settings::MalwareCheckSettings;
 use uv_types::{HashStrategy, HashVerification, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
@@ -147,7 +152,7 @@ impl CachedEnvironment {
         workspace_cache: &WorkspaceCache,
         printer: Printer,
         preview: Preview,
-    ) -> Result<Self, EnvironmentError> {
+    ) -> Result<Self, ProjectError> {
         let interpreter = Self::base_interpreter(interpreter, cache)?;
 
         // Resolve the requirements with the interpreter.
@@ -213,7 +218,7 @@ impl CachedEnvironment {
         cache: &Cache,
         printer: Printer,
         preview: Preview,
-    ) -> Result<Self, EnvironmentError> {
+    ) -> Result<Self, ProjectError> {
         let malware_check_client_builder = client_builder
             .clone()
             .keyring(settings.resolver.keyring_provider);
@@ -260,7 +265,7 @@ impl CachedEnvironment {
         cache: &Cache,
         printer: Printer,
         preview: Preview,
-    ) -> Result<Self, EnvironmentError> {
+    ) -> Result<Self, ProjectError> {
         // Hash the resolution by hashing the generated lockfile.
         let resolution_hash = {
             let mut distributions = resolution
@@ -278,10 +283,10 @@ impl CachedEnvironment {
                     Ok(CachedEnvironmentDist {
                         dist: dist.clone(),
                         hashes: hashes.clone(),
-                        cache_info: Self::cache_info(dist).map_err(EnvironmentError::from)?,
+                        cache_info: Self::cache_info(dist).map_err(ProjectError::from)?,
                     })
                 })
-                .collect::<Result<Vec<_>, EnvironmentError>>()?;
+                .collect::<Result<Vec<_>, ProjectError>>()?;
             distributions.sort_unstable_by(|left, right| {
                 left.dist
                     .distribution_id()
@@ -326,7 +331,7 @@ impl CachedEnvironment {
             uv_virtualenv::OnExisting::Remove(uv_virtualenv::RemovalReason::TemporaryEnvironment),
             true,
             uv_virtualenv::Seed::Disabled,
-            false,
+            UpgradePolicy::Fixed,
         )?;
 
         sync_environment(

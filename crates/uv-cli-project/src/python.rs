@@ -13,8 +13,9 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::DependencyGroupsWithDefaults;
 use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
+use uv_lock::Installable;
 use uv_pep440::TildeVersionSpecifier;
-use uv_python_interpreter::Interpreter;
+use uv_python_interpreter::{Interpreter, RequestedInterpreter};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -32,11 +33,16 @@ use uv_cli_common::reporters::PythonDownloadReporter;
 /// requirement, including the selected dependency groups. Warning-only commands and existing
 /// environments preserved by `--no-sync` do not use this type.
 #[derive(Debug)]
-pub struct CompatibleProjectPython(Interpreter);
+pub struct CompatibleProjectPython(RequestedInterpreter);
 
 impl CompatibleProjectPython {
     /// Consume the compatible interpreter for use by the environment or resolver APIs.
     pub fn into_interpreter(self) -> Interpreter {
+        self.0.into_interpreter()
+    }
+
+    /// Retain the resolved request for environment creation.
+    pub fn into_requested_interpreter(self) -> RequestedInterpreter {
         self.0
     }
 }
@@ -109,7 +115,7 @@ impl ProjectPythonRequest {
         groups: &DependencyGroupsWithDefaults,
         project_dir: &Path,
         config_discovery: ConfigDiscovery,
-    ) -> Result<Self, PythonSelectionError> {
+    ) -> Result<Self, ProjectError> {
         let requirement = workspace
             .map(|workspace| find_workspace_python_requirement(workspace, groups))
             .transpose()?
@@ -132,7 +138,7 @@ impl ProjectPythonRequest {
         requirement: Option<ProjectPythonRequirement>,
         project_dir: &Path,
         config_discovery: ConfigDiscovery,
-    ) -> Result<Self, PythonSelectionError> {
+    ) -> Result<Self, ProjectError> {
         let (source, python_request) = if let Some(request) = python_request {
             // (1) Explicit request from user
             let source = PythonRequestSource::UserRequest;
@@ -213,9 +219,12 @@ impl ProjectPythonRequest {
     pub(crate) fn validate(
         &self,
         interpreter: Interpreter,
-    ) -> Result<CompatibleProjectPython, PythonSelectionError> {
+    ) -> Result<CompatibleProjectPython, ProjectError> {
         self.check(&interpreter)?;
-        Ok(CompatibleProjectPython(interpreter))
+        Ok(CompatibleProjectPython(RequestedInterpreter::new(
+            interpreter,
+            self.python_request.clone().unwrap_or_default(),
+        )))
     }
 
     /// Find or download an interpreter for the resolved request, then check project compatibility.
@@ -231,7 +240,7 @@ impl ProjectPythonRequest {
         cache: &Cache,
         reporter: &PythonDownloadReporter,
         install_mirrors: &PythonInstallMirrors,
-    ) -> Result<CompatibleProjectPython, PythonSelectionError> {
+    ) -> Result<CompatibleProjectPython, ProjectError> {
         let interpreter = PythonInstallation::find_or_download(
             self.python_request.as_ref(),
             environment_preference,
@@ -257,7 +266,7 @@ impl ProjectPythonRequest {
 pub fn find_requires_python(
     workspace: &Workspace,
     groups: &DependencyGroupsWithDefaults,
-) -> Result<Option<RequiresPython>, PythonSelectionError> {
+) -> Result<Option<RequiresPython>, ProjectError> {
     Ok(find_workspace_python_requirement(workspace, groups)?
         .map(|requirement| requirement.requires_python))
 }
@@ -268,7 +277,7 @@ pub fn find_requires_python(
 fn find_workspace_python_requirement(
     workspace: &Workspace,
     groups: &DependencyGroupsWithDefaults,
-) -> Result<Option<ProjectPythonRequirement>, PythonSelectionError> {
+) -> Result<Option<ProjectPythonRequirement>, ProjectError> {
     let requires_python = workspace.requires_python(groups)?;
     // If there are no `Requires-Python` specifiers in the workspace, return `None`.
     if requires_python.is_empty() {
@@ -301,10 +310,66 @@ fn find_workspace_python_requirement(
                 multiple_members: workspace.packages().len() > 1,
             },
         })),
-        None => Err(PythonSelectionError::DisjointRequiresPython(
-            requires_python,
-        )),
+        None => Err(ProjectError::DisjointRequiresPython(requires_python)),
     }
+}
+
+/// Intersect the lockfile's Python requirement with the selected groups' requirements.
+fn find_lockfile_requires_python(
+    target: InstallTarget<'_>,
+    groups: &DependencyGroupsWithDefaults,
+) -> Result<ProjectPythonRequirement, ProjectError> {
+    let lock = target.lock();
+    let mut group_requirements = RequiresPythonSources::new();
+
+    if let Some(members) = lock.member_group_metadata() {
+        let group_root = target.group_root(groups);
+
+        for (member, member_groups) in members {
+            let is_install_root = target.roots().any(|root| root == member);
+            if !is_install_root && group_root != Some(member) {
+                continue;
+            }
+
+            for (group, metadata) in member_groups {
+                if target.includes_group(Some(member), group, groups)
+                    && let Some(requires_python) = &metadata.requires_python
+                {
+                    group_requirements.insert(
+                        RequiresPythonDeclaration::Member(member.clone(), Some(group.clone())),
+                        requires_python.clone(),
+                    );
+                }
+            }
+        }
+    }
+
+    for (group, metadata) in lock.workspace_group_metadata() {
+        if target.includes_group(None, group, groups)
+            && let Some(requires_python) = &metadata.requires_python
+        {
+            group_requirements.insert(
+                RequiresPythonDeclaration::Workspace(group.clone()),
+                requires_python.clone(),
+            );
+        }
+    }
+
+    let Some(requires_python) = RequiresPython::intersection(
+        std::iter::once(lock.requires_python().specifiers()).chain(group_requirements.values()),
+    ) else {
+        return Err(ProjectError::DisjointLockedRequiresPython {
+            locked: lock.requires_python().clone(),
+            groups: group_requirements,
+        });
+    };
+    Ok(ProjectPythonRequirement {
+        requires_python,
+        source: PythonRequirementSource::Lockfile {
+            locked: lock.requires_python().clone(),
+            groups: group_requirements,
+        },
+    })
 }
 
 /// The requirements that exclude a Python version, and where they were read.
@@ -417,7 +482,7 @@ pub(crate) fn validate_python_requirement(
     requires_python: &RequiresPython,
     source: &PythonRequestSource,
     requirement_source: &PythonRequirementSource,
-) -> Result<(), PythonSelectionError> {
+) -> Result<(), ProjectError> {
     if requires_python.contains(interpreter.python_version()) {
         return Ok(());
     }
@@ -453,22 +518,22 @@ pub(crate) fn validate_python_requirement(
 
     match source {
         PythonRequestSource::UserRequest => {
-            Err(PythonSelectionError::RequestedPythonProjectIncompatibility(
+            Err(ProjectError::RequestedPythonProjectIncompatibility(
                 interpreter.python_version().clone(),
                 requires_python.clone(),
                 Box::new(conflicting_requires),
             ))
         }
-        PythonRequestSource::DotPythonVersion(file) => Err(
-            PythonSelectionError::DotPythonVersionProjectIncompatibility {
+        PythonRequestSource::DotPythonVersion(file) => {
+            Err(ProjectError::DotPythonVersionProjectIncompatibility {
                 python_request: file.path().user_display().to_string(),
                 version: interpreter.python_version().clone(),
                 requires_python: requires_python.clone(),
                 requires_python_sources: Box::new(conflicting_requires),
-            },
-        ),
+            })
+        }
         PythonRequestSource::RequiresPython => {
-            Err(PythonSelectionError::RequiresPythonProjectIncompatibility(
+            Err(ProjectError::RequiresPythonProjectIncompatibility(
                 interpreter.python_version().clone(),
                 requires_python.clone(),
                 Box::new(conflicting_requires),

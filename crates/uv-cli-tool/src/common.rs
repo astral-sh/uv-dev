@@ -54,7 +54,8 @@ use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
 
-use uv_cli_pip as pip;
+use crate::error::ToolLockError;
+use uv_cli_operations::{resolution_markers, resolution_tags};
 
 /// An error raised when a tool package provides no executables.
 #[derive(Debug, Error)]
@@ -118,8 +119,7 @@ use uv_cli_common::printer::Printer;
 use uv_cli_common::reporters::PythonDownloadReporter;
 use uv_cli_common::settings::ResolverSettings;
 use uv_cli_project::{
-    EnvironmentSpecification, PreferenceLocation, ProjectError, PythonRequestSource,
-    lock::ValidatedLock,
+    EnvironmentSpecification, PreferenceLocation, PythonRequestSource, lock::ValidatedLock,
 };
 
 /// Return all packages which contain an executable with the given name.
@@ -646,7 +646,7 @@ pub(crate) fn tool_environment_spec<'lock>(
 pub(crate) async fn refine_interpreter(
     interpreter: &Interpreter,
     python_request: Option<&PythonRequest>,
-    err: &ResolveError,
+    err: &uv_cli_operations::operations::Error,
     client_builder: &BaseClientBuilder<'_>,
     reporter: &PythonDownloadReporter,
     install_mirrors: &PythonInstallMirrors,

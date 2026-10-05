@@ -9,21 +9,19 @@ use owo_colors::OwoColorize;
 use tracing::{debug, trace, warn};
 use uv_audit::osv;
 use uv_audit::{Dependency, VulnerabilityID};
-use uv_auth::{CredentialsCache, CredentialsFromUrlError};
+use uv_auth::CredentialsFromUrlError;
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
-    ExtrasSpecification, GitLfsSetting, HashCheckingMode, Override, PackageOverride, Reinstall,
-    TargetTriple, Upgrade,
+    ExtrasSpecification, GitLfsSetting, HashCheckingMode, Reinstall, TargetTriple, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, SharedState};
-use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, LoweredRequirement};
+use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    ExtraBuildRequirement, ExtraBuildRequires, HashCollection, Index, IndexCredentialsError,
-    IndexUrlError, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
-    UnresolvedRequirementSpecification,
+    ExtraBuildRequires, HashCollection, Index, IndexCredentialsError, IndexUrlError, Requirement,
+    RequiresPython, Resolution, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_fs::{CWD, LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
@@ -34,12 +32,16 @@ use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::MarkerTreeContents;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
-use uv_python::managed::{ManagedPythonInstallation, PythonMinorVersionLink};
-use uv_python::{
-    BrokenLink, ConfigDiscovery, EnvironmentPreference, Interpreter, InvalidEnvironmentKind,
-    LenientImplementationName, PythonArchitecture, PythonDownloads, PythonEnvironment,
-    PythonInstallation, PythonPreference, PythonRequest, PythonSource, PythonVariant,
-    PythonVersionFile, VersionFileDiscoveryOptions, VersionRequest,
+use uv_python_discovery::{
+    ConfigDiscovery, PythonInstallation, PythonVersionFile, VersionFileDiscoveryOptions,
+};
+use uv_python_interpreter::{
+    BrokenLink, Interpreter, InvalidEnvironmentKind, PythonEnvironment, RequestedInterpreter,
+};
+use uv_python_managed::{PythonMinorVersionLink, UpgradePolicy};
+use uv_python_types::{
+    EnvironmentPreference, LenientImplementationName, PythonArchitecture, PythonDownloads,
+    PythonPreference, PythonRequest, PythonSource, PythonVariant, VersionRequest,
 };
 use uv_requirements::{NamedRequirementsResolver, RequirementsSpecification};
 use uv_resolver::{
@@ -50,10 +52,9 @@ use uv_scripts::Pep723ItemRef;
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
 use uv_torch::TorchStrategy;
-use uv_types::{BuildIsolation, EmptyInstalledPackages, HashStrategy, SourceTreeEditablePolicy};
+use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::dependency_groups::DependencyGroupError;
-use uv_workspace::pyproject::ExtraBuildDependency;
 use uv_workspace::{ProjectEnvironmentSelection, RequiresPythonSources, Workspace, WorkspaceCache};
 
 use crate::install_target::{InstallTarget, PackageSelection};
@@ -70,10 +71,10 @@ use uv_cli_common::settings::{
     FrozenSource, InstallerSettingsRef, LockedSource, ResolverInstallerSettings, ResolverSettings,
 };
 use uv_cli_common::{capitalize, conjunction};
-use uv_cli_pip as pip;
-use uv_cli_pip::locked_requirements::{LockedRequirements, read_lock_requirements};
-use uv_cli_pip::loggers::{InstallLogger, ResolveLogger};
-use uv_cli_pip::operations::{Changelog, Modifications};
+use uv_cli_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
+use uv_cli_operations::loggers::{InstallLogger, ResolveLogger};
+use uv_cli_operations::operations::{Changelog, Modifications};
+use uv_cli_operations::{resolution_markers, resolution_tags};
 
 /// The source of a missing lockfile error.
 #[derive(Debug, Clone, Copy)]
@@ -281,7 +282,10 @@ pub enum ProjectError {
     IndexUrl(#[from] IndexUrlError),
 
     #[error(transparent)]
-    Python(#[from] uv_python::Error),
+    Python(#[from] Box<uv_python_discovery::Error>),
+
+    #[error(transparent)]
+    PythonEnvironment(#[from] uv_python_interpreter::PythonEnvironmentError),
 
     #[error(transparent)]
     Virtualenv(#[from] uv_virtualenv::Error),
@@ -293,16 +297,16 @@ pub enum ProjectError {
     Tags(#[from] uv_platform_tags::TagsError),
 
     #[error(transparent)]
-    FlatIndex(#[from] uv_client::FlatIndexError),
+    FlatIndex(#[from] Box<uv_client::FlatIndexError>),
 
     #[error(transparent)]
     Lock(#[from] uv_lock::LockError),
 
     #[error(transparent)]
-    Operation(#[from] uv_cli_pip::operations::Error),
+    Operation(#[from] Box<uv_cli_operations::operations::Error>),
 
     #[error(transparent)]
-    Interpreter(#[from] uv_python::InterpreterError),
+    Interpreter(#[from] uv_python_interpreter::InterpreterError),
 
     #[error(transparent)]
     Tool(#[from] uv_tool::Error),
@@ -317,7 +321,7 @@ pub enum ProjectError {
     Metadata(#[from] uv_distribution::MetadataError),
 
     #[error(transparent)]
-    Lowering(#[from] uv_distribution::LoweringError),
+    Lowering(#[from] Box<uv_distribution::LoweringError>),
 
     #[error(transparent)]
     Workspace(#[from] uv_workspace::WorkspaceError),
@@ -326,7 +330,7 @@ pub enum ProjectError {
     DefaultGroups(#[from] uv_workspace::DefaultGroupsError),
 
     #[error(transparent)]
-    PyprojectMut(#[from] uv_workspace::pyproject_mut::Error),
+    PyprojectMut(#[from] uv_project_edit::Error),
 
     #[error(transparent)]
     ExtraBuildRequires(#[from] uv_distribution_types::ExtraBuildRequiresError),
@@ -350,12 +354,36 @@ pub enum ProjectError {
     Anyhow(#[from] anyhow::Error),
 }
 
+impl From<uv_python_discovery::Error> for ProjectError {
+    fn from(error: uv_python_discovery::Error) -> Self {
+        Self::Python(Box::new(error))
+    }
+}
+
+impl From<uv_client::FlatIndexError> for ProjectError {
+    fn from(error: uv_client::FlatIndexError) -> Self {
+        Self::FlatIndex(Box::new(error))
+    }
+}
+
+impl From<uv_cli_operations::operations::Error> for ProjectError {
+    fn from(error: uv_cli_operations::operations::Error) -> Self {
+        Self::Operation(Box::new(error))
+    }
+}
+
+impl From<uv_distribution::LoweringError> for ProjectError {
+    fn from(error: uv_distribution::LoweringError) -> Self {
+        Self::Lowering(Box::new(error))
+    }
+}
+
 impl From<uv_requirements::ScriptRequirementsError> for ProjectError {
     fn from(error: uv_requirements::ScriptRequirementsError) -> Self {
         match error {
             uv_requirements::ScriptRequirementsError::Io(error) => Self::Io(error),
             uv_requirements::ScriptRequirementsError::IndexUrl(error) => Self::IndexUrl(error),
-            uv_requirements::ScriptRequirementsError::Lowering(error) => Self::Lowering(*error),
+            uv_requirements::ScriptRequirementsError::Lowering(error) => Self::Lowering(error),
         }
     }
 }
@@ -541,7 +569,10 @@ fn validate_script_requires_python(
         }
         PythonRequestSource::DotPythonVersion(file) => {
             Err(ProjectError::DotPythonVersionScriptIncompatibility(
-                file.file_name().to_string(),
+                file.path()
+                    .file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .map_or_else(|| file.path().user_display().to_string(), ToOwned::to_owned),
                 interpreter.python_version().clone(),
                 requires_python.clone(),
             ))
@@ -560,7 +591,7 @@ fn validate_script_requires_python(
 #[expect(clippy::large_enum_variant)]
 pub enum ScriptInterpreter {
     /// An interpreter to use to create a new script environment.
-    Interpreter(Interpreter),
+    Interpreter(RequestedInterpreter),
     /// An interpreter from an existing script environment.
     Environment(PythonEnvironment),
 }
@@ -660,7 +691,7 @@ impl ScriptInterpreter {
         let root = Self::root(script, active, cache);
         match PythonEnvironment::from_root(&root, cache) {
             Ok(environment) => Some(environment),
-            Err(uv_python::Error::MissingEnvironment(_)) => None,
+            Err(uv_python_interpreter::PythonEnvironmentError::MissingEnvironment(_)) => None,
             Err(err) => {
                 warn!("Ignoring existing script environment: {err}");
                 None
@@ -763,13 +794,16 @@ impl ScriptInterpreter {
             warn_user!("{err}");
         }
 
-        Ok(Self::Interpreter(interpreter))
+        Ok(Self::Interpreter(RequestedInterpreter::new(
+            interpreter,
+            python_request.unwrap_or_default(),
+        )))
     }
 
-    /// Consume the [`PythonInstallation`] and return the [`Interpreter`].
+    /// Consume the script selection and return its [`Interpreter`].
     pub fn into_interpreter(self) -> Interpreter {
         match self {
-            Self::Interpreter(interpreter) => interpreter,
+            Self::Interpreter(requested) => requested.into_interpreter(),
             Self::Environment(venv) => venv.into_interpreter(),
         }
     }
@@ -859,7 +893,7 @@ fn check_environment_compatibility(
         .or_else(|| python_arch.map(|_| &PythonRequest::Any))
         .map(|request| request.with_default_arch(python_arch.map(PythonArchitecture::into_inner)));
     if let Some(request) = python_request {
-        if request.satisfied(environment.interpreter(), cache) {
+        if environment.interpreter().matches_request(&request, cache) {
             debug!("The {kind} environment's Python version satisfies the request: `{request}`");
         } else {
             return Err(EnvironmentIncompatibilityError::PythonRequest(
@@ -882,10 +916,7 @@ fn check_environment_compatibility(
         }
     }
 
-    if python_preference.allows_installation(&PythonInstallation::new(
-        PythonSource::DiscoveredEnvironment,
-        environment.interpreter().clone(),
-    )) {
+    if python_preference.allows_source(PythonSource::DiscoveredEnvironment) {
         trace!(
             "The virtual environment's Python interpreter meets the Python preference: `{}`",
             python_preference
@@ -926,8 +957,10 @@ fn existing_project_environment(
 ) -> Result<Option<PythonEnvironment>, ProjectError> {
     let environment = match PythonEnvironment::from_root(root, cache) {
         Ok(environment) => environment,
-        Err(uv_python::Error::MissingEnvironment(_)) => return Ok(None),
-        Err(uv_python::Error::InvalidEnvironment(inner)) => {
+        Err(uv_python_interpreter::PythonEnvironmentError::MissingEnvironment(_)) => {
+            return Ok(None);
+        }
+        Err(uv_python_interpreter::PythonEnvironmentError::InvalidEnvironment(inner)) => {
             match inner.kind {
                 InvalidEnvironmentKind::NotDirectory => {
                     return Err(ProjectError::InvalidProjectEnvironmentDir(
@@ -953,14 +986,18 @@ fn existing_project_environment(
             }
             return Ok(None);
         }
-        Err(uv_python::Error::Query(uv_python::InterpreterError::NotFound(_))) => {
+        Err(uv_python_interpreter::PythonEnvironmentError::Query(
+            uv_python_interpreter::InterpreterError::NotFound(_),
+        )) => {
             return Ok(None);
         }
-        Err(uv_python::Error::Query(uv_python::InterpreterError::BrokenLink(BrokenLink {
-            path,
-            unix,
-            venv: _,
-        }))) => {
+        Err(uv_python_interpreter::PythonEnvironmentError::Query(
+            uv_python_interpreter::InterpreterError::BrokenLink(BrokenLink {
+                path,
+                unix,
+                venv: _,
+            }),
+        )) => {
             if unix {
                 let target_path = fs_err::read_link(&path)?;
                 warn_user!(
@@ -1125,7 +1162,7 @@ pub fn is_centralized_environment_reference(path: &Path, cache: &Cache) -> bool 
 pub fn centralized_environment_root(
     target: ProjectEnvironmentTarget<'_>,
     interpreter: &Interpreter,
-    upgradeable: bool,
+    upgrade_policy: UpgradePolicy,
     cache: &Cache,
 ) -> PathBuf {
     let install_path = target.install_path();
@@ -1135,21 +1172,18 @@ pub fn centralized_environment_root(
     // Use the workspace path to isolate projects and the interpreter key to maximize intra-project
     // environment re-use while avoiding clashes with incompatible environments. Ignoring the patch
     // version allows upgradeable managed environments to be re-used after an upgrade.
-    let (digest, python_version) = if upgradeable
-        && let Some(installation) = ManagedPythonInstallation::try_from_interpreter(interpreter)
-        && PythonMinorVersionLink::from_installation(&installation)
-            .is_some_and(|link| link.exists())
-    {
-        (
-            cache_digest(&(&workspace_path, installation.minor_version_key())),
-            interpreter.python_minor_version(),
-        )
-    } else {
-        (
-            cache_digest(&(&workspace_path, &interpreter_key)),
-            interpreter.python_version().clone(),
-        )
-    };
+    let (digest, python_version) =
+        if let Some(link) = PythonMinorVersionLink::from_interpreter(interpreter, upgrade_policy) {
+            (
+                cache_digest(&(&workspace_path, link.key())),
+                interpreter.python_minor_version(),
+            )
+        } else {
+            (
+                cache_digest(&(&workspace_path, &interpreter_key)),
+                interpreter.python_version().clone(),
+            )
+        };
     let name = target
         .project_name()
         .and_then(|name| cache_name(name.as_ref(), Some(100)))
@@ -1343,11 +1377,12 @@ impl ProjectInterpreter {
     ) -> Result<Self, ProjectError> {
         let python_request = project_python.python_request.as_ref();
         let requires_python = project_python.requires_python();
+        let upgrade_policy =
+            UpgradePolicy::from_request(python_request.unwrap_or(&PythonRequest::Default));
 
         let environment_selection =
             ProjectEnvironmentSelection::from_install_path(target.install_path(), active);
         let centralized = centralized_environments_enabled(&environment_selection, cache);
-        let upgradeable = python_request.is_none_or(|request| !request.includes_patch());
 
         // Prefer `.venv`'s interpreter to keep its compatible cached environment selected; derive
         // the cache root instead of trusting the link target.
@@ -1363,7 +1398,7 @@ impl ProjectInterpreter {
                 let root = centralized_environment_root(
                     target,
                     candidate.interpreter(),
-                    upgradeable,
+                    upgrade_policy,
                     cache,
                 );
                 if let Some(environment) = discover_project_environment(
@@ -1422,7 +1457,7 @@ impl ProjectInterpreter {
 
         if centralized {
             let root =
-                centralized_environment_root(target, python.interpreter(), upgradeable, cache);
+                centralized_environment_root(target, python.interpreter(), upgrade_policy, cache);
             if let Some(environment) = discover_project_environment(
                 &root,
                 python_request,
@@ -1544,7 +1579,7 @@ impl ScriptPython {
             // Ignore version files that are incompatible with the script's `requires-python`
             match (file.version(), script_requires_python.as_ref()) {
                 (Some(request), Some(requires_python)) => {
-                    request.intersects_requires_python(requires_python)
+                    request.intersects_specifiers(requires_python.specifiers())
                 }
                 _ => true,
             }
@@ -1556,7 +1591,7 @@ impl ScriptPython {
             }
             match (file.version(), workspace_requires_python.as_ref()) {
                 (Some(request), Some(requires_python)) => {
-                    request.intersects_requires_python(requires_python)
+                    request.intersects_specifiers(requires_python.specifiers())
                 }
                 _ => true,
             }
@@ -1575,9 +1610,12 @@ impl ScriptPython {
             (PythonRequestSource::RequiresPython, Some(request))
         } else {
             // (4) `requires-python` from workspace `pyproject.toml`
-            let request = workspace_requires_python
-                .as_ref()
-                .and_then(PythonRequest::from_requires_python);
+            let request = workspace_requires_python.as_ref().map(|requires_python| {
+                PythonRequest::Version(VersionRequest::from_specifiers(
+                    requires_python.specifiers().clone(),
+                    PythonVariant::Default,
+                ))
+            });
             (PythonRequestSource::RequiresPython, request)
         };
 
@@ -1692,11 +1730,6 @@ impl ProjectEnvironment {
             )
             .await?
         };
-        let upgradeable = project_python
-            .python_request
-            .as_ref()
-            .is_none_or(|request| !request.includes_patch());
-
         match ProjectInterpreter::discover(
             target,
             project_python,
@@ -1726,9 +1759,11 @@ impl ProjectEnvironment {
 
             // Otherwise, create a virtual environment with the discovered interpreter.
             ProjectInterpreter::Interpreter(interpreter) => {
-                let interpreter = interpreter.into_interpreter();
+                let requested = interpreter.into_requested_interpreter();
+                let upgrade_policy = UpgradePolicy::from_request(requested.request());
+                let interpreter = requested.into_interpreter();
                 let root = if centralized {
-                    centralized_environment_root(target, &interpreter, upgradeable, cache)
+                    centralized_environment_root(target, &interpreter, upgrade_policy, cache)
                 } else {
                     environment_selection
                         .explicit_path()
@@ -1804,7 +1839,7 @@ impl ProjectEnvironment {
                         ),
                         uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
                         uv_virtualenv::Seed::Disabled,
-                        upgradeable,
+                        upgrade_policy,
                     )?;
                     return Ok(if replace_environment {
                         Self::WouldReplace(root, environment, temp_dir)
@@ -1865,7 +1900,7 @@ impl ProjectEnvironment {
                     ),
                     uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
                     uv_virtualenv::Seed::Disabled,
-                    upgradeable,
+                    upgrade_policy,
                 )?;
 
                 if centralized {
@@ -1970,10 +2005,6 @@ impl ScriptEnvironment {
             })
             .ok();
 
-        let upgradeable = python_request
-            .as_ref()
-            .is_none_or(|request| !request.includes_patch());
-
         match ScriptInterpreter::discover(
             script,
             python_request,
@@ -1994,7 +2025,9 @@ impl ScriptEnvironment {
             ScriptInterpreter::Environment(environment) => Ok(Self::Existing(environment)),
 
             // Otherwise, create a virtual environment with the discovered interpreter.
-            ScriptInterpreter::Interpreter(interpreter) => {
+            ScriptInterpreter::Interpreter(requested) => {
+                let upgrade_policy = UpgradePolicy::from_request(requested.request());
+                let interpreter = requested.into_interpreter();
                 let root = ScriptInterpreter::root(script, active, cache);
 
                 // Determine a prompt for the environment, in order of preference:
@@ -2021,7 +2054,7 @@ impl ScriptEnvironment {
                         ),
                         false,
                         uv_virtualenv::Seed::Disabled,
-                        upgradeable,
+                        upgrade_policy,
                     )?;
                     return Ok(if root.exists() {
                         Self::WouldReplace(root, environment, temp_dir)
@@ -2058,7 +2091,7 @@ impl ScriptEnvironment {
                     ),
                     false,
                     uv_virtualenv::Seed::Disabled,
-                    upgradeable,
+                    upgrade_policy,
                 )?;
 
                 Ok(if replaced {
@@ -2111,7 +2144,7 @@ impl std::ops::Deref for ScriptEnvironment {
 pub async fn resolve_names(
     requirements: Vec<UnresolvedRequirementSpecification>,
     interpreter: &Interpreter,
-    settings: &ResolverInstallerSettings,
+    settings: &ResolverSettings,
     build_constraints: &Constraints,
     client_builder: &BaseClientBuilder<'_>,
     state: &SharedState,
@@ -2140,32 +2173,27 @@ pub async fn resolve_names(
     }
 
     // Extract the project settings.
-    let ResolverInstallerSettings {
-        resolver:
-            ResolverSettings {
-                build_options,
-                config_setting,
-                config_settings_package,
-                dependency_metadata,
-                exclude_newer,
-                fork_strategy: _,
-                index_locations,
-                index_strategy,
-                keyring_provider,
-                link_mode,
-                build_isolation,
-                extra_build_dependencies,
-                extra_build_variables,
-                prerelease: _,
-                resolution: _,
-                sources,
-                torch_backend,
-                cuda_driver_version,
-                amd_gpu_architecture,
-                upgrade: _,
-            },
-        compile_bytecode: _,
-        reinstall: _,
+    let ResolverSettings {
+        build_options,
+        config_setting,
+        config_settings_package,
+        dependency_metadata,
+        exclude_newer,
+        fork_strategy: _,
+        index_locations,
+        index_strategy,
+        keyring_provider,
+        link_mode,
+        build_isolation,
+        extra_build_dependencies,
+        extra_build_variables,
+        prerelease: _,
+        resolution: _,
+        sources,
+        torch_backend,
+        cuda_driver_version,
+        amd_gpu_architecture,
+        upgrade: _,
     } = settings;
 
     let client_builder = client_builder.clone().keyring(*keyring_provider);
@@ -2376,8 +2404,8 @@ pub async fn resolve_environment(
     // Determine the tags and marker environment to use for resolution.
     let (tags, resolver_environment) = match resolution_scope {
         EnvironmentResolution::Specific => {
-            let tags = pip::resolution_tags(None, python_platform, interpreter)?;
-            let marker_environment = pip::resolution_markers(None, python_platform, interpreter);
+            let tags = resolution_tags(None, python_platform, interpreter)?;
+            let marker_environment = resolution_markers(None, python_platform, interpreter);
             (
                 Some(tags),
                 ResolverEnvironment::specific(marker_environment),
@@ -2523,7 +2551,7 @@ pub async fn resolve_environment(
     );
 
     // Resolve the requirements.
-    Ok(uv_cli_pip::operations::resolve(
+    Ok(uv_cli_operations::operations::resolve(
         requirements,
         constraints,
         overrides,
@@ -2535,7 +2563,7 @@ pub async fn resolve_environment(
         &extras,
         &groups,
         preferences,
-        EmptyInstalledPackages,
+        None,
         &hasher,
         &reinstall,
         &upgrade,
@@ -2664,7 +2692,7 @@ pub async fn sync_environment(
     );
 
     // Sync the environment.
-    uv_cli_pip::operations::install(
+    uv_cli_operations::operations::install(
         resolution,
         site_packages,
         InstallationStrategy::Permissive,
@@ -2672,7 +2700,7 @@ pub async fn sync_environment(
         reinstall,
         build_options,
         link_mode,
-        compile_bytecode.then_some(uv_cli_pip::operations::BytecodeCompilation::All),
+        compile_bytecode.then_some(uv_cli_operations::operations::BytecodeCompilation::All),
         &hasher,
         tags,
         &client,
@@ -2690,7 +2718,7 @@ pub async fn sync_environment(
     .await?;
 
     // Notify the user of any resolution diagnostics.
-    uv_cli_pip::operations::diagnose_resolution(resolution.diagnostics(), printer)?;
+    uv_cli_operations::operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
     Ok(venv)
 }
@@ -2779,8 +2807,8 @@ pub async fn update_environment(
 
     // Determine markers and tags to use for resolution.
     let interpreter = venv.interpreter();
-    let marker_env = pip::resolution_markers(None, python_platform, interpreter);
-    let tags = pip::resolution_tags(None, python_platform, interpreter)?;
+    let marker_env = resolution_markers(None, python_platform, interpreter);
+    let tags = resolution_tags(None, python_platform, interpreter)?;
 
     // Check if the current environment satisfies the requirements
     let site_packages = SitePackages::from_environment(&venv)?;
@@ -2921,7 +2949,7 @@ pub async fn update_environment(
     );
 
     // Resolve the requirements.
-    let (resolution, hasher) = match uv_cli_pip::operations::resolve(
+    let (resolution, hasher) = match uv_cli_operations::operations::resolve(
         requirements,
         constraints,
         overrides,
@@ -2933,7 +2961,7 @@ pub async fn update_environment(
         &extras,
         &groups,
         preferences,
-        site_packages.clone(),
+        Some(site_packages.clone()),
         &hasher,
         reinstall,
         upgrade,
@@ -2958,7 +2986,7 @@ pub async fn update_environment(
         Err(err) => return Err(err.into()),
     };
     // Sync the environment.
-    let changelog = uv_cli_pip::operations::install(
+    let changelog = uv_cli_operations::operations::install(
         &resolution,
         site_packages,
         InstallationStrategy::Permissive,
@@ -2966,7 +2994,7 @@ pub async fn update_environment(
         reinstall,
         build_options,
         *link_mode,
-        (*compile_bytecode).then_some(uv_cli_pip::operations::BytecodeCompilation::All),
+        (*compile_bytecode).then_some(uv_cli_operations::operations::BytecodeCompilation::All),
         &hasher,
         &tags,
         &client,
@@ -2984,7 +3012,7 @@ pub async fn update_environment(
     .await?;
 
     // Notify the user of any resolution diagnostics.
-    uv_cli_pip::operations::diagnose_resolution(resolution.diagnostics(), printer)?;
+    uv_cli_operations::operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
     Ok(EnvironmentUpdate {
         environment: venv,
@@ -3088,212 +3116,6 @@ pub fn detect_conflicts(
     Ok(())
 }
 
-/// Determine the [`RequirementsSpecification`] for a script.
-pub async fn script_specification(
-    script: Pep723ItemRef<'_>,
-    settings: &ResolverSettings,
-    cache: &Cache,
-    workspace_cache: &WorkspaceCache,
-    credentials_cache: &CredentialsCache,
-) -> Result<Option<RequirementsSpecification>, ProjectError> {
-    let Some(dependencies) = script.metadata().dependencies.as_ref() else {
-        return Ok(None);
-    };
-
-    let script_dir = script.directory()?;
-    let script_indexes = script
-        .indexes(&settings.sources)
-        .iter()
-        .cloned()
-        .map(|index| index.relative_to(&script_dir))
-        .collect::<Result<Vec<_>, _>>()?;
-    let script_sources = script.sources(&settings.sources);
-
-    let mut requirements = Vec::new();
-    for requirement in dependencies.iter().cloned() {
-        requirements.extend(
-            LoweredRequirement::from_non_workspace_requirement(
-                requirement,
-                script_dir.as_ref(),
-                script_sources.as_ref(),
-                &script_indexes,
-                &settings.index_locations,
-                cache,
-                workspace_cache,
-                credentials_cache,
-            )
-            .await
-            .map_ok(LoweredRequirement::into_inner)
-            .collect::<Result<Vec<_>, _>>()?,
-        );
-    }
-    let constraint_dependencies = script
-        .metadata()
-        .tool
-        .as_ref()
-        .and_then(|tool| tool.uv.as_ref())
-        .and_then(|uv| uv.constraint_dependencies.as_ref())
-        .into_iter()
-        .flatten()
-        .cloned();
-    let mut constraints = Vec::new();
-    for requirement in constraint_dependencies {
-        constraints.extend(
-            LoweredRequirement::from_non_workspace_requirement(
-                requirement,
-                script_dir.as_ref(),
-                script_sources.as_ref(),
-                &script_indexes,
-                &settings.index_locations,
-                cache,
-                workspace_cache,
-                credentials_cache,
-            )
-            .await
-            .map_ok(LoweredRequirement::into_inner)
-            .collect::<Result<Vec<_>, _>>()?,
-        );
-    }
-    let overrides = {
-        let override_entries = script
-            .metadata()
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.override_dependencies.as_ref())
-            .into_iter()
-            .flatten()
-            .cloned();
-        let mut overrides = Vec::new();
-        for entry in override_entries {
-            match entry {
-                Override::Requirement(requirement) => {
-                    overrides.extend(
-                        LoweredRequirement::from_non_workspace_requirement(
-                            requirement,
-                            script_dir.as_ref(),
-                            script_sources.as_ref(),
-                            &script_indexes,
-                            &settings.index_locations,
-                            cache,
-                            workspace_cache,
-                            credentials_cache,
-                        )
-                        .await
-                        .map_ok(LoweredRequirement::into_inner)
-                        .map_ok(Override::Requirement)
-                        .collect::<Result<Vec<_>, _>>()?,
-                    );
-                }
-                Override::Package(package) => {
-                    let mut dependencies = Vec::new();
-                    for requirement in package.dependencies.into_vec() {
-                        dependencies.extend(
-                            LoweredRequirement::from_non_workspace_requirement(
-                                requirement,
-                                script_dir.as_ref(),
-                                script_sources.as_ref(),
-                                &script_indexes,
-                                &settings.index_locations,
-                                cache,
-                                workspace_cache,
-                                credentials_cache,
-                            )
-                            .await
-                            .map_ok(LoweredRequirement::into_inner)
-                            .collect::<Result<Vec<_>, _>>()?,
-                        );
-                    }
-                    overrides.push(Override::Package(PackageOverride {
-                        package: package.package,
-                        dependencies: dependencies.into_boxed_slice(),
-                    }));
-                }
-            }
-        }
-        overrides
-    };
-    let excludes = script
-        .metadata()
-        .tool
-        .as_ref()
-        .and_then(|tool| tool.uv.as_ref())
-        .and_then(|uv| uv.exclude_dependencies.as_ref())
-        .into_iter()
-        .flatten()
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let mut specification =
-        RequirementsSpecification::from_excludes(requirements, constraints, Vec::new(), Vec::new());
-    specification.override_dependencies = overrides;
-    specification.excludes = excludes;
-    Ok(Some(specification))
-}
-
-/// Determine the extra build requires for a script.
-pub async fn script_extra_build_requires(
-    script: Pep723ItemRef<'_>,
-    settings: &ResolverSettings,
-    cache: &Cache,
-    workspace_cache: &WorkspaceCache,
-    credentials_cache: &CredentialsCache,
-) -> Result<LoweredExtraBuildDependencies, ProjectError> {
-    let script_dir = script.directory()?;
-    let script_indexes = script
-        .indexes(&settings.sources)
-        .iter()
-        .cloned()
-        .map(|index| index.relative_to(&script_dir))
-        .collect::<Result<Vec<_>, _>>()?;
-    let script_sources = script.sources(&settings.sources);
-
-    // Collect any `tool.uv.extra-build-dependencies` from the script.
-    let empty = BTreeMap::default();
-    let script_extra_build_dependencies = script
-        .metadata()
-        .tool
-        .as_ref()
-        .and_then(|tool| tool.uv.as_ref())
-        .and_then(|uv| uv.extra_build_dependencies.as_ref())
-        .unwrap_or(&empty);
-
-    // Lower the extra build dependencies.
-    let mut extra_build_requires = ExtraBuildRequires::default();
-    for (name, requirements) in script_extra_build_dependencies {
-        let mut lowered_requirements = Vec::new();
-        for ExtraBuildDependency {
-            requirement,
-            match_runtime,
-        } in requirements.iter().cloned()
-        {
-            lowered_requirements.extend(
-                LoweredRequirement::from_non_workspace_requirement(
-                    requirement,
-                    script_dir.as_ref(),
-                    script_sources.as_ref(),
-                    &script_indexes,
-                    &settings.index_locations,
-                    cache,
-                    workspace_cache,
-                    credentials_cache,
-                )
-                .await
-                .map_ok(|requirement| ExtraBuildRequirement {
-                    requirement: requirement.into_inner(),
-                    match_runtime,
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            );
-        }
-        extra_build_requires.insert(name.clone(), lowered_requirements);
-    }
-
-    Ok(LoweredExtraBuildDependencies::from_lowered(
-        extra_build_requires,
-    ))
-}
-
 /// Warn if the user provides (e.g.) an `--index-url` in a requirements file.
 fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: &ResolverSettings) {
     let RequirementsSpecification {
@@ -3370,9 +3192,9 @@ impl From<ProjectError> for uv_cli_common::error::UvError {
             | ProjectError::LockFormat(..)
             | ProjectError::MissingLockfile(..)
             | ProjectError::LockWorkspaceMismatch(..)) => Self::user(error),
-            ProjectError::Operation(error) => Self::from(error),
+            ProjectError::Operation(error) => Self::from(*error),
             ProjectError::Requirements(error) => {
-                Self::from(uv_cli_pip::operations::Error::Requirements(error))
+                Self::from(uv_cli_operations::operations::Error::Requirements(error))
             }
             error => Self::unexpected(error.into()),
         }

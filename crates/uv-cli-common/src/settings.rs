@@ -1,4 +1,3 @@
-use uv_cli::options::{Flag, FlagSource};
 use uv_configuration::{
     BuildIsolation, BuildOptions, IndexStrategy, KeyringProviderType, NoBinary, NoBuild, NoSources,
     Reinstall, Upgrade,
@@ -12,7 +11,6 @@ use uv_resolver::{
     ExcludeNewer, ForkStrategy, Prerelease, PrereleaseMode, PrereleasePackage, ResolutionMode,
 };
 use uv_settings::{ResolverInstallerOptions, ResolverOptions};
-use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
 use uv_warnings::warn_user_once;
 use uv_workspace::pyproject::ExtraBuildDependencies;
@@ -66,19 +64,6 @@ pub enum LockCheck {
     Disabled,
 }
 
-impl From<LockCheck> for Flag {
-    fn from(lock_check: LockCheck) -> Self {
-        match lock_check {
-            LockCheck::Enabled(LockedSource::Cli(flag)) => Self::from_cli(flag.name()),
-            LockCheck::Enabled(LockedSource::Env) => Self::Enabled {
-                source: FlagSource::Env(EnvVars::UV_LOCKED),
-                name: "locked",
-            },
-            LockCheck::Disabled => Self::disabled(),
-        }
-    }
-}
-
 /// The CLI flag that requested frozen mode.
 #[derive(Debug, Clone, Copy)]
 pub enum FrozenFlag {
@@ -115,18 +100,6 @@ impl std::fmt::Display for FrozenSource {
         match self {
             Self::Cli(flag) => flag.fmt(f),
             Self::Env => write!(f, "UV_FROZEN=1"),
-        }
-    }
-}
-
-impl From<FrozenSource> for Flag {
-    fn from(source: FrozenSource) -> Self {
-        match source {
-            FrozenSource::Cli(flag) => Self::from_cli(flag.name()),
-            FrozenSource::Env => Self::Enabled {
-                source: FlagSource::Env(EnvVars::UV_FROZEN),
-                name: "frozen",
-            },
         }
     }
 }

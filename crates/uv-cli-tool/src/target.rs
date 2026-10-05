@@ -4,7 +4,7 @@ use tracing::debug;
 
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::Version;
-use uv_python::PythonRequest;
+use uv_python_types::PythonRequest;
 
 /// A request to run or install a tool (e.g., `uvx ruff@latest`).
 #[derive(Debug, Clone, PartialEq, Eq)]

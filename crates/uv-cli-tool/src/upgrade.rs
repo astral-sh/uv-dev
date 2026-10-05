@@ -1,4 +1,3 @@
-use crate::common::finalize_tool_install;
 use anyhow::{Context, Result};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
@@ -10,9 +9,7 @@ use tracing::{debug, trace};
 use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{
-    Concurrency, Constraints, DryRun, HashCheckingMode, Modifications, TargetTriple,
-};
+use uv_configuration::{Concurrency, Constraints, DryRun, HashCheckingMode, TargetTriple};
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
@@ -38,8 +35,10 @@ use uv_cli_common::printer::Printer;
 use uv_cli_common::reporters::PythonDownloadReporter;
 use uv_cli_common::settings::ResolverInstallerSettings;
 use uv_cli_common::{conjunction, exit_status::ExitStatus};
-use uv_cli_pip::loggers::{DefaultInstallLogger, SummaryResolveLogger, UpgradeInstallLogger};
-use uv_cli_pip::{operations::Modifications, resolution_tags};
+use uv_cli_operations::loggers::{
+    DefaultInstallLogger, SummaryResolveLogger, UpgradeInstallLogger,
+};
+use uv_cli_operations::{operations::Modifications, resolution_tags};
 use uv_cli_project::{
     EnvironmentResolution, EnvironmentUpdate, resolve_environment, sync_environment,
     update_environment,
@@ -672,4 +671,3 @@ fn pinned_version_from(requirements: &[Requirement], name: &PackageName) -> Opti
             _ => None,
         })
 }
-

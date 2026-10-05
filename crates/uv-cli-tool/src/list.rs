@@ -23,7 +23,7 @@ use uv_cli_common::exit_status::ExitStatus;
 use uv_cli_common::printer::Printer;
 use uv_cli_common::reporters::LatestVersionReporter;
 use uv_cli_common::settings::ResolverInstallerSettings;
-use uv_cli_pip::latest::LatestClient;
+use uv_cli_operations::latest::LatestClient;
 
 /// List installed tools.
 #[expect(clippy::fn_params_excessive_bools)]

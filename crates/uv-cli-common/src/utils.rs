@@ -9,7 +9,7 @@ use uv_cache::Cache;
 use uv_configuration::Concurrency;
 use uv_fs::{CWD, Simplified};
 use uv_installer::{compile_files, compile_tree};
-use uv_python::PythonEnvironment;
+use uv_python_interpreter::PythonEnvironment;
 
 /// Format a duration as a human-readable string, Cargo-style.
 pub fn elapsed(duration: Duration) -> String {

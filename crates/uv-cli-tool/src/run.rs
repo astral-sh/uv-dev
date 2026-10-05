@@ -1,11 +1,11 @@
 use std::ffi::OsString;
+use std::fmt::Display;
 use std::fmt::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use uv_dispatch::PlatformState;
 use uv_distribution_types::RequirementScope;
-use uv_environment_operations::environment::CachedEnvironment;
 
 use anyhow::{Context, bail};
 use console::Term;
@@ -19,7 +19,7 @@ use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, Excludes, GitLfsSetting,
-    Overrides, TargetTriple, ToolRunCommand,
+    Overrides, TargetTriple,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::InstalledDist;
@@ -57,12 +57,12 @@ use uv_cli_common::reporters::PythonDownloadReporter;
 use uv_cli_common::settings::ResolverInstallerSettings;
 use uv_cli_common::settings::ResolverSettings;
 use uv_cli_common::{env_file::read_env_files, error::UvError};
-use uv_cli_pip as pip;
-use uv_cli_pip::latest::LatestClient;
-use uv_cli_pip::loggers::{
+use uv_cli_operations::latest::LatestClient;
+use uv_cli_operations::loggers::{
     DefaultInstallLogger, DefaultResolveLogger, SummaryInstallLogger, SummaryResolveLogger,
 };
-use uv_cli_pip::operations;
+use uv_cli_operations::operations;
+use uv_cli_operations::{resolution_markers, resolution_tags};
 use uv_cli_project::environment::CachedEnvironment;
 use uv_cli_project::{EnvironmentSpecification, ProjectError, resolve_names};
 
@@ -75,19 +75,16 @@ pub enum ToolRunCommand {
     ToolRun,
 }
 
-use crate::common::{ToolPython, matching_packages, refine_interpreter};
+impl Display for ToolRunCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Uvx => write!(f, "uvx"),
+            Self::ToolRun => write!(f, "uv tool run"),
+        }
+    }
+}
+
 use crate::error::ToolError;
-use crate::requirements::resolve_names;
-use crate::{Target, ToolRequest};
-use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
-use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
-use uv_python_discovery::PythonDownloadReporter;
-use uv_resolve_operations as operations;
-use uv_resolve_operations::latest::LatestClient;
-use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
-use uv_resolve_operations::{resolution_markers, resolution_tags};
-use uv_settings::ResolverInstallerSettings;
-use uv_settings::ResolverSettings;
 
 /// Context for invocation mistakes that are specific to `uv tool run` and `uvx`.
 #[derive(Debug)]
@@ -343,18 +340,12 @@ pub async fn run(
     let explicit_from = from.is_some();
     let (from, environment) = match result {
         Ok(resolution) => resolution,
-        Err(
-            err @ (ToolError::Resolve(_)
-            | ToolError::Environment(
-                EnvironmentError::Resolve(_) | EnvironmentError::Install(_),
-            )),
-        ) => {
+        Err(err @ (ToolError::Resolve(_) | ToolError::Project(ProjectError::Operation(_)))) => {
             let uvx_run =
                 from.is_none() && invocation_source == ToolRunCommand::Uvx && target == "run";
             let verbose_flag = find_verbose_flag(args);
             let err = match err {
-                ToolError::Resolve(err)
-                | ToolError::Environment(EnvironmentError::Resolve(err))
+                ToolError::Resolve(err) | ToolError::Project(ProjectError::Operation(err))
                     if uvx_run || verbose_flag.is_none() =>
                 {
                     UvError::from(err.with_resolution_context("tool"))
@@ -394,10 +385,7 @@ pub async fn run(
             return Err(err.into());
         }
 
-        Err(
-            ToolError::Requirements(err)
-            | ToolError::Environment(EnvironmentError::Requirements(err)),
-        ) => {
+        Err(ToolError::Requirements(err) | ToolError::Project(ProjectError::Requirements(err))) => {
             return Err(UvError::from(
                 operations::Error::Requirements(err).with_resolution_context("`--with`"),
             )
@@ -1240,8 +1228,7 @@ async fn get_or_create_environment(
     let environment = match result {
         Ok(environment) => environment,
         Err(err) => match err {
-            EnvironmentError::Resolve(err) => {
-                let err = *err;
+            ProjectError::Operation(err) => {
                 // If the resolution failed due to the discovered interpreter not satisfying the
                 // `requires-python` constraint, we can try to refine the interpreter.
                 //

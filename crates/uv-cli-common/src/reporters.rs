@@ -16,7 +16,7 @@ use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{BuildableSource, CachedDist, VersionOrUrlRef};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_python::PythonInstallationKey;
+use uv_python_types::PythonInstallationKey;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 
@@ -121,11 +121,11 @@ impl Direction {
     }
 }
 
-impl From<uv_python::downloads::Direction> for Direction {
-    fn from(dir: uv_python::downloads::Direction) -> Self {
+impl From<uv_python_managed::downloads::Direction> for Direction {
+    fn from(dir: uv_python_managed::downloads::Direction) -> Self {
         match dir {
-            uv_python::downloads::Direction::Download => Self::Download,
-            uv_python::downloads::Direction::Extract => Self::Extract,
+            uv_python_managed::downloads::Direction::Download => Self::Download,
+            uv_python_managed::downloads::Direction::Extract => Self::Extract,
         }
     }
 }
@@ -665,10 +665,10 @@ impl PythonDownloadReporter {
     }
 }
 
-impl uv_python::downloads::Reporter for PythonDownloadReporter {
+impl uv_python_managed::downloads::Reporter for PythonDownloadReporter {
     fn on_request_start(
         &self,
-        direction: uv_python::downloads::Direction,
+        direction: uv_python_managed::downloads::Direction,
         name: &PythonInstallationKey,
         size: Option<u64>,
     ) -> usize {
@@ -680,7 +680,7 @@ impl uv_python::downloads::Reporter for PythonDownloadReporter {
         self.reporter.on_request_progress(id, inc);
     }
 
-    fn on_request_complete(&self, direction: uv_python::downloads::Direction, id: usize) {
+    fn on_request_complete(&self, direction: uv_python_managed::downloads::Direction, id: usize) {
         self.reporter.on_request_complete(direction.into(), id);
     }
 }

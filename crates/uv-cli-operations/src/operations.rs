@@ -38,8 +38,9 @@ use uv_pep508::{MarkerEnvironment, RequirementOrigin, VerbatimUrl};
 use uv_platform_tags::Tags;
 use uv_preview::Preview;
 use uv_pypi_types::{Conflicts, ResolverMarkerEnvironment};
-use uv_python::managed::{ManagedPythonInstallation, PythonMinorVersionLink};
-use uv_python::{PythonEnvironment, PythonInstallation};
+use uv_python_discovery::PythonInstallation;
+use uv_python_interpreter::PythonEnvironment;
+use uv_python_managed::{ManagedPythonInstallation, PythonMinorVersionLink};
 use uv_requirements::{
     GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
     RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
@@ -1406,6 +1407,9 @@ pub enum Error {
     #[error(transparent)]
     Prepare(#[from] uv_installer::PrepareError),
 
+    #[error(transparent)]
+    Install(#[from] uv_installer::InstallError),
+
     #[error("{header}")]
     NoSolution {
         header: NoSolutionHeader,
@@ -1447,13 +1451,14 @@ pub enum Error {
 
 impl Error {
     /// Return the solver failure for an unsatisfiable resolution.
-    pub(crate) fn as_no_solution(&self) -> Option<&NoSolutionError> {
+    pub fn as_no_solution(&self) -> Option<&NoSolutionError> {
         match self {
             Self::NoSolution { source, .. } | Self::Resolve(ResolveError::NoSolution(source)) => {
                 Some(source)
             }
             Self::Resolve(_)
             | Self::Prepare(_)
+            | Self::Install(_)
             | Self::Uninstall(_)
             | Self::Hash(_)
             | Self::Io(_)
@@ -1466,12 +1471,13 @@ impl Error {
     }
 
     /// Return the changes required by an environment that failed an up-to-date check.
-    pub(crate) fn outdated_environment(&self) -> Option<&Changelog> {
+    pub fn outdated_environment(&self) -> Option<&Changelog> {
         match self {
             Self::OutdatedEnvironment(changelog) => Some(changelog),
             Self::NoSolution { .. }
             | Self::Resolve(_)
             | Self::Prepare(_)
+            | Self::Install(_)
             | Self::Uninstall(_)
             | Self::Hash(_)
             | Self::Io(_)
@@ -1493,6 +1499,7 @@ impl Error {
                 source,
             },
             error @ (Self::Prepare(_)
+            | Self::Install(_)
             | Self::NoSolution { .. }
             | Self::Resolve(_)
             | Self::Uninstall(_)
@@ -1518,6 +1525,7 @@ impl Error {
                 Self::RequirementsWithContext { context, source }
             }
             error @ (Self::Prepare(_)
+            | Self::Install(_)
             | Self::Resolve(_)
             | Self::Uninstall(_)
             | Self::Hash(_)
@@ -1538,7 +1546,11 @@ impl Error {
             Self::Requirements(error) | Self::RequirementsWithContext { source: error, .. } => {
                 error.is_user_failure()
             }
-            Self::Uninstall(_) | Self::Io(_) | Self::Fmt(_) | Self::Anyhow(_) => false,
+            Self::Install(_)
+            | Self::Uninstall(_)
+            | Self::Io(_)
+            | Self::Fmt(_)
+            | Self::Anyhow(_) => false,
         }
     }
 }
@@ -1576,6 +1588,7 @@ impl uv_errors::Hinted for Error {
                 uv_errors::Hints::none()
             }
             Self::Prepare(_)
+            | Self::Install(_)
             | Self::Uninstall(_)
             | Self::Hash(_)
             | Self::Io(_)
