@@ -1486,7 +1486,7 @@ impl Error {
     ///
     /// Nested operation errors may already have a more specific heading from their caller.
     #[must_use]
-    pub fn with_default_resolution_context(self) -> Self {
+    pub(crate) fn with_default_resolution_context(self) -> Self {
         match self {
             Self::Resolve(ResolveError::NoSolution(source)) => Self::NoSolution {
                 header: NoSolutionHeader::new(source.environment().clone()),
@@ -1529,7 +1529,7 @@ impl Error {
     }
 
     /// Return whether this operation failure is an expected user-facing failure.
-    pub fn is_user_failure(&self) -> bool {
+    pub(crate) fn is_user_failure(&self) -> bool {
         match self {
             Self::Prepare(error) => error.is_user_failure(),
             Self::NoSolution { .. } => true,

@@ -6435,6 +6435,7 @@ dependencies = [
  "uv-settings",
  "uv-tool",
  "uv-types",
+ "uv-version",
  "uv-virtualenv",
  "uv-warnings",
  "uv-workspace",
