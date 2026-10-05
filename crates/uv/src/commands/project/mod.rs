@@ -31,7 +31,7 @@ use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock, LockParseError};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{TildeVersionSpecifier, Version, VersionSpecifiers};
-use uv_pep508::{MarkerTreeContents, VersionOrUrl};
+use uv_pep508::MarkerTreeContents;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_python::managed::{ManagedPythonInstallation, PythonMinorVersionLink};
@@ -41,9 +41,7 @@ use uv_python::{
     PythonPreference, PythonRequest, PythonSource, PythonVariant, PythonVersionFile,
     VersionFileDiscoveryOptions, VersionRequest,
 };
-use uv_requirements::{
-    NamedRequirementsResolver, RequirementsSpecification, infer_name_from_filename,
-};
+use uv_requirements::{NamedRequirementsResolver, RequirementsSpecification};
 use uv_resolver::{
     DependencyMode, FlatIndex, InMemoryIndex, OptionsBuilder, Preference, PythonRequirement,
     ResolverEnvironment, ResolverOutput,
@@ -2536,25 +2534,6 @@ pub(crate) async fn resolve_names(
 
     // Short-circuit if there are no unnamed requirements.
     if unnamed.is_empty() {
-        return Ok(requirements);
-    }
-
-    // Complete archive filenames need no metadata or build dependencies. Keep mixed inputs
-    // together when any name needs resolution so their requirement order stays unchanged.
-    if let Some(names) = unnamed
-        .iter()
-        .map(infer_name_from_filename)
-        .collect::<Result<Option<Vec<_>>, uv_requirements::Error>>()?
-    {
-        requirements.extend(unnamed.into_iter().zip(names).map(|(requirement, name)| {
-            Requirement::from(uv_pep508::Requirement {
-                name,
-                extras: requirement.extras,
-                version_or_url: Some(VersionOrUrl::Url(requirement.url)),
-                marker: requirement.marker,
-                origin: requirement.origin,
-            })
-        }));
         return Ok(requirements);
     }
 
