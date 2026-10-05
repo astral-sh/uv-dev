@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with installed uv 0.12.13 and Python 3.12.3, an isolated `uv build --wheel` using a dependency-free backend that slept after printing a marker was interrupted with Ctrl+C. The build exited with status 1, but `cache/builds-v0/.tmpqEQ9Qs/pyvenv.cfg` remained and occupied 108 KiB. `uv cache prune` reported `No unused entries found` and retained it. A control backend that raised a normal error left no build environment. No direct integration-test coverage was found; `crates/uv/tests/build/cache_prune.rs::prune_cached_env` only covers cached environments under `environments-v2`."
+}
