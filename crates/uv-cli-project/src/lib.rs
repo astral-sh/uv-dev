@@ -378,7 +378,7 @@ impl From<LockParseError> for ProjectError {
 
 /// Vulnerability identifiers grouped by dependency.
 #[derive(Debug)]
-pub struct MalwareFindings(pub Vec<(Dependency, Vec<VulnerabilityID>)>);
+pub struct MalwareFindings(pub(crate) Vec<(Dependency, Vec<VulnerabilityID>)>);
 
 impl std::fmt::Display for MalwareFindings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

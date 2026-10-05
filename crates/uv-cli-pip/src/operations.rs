@@ -486,7 +486,7 @@ impl std::fmt::Display for LongSpecifier<'_> {
 }
 
 impl ChangedDist {
-    pub fn short_specifier(&self) -> ShortSpecifier<'_> {
+    pub(crate) fn short_specifier(&self) -> ShortSpecifier<'_> {
         match self {
             Self::Local(dist) => ShortSpecifier::Version(dist.installed_version().version()),
             Self::Remote(dist) => match dist.version_or_url() {
@@ -496,7 +496,7 @@ impl ChangedDist {
         }
     }
 
-    pub fn long_specifier(&self) -> LongSpecifier<'_> {
+    pub(crate) fn long_specifier(&self) -> LongSpecifier<'_> {
         match self {
             Self::Local(dist) => LongSpecifier::InstalledVersion(dist.installed_version()),
             Self::Remote(dist) => match dist.version_or_url() {

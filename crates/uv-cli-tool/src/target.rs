@@ -77,7 +77,7 @@ pub enum Target<'a> {
 
 impl<'a> Target<'a> {
     /// Parse a target into a command name and a requirement.
-    pub(crate) fn parse(target: &'a str) -> Self {
+    fn parse(target: &'a str) -> Self {
         // e.g. `ruff`, no special handling
         let Some((name, version)) = target.split_once('@') else {
             return Self::Unspecified(target);

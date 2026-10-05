@@ -184,7 +184,7 @@ impl ProjectPythonRequest {
         })
     }
 
-    pub fn requires_python(&self) -> Option<&RequiresPython> {
+    pub(crate) fn requires_python(&self) -> Option<&RequiresPython> {
         self.requirement
             .as_ref()
             .map(|requirement| &requirement.requires_python)
@@ -210,7 +210,7 @@ impl ProjectPythonRequest {
     ///
     /// Discovery is responsible for matching the Python request; this checks the project and
     /// selected group requirements.
-    pub fn validate(
+    pub(crate) fn validate(
         &self,
         interpreter: Interpreter,
     ) -> Result<CompatibleProjectPython, PythonSelectionError> {
@@ -412,7 +412,7 @@ pub enum PythonRequirementSource {
 /// Returns an error if the [`Interpreter`] does not satisfy `requires_python`.
 ///
 /// The requirement source determines which conflicting declarations are included in the diagnostic.
-pub fn validate_python_requirement(
+pub(crate) fn validate_python_requirement(
     interpreter: &Interpreter,
     requires_python: &RequiresPython,
     source: &PythonRequestSource,
@@ -477,7 +477,7 @@ pub fn validate_python_requirement(
     }
 }
 
-pub fn format_requires_python_sources(conflicts: &RequiresPythonSources) -> String {
+pub(crate) fn format_requires_python_sources(conflicts: &RequiresPythonSources) -> String {
     conflicts
         .iter()
         .map(|(source, specifiers)| format!("- {source}: {specifiers}"))

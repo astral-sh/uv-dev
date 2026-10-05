@@ -25,7 +25,7 @@ static SUGGESTIONS: LazyLock<FxHashMap<PackageName, PackageName>> = LazyLock::ne
 });
 
 /// Format package context that should follow a distribution error as hints.
-pub fn dist_hints(
+pub(crate) fn dist_hints(
     name: &PackageName,
     version: Option<&Version>,
     chain: &DerivationChain,
