@@ -169,6 +169,21 @@ impl RetryState {
         }
     }
 
+    /// Consume retry budget for a continuation of an interrupted response.
+    ///
+    /// The first continuation can proceed without a delay. Earlier retries, including retries
+    /// performed by the HTTP middleware, require the usual backoff.
+    #[must_use]
+    pub fn should_resume(
+        &mut self,
+        err: &(dyn Error + 'static),
+        error_retries: u32,
+    ) -> Option<Duration> {
+        let first_retry = self.total_retries == 0 && error_retries == 0;
+        let backoff = self.should_retry(err, error_retries)?;
+        Some(if first_retry { Duration::ZERO } else { backoff })
+    }
+
     /// Wait before retrying the request.
     pub async fn sleep_backoff(&self, duration: Duration) {
         debug!(
