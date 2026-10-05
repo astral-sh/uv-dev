@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with installed uv 0.12.13, a local-only `uv pip install` parse error was sent to a non-blocking Unix socket with a full 4,608-byte buffer. All three runs terminated with SIGABRT (-6); the blocking control exited normally with status 2. `strace` confirmed `write(2)` returned EAGAIN, the panic message also hit EAGAIN, then uv invoked SIGABRT. No matching integration test was found. The required README could not be updated because `$RUNNER_TEMP` was outside the writable sandbox."
+}
