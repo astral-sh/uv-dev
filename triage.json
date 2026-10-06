@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22258,
+        "title": "test: reproduce Darwin release marker fallback inconsistencies",
+        "url": "https://github.com/astral-sh/uv/pull/22258",
+        "state": "open",
+        "reason": "Companion draft containing exactly the two reported public-API tests. Its diff adds only tests and its description reports both failing. It supplies reproductions for this report, not an independent canonical discussion or production fix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21766,
+        "title": "Infer Darwin release markers from macOS wheel tags",
+        "url": "https://github.com/astral-sh/uv/pull/21766",
+        "state": "merged",
+        "reason": "Introduced Darwin-specific VersionString lowering, the unconditional false return on version-parse failure, and numeric-range serialization. Merged September 17, 2026 and included in uv 0.12.16. Its tests cover valid releases, leaving the reported opaque inputs uncovered."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19808,
+        "title": "Update string marker ordering semantics",
+        "url": "https://github.com/astral-sh/uv/pull/19808",
+        "state": "merged",
+        "reason": "Applied updated ordering rules to pure String marker fields. Explicitly excluded platform_release and platform_version because they are Version | String fields, so it provides contract context but did not fix the reported Darwin failures."
+      },
+      {
+        "kind": "issue",
+        "number": 3917,
+        "title": "Different understanding of environment markers vs pip",
+        "url": "https://github.com/astral-sh/uv/issues/3917",
+        "state": "closed",
+        "reason": "Discusses non-PEP-440 platform_release values and numeric versus lexicographic fallback, including maintainer comments on inconsistent ordering. It concerns Linux/pip comparisons and predates the Darwin numeric path; it does not track broken logical negation or loss of opaque values during numeric simplification."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open/closed issues and open/closed/merged PRs separately for negation/parse-failure and simplification/tautology claims. Literal terms included platform_release, VersionString, not-a-version, 3-invalid, and both test names; conceptual terms included opaque, lexical/lexicographic, string ordering, negation, and marker simplification without platform constraints. PR keyword searches returned no hits even for known matching PRs, so coverage was supplemented with the 500 most recent all-state PRs, marker-file commit history, direct diffs, comments, reviews, and linked discussions. Ruled out astral-sh/uv#19105 and astral-sh/uv#18971 (normal-release dependency selection), astral-sh/uv#5044 and astral-sh/uv#5050 (eliding genuine tautologies), astral-sh/uv#21309 (unsupported reversed membership), astral-sh/uv#21825 (wheel-coverage fork boundaries), and astral-sh/uv#21939 (python_version false-marker serialization). No independent matching issue or production repair was found."
+  },
+  "type": "bug",
+  "type_reason": "Source confirms that MarkerEnvironment accepts arbitrary platform_release strings, but Darwin VersionString evaluation returns false before following complemented edges on parse failure. Numeric lowering also reduces the reported union to true on Darwin, losing the opaque-value case before evaluation. These violate existing API semantics. The companion reproduction PR astral-sh/uv#22258 does not make this a duplicate. Earlier ordering work explicitly excluded these mixed-type fields; no previously fixed instance of these failures was established.",
+  "summary": "astral-sh/uv#22258 reproduces both failures, and astral-sh/uv#21766 introduced the affected Darwin path. astral-sh/uv#19808 and astral-sh/uv#3917 provide comparison-semantics context. No independent duplicate or production fix was found. The requested README update could not be saved because $RUNNER_TEMP/issue-context/README.md is on a read-only filesystem; its template remains unchanged.",
+  "draft_response": "Your examples identify two correctness problems in the public API: an unparseable Darwin release returns false before complemented edges are evaluated, and numeric range simplification can discard the opaque-value case entirely. The relevant path was added in astral-sh/uv#21766.\n\nastral-sh/uv#22258 provides reproductions, with no production fix. The next step is to preserve the non-version case through evaluation, simplification, and printing/reparsing, using both tests as regressions. Changing only the parse-failure return will not cover the second case. The broader fallback contract still needs a design decision; these synthetic inputs do not establish an installation failure on normal macOS releases."
+}
