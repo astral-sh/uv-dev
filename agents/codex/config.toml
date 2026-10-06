@@ -1,11 +1,9 @@
 default_permissions = ":read-only"
 
 [permissions.issue-triage]
-description = "Issue triage with temporary filesystem and GitHub API access."
+description = "Issue triage with issue-context and GitHub API access."
 extends = ":read-only"
-
-[permissions.issue-triage.filesystem]
-":tmpdir" = "write"
+# The workflow grants writes to its issue-context directory by absolute path.
 
 [permissions.issue-triage.network]
 enabled = true
