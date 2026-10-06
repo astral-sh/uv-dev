@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 6349,
+        "title": "Request for `uv.lock` to support different index urls across different developer machines and CI environments",
+        "url": "https://github.com/astral-sh/uv/issues/6349",
+        "state": "open",
+        "reason": "Canonical discussion for installing from an unchanged lockfile through different indexes or proxies. Maintainers discuss retaining locked versions and hashes, supporting different artifact URLs, and installing without contacting the original index."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20790,
+        "title": "Support proxy indexes through reversible artifact URLs",
+        "url": "https://github.com/astral-sh/uv/pull/20790",
+        "state": "open",
+        "reason": "Proposes proxy downloads with unchanged canonical lockfile URLs and hash verification, including frozen installs. Currently requires identical artifact paths after configurable URL prefixes; maintainers defer different-path support to follow-up work. It therefore does not yet cover the reported GitLab layout or establish the requested origin-fallback behavior."
+      },
+      {
+        "kind": "issue",
+        "number": 19625,
+        "title": "`uv sync --frozen` ignores all index/mirror configuration and uses hardcoded URLs from `uv.lock`",
+        "url": "https://github.com/astral-sh/uv/issues/19625",
+        "state": "closed",
+        "reason": "Reports the same frozen-sync behavior and requests mirror lookup using locked versions and hashes, followed by fallback to locked URLs. A maintainer confirms that using locked URLs is intentional; closure did not represent an implemented fix."
+      },
+      {
+        "kind": "issue",
+        "number": 21747,
+        "title": "frozen block UV_DEFAULT_INDEX and UV_INDEX_STRATEGY",
+        "url": "https://github.com/astral-sh/uv/issues/21747",
+        "state": "closed",
+        "reason": "Reports frozen sync ignoring a configured mirror. A maintainer explains that frozen installs use locations recorded in uv.lock and points directly to astral-sh/uv#20790 when the lockfile must remain unchanged."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11782,
+        "title": "Support proxy index urls",
+        "url": "https://github.com/astral-sh/uv/pull/11782",
+        "state": "closed",
+        "reason": "Earlier proposal for CLI and environment-variable proxy overrides across sync and run while preserving canonical lockfile URLs. It targeted astral-sh/uv#6349 but closed without merging, so it is historical implementation work rather than a shipped fix."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs. Literal searches covered frozen index, UV_INDEX frozen, run frozen index, and air-gapped. Conceptual searches covered lockfile mirror, registry agnostic, override index, partial mirror, mirror hash fallback, and proxy artifact paths. Fix-oriented PR searches covered frozen/index, mirror, proxy, proxy-for, and artifact routing. PR keyword searches returned no hits; following issue references located the PRs inspected directly. Read candidate discussions, maintainer comments, proposed documentation, and current frozen-install source. Ruled out merged astral-sh/uv#7481 as a fix because it explicitly deferred proxy support; astral-sh/uv#16996 concerns ignored resolution-option diagnostics, and astral-sh/uv#20765 concerns named-source configuration during resolution."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#6349 already tracks installing identical locked artifacts through environment-specific mirrors without rewriting uv.lock. The partial GitLab mirror, different artifact paths, uv run auto-sync, and fallback policy refine that existing request. Current source and maintainer comments confirm that frozen installs consume locked URLs. No previously merged fix for this capability was identified; astral-sh/uv#20790 remains open and astral-sh/uv#11782 was never merged.",
+  "summary": "Duplicate of astral-sh/uv#6349. Open astral-sh/uv#20790 proposes narrower proxy support that does not yet cover this GitLab mirror's different artifact paths. The requested README could not be updated or saved elsewhere because both $RUNNER_TEMP and /tmp are read-only.",
+  "draft_response": "This is tracked in astral-sh/uv#6349. Currently, `--frozen` installs from the lockfile, including its recorded download URLs, so `UV_INDEX` or `--index` does not redirect those artifacts. This also applies to the project sync performed by `uv run --frozen`.\n\nastral-sh/uv#20790 proposes proxy support while retaining locked URLs and checking hashes, but it is still open and currently requires mirrors to preserve artifact paths after a configurable prefix. Your GitLab mirror's different paths need the follow-up support discussed there; fallback to the original URL also remains a design consideration. Please continue in astral-sh/uv#6349 with your partial-mirror, path-layout, and fallback requirements."
+}
