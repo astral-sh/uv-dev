@@ -739,6 +739,7 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(serde_json::json!({
+            "unmanaged_distributions": metadata["unmanaged_distributions"],
             "installed_packages": metadata["environment"]["packages"],
             "module_owners": metadata["module_owners"],
             "resolution": metadata["resolution"],
@@ -755,24 +756,26 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
           "module_owners": {
             "extra_module": [
               {
-                "package_id": "metadata-extra==0.1.0@installed+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
+                "package_id": "metadata-extra==0.1.0@unmanaged+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
               }
             ]
           },
           "resolution": {
-            "metadata-extra==0.1.0@installed+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info": {
-              "dependencies": [],
-              "kind": "package",
-              "name": "metadata-extra",
-              "source": {
-                "installed": "[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
-              },
-              "version": "0.1.0"
-            },
             "script+[TEMP_DIR]/script.py": {
               "dependencies": [],
               "kind": "script",
               "path": "[TEMP_DIR]/script.py"
+            }
+          },
+          "unmanaged_distributions": {
+            "metadata-extra==0.1.0@unmanaged+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info": {
+              "dependencies": [],
+              "kind": "package",
+              "name": "metadata-extra",
+              "source": {
+                "unmanaged": "[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
+              },
+              "version": "0.1.0"
             }
           }
         }
@@ -793,6 +796,7 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
 
     insta::assert_json_snapshot!(serde_json::json!({
+        "unmanaged_distributions": metadata.get("unmanaged_distributions"),
         "extraneous_installed": context
             .pip_show()
             .arg("metadata-extra")
@@ -805,7 +809,8 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
     {
       "extraneous_installed": false,
       "installed_packages": {},
-      "module_owners": null
+      "module_owners": null,
+      "unmanaged_distributions": null
     }
     "#);
 
@@ -1277,7 +1282,7 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
           "module_owners": {
             "extra_module": [
               {
-                "package_id": "metadata-extra==0.1.0@installed+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
+                "package_id": "metadata-extra==0.1.0@unmanaged+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
               }
             ],
             "required_module": [
@@ -1360,7 +1365,7 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
         {
           "extra_module": [
             {
-              "package_id": "metadata-extra==0.1.0@installed+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
+              "package_id": "metadata-extra==0.1.0@unmanaged+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
             }
           ],
           "required_module": [
@@ -1981,6 +1986,7 @@ package = false
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(serde_json::json!({
+            "unmanaged_distributions": metadata["unmanaged_distributions"],
             "module_owners": metadata["module_owners"],
             "resolution": metadata["resolution"],
         }), @r#"
@@ -1988,20 +1994,11 @@ package = false
           "module_owners": {
             "stale": [
               {
-                "package_id": "module-owner-root==0.1.0@installed+[SITE_PACKAGES]/module_owner_root-0.1.0.dist-info"
+                "package_id": "module-owner-root==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner_root-0.1.0.dist-info"
               }
             ]
           },
           "resolution": {
-            "module-owner-root==0.1.0@installed+[SITE_PACKAGES]/module_owner_root-0.1.0.dist-info": {
-              "dependencies": [],
-              "kind": "package",
-              "name": "module-owner-root",
-              "source": {
-                "installed": "[SITE_PACKAGES]/module_owner_root-0.1.0.dist-info"
-              },
-              "version": "0.1.0"
-            },
             "module-owner-root==0.1.0@virtual+[TEMP_DIR]/": {
               "dependencies": [],
               "kind": "package",
@@ -2015,6 +2012,17 @@ package = false
               "dependencies": [],
               "kind": "workspace",
               "path": "[TEMP_DIR]/"
+            }
+          },
+          "unmanaged_distributions": {
+            "module-owner-root==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner_root-0.1.0.dist-info": {
+              "dependencies": [],
+              "kind": "package",
+              "name": "module-owner-root",
+              "source": {
+                "unmanaged": "[SITE_PACKAGES]/module_owner_root-0.1.0.dist-info"
+              },
+              "version": "0.1.0"
             }
           }
         }
@@ -2065,11 +2073,12 @@ fn workspace_metadata_module_owners_after_dependency_changes() -> Result<()> {
         "#
     })?;
 
-    // Modules from an older installation still belong to the selected package with the same name.
+    // A selected package owns modules from an older installed version with the same name.
     let assert = context.workspace_metadata().assert().success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(serde_json::json!({
+            "unmanaged_distributions": metadata.get("unmanaged_distributions"),
             "installed_packages": metadata["environment"]["packages"],
             "module_owners": metadata["module_owners"],
         }), @r#"
@@ -2088,7 +2097,8 @@ fn workspace_metadata_module_owners_after_dependency_changes() -> Result<()> {
                 "package_id": "module-owner==0.2.0@path+[TEMP_DIR]/module_owner-0.2.0-py3-none-any.whl"
               }
             ]
-          }
+          },
+          "unmanaged_distributions": null
         }
         "#);
     });
@@ -2102,11 +2112,12 @@ fn workspace_metadata_module_owners_after_dependency_changes() -> Result<()> {
         "#
     })?;
 
-    // Refreshing metadata leaves the installed package available without declaring an edge.
+    // Without a declaration, the installed package remains available without a dependency edge.
     let assert = context.workspace_metadata().assert().success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(serde_json::json!({
+            "unmanaged_distributions": metadata["unmanaged_distributions"],
             "installed_packages": metadata["environment"]["packages"],
             "module_owners": metadata["module_owners"],
             "resolution": metadata["resolution"],
@@ -2123,7 +2134,7 @@ fn workspace_metadata_module_owners_after_dependency_changes() -> Result<()> {
           "module_owners": {
             "installed_module": [
               {
-                "package_id": "module-owner==0.1.0@installed+[SITE_PACKAGES]/module_owner-0.1.0.dist-info"
+                "package_id": "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info"
               }
             ]
           },
@@ -2137,19 +2148,21 @@ fn workspace_metadata_module_owners_after_dependency_changes() -> Result<()> {
               },
               "version": "0.1.0"
             },
-            "module-owner==0.1.0@installed+[SITE_PACKAGES]/module_owner-0.1.0.dist-info": {
-              "dependencies": [],
-              "kind": "package",
-              "name": "module-owner",
-              "source": {
-                "installed": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info"
-              },
-              "version": "0.1.0"
-            },
             "workspace+[TEMP_DIR]/": {
               "dependencies": [],
               "kind": "workspace",
               "path": "[TEMP_DIR]/"
+            }
+          },
+          "unmanaged_distributions": {
+            "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info": {
+              "dependencies": [],
+              "kind": "package",
+              "name": "module-owner",
+              "source": {
+                "unmanaged": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info"
+              },
+              "version": "0.1.0"
             }
           }
         }
@@ -2275,6 +2288,7 @@ fn workspace_metadata_installed_packages_without_modules() -> Result<()> {
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(serde_json::json!({
+            "unmanaged_distributions": metadata.get("unmanaged_distributions"),
             "installed_packages": metadata["environment"]["packages"],
             "module_owners": metadata["module_owners"],
             "resolution": metadata["resolution"],
@@ -2310,12 +2324,13 @@ fn workspace_metadata_installed_packages_without_modules() -> Result<()> {
               "kind": "workspace",
               "path": "[TEMP_DIR]/"
             }
-          }
+          },
+          "unmanaged_distributions": null
         }
         "#);
     });
 
-    // Missing module records for a declared dependency still make ownership incomplete.
+    // Missing module records for a selected package make module ownership incomplete.
     let declared = context
         .temp_dir
         .child("missing_record-0.1.0-py3-none-any.whl");
