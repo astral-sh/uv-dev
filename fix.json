@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "Confirmed the parent regression passes and a desired-behavior assertion fails. A complete fix requires choosing opaque-string fallback semantics and preserving them through numeric simplification and serialization; an evaluator-only patch is insufficient. The checkout is unchanged. The required README is read-only; the investigation is saved at /tmp/uv-22259-fix-README.md.",
+  "validation": [],
+  "pull_request": null
+}
