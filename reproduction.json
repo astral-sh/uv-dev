@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced both failures using Rust 1.98.1 on Linux x86_64, checkout 822539467aa0744075b4ffde516db85ed0a547c5, and synthetic Darwin MarkerEnvironment values. Command: cargo test --manifest-path /tmp/uv-22259-CjiEHE/harness/Cargo.toml --test darwin_release_fallback, with Cargo caches/build output under /tmp. For not-a-version, equality and its negation both returned false. For 3-invalid, both comparisons returned false individually, but their OR returned true. Both tests passed against the source immediately before astral-sh/uv#21766. Installed uv 0.12.13 predates the change; these are direct Rust API findings, without demonstrated ordinary macOS installation impact. Updating the required README failed because its filesystem is read-only. The completed handoff is saved at /tmp/uv-22259-CjiEHE/issue-context-README.md."
+}
