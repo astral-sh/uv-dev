@@ -37,7 +37,7 @@ use uv_distribution_types::{
     SourceUrl,
 };
 use uv_fs::{Simplified, rename_with_retry, write_atomic};
-use uv_git::{Fetch, GIT_LFS, GitError, GitHttpSettings, GitResolver};
+use uv_git::{Fetch, GIT_LFS, GitError, GitFetchSettings, GitResolver};
 use uv_git_types::{GitHubRepository, GitOid, GitUrl};
 use uv_metadata::read_archive_metadata;
 use uv_normalize::PackageName;
@@ -118,7 +118,7 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
                     git,
                     url.to_url(),
                     subdirectory.as_deref(),
-                    client.git_http_settings(git.url()),
+                    client.git_fetch_settings(git.url()),
                     self.cache,
                     None,
                 )
@@ -177,7 +177,7 @@ async fn fetch_git_source_tree(
     git: &GitUrl,
     url: DisplaySafeUrl,
     subdirectory: Option<&Path>,
-    http_settings: GitHttpSettings,
+    http_settings: GitFetchSettings,
     cache: &Cache,
     reporter: Option<Arc<dyn uv_git::Reporter>>,
 ) -> Result<Fetch, Error> {
@@ -1891,7 +1891,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .git()
             .fetch(
                 resource.git,
-                client.unmanaged.git_http_settings(resource.git.url()),
+                client.unmanaged.git_fetch_settings(resource.git.url()),
                 self.build_context.cache().bucket(CacheBucket::Git),
                 self.reporter
                     .clone()
@@ -2001,7 +2001,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .git()
             .fetch(
                 resource.git,
-                client.unmanaged.git_http_settings(resource.git.url()),
+                client.unmanaged.git_fetch_settings(resource.git.url()),
                 self.build_context.cache().bucket(CacheBucket::Git),
                 self.reporter
                     .clone()
@@ -2168,7 +2168,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             resource.git,
             resource.url.to_url(),
             resource.subdirectory,
-            client.unmanaged.git_http_settings(resource.git.url()),
+            client.unmanaged.git_fetch_settings(resource.git.url()),
             self.build_context.cache(),
             self.reporter
                 .clone()
@@ -2360,7 +2360,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             resource.git,
             resource.url.to_url(),
             resource.subdirectory,
-            client.unmanaged.git_http_settings(resource.git.url()),
+            client.unmanaged.git_fetch_settings(resource.git.url()),
             self.build_context.cache(),
             self.reporter
                 .clone()
@@ -2617,7 +2617,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .git()
             .fetch(
                 git,
-                client.unmanaged.git_http_settings(git.url()),
+                client.unmanaged.git_fetch_settings(git.url()),
                 self.build_context.cache().bucket(CacheBucket::Git),
                 self.reporter
                     .clone()
