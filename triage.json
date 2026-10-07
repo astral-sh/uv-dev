@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12691,
+        "title": "`uv run --with` uses different dependencies when prefixed with `python`",
+        "url": "https://github.com/astral-sh/uv/issues/12691",
+        "state": "open",
+        "reason": "Closest discussion: project pytest ignores a dependency supplied through --with, while python -m pytest sees it. Maintainer comments identify the project launcher selecting the base interpreter. This report identifies a specific remaining trigger: absolute /bin/sh wrappers."
+      },
+      {
+        "kind": "issue",
+        "number": 9724,
+        "title": "`--with` not working with local packages",
+        "url": "https://github.com/astral-sh/uv/issues/9724",
+        "state": "open",
+        "reason": "A project console script cannot import a --with dependency. A maintainer confirms that its shebang selects an environment without that dependency. The local-package reproduction differs, but the entrypoint bypassing the overlay is the same underlying problem."
+      },
+      {
+        "kind": "issue",
+        "number": 13327,
+        "title": "Ephemeral environments lacking scripts entry points",
+        "url": "https://github.com/astral-sh/uv/issues/13327",
+        "state": "closed",
+        "reason": "Historical report of base-environment entrypoints missing --with packages, including pytest and the python -m workaround. Closed by astral-sh/uv#14790, which introduced entrypoint copying but omitted absolute shell wrappers."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14790,
+        "title": "Copy entry points and Jupyter data directories into ephemeral environments",
+        "url": "https://github.com/astral-sh/uv/pull/14790",
+        "state": "merged",
+        "reason": "Merged July 22, 2025; introduced entrypoint copying and retargeting to avoid bypassing the ephemeral interpreter. Its original diff accepts only relocatable shell wrappers and direct Python shebangs, establishing that the reported absolute-wrapper case was omitted from that fix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14970,
+        "title": "Copy entrypoints that have a shebang that differs in `python` vs `python3`",
+        "url": "https://github.com/astral-sh/uv/pull/14970",
+        "state": "merged",
+        "reason": "Related fix for entrypoints skipped by the same matcher on subsequent invocations. It handles python versus python3 in direct shebangs, not absolute /bin/sh wrappers. The current checkout contains that separate fix."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Literal searches covered --with, entrypoint, ModuleNotFoundError, No module named 'six', copy_entrypoint, format_shebang, the exact skipped-shebang diagnostic, /bin/sh, long paths, and 127. Conceptual searches covered ephemeral environments, overlay visibility, console scripts, entrypoint copying, wrappers, and spaces, without package or platform restrictions. Followed comments and references through astral-sh/uv#14749, astral-sh/uv#13327, astral-sh/uv#14790, and astral-sh/uv#14970; inspected historical diffs and current source/tests. Ruled out astral-sh/uv#15113 (system site-packages omitted after successful copying), astral-sh/uv#9348 (upstream launcher quoting), and astral-sh/uv#14919 as a direct duplicate (dependency precedence and the separately fixed python/python3 mismatch). PR searches returned no candidates, so relevant historical PRs were retrieved directly from references; two supplementary API searches were rate-limited."
+  },
+  "type": "duplicate",
+  "type_reason": "The incorrect behavior is the same entrypoint/--with environment mismatch already tracked by open astral-sh/uv#12691 and astral-sh/uv#9724; the long-path wrapper is a specific uncovered case, so duplicate takes precedence. Source confirms that uv emits this wrapper but skips copying it into the overlay. Although astral-sh/uv#14790 fixed the general case, its original implementation also omitted absolute shell wrappers. There is no evidence this particular case previously worked and then regressed.",
+  "summary": "Closest match: astral-sh/uv#12691, also tracked by astral-sh/uv#9724. The report identifies a wrapper-handling gap in astral-sh/uv#14790. The complete handoff was prepared, but the requested README could not be updated because its filesystem is read-only; saving a temporary fallback also failed because no writable temporary directory was available.",
+  "draft_response": "This is another case of the entrypoint/`--with` mismatch tracked in astral-sh/uv#12691. Your long-path reproduction identifies a gap in astral-sh/uv#14790: uv generates an absolute `/bin/sh` wrapper, but `copy_entrypoint` does not recognize it, leaving the project launcher to use the base interpreter.\n\nLet's consolidate this reproduction in astral-sh/uv#12691. The remaining fix needs to recognize and retarget that wrapper, with integration coverage for long paths. In the meantime, your `uv run --with six python -m pytest -q test_x.py` workaround selects the overlay interpreter."
+}
