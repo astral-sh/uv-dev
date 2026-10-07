@@ -6,11 +6,15 @@ use axoupdater::{
     ReleaseSourceType,
     test::helpers::{RuntestArgs, perform_runtest},
 };
+#[cfg(unix)]
+use insta::assert_snapshot;
 use regex::escape;
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[cfg(unix)]
+use uv_platform::Platform;
 use uv_static::EnvVars;
 
 use uv_test::{TestContext, get_bin, uv_snapshot};
@@ -80,12 +84,8 @@ fn self_update_offline_extra_quiet() {
     ");
 }
 
-/// Set up a fake receipt and a mock update metadata endpoint to allow
-/// simulating an update with `--dry-run`.
-async fn setup_mock_update(
-    context: &TestContext,
-    target_version: &str,
-) -> Result<(PathBuf, MockServer)> {
+/// Set up a fake standalone install receipt for the test binary.
+fn setup_mock_receipt(context: &TestContext) -> Result<PathBuf> {
     let receipt_dir = context.temp_dir.child("receipt");
     receipt_dir.create_dir_all()?;
 
@@ -114,6 +114,16 @@ async fn setup_mock_update(
             "modify_path": true,
         }))?)?;
 
+    Ok(receipt_dir.to_path_buf())
+}
+
+/// Set up a fake receipt and a mock update metadata endpoint to allow
+/// simulating an update with `--dry-run`.
+async fn setup_mock_update(
+    context: &TestContext,
+    target_version: &str,
+) -> Result<(PathBuf, MockServer)> {
+    let receipt_dir = setup_mock_receipt(context)?;
     let server = MockServer::start().await;
     let installer_name = if cfg!(windows) {
         "uv-installer.ps1"
@@ -138,7 +148,67 @@ async fn setup_mock_update(
         .mount(&server)
         .await;
 
-    Ok((receipt_dir.to_path_buf(), server))
+    Ok((receipt_dir, server))
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn self_update_astral_mirror_success_message() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filter((
+        escape(&format!("v{}", env!("CARGO_PKG_VERSION"))),
+        "v[CURRENT_VERSION]",
+    ));
+    let receipt_dir = setup_mock_receipt(&context)?;
+    let server = MockServer::start().await;
+    let target_version = "9.9.9";
+    let platform = Platform::from_env()?.as_cargo_dist_triple();
+
+    Mock::given(method("GET"))
+        .and(path("/github/versions/main/v1/uv.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "version": target_version,
+            "date": "2025-01-01T00:00:00Z",
+            "artifacts": [{
+                "platform": platform,
+                "url": format!("https://github.com/astral-sh/uv/releases/download/{target_version}/uv-{platform}.tar.gz"),
+                "archive_format": "tar.gz",
+            }],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Record the installer's download URL without replacing the test binary.
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/github/uv/releases/download/{target_version}/uv-installer.sh"
+        )))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(
+                "#!/bin/sh\nprintf '%s' \"$UV_DOWNLOAD_URL\" > download-url.txt\n",
+            ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // The GitHub link misleadingly suggests the configured mirror was bypassed:
+    // astral-sh/uv#22264.
+    uv_snapshot!(context.filters(), context.self_update()
+        .env("AXOUPDATER_CONFIG_PATH", receipt_dir.as_os_str())
+        .env("UV_ASTRAL_MIRROR_URL", server.uri()), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    info: Checking for updates...
+    success: Upgraded uv from v[CURRENT_VERSION] to v9.9.9! https://github.com/astral-sh/uv/releases/tag/9.9.9
+    ");
+
+    let download_url = fs_err::read_to_string(context.temp_dir.child("download-url.txt"))?;
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(download_url, @"http://[LOCALHOST]/github/uv/releases/download/9.9.9");
+    });
+
+    Ok(())
 }
 
 #[test]
