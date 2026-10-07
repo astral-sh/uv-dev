@@ -4,6 +4,7 @@ use std::fmt::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, anyhow};
 use assert_cmd::prelude::*;
@@ -23,8 +24,8 @@ use sha2::{Digest, Sha256};
 use url::Url;
 use walkdir::WalkDir;
 use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{basic_auth, method, path},
+    Mock, MockServer, Request, ResponseTemplate,
+    matchers::{basic_auth, header, method, path},
 };
 
 use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
@@ -16728,19 +16729,110 @@ fn reject_invalid_chained_extra_field() {
     );
 }
 
-#[test]
-fn reject_invalid_short_usize_zip64() {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+/// Serve a wheel whose central directory has an unrequested ZIP64 size field.
+async fn malformed_zip64_server(head_failures: usize) -> Result<MockServer> {
+    let metadata_path = "attrs-25.3.0.dist-info/METADATA";
+    let mut writer = ZipFileWriter::new(Vec::new());
+    writer
+        .write_entry_whole(
+            ZipEntryBuilder::new(metadata_path.into(), Compression::Stored),
+            b"Metadata-Version: 2.1\nName: attrs\nVersion: 25.3.0\n",
+        )
+        .await?;
+    let mut wheel = writer.close().await?;
+
+    // Neither 32-bit size is a ZIP64 sentinel, so the central directory must not contain
+    // ZIP64 sizes. Keep the directory's own size accurate to isolate this malformed field.
+    let end = wheel.len() - 22;
+    assert_eq!(&wheel[end..end + 4], b"PK\x05\x06");
+    let directory = u32::from_le_bytes(wheel[end + 16..end + 20].try_into()?) as usize;
+    let directory_size = u32::from_le_bytes(wheel[end + 12..end + 16].try_into()?);
+    let extra = directory + 46 + metadata_path.len();
+    assert_eq!(&wheel[directory..directory + 4], b"PK\x01\x02");
+    assert_eq!(&wheel[directory + 30..directory + 32], &[0, 0]);
+    wheel[directory + 30..directory + 32].copy_from_slice(&20u16.to_le_bytes());
+    wheel.splice(extra..extra, [1, 0, 16, 0].into_iter().chain([0; 16]));
+    let end = end + 20;
+    wheel[end + 12..end + 16].copy_from_slice(&(directory_size + 20).to_le_bytes());
+
+    let server = MockServer::start().await;
+    let requests = AtomicUsize::new(0);
+    let wheel_length = wheel.len();
+    Mock::given(method("HEAD"))
+        .and(path("/attrs-25.3.0-py3-none-any.whl"))
+        .respond_with(move |_: &Request| {
+            if requests.fetch_add(1, Ordering::Relaxed) < head_failures {
+                ResponseTemplate::new(503)
+            } else {
+                ResponseTemplate::new(200)
+                    .insert_header("Accept-Ranges", "bytes")
+                    .insert_header("Content-Length", wheel_length.to_string())
+            }
+        })
+        .expect((head_failures + 1) as u64)
+        .mount(&server)
+        .await;
+    // This wheel fits in the metadata reader's initial range. Any further request after
+    // rejecting the malformed field would indicate an unexpected retry.
+    Mock::given(method("GET"))
+        .and(path("/attrs-25.3.0-py3-none-any.whl"))
+        .and(header("Range", format!("bytes=0-{}", wheel_length - 1)))
+        .respond_with(
+            ResponseTemplate::new(206)
+                .insert_header("Accept-Ranges", "bytes")
+                .insert_header(
+                    "Content-Range",
+                    format!("bytes 0-{}/{wheel_length}", wheel_length - 1),
+                )
+                .set_body_bytes(wheel),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Ok(server)
+}
+
+#[tokio::test]
+async fn reject_invalid_short_usize_zip64() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_http_retries("2");
+    let server = malformed_zip64_server(0).await?;
 
     uv_snapshot!(context.filters(), context.pip_install()
-        .arg("attrs @ https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/zip7/attrs-25.3.0-py3-none-any.whl"), @"
+        .arg(format!("attrs @ {}/attrs-25.3.0-py3-none-any.whl", server.uri()))
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to download `attrs @ https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/zip7/attrs-25.3.0-py3-none-any.whl`
+    error: Failed to download `attrs @ http://[LOCALHOST]/attrs-25.3.0-py3-none-any.whl`
       cause: Failed to unzip wheel: attrs-25.3.0-py3-none-any.whl
       cause: zip64 extended information field was too long: expected 16 bytes, but 0 bytes were provided
     "
     );
+
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn reject_invalid_short_usize_zip64_after_http_retry() -> Result<()> {
+    // Keep one retry available after the transient HEAD failure so an archive-classification
+    // regression would make an extra request and fail the server's request expectations.
+    let context = uv_test::test_context!("3.12").with_http_retries("2");
+    let server = malformed_zip64_server(1).await?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(format!("attrs @ {}/attrs-25.3.0-py3-none-any.whl", server.uri()))
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download `attrs @ http://[LOCALHOST]/attrs-25.3.0-py3-none-any.whl`
+      cause: Request failed after 1 retry in [TIME]
+      cause: Failed to unzip wheel: attrs-25.3.0-py3-none-any.whl
+      cause: zip64 extended information field was too long: expected 16 bytes, but 0 bytes were provided
+    "
+    );
+
+    server.verify().await;
+    Ok(())
 }
 
 /// Regression test for: <https://github.com/astral-sh/uv/issues/16068>
