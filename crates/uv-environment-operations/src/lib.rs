@@ -1000,7 +1000,8 @@ impl ProjectEnvironment {
                         uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
                         uv_virtualenv::Seed::Disabled,
                         upgrade_policy,
-                    )?;
+                    )?
+                    .into_environment();
                     return Ok(if replace_environment {
                         Self::WouldReplace(root, environment, temp_dir)
                     } else {
@@ -1061,8 +1062,8 @@ impl ProjectEnvironment {
                     uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
                     uv_virtualenv::Seed::Disabled,
                     upgrade_policy,
-                )?;
-                environment.cache_virtualenv(false, cache)?;
+                )?
+                .cache(cache)?;
 
                 if centralized {
                     update_project_environment_link(&environment, target, link_error_reporting);
@@ -1216,7 +1217,8 @@ impl ScriptEnvironment {
                         false,
                         uv_virtualenv::Seed::Disabled,
                         upgrade_policy,
-                    )?;
+                    )?
+                    .into_environment();
                     return Ok(if root.exists() {
                         Self::WouldReplace(root, environment, temp_dir)
                     } else {
@@ -1253,8 +1255,8 @@ impl ScriptEnvironment {
                     false,
                     uv_virtualenv::Seed::Disabled,
                     upgrade_policy,
-                )?;
-                environment.cache_virtualenv(false, cache)?;
+                )?
+                .cache(cache)?;
 
                 Ok(if replaced {
                     Self::Replaced(environment)

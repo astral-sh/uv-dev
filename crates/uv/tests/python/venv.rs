@@ -5,7 +5,7 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use predicates::prelude::*;
-use uv_cache::Cache;
+use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::cache_digest;
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
@@ -96,27 +96,45 @@ fn create_venv_caches_interpreter() -> Result<()> {
             .assert()
             .success();
 
-        let site_packages = site_packages_path(&root_path, "python3.12");
-        fs_err::write(
-            site_packages.join("sitecustomize.py"),
-            indoc! {r#"
-                from pathlib import Path
-
-                Path(__file__).with_name("interpreter-started").touch()
-            "#},
-        )?;
-        let startup_marker = site_packages.join("interpreter-started");
-
+        let cached_interpreters = context.cache_files(CacheBucket::Interpreter)?;
         let cached = PythonEnvironment::from_root(&root_path, &cache)?;
-        assert!(!startup_marker.exists());
+        assert_eq!(
+            context.cache_files(CacheBucket::Interpreter)?,
+            cached_interpreters
+        );
 
         let fresh_cache = Cache::temp()?
             .init_no_wait()?
             .context("Fresh interpreter cache is locked")?;
         let queried = PythonEnvironment::from_root(&root_path, &fresh_cache)?;
-        assert!(startup_marker.is_file());
         assert_eq!(cached, queried);
     }
+
+    Ok(())
+}
+
+/// System site-packages require querying Python instead of caching inferred metadata.
+#[test]
+fn create_venv_system_site_packages_queries_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .venv()
+        .arg("--python")
+        .arg("3.12")
+        .arg("--system-site-packages")
+        .assert()
+        .success();
+
+    let cached_interpreters = context.cache_files(CacheBucket::Interpreter)?;
+    context
+        .python_find()
+        .arg(context.venv.path())
+        .assert()
+        .success();
+    assert_eq!(
+        context.cache_files(CacheBucket::Interpreter)?.len(),
+        cached_interpreters.len() + 1
+    );
 
     Ok(())
 }

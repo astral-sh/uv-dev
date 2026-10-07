@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use uv_fs::Simplified;
-use uv_python_interpreter::{Interpreter, PythonEnvironment};
+use uv_python_interpreter::{CreatedVirtualEnvironment, Interpreter};
 pub use uv_python_managed::UpgradePolicy;
 
 pub use virtualenv::{ClearNonVirtualenv, OnExisting, RemovalReason, Seed};
@@ -87,7 +87,7 @@ pub fn create_venv(
     relocatable: bool,
     seed: Seed,
     upgrade_policy: UpgradePolicy,
-) -> Result<PythonEnvironment, Error> {
+) -> Result<CreatedVirtualEnvironment, Error> {
     // Create the virtualenv at the given location.
     let virtualenv = virtualenv::create(
         location,
@@ -100,7 +100,5 @@ pub fn create_venv(
         upgrade_policy,
     )?;
 
-    // Create the corresponding `PythonEnvironment`.
-    let interpreter = interpreter.with_virtualenv(virtualenv);
-    Ok(PythonEnvironment::from_interpreter(interpreter))
+    Ok(interpreter.with_virtualenv(virtualenv))
 }

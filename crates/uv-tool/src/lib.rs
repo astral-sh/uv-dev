@@ -359,8 +359,8 @@ impl InstalledTools {
             false,
             uv_virtualenv::Seed::Disabled,
             UpgradePolicy::Fixed,
-        )?;
-        venv.cache_virtualenv(false, cache)?;
+        )?
+        .cache(cache)?;
 
         Ok(venv)
     }

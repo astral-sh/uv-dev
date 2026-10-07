@@ -54,6 +54,74 @@ struct PythonEnvironmentShared {
     interpreter: Interpreter,
 }
 
+/// A newly created virtual environment whose interpreter metadata was inferred from its base.
+///
+/// Produced by [`Interpreter::with_virtualenv`]. Consume it with [`Self::cache`] to cache
+/// eligible metadata, or [`Self::into_environment`] for temporary environments.
+#[derive(Debug)]
+#[must_use]
+pub struct CreatedVirtualEnvironment {
+    environment: PythonEnvironment,
+    system_site_packages: bool,
+}
+
+impl CreatedVirtualEnvironment {
+    pub(crate) fn new(interpreter: Interpreter, system_site_packages: bool) -> Self {
+        Self {
+            environment: PythonEnvironment::from_interpreter(interpreter),
+            system_site_packages,
+        }
+    }
+
+    /// Use the environment without caching its inferred interpreter metadata.
+    pub fn into_environment(self) -> PythonEnvironment {
+        self.environment
+    }
+
+    /// Cache eligible interpreter metadata before using the environment.
+    ///
+    /// If creation cannot infer the metadata Python would report, the next lookup queries Python.
+    pub fn cache(self, cache: &Cache) -> Result<PythonEnvironment, Error> {
+        let Self {
+            environment,
+            system_site_packages,
+        } = self;
+
+        // Launcher overrides can change `sys.executable` and `sys.prefix`, while
+        // `sys._base_executable` isn't affected. Query the actual metadata on the next run.
+        if env::var_os(EnvVars::PYTHONEXECUTABLE).is_some()
+            || env::var_os(EnvVars::PYVENV_LAUNCHER).is_some()
+        {
+            return Ok(environment);
+        }
+
+        // TODO: Handle system-site-packages correctly.
+        // We should infer the site packages path from the base interpreter,
+        // but for that, we first need to fix cache invalidation when it changes.
+        // https://github.com/astral-sh/uv/issues/18510
+        if system_site_packages {
+            return Ok(environment);
+        }
+
+        // An upgradeable venv can use a minor-version link instead of the selected base
+        // interpreter. Python may report different base paths when started through that link.
+        if let Some(home) = environment.cfg()?.home
+            && environment
+                .interpreter()
+                .to_base_python()?
+                .parent()
+                .is_some_and(|base| base.simplified() != home.simplified())
+        {
+            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
+            return Ok(environment);
+        }
+
+        let info = InterpreterInfo::try_from(environment.interpreter())?;
+        info.cache(environment.interpreter().sys_executable(), cache)?;
+        Ok(environment)
+    }
+}
+
 /// The result of failed environment discovery.
 ///
 /// Records the requested Python and the environment kinds that were searched.
@@ -364,44 +432,5 @@ impl PythonEnvironment {
         };
 
         (cfg_version != exe_version).then_some((cfg_version, exe_version))
-    }
-
-    /// Cache the interpreter metadata for this venv.
-    ///
-    /// Derive the metadata from the base interpreter without running the venv's Python.
-    pub fn cache_virtualenv(&self, system_site_packages: bool, cache: &Cache) -> Result<(), Error> {
-        // Launcher overrides can change `sys.executable` and `sys.prefix`, while
-        // `sys._base_executable` isn't affected. Instead of trying to stitch together this edge
-        // case, query the actual metadata on the next run.
-        if env::var_os(EnvVars::PYTHONEXECUTABLE).is_some()
-            || env::var_os(EnvVars::PYVENV_LAUNCHER).is_some()
-        {
-            return Ok(());
-        }
-
-        // TODO: Handle system-site-packages correctly.
-        // We should infer the site packages path from the base interpreter,
-        // but for that, we first need to fix cache invalidation when it changes.
-        // https://github.com/astral-sh/uv/issues/18510
-        if system_site_packages {
-            return Ok(());
-        }
-
-        // An upgradeable venv can use a minor-version link instead of the selected base
-        // interpreter. Python may report different base paths when started through that link.
-        if let Some(home) = self.cfg()?.home
-            && self
-                .interpreter()
-                .to_base_python()?
-                .parent()
-                .is_some_and(|base| base.simplified() != home.simplified())
-        {
-            Interpreter::clear_cache(self.interpreter().sys_executable(), cache)?;
-            return Ok(());
-        }
-
-        let info = InterpreterInfo::from_virtualenv(self.interpreter())?;
-        info.cache(self.interpreter().sys_executable(), cache)?;
-        Ok(())
     }
 }

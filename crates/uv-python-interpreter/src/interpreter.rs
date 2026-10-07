@@ -28,10 +28,8 @@ use uv_platform_tags::{Platform, Tags, TagsError, TagsOptions};
 use uv_pypi_types::{ResolverMarkerEnvironment, Scheme};
 use uv_static::EnvVars;
 
-use crate::PointerSize;
-use crate::PyVenvConfiguration;
-use crate::VirtualEnvironment;
 use crate::virtualenv::virtualenv_python_executable;
+use crate::{CreatedVirtualEnvironment, PointerSize, PyVenvConfiguration, VirtualEnvironment};
 use uv_python_types::{
     ImplementationName, LenientImplementationName, Prefix, PythonDownloadRequest,
     PythonInstallationKey, PythonRequest, PythonVariant, Target, VersionRequest,
@@ -116,9 +114,8 @@ impl Interpreter {
         }
     }
 
-    /// Return a new [`Interpreter`] with the given virtual environment root.
-    #[must_use]
-    pub fn with_virtualenv(self, virtualenv: VirtualEnvironment) -> Self {
+    /// Infer interpreter metadata for a newly created [`VirtualEnvironment`].
+    pub fn with_virtualenv(self, virtualenv: VirtualEnvironment) -> CreatedVirtualEnvironment {
         // Match `site.getsitepackages()` for the new environment instead of retaining the
         // parent interpreter's site-packages paths.
         // Note: This is not `sys.path`, but a distinct list.
@@ -146,7 +143,7 @@ impl Interpreter {
                 }
             }
         }
-        Self {
+        let interpreter = Self {
             scheme: virtualenv.scheme,
             sys_base_executable: Some(virtualenv.base_executable),
             sys_executable: virtualenv.executable,
@@ -155,7 +152,8 @@ impl Interpreter {
             prefix: None,
             site_packages,
             ..self
-        }
+        };
+        CreatedVirtualEnvironment::new(interpreter, virtualenv.system_site_packages)
     }
 
     /// Return a new [`Interpreter`] to install into the given `--target` directory.
@@ -1168,10 +1166,12 @@ pub(crate) struct InterpreterInfo {
     debug_enabled: bool,
 }
 
-impl InterpreterInfo {
-    /// Build metadata for virtual environment discovery without querying Python or using the cache.
-    pub(crate) fn from_virtualenv(interpreter: &Interpreter) -> Result<Self, Error> {
-        // Python reports ordinary Windows paths even when the venv was created with a verbatim path.
+impl TryFrom<&Interpreter> for InterpreterInfo {
+    type Error = Error;
+
+    /// Convert interpreter metadata to the cache representation without querying Python.
+    fn try_from(interpreter: &Interpreter) -> Result<Self, Self::Error> {
+        // Python reports ordinary Windows paths even when uv uses a verbatim path.
         let scheme = Scheme {
             purelib: interpreter.scheme.purelib.simplified().to_path_buf(),
             platlib: interpreter.scheme.platlib.simplified().to_path_buf(),
@@ -1191,7 +1191,11 @@ impl InterpreterInfo {
             sys_base_exec_prefix: PathBuf::new(),
             sys_path: Vec::new(),
             sys_base_prefix: interpreter.sys_base_prefix.clone(),
-            sys_base_executable: interpreter.sys_base_executable.clone(),
+            sys_base_executable: interpreter
+                .sys_base_executable
+                .as_deref()
+                .map(canonicalize_executable)
+                .transpose()?,
             sys_executable: std::path::absolute(interpreter.sys_executable())?
                 .simplified()
                 .to_path_buf(),
@@ -1208,7 +1212,9 @@ impl InterpreterInfo {
             debug_enabled: interpreter.debug_enabled,
         })
     }
+}
 
+impl InterpreterInfo {
     /// Cache already prepared metadata for this executable.
     pub(crate) fn cache(&self, executable: &Path, cache: &Cache) -> Result<(), Error> {
         // The lookup must use the original path, which may differ from Python's `sys.executable`.
