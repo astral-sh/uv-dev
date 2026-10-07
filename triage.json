@@ -1,0 +1,27 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 22170,
+        "title": "uv aborts (SIGABRT) when stderr is a non-blocking stream that returns EAGAIN",
+        "url": "https://github.com/astral-sh/uv/issues/22170",
+        "state": "open",
+        "reason": "Shares the panic and SIGABRT after a failed stderr write, but concerns transient EAGAIN in printer.rs and requests retrying or dropping output. Maintainer comments identify unsupported inherited O_NONBLOCK and a Bun bug. This report concerns permanent EDQUOT on a regular file in the hardlink warning path and requests a controlled failure."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22195,
+        "title": "Handle non-blocking stdio and retry on EAGAIN in printer",
+        "url": "https://github.com/astral-sh/uv/pull/22195",
+        "state": "closed",
+        "reason": "Proposed retries for astral-sh/uv#22170 in printer.rs; closed without merging on October 5, 2026. Maintainer objections address nonblocking descriptors and polling. It neither changed uv-warnings nor established handling for permanent stderr failures."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Literal queries included EDQUOT, Disk quota exceeded, failed printing to stderr, atomic_hardlink_overwrite, and hardlink warning/panic. Conceptual and fix-oriented queries covered stderr panic/abort/redirect, diagnostic-write failures, graceful output, ENOSPC, EAGAIN, BrokenPipe, eprintln, warn_user_once, anstream, and area:cli. PR keyword searches missed known matches, so supplemented them with linked discussions and the 300 most recently updated PRs. Inspected candidate bodies, comments, reviews, timelines, and relevant files. Ruled out the plausible piped-stdio abort in astral-sh/uv#21337 after following merged astral-sh/uv#21341 and astral-sh/uv#21342 to a workspace-glob panic. Also checked quota-damaged Python files in astral-sh/uv#10815, shell-completion BrokenPipe handling in astral-sh/uv#12244 and astral-sh/uv#18584, closed EAGAIN proposals astral-sh/uv#22201 and astral-sh/uv#22202, and linked Bun/reproduction work. No matching merged fix or established regression was found."
+  },
+  "type": "bug",
+  "type_reason": "The current source confirms that atomic_hardlink_overwrite emits its fallback warning through warn_user_once! and anstream::eprintln!, which panics on non-BrokenPipe write errors; release builds abort on panic. A permanent stderr failure therefore escapes normal error handling. This is a correctness bug despite the report's policy-question wording. The closest existing discussion concerns unsupported nonblocking stdio and a different requested outcome, so it is not a duplicate. No prior fix for this path was identified.",
+  "summary": "astral-sh/uv#22170 and closed, unmerged astral-sh/uv#22195 are the closest discussions, but concern nonblocking EAGAIN. The EDQUOT warning-write abort warrants a separate bug. The README could not be saved: both $RUNNER_TEMP/issue-context and /tmp are read-only.",
+  "draft_response": "The warning path confirms the bug: warn_user_once! uses anstream::eprintln!, which panics when stderr returns EDQUOT, and release builds abort on panic. This is distinct from the unsupported nonblocking-stdio case in astral-sh/uv#22170 and astral-sh/uv#22195; those discussions do not resolve permanent write failures on a regular file.\n\nPlease share the standalone synthetic-wheel and error-injection script so it can support a focused regression test. The remaining design decision is how to turn that diagnostic-write failure into a controlled nonzero exit without attempting another write to the failing stream."
+}
