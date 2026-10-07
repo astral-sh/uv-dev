@@ -5,6 +5,7 @@
 extern crate uv_performance_memory_allocator;
 
 mod git_fixture;
+mod git_repositories;
 
 use std::cell::LazyCell;
 use std::env;
@@ -153,6 +154,10 @@ criterion_group! {
         .sample_size(10)
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(3));
-    targets = git_fetch
+    targets =
+        git_fetch,
+        git_repositories::popular,
+        git_repositories::monorepo,
+        git_repositories::large
 }
 criterion_main!(repositories);
