@@ -36,9 +36,7 @@ use uv_test::archive::write_tar_gz;
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
 use uv_test::package_server::PackageServer;
-#[cfg(windows)]
-use uv_test::packse::generate_wheel_with_files;
-use uv_test::packse::{PackseServer, generate_wheel};
+use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 use uv_test::{
     DEFAULT_PYTHON_VERSION, TestContext, apply_filters, download_to_disk, get_bin, uv_snapshot,
     venv_bin_path,
@@ -8667,6 +8665,102 @@ fn find_links_relative_to_working_directory() -> Result<()> {
       cause: relative URL without a base
     "
     );
+
+    Ok(())
+}
+
+/// Upgrade rebuilt direct and transitive wheels without changing their versions.
+#[test]
+fn upgrade_rebuilt_find_links_wheels() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+
+    let write_wheels = |value: &str, timestamp: i64| -> Result<()> {
+        for (name, requires) in [
+            ("direct", vec!["transitive==1.0.0".parse()?]),
+            ("transitive", vec![]),
+        ] {
+            let (filename, wheel) = generate_wheel_with_files(
+                &name.parse()?,
+                &"1.0.0".parse()?,
+                &requires,
+                &BTreeMap::new(),
+                None,
+                "py3-none-any",
+                &[(&format!("{name}/value.py"), &format!("VALUE = {value:?}\n"))],
+            );
+            let path = links.child(filename);
+            fs::write(&path, wheel)?;
+            filetime::set_file_mtime(path, filetime::FileTime::from_unix_time(timestamp, 0))?;
+        }
+        Ok(())
+    };
+
+    write_wheels("before", 1_700_000_000)?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("direct")
+        .arg("--no-index")
+        .arg("--find-links").arg(links.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + direct==1.0.0
+     + transitive==1.0.0
+    ");
+
+    write_wheels("after", 1_800_000_000)?;
+
+    // Without an upgrade, installed versions continue to satisfy named requirements.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("direct")
+        .arg("--no-index")
+        .arg("--find-links").arg(links.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    context
+        .assert_command("from direct.value import VALUE; assert VALUE == 'before'")
+        .success();
+    context
+        .assert_command("from transitive.value import VALUE; assert VALUE == 'before'")
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("direct")
+        .arg("--upgrade")
+        .arg("--no-index")
+        .arg("--find-links").arg(links.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Uninstalled 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     ~ direct==1.0.0
+     ~ transitive==1.0.0
+    ");
+    context
+        .assert_command("from direct.value import VALUE; assert VALUE == 'after'")
+        .success();
+    context
+        .assert_command("from transitive.value import VALUE; assert VALUE == 'after'")
+        .success();
+
+    // An unchanged wheel does not need another installation.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("direct")
+        .arg("--upgrade")
+        .arg("--no-index")
+        .arg("--find-links").arg(links.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    ");
 
     Ok(())
 }
