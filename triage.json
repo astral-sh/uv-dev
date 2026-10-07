@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 909,
+        "title": "reqsign-google: `external_account` configs without `credential_source.format` fail to parse (Google defaults it to `text`)",
+        "url": "https://github.com/apache/reqsign/issues/909",
+        "state": "open",
+        "reason": "Tracks the exact missing-format parsing failure and subsequent VM metadata fallback. The locked dependency source confirms both mechanisms. This upstream parser issue does not resolve uv's diagnostic filtering or handling of explicit credential failures."
+      },
+      {
+        "kind": "issue",
+        "number": 19894,
+        "title": "Consider erroring if `NETRC` is set to a missing file",
+        "url": "https://github.com/astral-sh/uv/issues/19894",
+        "state": "open",
+        "reason": "Discusses whether an explicit credential-file setting should permit fallback or produce an error or warning. Relevant policy precedent, but it concerns missing netrc files rather than rejected Google credentials and selection of another cloud identity."
+      },
+      {
+        "kind": "issue",
+        "number": 7685,
+        "title": "An invalid netrc file does not produce a warning",
+        "url": "https://github.com/astral-sh/uv/issues/7685",
+        "state": "closed",
+        "reason": "Reports an analogous diagnostic failure: silently ignoring credential-file parsing errors obscured authentication failures. Maintainers supported warning when credentials were needed. Its netrc-specific resolution does not cover reqsign."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8364,
+        "title": "Log netrc parsing error",
+        "url": "https://github.com/astral-sh/uv/pull/8364",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#7685 by logging netrc parsing errors; its validation demonstrates the warning with -v. Provides precedent for exposing credential-loading failures, but did not fix GCS authentication or establish a regression."
+      },
+      {
+        "kind": "pull_request",
+        "number": 11758,
+        "title": "rework log verbosity (`-vvv`)",
+        "url": "https://github.com/astral-sh/uv/pull/11758",
+        "state": "merged",
+        "reason": "Established uv-only logging for -v and -vv, with all-crate tracing at -vvv. These filters remain in uv 0.12.23 and explain the hidden reqsign_core warning. This is relevant logging history, not a credential-fallback fix."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged pull requests. Separately searched explicit-credential fallback, missing diagnostics, and external-account parsing. Literal searches included GOOGLE_APPLICATION_CREDENTIALS, UV_GCS_ENDPOINT_URL, gcs-endpoint, external_account, credential_source, reqsign_core, and the exact untagged enum Source error. Conceptual searches covered workload identity, metadata credentials, identity fallback, credential parsing/warnings, Artifact Registry 403s, and authentication/tracing labels without version or platform restrictions. Fix-oriented searches covered reqsign, GCS, Google, signing, credential warnings, logging, and netrc. Inspected candidate comments and linked historical fixes, and checked uv 0.12.23 source and its locked dependencies. Ruled out astral-sh/uv#20850: comments describe keyring authentication and package-specific 403s. Ruled out astral-sh/uv#12716 and astral-sh/uv#12280: their resolutions concern keyring configuration and lookup. astral-sh/uv#10854 concerns implicitly discovered netrc diagnostics. Followed astral-sh/uv#19865, closed unmerged, to the continuing policy discussion in astral-sh/uv#19894. No existing uv duplicate or previous GCS fix was identified."
+  },
+  "type": "bug",
+  "type_reason": "Source confirms that reqsign-google 3.1.1 requires format for file/URL external-account sources, reqsign-core continues after credential-provider errors, and uv 0.12.23 suppresses those warnings at default verbosity and -v. Silently discarding explicitly configured credentials and potentially selecting another identity is a correctness and diagnostic bug. The upstream parser issue and netrc discussions do not subsume uv's handling of this failure. No evidence establishes a regression from a previous GCS fix.",
+  "summary": "No existing uv duplicate found. apache/reqsign#909 tracks the upstream defect; the netrc discussions provide related precedent, and astral-sh/uv#11758 explains the logging gap. The handoff was drafted, but writing $RUNNER_TEMP/issue-context/README.md failed because the filesystem is read-only; the template remains unchanged.",
+  "draft_response": "Your report matches the code in uv 0.12.23: reqsign requires `format` for file/URL external-account sources and continues to later credential providers after a parsing error. That can reach VM metadata. uv's `-v` filter only enables uv logs, hiding reqsign's warning.\n\nThe parsing defect is tracked in apache/reqsign#909. The next step here is to add coverage for rejected explicitly configured credentials and surface their loading errors; whether those errors should also stop fallback needs a policy decision. Your explicit `\"format\": {\"type\": \"text\"}` workaround addresses this parsing case. `RUST_LOG=reqsign_core=warn` enables the existing provider warning."
+}
