@@ -11,6 +11,8 @@ pub enum Error {
     #[error(transparent)]
     Prepare(#[from] uv_installer::PrepareError),
     #[error(transparent)]
+    Install(#[from] uv_installer::InstallError),
+    #[error(transparent)]
     Uninstall(#[from] uv_installer::UninstallError),
     #[error(transparent)]
     Hash(#[from] uv_types::HashStrategyError),
@@ -30,6 +32,7 @@ impl Error {
         match self {
             Self::OutdatedEnvironment(changelog) => Some(changelog),
             Self::Prepare(_)
+            | Self::Install(_)
             | Self::Uninstall(_)
             | Self::Hash(_)
             | Self::Io(_)
@@ -43,7 +46,11 @@ impl Error {
         match self {
             Self::Prepare(error) => error.is_user_failure(),
             Self::Hash(_) | Self::OutdatedEnvironment(_) => true,
-            Self::Uninstall(_) | Self::Io(_) | Self::Fmt(_) | Self::Anyhow(_) => false,
+            Self::Install(_)
+            | Self::Uninstall(_)
+            | Self::Io(_)
+            | Self::Fmt(_)
+            | Self::Anyhow(_) => false,
         }
     }
 }
@@ -65,6 +72,7 @@ impl uv_errors::Hinted for Error {
                 dist_hints(dist.name(), dist.version(), chain, error.hints())
             }
             Self::Prepare(_)
+            | Self::Install(_)
             | Self::Uninstall(_)
             | Self::Hash(_)
             | Self::Io(_)

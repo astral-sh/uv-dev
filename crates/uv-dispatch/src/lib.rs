@@ -77,6 +77,9 @@ pub enum BuildDispatchError {
     #[error(transparent)]
     Prepare(#[from] uv_installer::PrepareError),
 
+    #[error("Failed to install build dependencies")]
+    InstallBuildDependencies(#[source] uv_installer::InstallError),
+
     #[error(transparent)]
     Lookahead(#[from] uv_requirements::Error),
 }
@@ -91,6 +94,7 @@ impl uv_errors::Hinted for BuildDispatchError {
             | Self::Join(_)
             | Self::Anyhow(_)
             | Self::Prepare(_)
+            | Self::InstallBuildDependencies(_)
             | Self::Lookahead(_) => uv_errors::Hints::none(),
         }
     }
@@ -105,7 +109,11 @@ impl IsBuildBackendError for BuildDispatchError {
             }
             Self::Prepare(error) => error.is_user_failure(),
             Self::Lookahead(error) => error.is_user_failure(),
-            Self::BuildBackend(_) | Self::Tags(_) | Self::Join(_) | Self::Anyhow(_) => false,
+            Self::BuildBackend(_)
+            | Self::Tags(_)
+            | Self::Join(_)
+            | Self::Anyhow(_)
+            | Self::InstallBuildDependencies(_) => false,
         }
     }
 
@@ -118,6 +126,7 @@ impl IsBuildBackendError for BuildDispatchError {
             | Self::Join(_)
             | Self::Anyhow(_)
             | Self::Prepare(_)
+            | Self::InstallBuildDependencies(_)
             | Self::Lookahead(_) => false,
             Self::BuildFrontend(err) => err.is_build_backend_error(),
         }
@@ -516,7 +525,7 @@ impl BuildContext for BuildDispatch<'_> {
                 .with_cache(self.cache)
                 .install(wheels)
                 .await
-                .context("Failed to install build dependencies")?;
+                .map_err(BuildDispatchError::InstallBuildDependencies)?;
         }
 
         Ok(wheels)
