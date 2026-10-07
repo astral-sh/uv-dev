@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 10709,
+        "title": "The uv installer does not respect HTTPS_PROXY on Windows",
+        "url": "https://github.com/astral-sh/uv/issues/10709",
+        "state": "closed",
+        "reason": "Same generated PowerShell installer and proxy configuration path. This historical issue concerned ignoring HTTPS_PROXY; the present report concerns honoring NO_PROXY exclusions after proxy support was added. Its comments identify the upstream implementation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 2078,
+        "title": "Powershell installer: respect HTTPS_PROXY and ANY_PROXY env vars",
+        "url": "https://github.com/axodotdev/cargo-dist/pull/2078",
+        "state": "merged",
+        "reason": "Implemented the implicated proxy functions and fixed astral-sh/uv#10709. Its description explicitly excludes NO_PROXY support. The code reads HTTPS_PROXY and ALL_PROXY despite the title saying ANY_PROXY. This establishes an omission rather than a previously fixed NO_PROXY regression."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15798,
+        "title": "Re-upstream to dist to axodotdev/cargo-dist",
+        "url": "https://github.com/astral-sh/uv/pull/15798",
+        "state": "merged",
+        "reason": "Updated uv's installer generator from the Astral cargo-dist 0.28.7 fork to upstream 0.30.0 in September 2025, adopting the earlier Windows proxy implementation. It did not implement NO_PROXY exclusions."
+      }
+    ],
+    "search_scope": "Used authenticated gh searches across open and closed issues for NO_PROXY, WebProxyFromEnvironment, WebProxyFromUrl, UV_INSTALLER_GITHUB_BASE_URL, installer proxy, PowerShell proxy, proxy bypass/exceptions, installer source code, and relevant Windows/release labels. Attempted searches across open, closed, and merged PRs for proxy, NO_PROXY, cargo-dist, PowerShell, bypass, and the mirror variable. PR searches returned unexpectedly empty results, and follow-up search API requests hit an installation rate limit, limiting completeness. Followed comments to inspect astral-sh/uv#15798, axodotdev/cargo-dist#2075, and axodotdev/cargo-dist#2078 directly, including comments and the adoption diff. Ruled out astral-sh/uv#11640: it concerned Windows registry exclusions in reqwest during package operations, not environment exclusions in the PowerShell installer. Also inspected astral-sh/uv#15696, astral-sh/uv#2021, astral-sh/uv#15785, and astral-sh/uv#9134; these concern the earlier HTTPS_PROXY issue, Rust-client support/documentation, or mirror layout."
+  },
+  "type": "bug",
+  "type_reason": "The released uv 0.12.23 installer constructs and assigns a WebProxy from HTTPS_PROXY or ALL_PROXY without reading NO_PROXY or configuring exclusions, confirming the reported omission. The upstream implementation explicitly omitted NO_PROXY, so this is an unfixed correctness gap rather than evidence of a regression. No canonical duplicate was found within the search limitations. The source-location question does not change the bug classification.",
+  "summary": "The closest history is astral-sh/uv#10709, upstream fix axodotdev/cargo-dist#2078, and adoption in astral-sh/uv#15798. That implementation explicitly omitted NO_PROXY, and the omission remains in 0.12.23. The requested handoff README could not be updated because $RUNNER_TEMP/issue-context/README.md is on a read-only filesystem.",
+  "draft_response": "The 0.12.23 installer confirms this bug: it reads HTTPS_PROXY and ALL_PROXY, but never applies NO_PROXY exclusions. The earlier fix in axodotdev/cargo-dist#2078 explicitly left NO_PROXY unsupported.\n\nThe installer source is the cargo-dist PowerShell template: https://github.com/axodotdev/cargo-dist/blob/main/cargo-dist/templates/installer/installer.ps1.j2. Please open an upstream issue referencing astral-sh/uv#22265 to coordinate your contribution. The fix needs to parse and apply the exclusions; WebProxyFromUrl currently accepts only ProxyUrl, so adding -BypassList at the call site alone is insufficient. Validation should cover an excluded internal mirror and a non-excluded destination that still uses the proxy."
+}
