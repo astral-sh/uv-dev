@@ -3,13 +3,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
+use filetime::FileTime;
 use indoc::indoc;
 use predicates::prelude::*;
 use uv_cache::Cache;
 use uv_cache_key::cache_digest;
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
-use uv_python_interpreter::PythonEnvironment;
+use uv_python_interpreter::{PyVenvConfiguration, PythonEnvironment};
 use uv_static::EnvVars;
 
 #[cfg(unix)]
@@ -117,6 +118,36 @@ fn create_venv_caches_interpreter() -> Result<()> {
         assert!(startup_marker.is_file());
         assert_eq!(cached, queried);
     }
+
+    Ok(())
+}
+
+/// Changing `pyvenv.cfg` invalidates metadata inferred when the venv was created.
+#[test]
+fn create_venv_invalidates_cached_interpreter_on_configuration_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+
+    let pyvenv_cfg = context.venv.join("pyvenv.cfg");
+    let modified = FileTime::from_last_modification_time(&fs_err::metadata(&pyvenv_cfg)?);
+    let contents = fs_err::read_to_string(&pyvenv_cfg)?;
+    fs_err::write(
+        &pyvenv_cfg,
+        PyVenvConfiguration::set(&contents, "include-system-site-packages", "true"),
+    )?;
+    filetime::set_file_mtime(&pyvenv_cfg, modified)?;
+
+    let updated = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    assert_ne!(cached, updated);
+
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
+    assert_eq!(updated, queried);
 
     Ok(())
 }

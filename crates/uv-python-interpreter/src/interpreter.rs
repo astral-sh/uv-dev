@@ -1989,6 +1989,14 @@ mod tests {
             );
             Interpreter::query(&mocked_interpreter, &cache)?;
             assert_eq!(fs::read_to_string(&query_count)?, "......");
+
+            // Inferred metadata must not overwrite the entry for an absent configuration.
+            fs::remove_dir(&configuration)?;
+            assert_eq!(
+                Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+                &original_version
+            );
+            assert_eq!(fs::read_to_string(&query_count)?, "......");
             assert_eq!(
                 Timestamp::from_path(&mocked_interpreter)?,
                 executable_timestamp
