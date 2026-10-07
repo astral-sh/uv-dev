@@ -20,7 +20,8 @@ use uv_configuration::{
 use uv_distribution_types::{
     ConfigSettings, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue, ExtraBuildVariables,
     Index, IndexLocations, IndexUrl, IndexUrlError, MinimumLibcVersion, Origin,
-    PackageConfigSettings, PipExtraIndex, PipFindLinks, PipIndex, StaticMetadata,
+    PackageConfigSettings, PipExtraIndex, PipFindLinks, PipIndex, RequirementsInput, SettingSource,
+    Sourced, StaticMetadata,
 };
 use uv_install_wheel::LinkMode;
 use uv_macros::{CombineOptions, OptionsMetadata};
@@ -243,6 +244,30 @@ impl Options {
                 for index_url in extra_index_urls {
                     index_url.try_set_origin(origin);
                 }
+            }
+        }
+        self
+    }
+
+    /// Attach configuration locations before options from different files are combined.
+    #[must_use]
+    pub fn with_config_source(mut self, input: &RequirementsInput, prefix: &str) -> Self {
+        let source = |key: &str| SettingSource::Configuration {
+            input: input.clone(),
+            key: format!("{prefix}{key}"),
+        };
+        if let Some(no_index) = &mut self.top_level.no_index {
+            no_index.set_source(source("no-index"));
+        }
+        if let Some(pip) = &mut self.pip {
+            if let Some(no_index) = &mut pip.no_index {
+                no_index.set_source(source("pip.no-index"));
+            }
+            if let Some(require_hashes) = &mut pip.require_hashes {
+                require_hashes.set_source(source("pip.require-hashes"));
+            }
+            if let Some(verify_hashes) = &mut pip.verify_hashes {
+                verify_hashes.set_source(source("pip.verify-hashes"));
             }
         }
         self
@@ -567,7 +592,7 @@ pub struct InstallerOptions {
     index: Option<Vec<Index>>,
     index_url: Option<PipIndex>,
     extra_index_url: Option<Vec<PipExtraIndex>>,
-    no_index: Option<bool>,
+    no_index: Option<Sourced<bool>>,
     find_links: Option<Vec<PipFindLinks>>,
     index_strategy: Option<IndexStrategy>,
     keyring_provider: Option<KeyringProviderType>,
@@ -591,7 +616,7 @@ pub struct IndexOptions {
     pub index: Option<Vec<Index>>,
     pub index_url: Option<PipIndex>,
     pub extra_index_url: Option<Vec<PipExtraIndex>>,
-    pub no_index: Option<bool>,
+    pub no_index: Option<Sourced<bool>>,
     pub find_links: Option<Vec<PipFindLinks>>,
 }
 
@@ -924,7 +949,7 @@ pub struct ResolverInstallerSchema {
             no-index = true
         "#
     )]
-    pub no_index: Option<bool>,
+    pub no_index: Option<Sourced<bool>>,
     /// Locations to search for candidate distributions, in addition to those found in the registry
     /// indexes.
     ///
@@ -1585,7 +1610,7 @@ pub struct PipOptions {
             no-index = true
         "#
     )]
-    pub no_index: Option<bool>,
+    pub no_index: Option<Sourced<bool>>,
     /// Locations to search for candidate distributions, in addition to those found in the registry
     /// indexes.
     ///
@@ -2186,7 +2211,7 @@ pub struct PipOptions {
             require-hashes = true
         "#
     )]
-    pub require_hashes: Option<bool>,
+    pub require_hashes: Option<Sourced<bool>>,
     /// Validate any hashes provided in the requirements file.
     ///
     /// Unlike `--require-hashes`, `--verify-hashes` does not require that all requirements have
@@ -2199,7 +2224,7 @@ pub struct PipOptions {
             verify-hashes = true
         "#
     )]
-    pub verify_hashes: Option<bool>,
+    pub verify_hashes: Option<Sourced<bool>>,
     /// Ignore the `tool.uv.sources` table when resolving dependencies. Used to lock against the
     /// standards-compliant, publishable package metadata, as opposed to using any local or Git
     /// sources.
@@ -2394,7 +2419,7 @@ pub struct ToolOptions {
     index: Option<Vec<Index>>,
     index_url: Option<PipIndex>,
     extra_index_url: Option<Vec<PipExtraIndex>>,
-    no_index: Option<bool>,
+    no_index: Option<Sourced<bool>>,
     find_links: Option<Vec<PipFindLinks>>,
     index_strategy: Option<IndexStrategy>,
     keyring_provider: Option<KeyringProviderType>,
@@ -2429,7 +2454,7 @@ pub struct ToolOptionsWire {
     index: Option<Vec<Index>>,
     index_url: Option<PipIndex>,
     extra_index_url: Option<Vec<PipExtraIndex>>,
-    no_index: Option<bool>,
+    no_index: Option<Sourced<bool>>,
     find_links: Option<Vec<PipFindLinks>>,
     index_strategy: Option<IndexStrategy>,
     keyring_provider: Option<KeyringProviderType>,
@@ -2669,7 +2694,7 @@ struct OptionsWire {
     index: Option<Vec<Index>>,
     index_url: Option<PipIndex>,
     extra_index_url: Option<Vec<PipExtraIndex>>,
-    no_index: Option<bool>,
+    no_index: Option<Sourced<bool>>,
     find_links: Option<Vec<PipFindLinks>>,
     index_strategy: Option<IndexStrategy>,
     keyring_provider: Option<KeyringProviderType>,

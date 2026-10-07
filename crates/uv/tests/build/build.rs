@@ -1925,6 +1925,18 @@ fn build_sha() -> Result<()> {
       cause: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: hatchling[foo]
     ");
 
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--build-constraint").arg("constraints.txt")
+        .env(EnvVars::UV_REQUIRE_HASHES, "1")
+        .current_dir(&project), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `[TEMP_DIR]/project`
+      cause: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: hatchling[foo]
+
+    hint: `--require-hashes` was enabled by environment variable `UV_REQUIRE_HASHES`
+    ");
+
     // Reject an incorrect hash.
     constraints.write_str(indoc::indoc! {r"
         hatchling==1.22.4 \

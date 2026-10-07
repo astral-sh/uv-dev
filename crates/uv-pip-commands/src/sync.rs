@@ -17,7 +17,7 @@ use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, Name, Origin,
-    PackageConfigSettings, Resolution,
+    PackageConfigSettings, Resolution, Sourced,
 };
 use uv_fs::Simplified;
 use uv_install_wheel::LinkMode;
@@ -68,7 +68,7 @@ pub async fn pip_sync(
     reinstall: Reinstall,
     link_mode: LinkMode,
     compile: bool,
-    hash_checking: Option<HashCheckingMode>,
+    hash_checking: Option<Sourced<HashCheckingMode>>,
     build_hash_checking: HashCheckingMode,
     index_locations: IndexLocations,
     index_strategy: IndexStrategy,
@@ -149,9 +149,9 @@ pub async fn pip_sync(
     )
     .await?;
 
-    let hash_checking =
-        HashCheckingMode::from_requirements_txt(hash_checking, require_hashes.is_some());
-    let build_hash_checking = resolve_build_hash_checking(hash_checking, build_hash_checking);
+    let hash_checking = HashCheckingMode::from_requirements_txt(hash_checking, require_hashes);
+    let build_hash_checking =
+        resolve_build_hash_checking(hash_checking.clone(), build_hash_checking);
 
     if pylock.is_some() {
         if !preview.is_enabled(PreviewFeature::Pylock) {
@@ -283,7 +283,7 @@ pub async fn pip_sync(
     )?;
 
     // Collect the set of required hashes.
-    let hasher = if let Some(hash_checking) = hash_checking {
+    let hasher = if let Some(hash_checking) = hash_checking.clone() {
         HashStrategy::from_requirements(
             requirements
                 .iter()
@@ -293,8 +293,7 @@ pub async fn pip_sync(
                 .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
             Some(&marker_env),
             hash_checking,
-        )
-        .map_err(|err| err.with_require_hashes_source(require_hashes))?
+        )?
     } else {
         HashStrategy::default()
     };

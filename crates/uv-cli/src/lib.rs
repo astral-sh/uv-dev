@@ -24,7 +24,7 @@ use uv_configuration::{
 };
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, ExcludeNewerOverride, Index, IndexName,
-    IndexSourceError, IndexUrl, Origin, PipExtraIndex, PipFindLinks, PipIndex,
+    IndexSourceError, IndexUrl, Origin, PipExtraIndex, PipFindLinks, PipIndex, Sourced,
 };
 use uv_normalize::{ExtraName, GroupName, PackageName, PipGroupName};
 use uv_pep508::{MarkerTree, Requirement, VerbatimUrl};
@@ -6824,9 +6824,15 @@ pub struct ProjectDependencyGroupsArgs<const CHECKS_CONFLICTS: bool = false> {
 pub type ConflictCheckedDependencyGroupsArgs = ProjectDependencyGroupsArgs<true>;
 
 /// Arguments that configure requirement hash checking.
+pub struct HashCheckingArgs {
+    require_hashes: Option<Sourced<bool>>,
+    verify_hashes: Option<Sourced<bool>>,
+}
+
+/// The argument definitions, before their sources are attached.
 #[derive(Args)]
 #[group(skip)]
-pub struct HashCheckingArgs {
+struct HashCheckingOptions {
     /// Require a matching hash for each requirement.
     ///
     /// By default, uv will verify any available hashes in the requirements file, but will not
