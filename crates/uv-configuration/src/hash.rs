@@ -16,7 +16,7 @@ impl HashCheckingMode {
     /// By default, the hash checking mode is [`HashCheckingMode::Verify`]. If `--require-hashes` is
     /// passed, the hash checking mode is [`HashCheckingMode::Require`]. If `--no-verify-hashes` is
     /// passed, then no hash checking is performed.
-    pub fn from_args(require_hashes: Option<bool>, verify_hashes: Option<bool>) -> Option<Self> {
+    fn from_args(require_hashes: Option<bool>, verify_hashes: Option<bool>) -> Option<Self> {
         if require_hashes == Some(true) {
             // Given `--require-hashes`, always require hashes, regardless of any other flags.
             Some(Self::Require)

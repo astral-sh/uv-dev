@@ -41,9 +41,8 @@ impl uv_errors::Hinted for PylockResolutionError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
             Self::Pylock(error) => error.hints(),
-            Self::IncompatiblePython { .. } | Self::Tags(_) | Self::Hash(_) => {
-                uv_errors::Hints::none()
-            }
+            Self::Hash(error) => error.hints(),
+            Self::IncompatiblePython { .. } | Self::Tags(_) => uv_errors::Hints::none(),
         }
     }
 }

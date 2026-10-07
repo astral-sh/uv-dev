@@ -760,7 +760,7 @@ pub enum HashStrategyError {
 impl HashStrategyError {
     /// Attach the declarations responsible for the effective hash-checking policy.
     #[must_use]
-    pub fn with_sources(mut self, sources: SettingSources) -> Self {
+    fn with_sources(mut self, sources: SettingSources) -> Self {
         match &mut self {
             Self::UnpinnedRequirement(_, _, origin)
             | Self::InsecureHashAlgorithm(_, _, _, origin)
@@ -781,10 +781,12 @@ impl Hinted for HashStrategyError {
             | Self::NoIntersection(_, mode, sources) => (mode, sources),
             Self::Hash(_) | Self::ConflictingArchiveUrlHashes(..) => return Hints::none(),
         };
-        Hints::from_iter(sources.enabled_hints(match mode {
-            HashCheckingMode::Require => "--require-hashes",
-            HashCheckingMode::Verify => "--verify-hashes",
-        }))
+        sources
+            .enabled_hints(match mode {
+                HashCheckingMode::Require => "--require-hashes",
+                HashCheckingMode::Verify => "--verify-hashes",
+            })
+            .collect()
     }
 }
 
