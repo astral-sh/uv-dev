@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with installed uv 0.12.13, both `uv self update` and `uv self update 0.12.23` printed `success: Upgraded uv from v0.12.13 to v0.12.23! https://github.com/astral-sh/uv/releases/tag/0.12.23` despite UV_ASTRAL_MIRROR_URL pointing to a local mirror. A temporary standalone receipt and successful stub installer exercised the logging path without replacing uv. Metadata and installer requests reached the mirror, and the installer received the mirror-based UV_DOWNLOAD_URL. This confirms the logging behavior, not a download-routing defect. The reported starting version and Windows were not tested. Updating $RUNNER_TEMP/issue-context/README.md failed because its filesystem is read-only; the complete handoff and reproduction fixture are saved under /tmp/uv-22264.0lOVN9/."
+}
