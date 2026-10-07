@@ -8,6 +8,8 @@ use crate::Changelog;
 /// An error while preparing or installing distributions.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("Failed to determine installation plan")]
+    Plan(#[source] uv_installer::PlanError),
     #[error(transparent)]
     Prepare(#[from] uv_installer::PrepareError),
     #[error(transparent)]
@@ -29,7 +31,8 @@ impl Error {
     pub fn outdated_environment(&self) -> Option<&Changelog> {
         match self {
             Self::OutdatedEnvironment(changelog) => Some(changelog),
-            Self::Prepare(_)
+            Self::Plan(_)
+            | Self::Prepare(_)
             | Self::Uninstall(_)
             | Self::Hash(_)
             | Self::Io(_)
@@ -43,7 +46,9 @@ impl Error {
         match self {
             Self::Prepare(error) => error.is_user_failure(),
             Self::Hash(_) | Self::OutdatedEnvironment(_) => true,
-            Self::Uninstall(_) | Self::Io(_) | Self::Fmt(_) | Self::Anyhow(_) => false,
+            Self::Plan(_) | Self::Uninstall(_) | Self::Io(_) | Self::Fmt(_) | Self::Anyhow(_) => {
+                false
+            }
         }
     }
 }
@@ -64,7 +69,8 @@ impl uv_errors::Hinted for Error {
             Self::Prepare(uv_installer::PrepareError::Dist(_, dist, chain, error)) => {
                 dist_hints(dist.name(), dist.version(), chain, error.hints())
             }
-            Self::Prepare(_)
+            Self::Plan(_)
+            | Self::Prepare(_)
             | Self::Uninstall(_)
             | Self::Hash(_)
             | Self::Io(_)
