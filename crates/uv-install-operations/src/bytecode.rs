@@ -9,7 +9,7 @@ use uv_command_support::{Printer, elapsed};
 use uv_configuration::Concurrency;
 use uv_fs::{CWD, Simplified};
 use uv_installer::{compile_files, compile_tree};
-use uv_python::PythonEnvironment;
+use uv_python_interpreter::PythonEnvironment;
 
 /// Compile all Python source files in site-packages to bytecode, to speed up the
 /// initial run of any subsequent executions.

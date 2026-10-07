@@ -11,7 +11,8 @@ use uv_configuration::{BuildOptions, HashCheckingMode, RequirementsInput, Target
 use uv_distribution_types::Resolution;
 use uv_lock::PylockToml;
 use uv_normalize::{ExtraName, GroupName};
-use uv_python::{Interpreter, PythonVersion};
+use uv_python_interpreter::Interpreter;
+use uv_python_types::PythonVersion;
 use uv_types::HashStrategy;
 
 use uv_resolve_operations::{resolution_markers, resolution_tags};

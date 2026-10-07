@@ -26,10 +26,10 @@ use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Pep508ErrorSource, Requirement, VerbatimUrl, VersionOrUrl};
 use uv_preview::Preview;
 use uv_pypi_types::{PyProjectToml, ResolutionMetadata, SupportedEnvironments, VerbatimParsedUrl};
-use uv_python::{
-    ConfigDiscovery, Interpreter, PythonArchitecture, PythonDownloads, PythonPreference,
-};
-use uv_python_context::ProjectPythonRequest;
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::ProjectPythonRequest;
+use uv_python_interpreter::Interpreter;
+use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference};
 use uv_redacted::DisplaySafeUrl;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolver::MetadataResponse;

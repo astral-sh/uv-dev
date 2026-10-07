@@ -26,10 +26,9 @@ use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, PackageName};
 use uv_pep440::{BumpCommand, PrereleaseKind, Version};
 use uv_preview::Preview;
-use uv_python::{
-    ConfigDiscovery, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
-};
-use uv_python_context::ProjectPythonRequest;
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::ProjectPythonRequest;
+use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_settings::{
     FrozenSource, LockCheck, MalwareCheckSettings, PythonInstallMirrors, ResolverInstallerSettings,
