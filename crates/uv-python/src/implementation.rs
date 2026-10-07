@@ -12,7 +12,8 @@ pub enum Error {
     UnknownImplementation(String),
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Copy, Default, PartialOrd, Ord, Hash)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy, Default, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ImplementationName {
     Pyodide,
     GraalPy,
@@ -21,19 +22,32 @@ pub enum ImplementationName {
     CPython,
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Ord, PartialOrd, Hash)]
+#[derive(Debug, Eq, PartialEq, Clone, Ord, PartialOrd, Hash, serde::Serialize)]
+#[serde(untagged)]
 pub enum LenientImplementationName {
     Unknown(String),
     Known(ImplementationName),
 }
 
 impl ImplementationName {
-    pub(crate) fn short_names() -> impl Iterator<Item = &'static str> {
-        ["cp", "pp", "gp"].into_iter()
+    /// Return the full implementation name.
+    pub const fn long_name(self) -> &'static str {
+        match self {
+            Self::CPython => "cpython",
+            Self::PyPy => "pypy",
+            Self::GraalPy => "graalpy",
+            Self::Pyodide => "pyodide",
+        }
     }
 
-    pub(crate) fn long_names() -> impl Iterator<Item = &'static str> {
-        ["cpython", "pypy", "graalpy", "pyodide"].into_iter()
+    /// Return the abbreviated implementation name, if one exists.
+    pub const fn short_name(self) -> Option<&'static str> {
+        match self {
+            Self::CPython => Some("cp"),
+            Self::PyPy => Some("pp"),
+            Self::GraalPy => Some("gp"),
+            Self::Pyodide => None,
+        }
     }
 
     pub(crate) fn iter_all() -> impl Iterator<Item = Self> {
@@ -53,7 +67,7 @@ impl ImplementationName {
     pub(crate) fn executable_name(self) -> &'static str {
         match self {
             Self::CPython | Self::Pyodide => "python",
-            Self::PyPy | Self::GraalPy => self.into(),
+            Self::PyPy | Self::GraalPy => self.long_name(),
         }
     }
 
@@ -70,7 +84,7 @@ impl ImplementationName {
             Self::Pyodide => interpreter.os().is_emscripten(),
             _ => interpreter
                 .implementation_name()
-                .eq_ignore_ascii_case(self.into()),
+                .eq_ignore_ascii_case(self.long_name()),
         }
     }
 }
@@ -91,27 +105,10 @@ impl LenientImplementationName {
     }
 }
 
-impl From<&ImplementationName> for &'static str {
-    fn from(value: &ImplementationName) -> &'static str {
-        match value {
-            ImplementationName::CPython => "cpython",
-            ImplementationName::PyPy => "pypy",
-            ImplementationName::GraalPy => "graalpy",
-            ImplementationName::Pyodide => "pyodide",
-        }
-    }
-}
-
-impl From<ImplementationName> for &'static str {
-    fn from(value: ImplementationName) -> &'static str {
-        (&value).into()
-    }
-}
-
 impl<'a> From<&'a LenientImplementationName> for &'a str {
     fn from(value: &'a LenientImplementationName) -> &'a str {
         match value {
-            LenientImplementationName::Known(implementation) => implementation.into(),
+            LenientImplementationName::Known(implementation) => implementation.long_name(),
             LenientImplementationName::Unknown(name) => name,
         }
     }
@@ -124,19 +121,20 @@ impl FromStr for ImplementationName {
     ///
     /// Supports the full name and the platform compatibility tag style name.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "cpython" | "cp" => Ok(Self::CPython),
-            "pypy" | "pp" => Ok(Self::PyPy),
-            "graalpy" | "gp" => Ok(Self::GraalPy),
-            "pyodide" => Ok(Self::Pyodide),
-            _ => Err(Error::UnknownImplementation(s.to_string())),
-        }
+        Self::iter_all()
+            .find(|implementation| {
+                s.eq_ignore_ascii_case(implementation.long_name())
+                    || implementation
+                        .short_name()
+                        .is_some_and(|name| s.eq_ignore_ascii_case(name))
+            })
+            .ok_or_else(|| Error::UnknownImplementation(s.to_string()))
     }
 }
 
 impl Display for ImplementationName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.into())
+        f.write_str(self.long_name())
     }
 }
 
@@ -152,6 +150,19 @@ impl From<&str> for LenientImplementationName {
 impl From<ImplementationName> for LenientImplementationName {
     fn from(implementation: ImplementationName) -> Self {
         Self::Known(implementation)
+    }
+}
+
+impl TryFrom<&LenientImplementationName> for ImplementationName {
+    type Error = Error;
+
+    fn try_from(implementation: &LenientImplementationName) -> Result<Self, Self::Error> {
+        match implementation {
+            LenientImplementationName::Known(implementation) => Ok(*implementation),
+            LenientImplementationName::Unknown(name) => {
+                Err(Error::UnknownImplementation(name.clone()))
+            }
+        }
     }
 }
 

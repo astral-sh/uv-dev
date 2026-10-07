@@ -18,7 +18,7 @@ use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use crate::{IndexMetadata, IndexUrl};
 
 use uv_pypi_types::{
-    ConflictItem, Hashes, ParsedArchiveUrl, ParsedDirectoryUrl, ParsedGitDirectoryUrl,
+    ConflictItem, HashError, Hashes, ParsedArchiveUrl, ParsedDirectoryUrl, ParsedGitDirectoryUrl,
     ParsedGitPathUrl, ParsedPathUrl, ParsedUrl, ParsedUrlError, VerbatimParsedUrl,
 };
 
@@ -60,7 +60,32 @@ pub struct Requirement {
     #[serde(flatten)]
     pub source: RequirementSource,
     #[serde(skip)]
+    pub scope: RequirementScope,
+    #[serde(skip)]
     pub origin: Option<RequirementOrigin>,
+}
+
+/// Whether a requirement is global or belongs to a package's dependency group.
+#[derive(Debug, Clone, Default, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub enum RequirementScope {
+    #[default]
+    Global,
+    Group {
+        package: PackageName,
+        group: GroupName,
+    },
+}
+
+impl RequirementScope {
+    /// Return the conflict item whose activation makes this requirement visible.
+    pub fn conflict_item(&self) -> Option<ConflictItem> {
+        match self {
+            Self::Global => None,
+            Self::Group { package, group } => {
+                Some(ConflictItem::from((package.clone(), group.clone())))
+            }
+        }
+    }
 }
 
 impl Requirement {
@@ -83,20 +108,36 @@ impl Requirement {
 
     /// Convert to a [`Requirement`] with an absolute path based on the given root.
     #[must_use]
-    pub fn to_absolute(self, path: &Path) -> Self {
+    pub(crate) fn into_absolute(self, path: &Path) -> Self {
         Self {
             source: self.source.into_absolute(path),
             ..self
         }
     }
 
+    /// Set whether this requirement's local source should be represented by a relative path.
+    ///
+    /// When `false`, preserve the original input's path preference. Non-local sources are unchanged.
+    pub fn set_force_relative(&mut self, force_relative: bool) {
+        if let RequirementSource::Path { url, .. } | RequirementSource::Directory { url, .. } =
+            &mut self.source
+            && url.force_relative() != force_relative
+        {
+            *url = url.clone().with_force_relative(force_relative);
+        }
+    }
+
     /// Return the hashes of the requirement, as specified in the URL fragment.
-    pub fn hashes(&self) -> Option<Hashes> {
-        let RequirementSource::Url { ref url, .. } = self.source else {
-            return None;
+    pub fn hashes(&self) -> Result<Option<Hashes>, HashError> {
+        let (RequirementSource::Url { ref url, .. } | RequirementSource::Path { ref url, .. }) =
+            self.source
+        else {
+            return Ok(None);
         };
-        let fragment = url.fragment()?;
-        Hashes::parse_fragment(fragment).ok()
+        let Some(fragment) = url.fragment() else {
+            return Ok(None);
+        };
+        Hashes::parse_url_fragment(fragment)
     }
 
     /// Set the source file containing the requirement.
@@ -117,6 +158,7 @@ impl std::hash::Hash for Requirement {
             groups,
             marker,
             source,
+            scope,
             origin: _,
         } = self;
         name.hash(state);
@@ -124,6 +166,7 @@ impl std::hash::Hash for Requirement {
         groups.hash(state);
         marker.hash(state);
         source.hash(state);
+        scope.hash(state);
     }
 }
 
@@ -135,6 +178,7 @@ impl PartialEq for Requirement {
             groups,
             marker,
             source,
+            scope,
             origin: _,
         } = self;
         let Self {
@@ -143,6 +187,7 @@ impl PartialEq for Requirement {
             groups: other_groups,
             marker: other_marker,
             source: other_source,
+            scope: other_scope,
             origin: _,
         } = other;
         name == other_name
@@ -150,6 +195,7 @@ impl PartialEq for Requirement {
             && groups == other_groups
             && marker == other_marker
             && source == other_source
+            && scope == other_scope
     }
 }
 
@@ -163,6 +209,7 @@ impl Ord for Requirement {
             groups,
             marker,
             source,
+            scope,
             origin: _,
         } = self;
         let Self {
@@ -171,6 +218,7 @@ impl Ord for Requirement {
             groups: other_groups,
             marker: other_marker,
             source: other_source,
+            scope: other_scope,
             origin: _,
         } = other;
         name.cmp(other_name)
@@ -178,6 +226,7 @@ impl Ord for Requirement {
             .then_with(|| groups.cmp(other_groups))
             .then_with(|| marker.cmp(other_marker))
             .then_with(|| source.cmp(other_source))
+            .then_with(|| scope.cmp(other_scope))
     }
 }
 
@@ -314,6 +363,7 @@ impl From<uv_pep508::Requirement<VerbatimParsedUrl>> for Requirement {
             extras: requirement.extras,
             marker: requirement.marker,
             source,
+            scope: RequirementScope::Global,
             origin: requirement.origin,
         }
     }
@@ -743,7 +793,7 @@ impl RequirementSource {
                 ext,
                 url,
             } => Ok(Self::Path {
-                install_path: try_relative_to_if(&install_path, path, !url.was_given_absolute())?
+                install_path: try_relative_to_if(&install_path, path, url.prefers_relative())?
                     .into_boxed_path(),
                 ext,
                 url,
@@ -755,7 +805,7 @@ impl RequirementSource {
                 url,
                 ..
             } => Ok(Self::Directory {
-                install_path: try_relative_to_if(&install_path, path, !url.was_given_absolute())?
+                install_path: try_relative_to_if(&install_path, path, url.prefers_relative())?
                     .into_boxed_path(),
                 editable,
                 r#virtual,
@@ -1145,7 +1195,7 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
                 let location = url.clone();
 
                 // Create a PEP 508-compatible URL.
-                let mut url = url.clone();
+                let mut url = url;
                 if let Some(subdirectory) = &subdirectory {
                     url.set_fragment(Some(&format!("subdirectory={subdirectory}")));
                 }
@@ -1155,7 +1205,7 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
                     subdirectory: subdirectory.map(Box::<Path>::from),
                     ext: DistExtension::from_path(url.path())
                         .map_err(|err| ParsedUrlError::MissingExtensionUrl(url.to_string(), err))?,
-                    url: VerbatimUrl::from_url(url.clone()),
+                    url: VerbatimUrl::from_url(url),
                 })
             }
             // TODO(charlie): The use of `CWD` here is incorrect. These should be resolved relative
@@ -1213,7 +1263,7 @@ mod tests {
 
     use uv_pep508::{MarkerTree, VerbatimUrl};
 
-    use crate::{Requirement, RequirementSource};
+    use crate::{Requirement, RequirementScope, RequirementSource};
 
     #[test]
     fn roundtrip() {
@@ -1227,6 +1277,7 @@ mod tests {
                 index: None,
                 conflict: None,
             },
+            scope: RequirementScope::Global,
             origin: None,
         };
 
@@ -1250,6 +1301,7 @@ mod tests {
                 r#virtual: Some(false),
                 url: VerbatimUrl::from_absolute_path(path).unwrap(),
             },
+            scope: RequirementScope::Global,
             origin: None,
         };
 
@@ -1276,6 +1328,7 @@ mod tests {
             groups: Box::new([]),
             marker: MarkerTree::TRUE,
             source,
+            scope: RequirementScope::Global,
             origin: None,
         };
         assert_eq!(

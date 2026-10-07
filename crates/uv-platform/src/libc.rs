@@ -6,13 +6,12 @@
 use crate::{Arch, cpuinfo::detect_hardware_floating_point_support};
 use fs_err as fs;
 use goblin::elf::Elf;
-use regex::Regex;
+use regex::regex;
 use std::fmt::Display;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
-use std::sync::LazyLock;
 use std::{env, fmt};
 use target_lexicon::Endianness;
 use tracing::trace;
@@ -25,9 +24,9 @@ pub enum LibcDetectionError {
         "Could not detect either glibc version nor musl libc version, at least one of which is required"
     )]
     NoLibcFound,
-    #[error("Failed to get base name of symbolic link path {0}")]
+    #[error("Failed to get base name of symbolic link path `{0}`")]
     MissingBasePath(PathBuf),
-    #[error("Failed to find glibc version in the filename of linker: `{0}`")]
+    #[error("Failed to find glibc version in the filename of linker: {0}")]
     GlibcExtractionMismatch(PathBuf),
     #[error("Failed to determine {libc} version by running: `{program}`")]
     FailedToRun {
@@ -38,7 +37,7 @@ pub enum LibcDetectionError {
     },
     #[error("Could not find glibc version in output of: `{0} --version`")]
     InvalidLdSoOutputGnu(PathBuf),
-    #[error("Could not find musl version in output of: `{0}`")]
+    #[error("Could not find musl version in output of: {0}")]
     InvalidLdSoOutputMusl(PathBuf),
     #[error("Could not read ELF interpreter from any of the following paths: {0}")]
     CoreBinaryParsing(String),
@@ -50,7 +49,7 @@ pub enum LibcDetectionError {
 
 /// We support glibc (manylinux) and musl (musllinux) on linux.
 #[derive(Debug, PartialEq, Eq)]
-pub enum LibcVersion {
+enum LibcVersion {
     Manylinux { major: u32, minor: u32 },
     Musllinux { major: u32, minor: u32 },
 }
@@ -64,36 +63,30 @@ pub enum Libc {
 impl Libc {
     pub(crate) fn from_env() -> Result<Self, crate::Error> {
         match env::consts::OS {
-            "linux" => {
-                if let Ok(libc) = env::var(EnvVars::UV_LIBC) {
-                    if !libc.is_empty() {
-                        return Self::from_str(&libc);
-                    }
-                }
-
-                Ok(Self::Some(match detect_linux_libc()? {
-                    LibcVersion::Manylinux { .. } => match env::consts::ARCH {
-                        "arm" | "armv5te" | "armv7" => {
-                            match detect_hardware_floating_point_support() {
-                                Ok(true) => target_lexicon::Environment::Gnueabihf,
-                                Ok(false) => target_lexicon::Environment::Gnueabi,
-                                Err(_) => target_lexicon::Environment::Gnu,
-                            }
-                        }
-                        _ => target_lexicon::Environment::Gnu,
-                    },
-                    LibcVersion::Musllinux { .. } => match env::consts::ARCH {
-                        "arm" | "armv5te" | "armv7" => {
-                            match detect_hardware_floating_point_support() {
-                                Ok(true) => target_lexicon::Environment::Musleabihf,
-                                Ok(false) => target_lexicon::Environment::Musleabi,
-                                Err(_) => target_lexicon::Environment::Musl,
-                            }
-                        }
-                        _ => target_lexicon::Environment::Musl,
-                    },
-                }))
+            "linux"
+                if let Ok(libc) = env::var(EnvVars::UV_LIBC)
+                    && !libc.is_empty() =>
+            {
+                Self::from_str(&libc)
             }
+            "linux" => Ok(Self::Some(match detect_linux_libc()? {
+                LibcVersion::Manylinux { .. } => match env::consts::ARCH {
+                    "arm" | "armv5te" | "armv7" => match detect_hardware_floating_point_support() {
+                        Ok(true) => target_lexicon::Environment::Gnueabihf,
+                        Ok(false) => target_lexicon::Environment::Gnueabi,
+                        Err(_) => target_lexicon::Environment::Gnu,
+                    },
+                    _ => target_lexicon::Environment::Gnu,
+                },
+                LibcVersion::Musllinux { .. } => match env::consts::ARCH {
+                    "arm" | "armv5te" | "armv7" => match detect_hardware_floating_point_support() {
+                        Ok(true) => target_lexicon::Environment::Musleabihf,
+                        Ok(false) => target_lexicon::Environment::Musleabi,
+                        Err(_) => target_lexicon::Environment::Musl,
+                    },
+                    _ => target_lexicon::Environment::Musl,
+                },
+            })),
             "windows" | "macos" => Ok(Self::None),
             // Use `None` on platforms without explicit support.
             _ => Ok(Self::None),
@@ -214,12 +207,11 @@ fn detect_glibc_version_from_ld(ld_so: &Path) -> Result<LibcVersion, LibcDetecti
 ///
 /// Example: `ld.so (Ubuntu GLIBC 2.39-0ubuntu8.3) stable release version 2.39.`.
 fn glibc_ld_output_to_version(kind: &str, output: &[u8]) -> Option<LibcVersion> {
-    static RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"ld.so \(.+\) .* ([0-9]+\.[0-9]+)").unwrap());
-
     let output = String::from_utf8_lossy(output);
     trace!("{kind} output from `ld.so --version`: {output:?}");
-    let (_, [version]) = RE.captures(output.as_ref()).map(|c| c.extract())?;
+    let (_, [version]) = regex!(r"ld.so \(.+\) .* ([0-9]+\.[0-9]+)")
+        .captures(output.as_ref())
+        .map(|c| c.extract())?;
     // Parse the input as "x.y" glibc version.
     let mut parsed_ints = version.split('.').map(str::parse).fuse();
     let major = parsed_ints.next()?.ok()?;
@@ -229,15 +221,12 @@ fn glibc_ld_output_to_version(kind: &str, output: &[u8]) -> Option<LibcVersion> 
 }
 
 fn detect_linux_libc_from_ld_symlink(path: &Path) -> Result<LibcVersion, LibcDetectionError> {
-    static RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^ld-([0-9]{1,3})\.([0-9]{1,3})\.so$").unwrap());
-
     let ld_path = fs::read_link(path)?;
     let filename = ld_path
         .file_name()
         .ok_or_else(|| LibcDetectionError::MissingBasePath(ld_path.clone()))?
         .to_string_lossy();
-    let (_, [major, minor]) = RE
+    let (_, [major, minor]) = regex!(r"^ld-([0-9]{1,3})\.([0-9]{1,3})\.so$")
         .captures(&filename)
         .map(|c| c.extract())
         .ok_or_else(|| LibcDetectionError::GlibcExtractionMismatch(ld_path.clone()))?;
@@ -284,12 +273,11 @@ fn detect_musl_version(ld_path: impl AsRef<Path>) -> Result<LibcVersion, LibcDet
 ///
 /// Example: `Version 1.2.5`.
 fn musl_ld_output_to_version(kind: &str, output: &[u8]) -> Option<LibcVersion> {
-    static RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"Version ([0-9]{1,4})\.([0-9]{1,4})").unwrap());
-
     let output = String::from_utf8_lossy(output);
     trace!("{kind} output from `ld`: {output:?}");
-    let (_, [major, minor]) = RE.captures(output.as_ref()).map(|c| c.extract())?;
+    let (_, [major, minor]) = regex!(r"Version ([0-9]{1,4})\.([0-9]{1,4})")
+        .captures(output.as_ref())
+        .map(|c| c.extract())?;
     // unwrap-safety: Since we are guaranteed to have between 1 and 4 ASCII digits and the
     // maximum possible value, 9999, fits into a u16.
     let major = major.parse().expect("valid major version");
@@ -462,7 +450,7 @@ fn find_ld_path_at(path: impl AsRef<Path>) -> Option<PathBuf> {
     };
     let Some(elf_interpreter) = elf.interpreter else {
         trace!(
-            "Couldn't find ELF interpreter path from {}",
+            "Couldn't find ELF interpreter path from `{}`",
             path.user_display()
         );
         return None;

@@ -5,9 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Bound;
 use std::str::FromStr;
 
-use crate::{
-    Operator, OperatorParseError, Version, VersionPattern, VersionPatternParseError, version,
-};
+use crate::{Operator, OperatorParseError, Version, VersionPattern, VersionPatternParseError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 #[cfg(feature = "tracing")]
 use tracing::warn;
@@ -83,7 +81,7 @@ impl VersionSpecifiers {
     ///
     /// This function is not applicable to ranges involving pre-release versions.
     pub fn from_release_only_bounds<'a>(
-        mut bounds: impl Iterator<Item = (&'a Bound<Version>, &'a Bound<Version>)>,
+        mut bounds: impl Iterator<Item = (Bound<&'a Version>, Bound<&'a Version>)>,
     ) -> Self {
         let mut specifiers = Vec::new();
 
@@ -93,38 +91,47 @@ impl VersionSpecifiers {
 
         // Add specifiers for the holes between the bounds.
         for (lower, upper) in bounds {
-            let specifier = match (next, lower) {
+            let gap_specifiers = match (next, lower) {
                 // Ex) [3.7, 3.8.5), (3.8.5, 3.9] -> >=3.7,!=3.8.5,<=3.9
                 (Bound::Excluded(prev), Bound::Excluded(lower)) if prev == lower => {
-                    Some(VersionSpecifier::not_equals_version(prev.clone()))
+                    vec![VersionSpecifier::not_equals_version(prev.clone())]
                 }
                 // Ex) [3.7, 3.8), (3.8, 3.9] -> >=3.7,!=3.8.*,<=3.9
                 (Bound::Excluded(prev), Bound::Included(lower)) => {
-                    match *prev.only_release_trimmed().release() {
-                        [major] if *lower.only_release_trimmed().release() == [major, 1] => {
-                            Some(VersionSpecifier::not_equals_star_version(Version::new([
-                                major, 0,
-                            ])))
-                        }
-                        [major, minor]
-                            if *lower.only_release_trimmed().release() == [major, minor + 1] =>
+                    let prev = prev.only_release_trimmed();
+                    let lower = lower.only_release_trimmed();
+                    match (&*prev.release(), &*lower.release()) {
+                        ([major], [lower_major, lower_minor]) if major == lower_major => (0
+                            ..*lower_minor)
+                            .map(|minor| {
+                                VersionSpecifier::not_equals_star_version(Version::new([
+                                    *major, minor,
+                                ]))
+                            })
+                            .collect(),
+                        ([major, minor], [lower_major, lower_minor])
+                            if major == lower_major && minor < lower_minor =>
                         {
-                            Some(VersionSpecifier::not_equals_star_version(Version::new([
-                                major, minor,
-                            ])))
+                            (*minor..*lower_minor)
+                                .map(|minor| {
+                                    VersionSpecifier::not_equals_star_version(Version::new([
+                                        *major, minor,
+                                    ]))
+                                })
+                                .collect()
                         }
-                        _ => None,
+                        _ => Vec::new(),
                     }
                 }
-                _ => None,
+                _ => Vec::new(),
             };
-            if let Some(specifier) = specifier {
-                specifiers.push(specifier);
-            } else {
+            if gap_specifiers.is_empty() {
                 #[cfg(feature = "tracing")]
                 warn!(
                     "Ignoring unsupported gap in `requires-python` version: {next:?} -> {lower:?}"
                 );
+            } else {
+                specifiers.extend(gap_specifiers);
             }
             next = upper;
         }
@@ -156,7 +163,23 @@ impl FromStr for VersionSpecifiers {
     type Err = VersionSpecifiersParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_version_specifiers(s).map(Self::from_unsorted)
+        let separator_count = s.bytes().filter(|byte| *byte == b',').count();
+        if separator_count == 0 {
+            if s.is_empty() {
+                return Ok(Self::empty());
+            }
+            return VersionSpecifier::from_str(s)
+                .map(Self::from)
+                .map_err(|err| VersionSpecifiersParseError {
+                    inner: Box::new(VersionSpecifiersParseErrorInner {
+                        err,
+                        line: s.to_string(),
+                        start: 0,
+                        end: s.len(),
+                    }),
+                });
+        }
+        parse_version_specifiers(s, separator_count + 1).map(Self::from_unsorted)
     }
 }
 
@@ -552,7 +575,7 @@ impl VersionSpecifier {
     ///
     /// This function is not applicable to ranges involving pre-release versions.
     pub fn from_release_only_bounds(
-        bounds: (&Bound<Version>, &Bound<Version>),
+        bounds: (Bound<&Version>, Bound<&Version>),
     ) -> impl Iterator<Item = Self> {
         let (b1, b2) = match bounds {
             (Bound::Included(v1), Bound::Included(v2)) if v1 == v2 => {
@@ -572,8 +595,8 @@ impl VersionSpecifier {
                         (Some(Self::equals_star_version(version)), None)
                     }
                     _ => (
-                        Self::from_lower_bound(&Bound::Included(v1.clone())),
-                        Self::from_upper_bound(&Bound::Excluded(v2.clone())),
+                        Self::from_lower_bound(Bound::Included(v1)),
+                        Self::from_upper_bound(Bound::Excluded(v2)),
                     ),
                 }
             }
@@ -584,7 +607,7 @@ impl VersionSpecifier {
     }
 
     /// Returns a version specifier representing the given lower bound.
-    fn from_lower_bound(bound: &Bound<Version>) -> Option<Self> {
+    fn from_lower_bound(bound: Bound<&Version>) -> Option<Self> {
         match bound {
             Bound::Included(version) => {
                 Some(Self::from_version(Operator::GreaterThanEqual, version.clone()).unwrap())
@@ -597,7 +620,7 @@ impl VersionSpecifier {
     }
 
     /// Returns a version specifier representing the given upper bound.
-    fn from_upper_bound(bound: &Bound<Version>) -> Option<Self> {
+    fn from_upper_bound(bound: Bound<&Version>) -> Option<Self> {
         match bound {
             Bound::Included(version) => {
                 Some(Self::from_version(Operator::LessThanEqual, version.clone()).unwrap())
@@ -647,7 +670,10 @@ impl VersionSpecifier {
                 {
                     warn!("Using arbitrary equality (`===`) is discouraged");
                 }
-                self.version.to_string() == version.to_string()
+                // We compare the full version. This isn't standards-compliant (see:
+                // https://peps.python.org/pep-0440/#arbitrary-equality), but it's consistent with the
+                // resolver, which (until the resolver is also standards-compliant) is more important.
+                this == version
             }
             Operator::NotEqual => this != other.as_ref(),
             Operator::NotEqualStar => {
@@ -688,19 +714,11 @@ impl VersionSpecifier {
                     return true;
                 }
 
-                if version::compare_release(&this.release(), &other.release()) == Ordering::Equal {
-                    // This special case is here so that, unless the specifier itself
-                    // includes is a post-release version, that we do not accept
-                    // post-release versions for the version mentioned in the specifier
-                    // (e.g. >3.1 should not match 3.0.post0, but should match 3.2.post0).
-                    if !this.is_post() && other.is_post() {
-                        return false;
-                    }
-
-                    // We already checked that self doesn't have a local version
-                    if other.is_local() {
-                        return false;
-                    }
+                // `>V` excludes post-releases of V unless V is itself a post-release.
+                // A post-release's base retains its pre-release component, so `>1.0a1`
+                // excludes `1.0a1.post0` but accepts `1.0.post0`.
+                if !this.is_post() && other.is_post() && other.without_post_and_dev_eq(this) {
+                    return false;
                 }
 
                 other.as_ref() > this
@@ -711,13 +729,13 @@ impl VersionSpecifier {
                     return true;
                 }
 
-                // The exclusive ordered comparison <V MUST NOT allow a pre-release of the specified
-                // version unless the specified version is itself a pre-release. E.g., <3.1 should
-                // not match 3.1.dev0, but should match both 3.0.dev0 and 3.0, while <3.1.dev1 does
-                // match 3.1.dev0, 3.0.dev0 and 3.0.
-                if version::compare_release(&this.release(), &other.release()) == Ordering::Equal
-                    && !this.any_prerelease()
+                // The exclusive ordered comparison `<V` must not allow a pre-release of the
+                // specified version unless the specified version is itself a pre-release. The
+                // earliest pre-release of a post-release retains its post component, so
+                // `<1.0.post1` excludes `1.0.post1.dev0`, but includes `1.0a1`.
+                if !this.any_prerelease()
                     && other.any_prerelease()
+                    && other.as_ref() >= &this.clone().with_dev(Some(0))
                 {
                     return false;
                 }
@@ -937,11 +955,9 @@ impl From<ParseErrorKind> for VersionSpecifierParseError {
 /// Parse a list of specifiers such as `>= 1.0, != 1.3.*, < 2.0`.
 fn parse_version_specifiers(
     spec: &str,
+    specifier_count: usize,
 ) -> Result<Vec<VersionSpecifier>, VersionSpecifiersParseError> {
-    let mut version_ranges = Vec::new();
-    if spec.is_empty() {
-        return Ok(version_ranges);
-    }
+    let mut version_ranges = Vec::with_capacity(specifier_count);
     let mut start: usize = 0;
     let separator = ",";
     for version_range_spec in spec.split(separator) {
@@ -1050,11 +1066,11 @@ impl std::fmt::Display for TildeVersionSpecifier<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp::Ordering, str::FromStr};
+    use std::{cmp::Ordering, error::Error, str::FromStr};
 
     use indoc::indoc;
 
-    use crate::LocalSegment;
+    use crate::{LocalSegment, version};
 
     use super::*;
 
@@ -1078,6 +1094,81 @@ mod tests {
                 .unwrap()
                 .contains(&version)
         );
+    }
+
+    /// Test the `<V.postN` cases corrected by `packaging` 26.1.
+    ///
+    /// See: <https://github.com/pypa/packaging/pull/1140>
+    #[test]
+    fn test_less_than_post_release() {
+        for (specifier, candidate, expected) in [
+            ("<1.0.post1", "1.0a1", true),
+            ("<1.0.post1", "1.0.post0.dev0", true),
+            ("<1.0.post1", "1.0.post1.dev0", false),
+            ("<1!1.0.post1", "1!1.0a1", true),
+        ] {
+            assert_eq!(
+                VersionSpecifier::from_str(specifier)
+                    .unwrap()
+                    .contains(&Version::from_str(candidate).unwrap()),
+                expected,
+                "expected `{specifier}` to contain `{candidate}`: {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn greater_than_post_release_with_long_versions() -> Result<(), Box<dyn Error>> {
+        // Long release numbers use the full version representation. Trailing zeros
+        // do not change which post-releases belong to the bound.
+        let short: VersionSpecifier = ">1.0".parse()?;
+        assert!(!short.contains(&"1.0.0.0.0.post1".parse()?));
+        assert!(short.contains(&"1.0.0.0.1.post1".parse()?));
+
+        let long: VersionSpecifier = ">1.0.0.0.0".parse()?;
+        assert!(!long.contains(&"1.0.post1".parse()?));
+        assert!(long.contains(&"1.1.post1".parse()?));
+
+        // A post-release belongs to a pre-release only when the pre-release
+        // component matches, even if it also has a development component.
+        let prerelease: VersionSpecifier = ">1.0.0.0.0a1".parse()?;
+        assert!(!prerelease.contains(&"1.0a1.post1.dev2".parse()?));
+        assert!(prerelease.contains(&"1.0a2.post1".parse()?));
+        assert!(prerelease.contains(&"1.0.post1".parse()?));
+
+        Ok(())
+    }
+
+    #[test]
+    fn greater_than_post_release_with_maximum_development_number() -> Result<(), Box<dyn Error>> {
+        // The largest parsed development number is still before the
+        // corresponding post-release.
+        let prerelease: VersionSpecifier = ">1.0a1.dev18446744073709551614".parse()?;
+        assert!(prerelease.contains(&"1.0a1.post0".parse()?));
+
+        // An internal maximum development number compares equal to an absent
+        // development component on a pre-release.
+        let lower = "1.0a1".parse::<Version>()?.with_dev(Some(u64::MAX));
+        let specifier = VersionSpecifier::from_version(Operator::GreaterThan, lower)?;
+        assert!(!specifier.contains(&"1.0a1.post0".parse()?));
+
+        Ok(())
+    }
+
+    #[test]
+    fn greater_than_post_release_with_internal_minimum() -> Result<(), Box<dyn Error>> {
+        // Internal minimum bounds compare before ordinary versions and retain
+        // their ordering when their candidate has other version components.
+        let lower = Version::new([1, 0]).with_min(Some(0));
+        let specifier = VersionSpecifier::from_version(Operator::GreaterThan, lower)?;
+
+        let same_minimum = "1.0.post1".parse::<Version>()?.with_min(Some(0));
+        assert!(!specifier.contains(&same_minimum));
+
+        let later_minimum = "1.0.post1".parse::<Version>()?.with_min(Some(1));
+        assert!(specifier.contains(&later_minimum));
+
+        Ok(())
     }
 
     const VERSIONS_ALL: &[&str] = &[

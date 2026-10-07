@@ -5,11 +5,11 @@ use futures::stream::FuturesUnordered;
 use rustc_hash::FxHashSet;
 use tracing::trace;
 
-use uv_configuration::{Constraints, Overrides};
+use uv_configuration::{Constraints, DependencyModifierScope, DependencyModifiers};
 use uv_distribution::{DistributionDatabase, Reporter};
 use uv_distribution_types::{Dist, Identifier, Requirement, RequirementSource};
 use uv_resolver::{InMemoryIndex, MetadataResponse, ResolverEnvironment};
-use uv_types::{BuildContext, HashStrategy, RequestedRequirements};
+use uv_types::{BuildContext, HashStrategy, HashVerification, RequestedRequirements};
 
 use crate::{Error, required_dist};
 
@@ -34,8 +34,8 @@ pub struct LookaheadResolver<'a, Context: BuildContext> {
     requirements: &'a [Requirement],
     /// The constraints for the project.
     constraints: &'a Constraints,
-    /// The overrides for the project.
-    overrides: &'a Overrides,
+    /// The dependency modifiers for the project.
+    modifiers: &'a DependencyModifiers,
     /// The required hashes for the project.
     hasher: &'a HashStrategy,
     /// The in-memory index for resolving dependencies.
@@ -49,7 +49,7 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
     pub fn new(
         requirements: &'a [Requirement],
         constraints: &'a Constraints,
-        overrides: &'a Overrides,
+        modifiers: &'a DependencyModifiers,
         hasher: &'a HashStrategy,
         index: &'a InMemoryIndex,
         database: DistributionDatabase<'a, Context>,
@@ -57,7 +57,7 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
         Self {
             requirements,
             constraints,
-            overrides,
+            modifiers,
             hasher,
             index,
             database,
@@ -91,7 +91,10 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
         // Queue up the initial requirements.
         let mut queue: VecDeque<_> = self
             .constraints
-            .apply(self.overrides.apply(self.requirements))
+            .apply(
+                self.modifiers
+                    .apply(DependencyModifierScope::Global, self.requirements),
+            )
             .filter(|requirement| requirement.evaluate_markers(env.marker_environment(), &[]))
             .map(|requirement| (*requirement).clone())
             .collect();
@@ -107,11 +110,41 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
 
             while let Some(result) = futures.next().await {
                 if let Some(lookahead) = result? {
-                    hasher = hasher.augment_with_requirements(lookahead.requirements().iter())?;
-                    for requirement in self
-                        .constraints
-                        .apply(self.overrides.apply(lookahead.requirements()))
-                    {
+                    // User-provided metadata can authorize dependencies even under required hashes.
+                    // An override may only match after the source's version has been discovered.
+                    // Read its hashes directly; the lookahead requirements may come from the archive.
+                    let trusted_requirements =
+                        if matches!(hasher.verification(), HashVerification::Required(_)) {
+                            self.database
+                                .dependency_metadata(lookahead.package(), Some(lookahead.version()))
+                                .map(|metadata| {
+                                    Box::into_iter(metadata.requires_dist)
+                                        .map(Requirement::from)
+                                        .collect::<Vec<_>>()
+                                })
+                        } else {
+                            None
+                        };
+                    let requirements = trusted_requirements
+                        .as_deref()
+                        .unwrap_or_else(|| lookahead.requirements())
+                        .iter()
+                        .filter(|requirement| {
+                            !self.modifiers.is_excluded_for(
+                                lookahead.package(),
+                                lookahead.version(),
+                                &requirement.name,
+                            )
+                        });
+                    hasher = if trusted_requirements.is_some() {
+                        hasher.augment_with_requirements(requirements)?
+                    } else {
+                        hasher.augment_with_metadata_requirements(requirements)?
+                    };
+                    for requirement in self.constraints.apply(self.modifiers.apply(
+                        DependencyModifierScope::Package(lookahead.package(), lookahead.version()),
+                        lookahead.requirements(),
+                    )) {
                         if requirement
                             .evaluate_markers(env.marker_environment(), lookahead.extras())
                         {
@@ -147,6 +180,8 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
             false
         };
 
+        self.database.record_metadata(&dist);
+
         // Fetch the metadata for the distribution.
         let metadata = {
             let id = dist.distribution_id();
@@ -159,7 +194,7 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
                 // Run the PEP 517 build process to extract metadata from the source distribution.
                 let archive = self
                     .database
-                    .get_or_build_wheel_metadata(&dist, hasher.get(&dist))
+                    .get_or_build_wheel_metadata(&dist, hasher.metadata_policy(&dist))
                     .await
                     .map_err(|err| Error::from_dist(dist, err))?;
 
@@ -175,6 +210,8 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
         };
 
         // Respect recursive extras by propagating the source extras to the dependencies.
+        let package = metadata.name.clone();
+        let version = metadata.version.clone();
         let requires_dist = Box::into_iter(metadata.requires_dist)
             .chain(
                 metadata
@@ -203,6 +240,8 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
 
         // Return the requirements from the metadata.
         Ok(Some(RequestedRequirements::new(
+            package,
+            version,
             requirement.extras,
             requires_dist,
             direct,

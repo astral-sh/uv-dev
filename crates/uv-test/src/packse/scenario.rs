@@ -4,6 +4,7 @@
 //! `[packages.<name>.versions.<version>]` becomes a [`PackageName`] key, then a [`Version`] key.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -45,6 +46,10 @@ pub struct Scenario {
     /// Additional resolver options.
     #[serde(default)]
     pub resolver_options: ResolverOptions,
+
+    /// Options for generating tests from this scenario.
+    #[serde(default)]
+    pub testgen: TestGeneration,
 }
 
 impl Scenario {
@@ -73,6 +78,7 @@ impl Scenario {
             },
             environment: Environment::default(),
             resolver_options: ResolverOptions::default(),
+            testgen: TestGeneration::default(),
         }
     }
 }
@@ -100,13 +106,23 @@ pub struct PackageMetadata {
     #[serde(default)]
     pub extras: BTreeMap<ExtraName, Vec<Requirement>>,
 
-    /// Whether to produce a source distribution.
-    #[serde(default = "default_true")]
-    pub sdist: bool,
+    /// Console script names that invoke the package's generated stub.
+    #[serde(default)]
+    pub entry_points: Vec<String>,
 
-    /// Whether to produce a wheel.
-    #[serde(default = "default_true")]
-    pub wheel: bool,
+    /// Whether to produce a source distribution, and optionally its metadata.
+    #[serde(
+        default = "default_artifact",
+        deserialize_with = "deserialize_artifact"
+    )]
+    pub sdist: Option<ArtifactMetadata>,
+
+    /// Whether to produce wheels, and optionally their shared metadata.
+    #[serde(
+        default = "default_artifact",
+        deserialize_with = "deserialize_artifact"
+    )]
+    pub wheel: Option<ArtifactMetadata>,
 
     /// Whether this version is yanked.
     #[serde(default)]
@@ -116,6 +132,33 @@ pub struct PackageMetadata {
     /// An empty list means produce only the default `py3-none-any` wheel.
     #[serde(default)]
     pub wheel_tags: Vec<WheelTag>,
+}
+
+fn deserialize_artifact<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<ArtifactMetadata>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Debug, Deserialize)]
+    #[serde(untagged)]
+    enum Helper {
+        Bool(bool),
+        Metadata(ArtifactMetadata),
+    }
+
+    match Helper::deserialize(deserializer)? {
+        Helper::Bool(false) => Ok(None),
+        Helper::Bool(true) => Ok(Some(ArtifactMetadata::default())),
+        Helper::Metadata(metadata) => Ok(Some(metadata)),
+    }
+}
+
+/// Metadata advertised for an artifact by the Packse Simple API.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactMetadata {
+    pub upload_time: Option<String>,
 }
 
 /// A validated three-component compatibility tag for generated wheels.
@@ -209,6 +252,10 @@ impl Default for Environment {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResolverOptions {
+    /// Version selection strategy.
+    #[serde(default)]
+    pub resolution: Option<Resolution>,
+
     /// Python version override for resolution.
     #[serde(default)]
     pub python: Option<PythonVersion>,
@@ -238,13 +285,55 @@ pub struct ResolverOptions {
     pub required_environments: Vec<MarkerTree>,
 }
 
+/// Options for generating tests from a scenario.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestGeneration {
+    /// Disable test generation for this scenario.
+    #[serde(default)]
+    pub disable: bool,
+
+    /// Select the generated test command for this scenario.
+    #[serde(default)]
+    pub kind: Option<ScenarioTest>,
+}
+
+/// The command template used to generate a scenario test.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScenarioTest {
+    Install,
+    Compile,
+    Lock,
+}
+
+/// The version selection strategy used by the resolver.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Resolution {
+    Highest,
+    Lowest,
+    LowestDirect,
+}
+
+impl fmt::Display for Resolution {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Highest => formatter.write_str("highest"),
+            Self::Lowest => formatter.write_str("lowest"),
+            Self::LowestDirect => formatter.write_str("lowest-direct"),
+        }
+    }
+}
+
 #[expect(clippy::unnecessary_wraps)] // Must return `Option` for serde `default`
 fn default_requires_python() -> Option<VersionSpecifiers> {
     Some(VersionSpecifiers::from_str(">=3.12").expect("default requires-python should be valid"))
 }
 
-fn default_true() -> bool {
-    true
+#[expect(clippy::unnecessary_wraps)] // Must return `Option` for serde `default`
+fn default_artifact() -> Option<ArtifactMetadata> {
+    Some(ArtifactMetadata::default())
 }
 
 fn default_python() -> PythonVersion {
@@ -316,6 +405,31 @@ extra_c = ["c"]
         assert_eq!(
             a_meta.extras[&extra_name],
             vec![Requirement::from_str("b").expect("valid requirement")]
+        );
+    }
+
+    #[test]
+    fn parse_test_and_resolution() {
+        let toml = r#"
+name = "lowest-direct"
+
+[root]
+requires = ["a"]
+
+[expected]
+satisfiable = true
+
+[testgen]
+kind = "compile"
+
+[resolver_options]
+resolution = "lowest-direct"
+"#;
+        let scenario: Scenario = toml::from_str(toml).expect("scenario should parse");
+        assert_eq!(scenario.testgen.kind, Some(ScenarioTest::Compile));
+        assert_eq!(
+            scenario.resolver_options.resolution,
+            Some(Resolution::LowestDirect)
         );
     }
 

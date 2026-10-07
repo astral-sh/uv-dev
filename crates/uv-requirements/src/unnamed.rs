@@ -151,7 +151,7 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                         .and_then(|contents| Metadata10::parse_pkg_info(&contents).ok())
                 {
                     debug!(
-                        "Found PKG-INFO metadata for {path} ({name})",
+                        "Found `PKG-INFO` metadata for `{path}` ({name})",
                         path = parsed_directory_url.install_path.display(),
                         name = metadata.name
                     );
@@ -176,7 +176,7 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                     // Read PEP 621 metadata from the `pyproject.toml`.
                     if let Some(project) = pyproject.project {
                         debug!(
-                            "Found PEP 621 metadata for {path} in `pyproject.toml` ({name})",
+                            "Found PEP 621 metadata for `{path}` in `pyproject.toml` ({name})",
                             path = parsed_directory_url.install_path.display(),
                             name = project.name
                         );
@@ -190,23 +190,22 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                     }
 
                     // Read Poetry-specific metadata from the `pyproject.toml`.
-                    if let Some(tool) = pyproject.tool {
-                        if let Some(poetry) = tool.poetry {
-                            if let Some(name) = poetry.name {
-                                debug!(
-                                    "Found Poetry metadata for {path} in `pyproject.toml` ({name})",
-                                    path = parsed_directory_url.install_path.display(),
-                                    name = name
-                                );
-                                return Ok(uv_pep508::Requirement {
-                                    name,
-                                    extras: requirement.extras,
-                                    version_or_url: Some(VersionOrUrl::Url(requirement.url)),
-                                    marker: requirement.marker,
-                                    origin: requirement.origin,
-                                });
-                            }
-                        }
+                    if let Some(tool) = pyproject.tool
+                        && let Some(poetry) = tool.poetry
+                        && let Some(name) = poetry.name
+                    {
+                        debug!(
+                            "Found Poetry metadata for `{path}` in `pyproject.toml` ({name})",
+                            path = parsed_directory_url.install_path.display(),
+                            name = name
+                        );
+                        return Ok(uv_pep508::Requirement {
+                            name,
+                            extras: requirement.extras,
+                            version_or_url: Some(VersionOrUrl::Url(requirement.url)),
+                            marker: requirement.marker,
+                            origin: requirement.origin,
+                        });
                     }
                 }
 
@@ -220,23 +219,22 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                             ini.read(contents).ok()
                         })
                 {
-                    if let Some(section) = setup_cfg.get("metadata") {
-                        if let Some(Some(name)) = section.get("name") {
-                            if let Ok(name) = PackageName::from_str(name) {
-                                debug!(
-                                    "Found setuptools metadata for {path} in `setup.cfg` ({name})",
-                                    path = parsed_directory_url.install_path.display(),
-                                    name = name
-                                );
-                                return Ok(uv_pep508::Requirement {
-                                    name,
-                                    extras: requirement.extras,
-                                    version_or_url: Some(VersionOrUrl::Url(requirement.url)),
-                                    marker: requirement.marker,
-                                    origin: requirement.origin,
-                                });
-                            }
-                        }
+                    if let Some(section) = setup_cfg.get("metadata")
+                        && let Some(Some(name)) = section.get("name")
+                        && let Ok(name) = PackageName::from_str(name)
+                    {
+                        debug!(
+                            "Found setuptools metadata for `{path}` in `setup.cfg` ({name})",
+                            path = parsed_directory_url.install_path.display(),
+                            name = name
+                        );
+                        return Ok(uv_pep508::Requirement {
+                            name,
+                            extras: requirement.extras,
+                            version_or_url: Some(VersionOrUrl::Url(requirement.url)),
+                            marker: requirement.marker,
+                            origin: requirement.origin,
+                        });
                     }
                 }
 
@@ -263,7 +261,7 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                     DistExtension::Wheel => unreachable!(),
                 };
                 SourceUrl::Direct(DirectSourceUrl {
-                    url: &parsed_archive_url.url,
+                    url: &requirement.url.verbatim,
                     subdirectory: parsed_archive_url.subdirectory.as_deref(),
                     ext,
                 })
@@ -308,7 +306,7 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                 archive.metadata.name.clone()
             } else {
                 // Run the PEP 517 build process to extract metadata from the source distribution.
-                let hashes = hasher.get_url(source.url());
+                let hashes = hasher.metadata_policy_for_url(source.url());
                 let source = BuildableSource::Url(source);
                 let archive = database
                     .build_wheel_metadata(&source, hashes)

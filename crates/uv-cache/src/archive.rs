@@ -1,5 +1,5 @@
 use std::convert::Infallible;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 /// A unique identifier for an archive (unzipped wheel) in the cache.
@@ -10,6 +10,10 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ArchiveId(String);
 
+/// A unique identifier for a file stored in the archive file bucket.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct ArchiveFileId(PathBuf);
+
 impl Default for ArchiveId {
     fn default() -> Self {
         Self::new()
@@ -19,7 +23,29 @@ impl Default for ArchiveId {
 impl ArchiveId {
     /// Generate a new unique identifier for an archive.
     pub(crate) fn new() -> Self {
-        Self(uv_fastid::Id::insecure().to_string())
+        Self(uv_fastid::Id::secure().to_string())
+    }
+
+    /// Use a path-safe digest as the complete archive identifier.
+    ///
+    /// This does not generate or hash an identifier. Callers must ensure that the digest uniquely
+    /// identifies the persisted directory contents.
+    pub fn from_digest(digest: String) -> Self {
+        Self(digest)
+    }
+}
+
+impl ArchiveFileId {
+    /// Identify a file object by a digest that includes its contents and executable status.
+    pub fn from_digest(digest: &str) -> Self {
+        let shard = digest.get(..2).unwrap_or(digest);
+        Self(PathBuf::from(shard).join(digest))
+    }
+}
+
+impl AsRef<Path> for ArchiveFileId {
+    fn as_ref(&self) -> &Path {
+        &self.0
     }
 }
 

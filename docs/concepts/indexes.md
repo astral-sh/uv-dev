@@ -40,8 +40,8 @@ Index names may only contain alphanumeric characters, dashes, underscores, and p
 valid ASCII.
 
 When providing an index on the command line (with `--index` or `--default-index`) or through an
-environment variable (`UV_INDEX` or `UV_DEFAULT_INDEX`), names are optional but can be included
-using the `<name>=<url>` syntax, as in:
+environment variable (`UV_INDEX` or `UV_DEFAULT_INDEX`), use its URL, a configured name, or the
+`<name>=<url>` syntax:
 
 ```shell
 # On the command line.
@@ -49,6 +49,8 @@ $ uv lock --index pytorch=https://download.pytorch.org/whl/cpu
 # Via an environment variable.
 $ UV_INDEX=pytorch=https://download.pytorch.org/whl/cpu uv lock
 ```
+
+With `--preview-features index-by-name`, configured index names take precedence over matching paths.
 
 ## Pinning a package to an index
 
@@ -212,14 +214,18 @@ authenticate = "always"
 When `authenticate` is set to `always`, uv will eagerly search for credentials and error if
 credentials cannot be found.
 
-### Ignoring error codes when searching across indexes
+### Ignoring error codes
 
 When using the [first-index strategy](#searching-across-multiple-indexes), uv will stop searching
 across indexes if an HTTP 401 Unauthorized or HTTP 403 Forbidden status code is encountered. The one
 exception is that uv will ignore 403s when searching the `pytorch` index (since this index returns a
 403 when a package is not present).
 
-To configure which error codes are ignored for an index, use the `ignored-error-codes` setting. For
+By default, uv will also stop resolution if an HTTP error is encountered when fetching distribution
+metadata or an archive from an index. Ignoring that error marks the affected package version as
+unavailable, allowing the resolver to try another version.
+
+To configure which error codes are ignored for an index, use the `ignore-error-codes` setting. For
 example, to ignore 403s (but not 401s) for a private index:
 
 ```toml
@@ -283,6 +289,25 @@ This setting is most commonly used to override the default cache control headers
 that otherwise disable caching, often unintentionally. We typically recommend following PyPI's
 approach to caching headers, i.e., setting `api = "max-age=600"` and
 `files = "max-age=365000000, immutable"`.
+
+### Requiring a hash algorithm
+
+When an index advertises multiple hashes for a distribution, uv selects a single hash to record in
+the lockfile. To require a specific algorithm for distributions resolved from an index, use the
+`hash-algorithm` setting:
+
+```toml
+[tool.uv]
+preview-features = ["index-hash-algorithm"]
+
+[[tool.uv.index]]
+name = "private-index"
+url = "https://private-index.com/simple"
+hash-algorithm = "sha256"
+```
+
+If a locked distribution does not advertise the required algorithm, uv will fail instead of falling
+back to another hash algorithm.
 
 ### Configuring `exclude-newer` for an index
 

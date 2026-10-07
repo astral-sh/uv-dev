@@ -1,9 +1,10 @@
 //! Common operations shared across the `pip` API and subcommands.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
 use itertools::Itertools;
@@ -13,19 +14,23 @@ use tracing::debug;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClient};
 use uv_configuration::{
-    BuildOptions, Concurrency, Constraints, DependencyGroups, DryRun, Excludes,
-    ExtrasSpecification, Overrides, Reinstall, Upgrade,
+    BuildOptions, Concurrency, Constraints, DependencyGroups, DependencyModifiers, DryRun,
+    ExcludeDependency, Excludes, ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
 use uv_distribution_types::{
-    CachedDist, DependencyMetadata, Diagnostic, Dist, InstalledDist, InstalledVersion, LocalDist,
-    NameRequirementSpecification, Requirement, ResolutionDiagnostic, UnresolvedRequirement,
+    CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, ExtraBuildRequires,
+    ExtraBuildVariables, IndexLocations, InstalledDist, InstalledVersion, LocalDist,
+    NameRequirementSpecification, PackageConfigSettings, Requirement, RequirementScope,
+    RequirementSource, ResolutionDiagnostic, ResolutionRecorder, UnresolvedRequirement,
     UnresolvedRequirementSpecification, VersionOrUrlRef,
 };
-use uv_distribution_types::{DistributionMetadata, InstalledMetadata, Name, Resolution};
-use uv_fs::Simplified;
-use uv_install_wheel::LinkMode;
+use uv_distribution_types::{
+    DerivationChain, DistributionMetadata, InstalledMetadata, Name, Resolution,
+};
+use uv_fs::{CWD, Simplified, normalize_path_under};
+use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
 use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -40,16 +45,17 @@ use uv_requirements::{
     RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
 };
 use uv_resolver::{
-    DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
-    Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput, UpgradePackages,
+    DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, NoSolutionError,
+    NoSolutionHeader, Options, Preference, Preferences, PythonRequirement, ResolveError, Resolver,
+    ResolverEnvironment, ResolverOutput, UpgradePackages,
 };
 use uv_tool::InstalledTools;
-use uv_types::{BuildContext, HashStrategy, InFlight, InstalledPackagesProvider};
+use uv_types::{BuildContext, HashStrategy, InFlight};
 use uv_warnings::warn_user;
 
-use crate::commands::compile_bytecode;
 use crate::commands::pip::loggers::{InstallLogger, ResolveLogger};
 use crate::commands::reporters::{InstallReporter, PrepareReporter, ResolverReporter};
+use crate::commands::{compile_bytecode, compile_bytecode_files};
 use crate::printer::Printer;
 
 /// Consolidate the requirements for an installation.
@@ -96,18 +102,19 @@ pub(crate) async fn read_constraints(
 }
 
 /// Resolve a set of requirements, similar to running `pip compile`.
-pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
+pub(crate) async fn resolve(
     requirements: Vec<UnresolvedRequirementSpecification>,
     constraints: Vec<NameRequirementSpecification>,
     overrides: Vec<UnresolvedRequirementSpecification>,
-    excludes: Vec<PackageName>,
+    lowered_overrides: Vec<Override<Requirement>>,
+    excludes: Vec<ExcludeDependency>,
     source_trees: Vec<SourceTree>,
     mut project: Option<PackageName>,
-    workspace_members: BTreeSet<PackageName>,
+    workspace_members: BTreeMap<PackageName, RequirementSource>,
     extras: &ExtrasSpecification,
     groups: &BTreeMap<PathBuf, DependencyGroups>,
     preferences: Vec<Preference>,
-    installed_packages: InstalledPackages,
+    installed_packages: Option<SitePackages>,
     hasher: &HashStrategy,
     reinstall: &Reinstall,
     upgrade: &Upgrade,
@@ -122,6 +129,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
     build_dispatch: &BuildDispatch<'_>,
     concurrency: &Concurrency,
     options: Options,
+    recorder: Option<ResolutionRecorder>,
     logger: Box<dyn ResolveLogger>,
     printer: Printer,
 ) -> Result<(ResolverOutput, HashStrategy), Error> {
@@ -152,7 +160,8 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                         client,
                         build_dispatch,
                         concurrency.downloads_semaphore.clone(),
-                    ),
+                    )
+                    .with_recorder(recorder.clone()),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
                 .resolve(unnamed.into_iter())
@@ -170,7 +179,8 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                     client,
                     build_dispatch,
                     concurrency.downloads_semaphore.clone(),
-                ),
+                )
+                .with_recorder(recorder.clone()),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
             .resolve(source_trees.iter())
@@ -234,7 +244,7 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
             // Complain if dependency groups are named that don't appear.
             for name in groups.explicit_names() {
                 if !metadata.dependency_groups.contains_key(name) {
-                    return Err(anyhow!(
+                    Err(anyhow!(
                         "The dependency group '{name}' was not found in the project: {}",
                         pyproject_path.user_display()
                     ))?;
@@ -243,7 +253,18 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
             // Apply dependency-groups
             for (group_name, group) in &metadata.dependency_groups {
                 if groups.contains(group_name) {
+                    let scope =
+                        metadata
+                            .name
+                            .as_ref()
+                            .map_or(RequirementScope::Global, |package| {
+                                RequirementScope::Group {
+                                    package: package.clone(),
+                                    group: group_name.clone(),
+                                }
+                            });
                     requirements.extend(group.iter().cloned().map(|group| Requirement {
+                        scope: scope.clone(),
                         origin: Some(RequirementOrigin::Group(
                             pyproject_path.clone(),
                             metadata.name.clone(),
@@ -288,7 +309,8 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                         client,
                         build_dispatch,
                         concurrency.downloads_semaphore.clone(),
-                    ),
+                    )
+                    .with_recorder(recorder.clone()),
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
                 .resolve(unnamed.into_iter())
@@ -306,24 +328,34 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
             .map(|constraint| constraint.requirement)
             .chain(upgrade.constraints().cloned()),
     );
-    let overrides = Overrides::from_requirements(overrides);
-    let excludes = excludes.into_iter().collect::<Excludes>();
+    let overrides = Overrides::from_entries(
+        lowered_overrides
+            .into_iter()
+            .chain(overrides.into_iter().map(Override::Requirement))
+            .collect(),
+    )
+    .map_err(anyhow::Error::from)?;
+    let excludes = Excludes::from_entries(excludes);
+    let modifiers = DependencyModifiers::new(overrides, excludes);
     let preferences = Preferences::from_iter(preferences, &resolver_env);
 
     // Determine any lookahead requirements.
     let lookaheads = match options.dependency_mode {
         DependencyMode::Transitive => {
+            let constraints = constraints.clone().with_recorder(recorder.clone());
+            let modifiers = modifiers.clone().with_recorder(recorder.clone());
             let (lookaheads, updated_hasher) = LookaheadResolver::new(
                 &requirements,
                 &constraints,
-                &overrides,
+                &modifiers,
                 &hasher,
                 index,
                 DistributionDatabase::new(
                     client,
                     build_dispatch,
                     concurrency.downloads_semaphore.clone(),
-                ),
+                )
+                .with_recorder(recorder.clone()),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
             .resolve(&resolver_env)
@@ -341,14 +373,14 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
     let manifest = Manifest::new(
         requirements,
         constraints,
-        overrides,
-        excludes,
+        modifiers,
         preferences,
         project,
         workspace_members,
         exclusions,
         lookaheads,
-    );
+    )
+    .with_recorder(recorder.clone());
 
     // Resolve the dependencies.
     let resolution = {
@@ -377,7 +409,8 @@ pub(crate) async fn resolve<InstalledPackages: InstalledPackagesProvider>(
                 client,
                 build_dispatch,
                 concurrency.downloads_semaphore.clone(),
-            ),
+            )
+            .with_recorder(recorder.clone()),
         )?
         .with_reporter(Arc::new(reporter));
 
@@ -547,6 +580,114 @@ impl Changelog {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BytecodeCompilation {
+    /// Compile all Python source files in the environment.
+    All,
+    /// Compile Python source files installed by this operation.
+    Installed,
+}
+
+/// An installation plan and the time required to create it.
+pub(crate) struct InstallationPlan {
+    plan: Plan,
+    elapsed: Duration,
+}
+
+impl InstallationPlan {
+    /// Determine the changes required to make an environment satisfy a resolution.
+    pub(crate) fn build(
+        resolution: &Resolution,
+        site_packages: SitePackages,
+        installation: InstallationStrategy,
+        reinstall: &Reinstall,
+        build_options: &BuildOptions,
+        hasher: &HashStrategy,
+        index_locations: &IndexLocations,
+        config_settings: &ConfigSettings,
+        config_settings_package: &PackageConfigSettings,
+        extra_build_requires: &ExtraBuildRequires,
+        extra_build_variables: &ExtraBuildVariables,
+        cache: &Cache,
+        venv: &PythonEnvironment,
+        tags: &Tags,
+    ) -> Result<Self, Error> {
+        let start = Instant::now();
+        let plan = Planner::new(resolution)
+            .build(
+                site_packages,
+                installation,
+                reinstall,
+                build_options,
+                hasher,
+                index_locations,
+                config_settings,
+                config_settings_package,
+                extra_build_requires,
+                extra_build_variables,
+                cache,
+                venv,
+                tags,
+            )
+            .context("Failed to determine installation plan")?;
+
+        Ok(Self {
+            plan,
+            elapsed: start.elapsed(),
+        })
+    }
+
+    /// Returns `true` if executing the plan would not modify the environment.
+    pub(crate) fn is_noop(
+        &self,
+        modifications: Modifications,
+        compile: Option<BytecodeCompilation>,
+        dry_run: DryRun,
+    ) -> bool {
+        self.plan.cached.is_empty()
+            && self.plan.remote.is_empty()
+            && self.plan.reinstalls.is_empty()
+            && (self.plan.extraneous.is_empty()
+                || matches!(modifications, Modifications::Sufficient))
+            && (compile.is_none() || dry_run.enabled())
+    }
+
+    /// Complete an installation that was determined to be a no-op.
+    pub(crate) fn finish_noop(
+        self,
+        resolution: &Resolution,
+        modifications: Modifications,
+        compile: Option<BytecodeCompilation>,
+        logger: &dyn InstallLogger,
+        dry_run: DryRun,
+        printer: Printer,
+    ) -> Result<Changelog, Error> {
+        debug_assert!(self.is_noop(modifications, compile, dry_run));
+
+        let (plan, start) = self.into_parts();
+        if dry_run.enabled() {
+            report_dry_run(
+                dry_run,
+                resolution,
+                plan,
+                modifications,
+                start,
+                logger,
+                printer,
+            )
+        } else {
+            logger.on_check(resolution.len(), start, printer, dry_run)?;
+            Ok(Changelog::default())
+        }
+    }
+
+    fn into_parts(self) -> (Plan, Instant) {
+        let now = Instant::now();
+        let start = now.checked_sub(self.elapsed).unwrap_or(now);
+        (self.plan, start)
+    }
+}
+
 /// Install a set of requirements into the current environment.
 ///
 /// Returns a [`Changelog`] summarizing the changes made to the environment.
@@ -558,7 +699,7 @@ pub(crate) async fn install(
     reinstall: &Reinstall,
     build_options: &BuildOptions,
     link_mode: LinkMode,
-    compile: bool,
+    compile: Option<BytecodeCompilation>,
     hasher: &HashStrategy,
     tags: &Tags,
     client: &RegistryClient,
@@ -573,147 +714,319 @@ pub(crate) async fn install(
     printer: Printer,
     preview: Preview,
 ) -> Result<Changelog, Error> {
-    let start = std::time::Instant::now();
+    let plan = InstallationPlan::build(
+        resolution,
+        site_packages,
+        installation,
+        reinstall,
+        build_options,
+        hasher,
+        build_dispatch.locations(),
+        build_dispatch.config_settings(),
+        build_dispatch.config_settings_package(),
+        build_dispatch.extra_build_requires(),
+        build_dispatch.extra_build_variables(),
+        cache,
+        venv,
+        tags,
+    )?;
 
-    // Partition into those that should be linked from the cache (`local`), those that need to be
-    // downloaded (`remote`), and those that should be removed (`extraneous`).
-    let plan = Planner::new(resolution)
-        .build(
-            site_packages,
-            installation,
-            reinstall,
-            build_options,
-            hasher,
-            build_dispatch.locations(),
-            build_dispatch.config_settings(),
-            build_dispatch.config_settings_package(),
-            build_dispatch.extra_build_requires(),
-            build_dispatch.extra_build_variables(),
-            cache,
-            venv,
-            tags,
-        )
-        .context("Failed to determine installation plan")?;
+    plan.execute(
+        resolution,
+        modifications,
+        build_options,
+        link_mode,
+        compile,
+        hasher,
+        tags,
+        client,
+        in_flight,
+        concurrency,
+        build_dispatch,
+        cache,
+        venv,
+        logger,
+        installer_metadata,
+        dry_run,
+        printer,
+        preview,
+    )
+    .await
+}
 
-    if dry_run.enabled() {
-        return report_dry_run(
-            dry_run,
-            resolution,
-            plan,
-            modifications,
-            start,
-            logger.as_ref(),
-            printer,
+impl InstallationPlan {
+    /// Execute a previously computed installation plan.
+    pub(crate) async fn execute(
+        self,
+        resolution: &Resolution,
+        modifications: Modifications,
+        build_options: &BuildOptions,
+        link_mode: LinkMode,
+        compile: Option<BytecodeCompilation>,
+        hasher: &HashStrategy,
+        tags: &Tags,
+        client: &RegistryClient,
+        in_flight: &InFlight,
+        concurrency: &Concurrency,
+        build_dispatch: &BuildDispatch<'_>,
+        cache: &Cache,
+        venv: &PythonEnvironment,
+        logger: Box<dyn InstallLogger>,
+        installer_metadata: bool,
+        dry_run: DryRun,
+        printer: Printer,
+        preview: Preview,
+    ) -> Result<Changelog, Error> {
+        let (plan, start) = self.into_parts();
+
+        if dry_run.enabled() {
+            return report_dry_run(
+                dry_run,
+                resolution,
+                plan,
+                modifications,
+                start,
+                logger.as_ref(),
+                printer,
+            );
+        }
+
+        let Plan {
+            cached,
+            remote,
+            reinstalls,
+            extraneous,
+        } = plan;
+
+        // If we're in `install` mode, ignore any extraneous distributions.
+        let extraneous = match modifications {
+            Modifications::Sufficient => vec![],
+            Modifications::Exact => extraneous,
+        };
+
+        // Nothing to do.
+        if remote.is_empty()
+            && cached.is_empty()
+            && reinstalls.is_empty()
+            && extraneous.is_empty()
+            && compile.is_none()
+        {
+            logger.on_check(resolution.len(), start, printer, dry_run)?;
+            return Ok(Changelog::default());
+        }
+
+        // Partition into two sets: those that require build isolation, and those that disable it. This
+        // is effectively a heuristic to make `--no-build-isolation` work "more often" by way of giving
+        // `--no-build-isolation` packages "access" to the rest of the environment.
+        let (isolated_phase, shared_phase) = Plan {
+            cached,
+            remote,
+            reinstalls,
+            extraneous,
+        }
+        .partition(|name| build_dispatch.build_isolation().is_isolated(Some(name)));
+
+        let has_isolated_phase = !isolated_phase.is_empty();
+        let has_shared_phase = !shared_phase.is_empty();
+
+        let mut installs = vec![];
+        let mut uninstalls = vec![];
+
+        // Execute the isolated-build phase.
+        if has_isolated_phase {
+            let (isolated_installs, isolated_uninstalls) = execute_plan(
+                isolated_phase,
+                None,
+                resolution,
+                build_options,
+                link_mode,
+                hasher,
+                tags,
+                client,
+                in_flight,
+                concurrency,
+                build_dispatch,
+                cache,
+                venv,
+                logger.as_ref(),
+                installer_metadata,
+                printer,
+                preview,
+            )
+            .await?;
+            installs.extend(isolated_installs);
+            uninstalls.extend(isolated_uninstalls);
+        }
+
+        if has_shared_phase {
+            let (shared_installs, shared_uninstalls) = execute_plan(
+                shared_phase,
+                if has_isolated_phase {
+                    Some(InstallPhase::Shared)
+                } else {
+                    None
+                },
+                resolution,
+                build_options,
+                link_mode,
+                hasher,
+                tags,
+                client,
+                in_flight,
+                concurrency,
+                build_dispatch,
+                cache,
+                venv,
+                logger.as_ref(),
+                installer_metadata,
+                printer,
+                preview,
+            )
+            .await?;
+            installs.extend(shared_installs);
+            uninstalls.extend(shared_uninstalls);
+        }
+
+        if let Some(compile) = compile {
+            match compile {
+                BytecodeCompilation::All => {
+                    compile_bytecode(venv, concurrency, cache, printer).await?;
+                }
+                BytecodeCompilation::Installed => {
+                    let files = python_source_files_for_installs(venv, &installs);
+                    compile_bytecode_files(files, venv, concurrency, cache, printer).await?;
+                }
+            }
+        }
+
+        // Construct a summary of the changes made to the environment.
+        let changelog = Changelog::from_local(installs, uninstalls);
+
+        // Notify the user of any environment modifications.
+        logger.on_complete(&changelog, printer, dry_run)?;
+
+        Ok(changelog)
+    }
+}
+
+type PythonSourceFileIterator = Box<dyn Iterator<Item = anyhow::Result<PathBuf>>>;
+
+/// Return the Python source files owned by the distributions installed by this operation.
+fn python_source_files_for_installs<'a>(
+    venv: &'a PythonEnvironment,
+    installs: &'a [CachedDist],
+) -> impl Iterator<Item = anyhow::Result<PathBuf>> + 'a {
+    let layout = venv.interpreter().layout();
+    let site_packages = [
+        CWD.join(&layout.scheme.purelib),
+        CWD.join(&layout.scheme.platlib),
+    ];
+    installs.iter().flat_map(move |install| {
+        let dist_info = match installed_dist_info_path(&layout, install.path()).with_context(|| {
+            format!("Failed to locate installed distribution for bytecode compilation: {install}")
+        }) {
+            Ok(dist_info) => dist_info,
+            Err(err) => return Box::new(std::iter::once(Err(err))) as PythonSourceFileIterator,
+        };
+        let Some(record_root) = dist_info.parent().map(|path| CWD.join(path)) else {
+            return Box::new(std::iter::once(Err(anyhow!(
+                "Invalid installed distribution path: {}",
+                dist_info.user_display()
+            ))));
+        };
+        let record_path = dist_info.join("RECORD");
+        let record_file = match fs_err::File::open(&record_path) {
+            Ok(record_file) => record_file,
+            // Another process may have removed the installed distribution.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Box::new(std::iter::empty());
+            }
+            Err(err) => {
+                return Box::new(std::iter::once(Err(err).with_context(|| {
+                    format!("Failed to read `{}`", record_path.user_display())
+                })));
+            }
+        };
+        let site_packages = site_packages.clone();
+
+        Box::new(read_record_into_iter(record_file).filter_map(move |entry| {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    return Some(Err(err).with_context(|| {
+                        format!("Failed to read `{}`", record_path.user_display())
+                    }));
+                }
+            };
+            let path = python_source_path_from_record(&record_root, &entry.path, &site_packages)?;
+            path.is_file().then_some(Ok(path))
+        }))
+    })
+}
+
+/// Resolve a Python source path from an installed `RECORD` entry.
+fn python_source_path_from_record(
+    record_root: &Path,
+    entry: &str,
+    site_packages: &[PathBuf],
+) -> Option<PathBuf> {
+    let path = Path::new(entry);
+    if path.extension().is_none_or(|extension| extension != "py") {
+        return None;
+    }
+
+    let path = record_root.join(path);
+    site_packages
+        .iter()
+        .find_map(|site_packages| normalize_path_under(&path, site_packages))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, python_source_path_from_record};
+    use insta::assert_snapshot;
+    use std::path::{Path, PathBuf};
+    use uv_normalize::PackageName;
+
+    #[test]
+    fn record_python_sources_stay_in_site_packages() {
+        let record_root = Path::new("venv/purelib");
+        let site_packages = [PathBuf::from("venv/purelib"), PathBuf::from("venv/platlib")];
+
+        assert_eq!(
+            python_source_path_from_record(record_root, "package/__init__.py", &site_packages,),
+            Some(PathBuf::from("venv/purelib/package/__init__.py"))
+        );
+        assert_eq!(
+            python_source_path_from_record(
+                record_root,
+                "../platlib/package/module.py",
+                &site_packages,
+            ),
+            Some(PathBuf::from("venv/platlib/package/module.py"))
+        );
+        assert_eq!(
+            python_source_path_from_record(record_root, "../scripts/tool.py", &site_packages),
+            None
+        );
+        assert_eq!(
+            python_source_path_from_record(record_root, "/outside.py", &site_packages),
+            None
+        );
+        assert_eq!(
+            python_source_path_from_record(record_root, "package/data.txt", &site_packages),
+            None
         );
     }
 
-    let Plan {
-        cached,
-        remote,
-        reinstalls,
-        extraneous,
-    } = plan;
-
-    // If we're in `install` mode, ignore any extraneous distributions.
-    let extraneous = match modifications {
-        Modifications::Sufficient => vec![],
-        Modifications::Exact => extraneous,
-    };
-
-    // Nothing to do.
-    if remote.is_empty()
-        && cached.is_empty()
-        && reinstalls.is_empty()
-        && extraneous.is_empty()
-        && !compile
-    {
-        logger.on_check(resolution.len(), start, printer, dry_run)?;
-        return Ok(Changelog::default());
+    #[test]
+    fn preparation_errors_are_transparent() -> Result<(), uv_normalize::InvalidNameError> {
+        let error = Error::Prepare(uv_installer::PrepareError::NoBuild(
+            PackageName::from_owned("demo".to_string())?,
+        ));
+        assert_snapshot!(error, @"Building source distributions is disabled, but attempted to build `demo`");
+        Ok(())
     }
-
-    // Partition into two sets: those that require build isolation, and those that disable it. This
-    // is effectively a heuristic to make `--no-build-isolation` work "more often" by way of giving
-    // `--no-build-isolation` packages "access" to the rest of the environment.
-    let (isolated_phase, shared_phase) = Plan {
-        cached,
-        remote,
-        reinstalls,
-        extraneous,
-    }
-    .partition(|name| build_dispatch.build_isolation().is_isolated(Some(name)));
-
-    let has_isolated_phase = !isolated_phase.is_empty();
-    let has_shared_phase = !shared_phase.is_empty();
-
-    let mut installs = vec![];
-    let mut uninstalls = vec![];
-
-    // Execute the isolated-build phase.
-    if has_isolated_phase {
-        let (isolated_installs, isolated_uninstalls) = execute_plan(
-            isolated_phase,
-            None,
-            resolution,
-            build_options,
-            link_mode,
-            hasher,
-            tags,
-            client,
-            in_flight,
-            concurrency,
-            build_dispatch,
-            cache,
-            venv,
-            logger.as_ref(),
-            installer_metadata,
-            printer,
-            preview,
-        )
-        .await?;
-        installs.extend(isolated_installs);
-        uninstalls.extend(isolated_uninstalls);
-    }
-
-    if has_shared_phase {
-        let (shared_installs, shared_uninstalls) = execute_plan(
-            shared_phase,
-            if has_isolated_phase {
-                Some(InstallPhase::Shared)
-            } else {
-                None
-            },
-            resolution,
-            build_options,
-            link_mode,
-            hasher,
-            tags,
-            client,
-            in_flight,
-            concurrency,
-            build_dispatch,
-            cache,
-            venv,
-            logger.as_ref(),
-            installer_metadata,
-            printer,
-            preview,
-        )
-        .await?;
-        installs.extend(shared_installs);
-        uninstalls.extend(shared_uninstalls);
-    }
-
-    if compile {
-        compile_bytecode(venv, concurrency, cache, printer).await?;
-    }
-
-    // Construct a summary of the changes made to the environment.
-    let changelog = Changelog::from_local(installs, uninstalls);
-
-    // Notify the user of any environment modifications.
-    logger.on_complete(&changelog, printer, dry_run)?;
-
-    Ok(changelog)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -778,9 +1091,7 @@ async fn execute_plan(
             PrepareReporter::from(printer).with_length(remote.len() as u64),
         ));
 
-        let wheels = preparer
-            .prepare(remote.clone(), in_flight, resolution)
-            .await?;
+        let wheels = preparer.prepare(remote, in_flight, resolution).await?;
 
         logger.on_prepare(
             wheels.len(),
@@ -815,7 +1126,7 @@ async fn execute_plan(
                     uv_install_wheel::Error::MissingRecord(_),
                 )) => {
                     warn_user!(
-                        "Failed to uninstall package at {} due to missing `RECORD` file. Installation may result in an incomplete environment.",
+                        "Failed to uninstall package at `{}` due to missing `RECORD` file. Installation may result in an incomplete environment.",
                         dist_info.install_path().user_display().cyan(),
                     );
                 }
@@ -823,7 +1134,7 @@ async fn execute_plan(
                     uv_install_wheel::Error::MissingTopLevel(_),
                 )) => {
                     warn_user!(
-                        "Failed to uninstall package at {} due to missing `top_level.txt` file. Installation may result in an incomplete environment.",
+                        "Failed to uninstall package at `{}` due to missing `top_level.txt` file. Installation may result in an incomplete environment.",
                         dist_info.install_path().user_display().cyan(),
                     );
                 }
@@ -861,7 +1172,7 @@ pub(crate) fn report_interpreter(
     python: &PythonInstallation,
     dimmed: bool,
     printer: Printer,
-) -> Result<(), Error> {
+) -> std::fmt::Result {
     let managed = python.source().is_managed();
     let implementation = python.implementation();
     let interpreter = python.interpreter();
@@ -922,7 +1233,7 @@ pub(crate) fn report_target_environment(
     env: &PythonEnvironment,
     cache: &Cache,
     printer: Printer,
-) -> Result<(), Error> {
+) -> std::fmt::Result {
     // Resolve minor-version link directories (e.g., `cpython-3.12` → `cpython-3.12.12`).
     // On Windows, junction points aren't resolved by the interpreter's `sys.prefix`, so we
     // use the target directory from the minor-version link to display the actual installation.
@@ -969,7 +1280,7 @@ pub(crate) fn report_target_environment(
         }
     }
 
-    Ok(writeln!(printer.stderr(), "{}", message.dimmed())?)
+    writeln!(printer.stderr(), "{}", message.dimmed())
 }
 
 /// Report on the results of a dry-run installation.
@@ -1006,7 +1317,7 @@ fn report_dry_run(
         vec![]
     } else {
         logger.on_prepare(remote.len(), None, start, printer, dry_run)?;
-        remote.clone()
+        remote
     };
 
     // Remove any upgraded or extraneous installations.
@@ -1062,8 +1373,8 @@ pub(crate) fn diagnose_resolution(
 }
 
 /// Report any diagnostics on installed distributions in the Python environment.
-pub(crate) fn diagnose_environment(
-    resolution: &Resolution,
+pub(crate) fn diagnose_environment<'a>(
+    relevant_packages: impl Iterator<Item = &'a PackageName>,
     venv: &PythonEnvironment,
     markers: &ResolverMarkerEnvironment,
     tags: &Tags,
@@ -1071,11 +1382,12 @@ pub(crate) fn diagnose_environment(
     printer: Printer,
 ) -> Result<(), Error> {
     let site_packages = SitePackages::from_environment(venv)?;
+    let relevant_packages = relevant_packages.collect::<HashSet<_>>();
     for diagnostic in site_packages.diagnostics(markers, tags, dependency_metadata)? {
         // Only surface diagnostics that are "relevant" to the current resolution.
-        if resolution
-            .distributions()
-            .any(|dist| diagnostic.includes(dist.name()))
+        if relevant_packages
+            .iter()
+            .any(|name| diagnostic.includes(name))
         {
             writeln!(
                 printer.stderr(),
@@ -1091,11 +1403,18 @@ pub(crate) fn diagnose_environment(
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
-    #[error("Failed to prepare distributions")]
+    #[error(transparent)]
     Prepare(#[from] uv_installer::PrepareError),
 
+    #[error("{header}")]
+    NoSolution {
+        header: NoSolutionHeader,
+        #[source]
+        source: Box<NoSolutionError>,
+    },
+
     #[error(transparent)]
-    Resolve(#[from] uv_resolver::ResolveError),
+    Resolve(#[from] ResolveError),
 
     #[error(transparent)]
     Uninstall(#[from] uv_installer::UninstallError),
@@ -1112,6 +1431,13 @@ pub(crate) enum Error {
     #[error(transparent)]
     Requirements(#[from] uv_requirements::Error),
 
+    #[error("Failed to resolve {context} requirement")]
+    RequirementsWithContext {
+        context: &'static str,
+        #[source]
+        source: uv_requirements::Error,
+    },
+
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 
@@ -1119,19 +1445,154 @@ pub(crate) enum Error {
     OutdatedEnvironment(Box<Changelog>),
 }
 
-impl uv_errors::Hint for Error {
+impl Error {
+    /// Return the solver failure for an unsatisfiable resolution.
+    pub(crate) fn as_no_solution(&self) -> Option<&NoSolutionError> {
+        match self {
+            Self::NoSolution { source, .. } | Self::Resolve(ResolveError::NoSolution(source)) => {
+                Some(source)
+            }
+            Self::Resolve(_)
+            | Self::Prepare(_)
+            | Self::Uninstall(_)
+            | Self::Hash(_)
+            | Self::Io(_)
+            | Self::Fmt(_)
+            | Self::Requirements(_)
+            | Self::RequirementsWithContext { .. }
+            | Self::Anyhow(_)
+            | Self::OutdatedEnvironment(_) => None,
+        }
+    }
+
+    /// Return the changes required by an environment that failed an up-to-date check.
+    pub(crate) fn outdated_environment(&self) -> Option<&Changelog> {
+        match self {
+            Self::OutdatedEnvironment(changelog) => Some(changelog),
+            Self::NoSolution { .. }
+            | Self::Resolve(_)
+            | Self::Prepare(_)
+            | Self::Uninstall(_)
+            | Self::Hash(_)
+            | Self::Io(_)
+            | Self::Fmt(_)
+            | Self::Requirements(_)
+            | Self::RequirementsWithContext { .. }
+            | Self::Anyhow(_) => None,
+        }
+    }
+
+    /// Add the default heading when this operation is the final command error.
+    ///
+    /// Nested operation errors may already have a more specific heading from their caller.
+    #[must_use]
+    pub(crate) fn with_default_resolution_context(self) -> Self {
+        match self {
+            Self::Resolve(ResolveError::NoSolution(source)) => Self::NoSolution {
+                header: NoSolutionHeader::new(source.environment().clone()),
+                source,
+            },
+            error @ (Self::Prepare(_)
+            | Self::NoSolution { .. }
+            | Self::Resolve(_)
+            | Self::Uninstall(_)
+            | Self::Hash(_)
+            | Self::Io(_)
+            | Self::Fmt(_)
+            | Self::Requirements(_)
+            | Self::RequirementsWithContext { .. }
+            | Self::Anyhow(_)
+            | Self::OutdatedEnvironment(_)) => error,
+        }
+    }
+
+    /// Set the command-specific context for a resolution failure.
+    #[must_use]
+    pub(crate) fn with_resolution_context(self, context: &'static str) -> Self {
+        match self.with_default_resolution_context() {
+            Self::NoSolution { header, source } => Self::NoSolution {
+                header: header.with_context(context),
+                source,
+            },
+            Self::Requirements(source) | Self::RequirementsWithContext { source, .. } => {
+                Self::RequirementsWithContext { context, source }
+            }
+            error @ (Self::Prepare(_)
+            | Self::Resolve(_)
+            | Self::Uninstall(_)
+            | Self::Hash(_)
+            | Self::Io(_)
+            | Self::Fmt(_)
+            | Self::Anyhow(_)
+            | Self::OutdatedEnvironment(_)) => error,
+        }
+    }
+
+    /// Return whether this operation failure is an expected user-facing failure.
+    pub(crate) fn is_user_failure(&self) -> bool {
+        match self {
+            Self::Prepare(error) => error.is_user_failure(),
+            Self::NoSolution { .. } => true,
+            Self::Resolve(error) => error.is_user_failure(),
+            Self::Hash(_) | Self::OutdatedEnvironment(_) => true,
+            Self::Requirements(error) | Self::RequirementsWithContext { source: error, .. } => {
+                error.is_user_failure()
+            }
+            Self::Uninstall(_) | Self::Io(_) | Self::Fmt(_) | Self::Anyhow(_) => false,
+        }
+    }
+}
+
+impl uv_errors::Hinted for Error {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
-            Self::Resolve(resolve_err) => resolve_err.hints(),
+            Self::NoSolution { source, .. } => source.hints(),
+            Self::Resolve(uv_resolver::ResolveError::Dist(_, dist, chain, error)) => {
+                crate::commands::diagnostics::dist_hints(
+                    dist.name(),
+                    dist.version(),
+                    chain,
+                    error.hints(),
+                )
+            }
+            Self::Resolve(uv_resolver::ResolveError::Dependencies(error, name, version, chain)) => {
+                crate::commands::diagnostics::dist_hints(name, Some(version), chain, error.hints())
+            }
+            Self::Resolve(error) => error.hints(),
+            Self::Requirements(uv_requirements::Error::Dist(_, dist, error))
+            | Self::RequirementsWithContext {
+                source: uv_requirements::Error::Dist(_, dist, error),
+                ..
+            } => crate::commands::diagnostics::dist_hints(
+                dist.name(),
+                dist.version(),
+                &DerivationChain::default(),
+                error.hints(),
+            ),
+            Self::Prepare(uv_installer::PrepareError::Dist(_, dist, chain, error)) => {
+                crate::commands::diagnostics::dist_hints(
+                    dist.name(),
+                    dist.version(),
+                    chain,
+                    error.hints(),
+                )
+            }
             Self::Anyhow(err) => {
                 for cause in err.chain() {
                     if let Some(extra_err) = cause.downcast_ref::<ExtrasWithoutSourceError>() {
-                        return uv_errors::Hint::hints(extra_err);
+                        return uv_errors::Hinted::hints(extra_err);
                     }
                 }
                 uv_errors::Hints::none()
             }
-            _ => uv_errors::Hints::none(),
+            Self::Prepare(_)
+            | Self::Uninstall(_)
+            | Self::Hash(_)
+            | Self::Io(_)
+            | Self::Fmt(_)
+            | Self::Requirements(_)
+            | Self::RequirementsWithContext { .. }
+            | Self::OutdatedEnvironment(_) => uv_errors::Hints::none(),
         }
     }
 }
@@ -1145,7 +1606,7 @@ pub(crate) struct ExtrasWithoutSourceError {
     has_editable: bool,
 }
 
-impl uv_errors::Hint for ExtrasWithoutSourceError {
+impl uv_errors::Hinted for ExtrasWithoutSourceError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         uv_errors::Hints::from(if self.has_editable {
             "Use `<dir>[extra]` syntax or `-r <file>` instead"

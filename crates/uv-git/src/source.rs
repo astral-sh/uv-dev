@@ -17,7 +17,7 @@ use crate::credentials::GIT_STORE;
 use crate::git::{GitDatabase, GitRemote};
 
 /// A remote Git source that can be checked out locally.
-pub struct GitSource {
+pub(crate) struct GitSource {
     /// The Git reference from the manifest file.
     git: GitUrl,
     /// Whether to disable SSL verification.
@@ -79,7 +79,7 @@ impl GitSource {
         // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes
         // it easier to short-circuit this in the cases where we do have the commit.
         let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {
-            let git_remote = GitRemote::new(&remote);
+            let git_remote = GitRemote::new(remote.clone().into_owned());
             let maybe_db = git_remote.db_at(&db_path).ok();
 
             // If we have a locked revision, and we have a pre-existing database which has that
@@ -143,12 +143,15 @@ impl GitSource {
             Ok((db, actual_rev, task))
         }()?;
 
+        // Validate the resolved commit before checking out its contents.
+        let git = self.git.clone().with_precise(actual_rev)?;
+
         // Don’t use the full hash, in order to contribute less to reaching the
         // path length limit on Windows.
         let short_id = db.to_short_id(actual_rev)?;
 
         // Compute the canonical URL for the repository checkout.
-        let canonical = self.git.repository().clone().with_lfs(Some(lfs_requested));
+        let canonical = git.repository().clone().with_lfs(Some(lfs_requested));
         // Recompute the checkout hash when Git LFS is enabled as we want
         // to distinctly differentiate between LFS vs non-LFS source trees.
         let ident = if lfs_requested {
@@ -175,7 +178,7 @@ impl GitSource {
         }
 
         Ok(Fetch {
-            git: self.git.with_precise(actual_rev),
+            git,
             path: checkout_path,
             lfs_ready: checkout.lfs_ready().unwrap_or(false),
         })

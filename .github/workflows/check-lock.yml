@@ -1,25 +1,26 @@
 on:
   workflow_call:
 
-permissions: {}
+permissions:
+  contents: read
+
+env:
+  UV_LOCKED: 1
 
 jobs:
   lock:
     timeout-minutes: 10
-    runs-on: ubuntu-slim
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     name: "uv lockfiles"
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: "Install uv"
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.11.19"
-      - name: "Check project lockfile"
-        run: uv lock --check
-      - name: "Check script lockfiles"
-        run: |
-          while IFS= read -r lockfile; do
-            uv lock --script "${lockfile%.lock}" --check
-          done < <(git ls-files '*.py.lock')
+          # renovate: datasource=github-release-attachments depName=astral-sh/uv
+          version: "0.12.13"
+          checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+      - name: "Check lockfiles"
+        run: ./scripts/workspace-lock.sh --check

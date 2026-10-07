@@ -1,9 +1,54 @@
 use anyhow::Result;
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
 
+use uv_static::EnvVars;
 use uv_test::uv_snapshot;
+
+/// The workspace discovered while resolving settings is reused by `uv format`.
+#[test]
+fn format_reuses_settings_workspace_discovery() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [tool.uv.workspace]
+            members = ["member"]
+        "#})?;
+    let member = context.temp_dir.child("member");
+    member.create_dir_all()?;
+    member
+        .child("pyproject.toml")
+        .write_str("[project]\nname = \"member\"\nversion = \"0.1.0\"\n")?;
+    context.temp_dir.child("main.py").write_str("x = 1\n")?;
+
+    uv_snapshot!(context.filters(), context.format()
+        .arg("--check")
+        .env(EnvVars::RUST_LOG, "uv_workspace=trace"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1 file already formatted
+
+    ----- stderr -----
+    DEBUG Found workspace root: [TEMP_DIR]/
+    TRACE Discovering workspace members for: [TEMP_DIR]/
+    DEBUG Adding root workspace member: [TEMP_DIR]/
+    TRACE Processing workspace member: member
+    DEBUG Adding discovered workspace member: [TEMP_DIR]/member
+    warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
+    DEBUG Found project root: [TEMP_DIR]/
+    ");
+
+    Ok(())
+}
 
 #[test]
 fn format_project() -> Result<()> {
@@ -25,8 +70,7 @@ fn format_project() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.format(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -42,6 +86,49 @@ fn format_project() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
+fn format_uses_ruff_from_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let tool_dir = context.root.child("tools");
+    let bin_dir = context.root.child("tool-bin");
+
+    context
+        .tool_install()
+        .arg("ruff==0.3.4")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let main_py = context.temp_dir.child("main.py");
+    main_py.write_str("x    = 1")?;
+    let ruff = bin_dir.child(format!("ruff{}", std::env::consts::EXE_SUFFIX));
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .format()
+            .arg("--version")
+            .arg(">=999.0.0")
+            .arg("--show-version")
+            .env(EnvVars::RUFF, ruff.as_os_str()),
+        @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1 file reformatted
+
+    ----- stderr -----
+    warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
+    ruff 0.3.4
+    "
+    );
+
+    assert_snapshot!(fs_err::read_to_string(&main_py)?, @"x = 1");
+
+    Ok(())
+}
+
+#[test]
 fn format_missing_pyproject_toml() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
 
@@ -52,8 +139,7 @@ fn format_missing_pyproject_toml() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.format(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -82,8 +168,7 @@ fn format_missing_project_in_pyproject_toml() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.format(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -121,8 +206,7 @@ fn format_unmanaged_project() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.format(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -161,8 +245,7 @@ fn format_from_project_root() -> Result<()> {
 
     // Using format from a subdirectory should still run in the project root
     uv_snapshot!(context.filters(), context.format().current_dir(&subdir), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -187,8 +270,7 @@ fn format_no_project() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.format().arg("--no-project"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -229,8 +311,7 @@ fn format_relative_project() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.format().arg("--project").arg("project"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -263,10 +344,7 @@ fn format_fails_malformed_pyproject() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.format(), @"
-    success: false
-    exit_code: 2
-    ----- stdout -----
-
+    exit_code: 2 (failure)
     ----- stderr -----
     warning: Failed to parse `pyproject.toml` during settings discovery:
       TOML parse error at line 1, column 11
@@ -276,12 +354,12 @@ fn format_fails_malformed_pyproject() -> Result<()> {
       key with no value, expected `=`
 
     warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
-    error: Failed to parse: `pyproject.toml`
-      Caused by: TOML parse error at line 1, column 11
-      |
-    1 | malformed pyproject.toml
-      |           ^
-    key with no value, expected `=`
+    error: Failed to parse: pyproject.toml
+      cause: TOML parse error at line 1, column 11
+               |
+             1 | malformed pyproject.toml
+               |           ^
+             key with no value, expected `=`
     ");
 
     // Check that the file is not formatted
@@ -311,8 +389,7 @@ fn format_check() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.format().arg("--check"), @"
-    success: false
-    exit_code: 1
+    exit_code: 1 (failure)
     ----- stdout -----
     Would reformat: main.py
     1 file would be reformatted
@@ -348,8 +425,7 @@ fn format_diff() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.format().arg("--diff"), @"
-    success: false
-    exit_code: 1
+    exit_code: 1 (failure)
     ----- stdout -----
     --- main.py
     +++ main.py
@@ -392,8 +468,7 @@ fn format_with_ruff_args() -> Result<()> {
 
     // Run format with custom line length
     uv_snapshot!(context.filters(), context.format().arg("--").arg("main.py").arg("--line-length").arg("200"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file left unchanged
 
@@ -436,8 +511,7 @@ fn format_specific_files() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.format().arg("--").arg("main.py"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -478,8 +552,7 @@ fn format_version_option() -> Result<()> {
     // the version we're using to stderr? Alas there's not a way to get the Ruff version from the
     // format command :)
     uv_snapshot!(context.filters(), context.format().arg("--version").arg("0.8.2"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -510,8 +583,7 @@ fn format_version_constraints() -> Result<()> {
 
     // Run format with version constraints - should find the latest version matching >=0.8.0
     uv_snapshot!(context.filters(), context.format().arg("--version").arg(">=0.8.0").arg("--show-version"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -543,8 +615,7 @@ fn format_version_latest() -> Result<()> {
 
     // Run format with --version latest - should fetch the latest version from the manifest
     uv_snapshot!(context.filters(), context.format().arg("--version").arg("latest").arg("--show-version"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -577,8 +648,7 @@ fn format_exclude_newer() -> Result<()> {
     // Run format with a different --exclude-newer value than the default (2025-01-01)
     // This verifies that the flag is respected for version resolution
     uv_snapshot!(context.filters(), context.format().arg("--exclude-newer").arg("2026-01-01").arg("--version").arg("latest").arg("--show-version"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
@@ -592,7 +662,10 @@ fn format_exclude_newer() -> Result<()> {
 
 #[test]
 fn format_no_matching_version() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_filter((
+        r"\b[a-z0-9_]+-(?:apple|pc|unknown)-[a-z0-9_]+(?:-[a-z0-9_]+)?\b",
+        "[PLATFORM]",
+    ));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -609,19 +682,12 @@ fn format_no_matching_version() -> Result<()> {
     "})?;
 
     // Run format with impossible version constraints - should fail
-    let context = context.with_filter((
-        r"\b[a-z0-9_]+-(?:apple|pc|unknown)-[a-z0-9_]+(?:-[a-z0-9_]+)?\b",
-        "[PLATFORM]",
-    ));
     uv_snapshot!(context.filters(), context.format().arg("--version").arg(">=999.0.0"), @"
-    success: false
-    exit_code: 2
-    ----- stdout -----
-
+    exit_code: 2 (failure)
     ----- stderr -----
     warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
     error: Failed to find ruff version matching: >=999.0.0
-      Caused by: No version of ruff found matching `>=999.0.0` for platform `[PLATFORM]`
+      cause: No version of ruff found matching `>=999.0.0` for platform `[PLATFORM]`
     ");
 
     Ok(())

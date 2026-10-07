@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::io::Read;
 use std::io::Write;
-use std::str::FromStr;
+use std::str::{FromStr, Utf8Error};
 
 use base64::prelude::BASE64_STANDARD;
 use base64::read::DecoderReader;
@@ -12,7 +12,7 @@ use reqsign::aws::DefaultSigner as AwsDefaultSigner;
 use reqsign::azure::DefaultSigner as AzureDefaultSigner;
 use reqsign::google::DefaultSigner as GcsDefaultSigner;
 use reqwest::Request;
-use reqwest::header::{HeaderName, HeaderValue};
+use reqwest::header::{HeaderValue, InvalidHeaderValue};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
@@ -20,8 +20,6 @@ use url::Url;
 use uv_netrc::Netrc;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
-
-const AZURE_STORAGE_VERSION: &str = "2023-11-03";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Credentials {
@@ -37,6 +35,14 @@ pub enum Credentials {
         /// The token to use for authentication.
         token: Token,
     },
+}
+
+#[derive(Debug, Error)]
+pub enum CredentialsFromUrlError {
+    #[error("URL username contains invalid UTF-8")]
+    InvalidUsernameUtf8(#[source] Utf8Error),
+    #[error("URL password contains invalid UTF-8")]
+    InvalidPasswordUtf8(#[source] Utf8Error),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Serialize, Deserialize)]
@@ -223,31 +229,37 @@ impl Credentials {
     /// Parse [`Credentials`] from a URL, if any.
     ///
     /// Returns [`None`] if both [`Url::username`] and [`Url::password`] are not populated.
-    pub fn from_url(url: &Url) -> Option<Self> {
+    pub fn from_url(url: &Url) -> Result<Option<Self>, CredentialsFromUrlError> {
         if url.username().is_empty() && url.password().is_none() {
-            return None;
+            return Ok(None);
         }
-        Some(Self::Basic {
-            // Remove percent-encoding from URL credentials
-            // See <https://github.com/pypa/pip/blob/06d21db4ff1ab69665c22a88718a4ea9757ca293/src/pip/_internal/utils/misc.py#L497-L499>
-            username: if url.username().is_empty() {
-                None
-            } else {
-                Some(
-                    percent_encoding::percent_decode_str(url.username())
-                        .decode_utf8_lossy()
-                        .into_owned(),
-                )
-            }
-            .into(),
-            password: url.password().map(|password| {
-                Password(
-                    percent_encoding::percent_decode_str(password)
-                        .decode_utf8_lossy()
-                        .into_owned(),
-                )
-            }),
-        })
+
+        // Remove percent-encoding from URL credentials.
+        // See <https://github.com/pypa/pip/blob/06d21db4ff1ab69665c22a88718a4ea9757ca293/src/pip/_internal/utils/misc.py#L497-L499>
+        let username = if url.username().is_empty() {
+            None
+        } else {
+            Some(
+                percent_encoding::percent_decode_str(url.username())
+                    .decode_utf8()
+                    .map_err(CredentialsFromUrlError::InvalidUsernameUtf8)?
+                    .into_owned(),
+            )
+        };
+        let password = url
+            .password()
+            .map(|password| {
+                percent_encoding::percent_decode_str(password)
+                    .decode_utf8()
+                    .map(|password| Password(password.into_owned()))
+                    .map_err(CredentialsFromUrlError::InvalidPasswordUtf8)
+            })
+            .transpose()?;
+
+        Ok(Some(Self::Basic {
+            username: username.into(),
+            password,
+        }))
     }
 
     /// Extract the [`Credentials`] from the environment, given a named source.
@@ -267,15 +279,17 @@ impl Credentials {
     /// Parse [`Credentials`] from an HTTP request, if any.
     ///
     /// Only HTTP Basic Authentication is supported.
-    pub(crate) fn from_request(request: &Request) -> Option<Self> {
+    pub(crate) fn from_request(request: &Request) -> Result<Option<Self>, CredentialsFromUrlError> {
         // First, attempt to retrieve the credentials from the URL
-        Self::from_url(request.url()).or(
-            // Then, attempt to pull the credentials from the headers
-            request
-                .headers()
-                .get(reqwest::header::AUTHORIZATION)
-                .map(Self::from_header_value)?,
-        )
+        if let Some(credentials) = Self::from_url(request.url())? {
+            return Ok(Some(credentials));
+        }
+
+        // Then, attempt to pull the credentials from the headers
+        Ok(request
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .and_then(Self::from_header_value))
     }
 
     /// Parse [`Credentials`] from an authorization header, if any.
@@ -323,11 +337,11 @@ impl Credentials {
         None
     }
 
-    /// Create an HTTP Basic Authentication header for the credentials.
+    /// Create an HTTP authorization header for the credentials.
     ///
-    /// Panics if the username or password cannot be base64 encoded.
-    pub fn to_header_value(&self) -> HeaderValue {
-        match self {
+    /// Returns an error if the bearer token contains invalid header characters.
+    pub fn to_header_value(&self) -> Result<HeaderValue, InvalidHeaderValue> {
+        let header_bytes = match self {
             Self::Basic { .. } => {
                 // See: <https://github.com/seanmonstar/reqwest/blob/2c11ef000b151c2eebeed2c18a7b81042220c6b0/src/util.rs#L3>
                 let mut buf = b"Basic ".to_vec();
@@ -340,18 +354,13 @@ impl Credentials {
                             .expect("Write to base64 encoder should succeed");
                     }
                 }
-                let mut header =
-                    HeaderValue::from_bytes(&buf).expect("base64 is always valid HeaderValue");
-                header.set_sensitive(true);
-                header
+                buf
             }
-            Self::Bearer { token } => {
-                let mut header = HeaderValue::from_bytes(&[b"Bearer ", token.as_slice()].concat())
-                    .expect("Bearer token is always valid HeaderValue");
-                header.set_sensitive(true);
-                header
-            }
-        }
+            Self::Bearer { token } => [b"Bearer ", token.as_slice()].concat(),
+        };
+        let mut header = HeaderValue::from_bytes(&header_bytes)?;
+        header.set_sensitive(true);
+        Ok(header)
     }
 
     /// Apply the credentials to the given URL.
@@ -371,12 +380,11 @@ impl Credentials {
     /// Attach the credentials to the given request.
     ///
     /// Any existing credentials will be overridden.
-    #[must_use]
-    pub fn authenticate(&self, mut request: Request) -> Request {
+    fn authenticate(&self, mut request: Request) -> Result<Request, InvalidHeaderValue> {
         request
             .headers_mut()
-            .insert(reqwest::header::AUTHORIZATION, Self::to_header_value(self));
-        request
+            .insert(reqwest::header::AUTHORIZATION, Self::to_header_value(self)?);
+        Ok(request)
     }
 }
 
@@ -397,6 +405,9 @@ pub(crate) enum Authentication {
 
 #[derive(Debug, Error)]
 pub(crate) enum AuthenticationError {
+    #[error("Invalid authorization header")]
+    InvalidHeaderValue(#[from] InvalidHeaderValue),
+
     #[error("Failed to convert request URL to URI")]
     InvalidUri(#[from] http::uri::InvalidUri),
 
@@ -512,7 +523,7 @@ impl Authentication {
         mut request: Request,
     ) -> Result<Request, AuthenticationError> {
         match self {
-            Self::Credentials(credentials) => Ok(credentials.authenticate(request)),
+            Self::Credentials(credentials) => Ok(credentials.authenticate(request)?),
             Self::AwsSigner(signer) => {
                 // Build an `http::Request` from the `reqwest::Request`.
                 let uri = Uri::from_str(request.url().as_str())?;
@@ -589,10 +600,6 @@ impl Authentication {
                         source,
                     })?;
                 *http_req.headers_mut() = request.headers().clone();
-                http_req
-                    .headers_mut()
-                    .entry(HeaderName::from_static("x-ms-version"))
-                    .or_insert(HeaderValue::from_static(AZURE_STORAGE_VERSION));
 
                 // Sign the parts.
                 let (mut parts, ()) = http_req.into_parts();
@@ -619,7 +626,10 @@ impl Authentication {
 
 #[cfg(test)]
 mod tests {
-    use insta::assert_debug_snapshot;
+    use std::assert_matches;
+    use std::future::{self, Future};
+
+    use insta::{assert_debug_snapshot, assert_snapshot};
     use reqsign::aws::Credential as AwsCredential;
     use reqsign::azure::Credential as AzureCredential;
     use reqsign::{Context, ProvideCredential};
@@ -632,11 +642,11 @@ mod tests {
     impl ProvideCredential for EmptyAwsCredentialProvider {
         type Credential = AwsCredential;
 
-        async fn provide_credential(
+        fn provide_credential(
             &self,
             _ctx: &Context,
-        ) -> reqsign::Result<Option<Self::Credential>> {
-            Ok(None)
+        ) -> impl Future<Output = reqsign::Result<Option<Self::Credential>>> {
+            future::ready(Ok(None))
         }
     }
 
@@ -646,18 +656,18 @@ mod tests {
     impl ProvideCredential for EmptyAzureCredentialProvider {
         type Credential = AzureCredential;
 
-        async fn provide_credential(
+        fn provide_credential(
             &self,
             _ctx: &Context,
-        ) -> reqsign::Result<Option<Self::Credential>> {
-            Ok(None)
+        ) -> impl Future<Output = reqsign::Result<Option<Self::Credential>>> {
+            future::ready(Ok(None))
         }
     }
 
     #[test]
     fn from_url_no_credentials() {
         let url = &Url::parse("https://example.com/simple/first/").unwrap();
-        assert_eq!(Credentials::from_url(url), None);
+        assert_matches!(Credentials::from_url(url), Ok(None));
     }
 
     #[test]
@@ -666,7 +676,7 @@ mod tests {
         let mut auth_url = url.clone();
         auth_url.set_username("user").unwrap();
         auth_url.set_password(Some("password")).unwrap();
-        let credentials = Credentials::from_url(&auth_url).unwrap();
+        let credentials = Credentials::from_url(&auth_url).unwrap().unwrap();
         assert_eq!(credentials.username(), Some("user"));
         assert_eq!(credentials.password(), Some("password"));
     }
@@ -674,17 +684,15 @@ mod tests {
     #[test]
     fn from_url_invalid_utf8_username() {
         let url = Url::parse("https://%FF:password@example.com/simple/first/").unwrap();
-        let credentials = Credentials::from_url(&url).unwrap();
-        assert_eq!(credentials.username(), Some("\u{fffd}"));
-        assert_eq!(credentials.password(), Some("password"));
+        let error = Credentials::from_url(&url).unwrap_err();
+        assert_snapshot!(error, @"URL username contains invalid UTF-8");
     }
 
     #[test]
     fn from_url_invalid_utf8_password() {
         let url = Url::parse("https://user:%FF@example.com/simple/first/").unwrap();
-        let credentials = Credentials::from_url(&url).unwrap();
-        assert_eq!(credentials.username(), Some("user"));
-        assert_eq!(credentials.password(), Some("\u{fffd}"));
+        let error = Credentials::from_url(&url).unwrap_err();
+        assert_snapshot!(error, @"URL password contains invalid UTF-8");
     }
 
     #[test]
@@ -692,7 +700,7 @@ mod tests {
         let url = &Url::parse("https://example.com/simple/first/").unwrap();
         let mut auth_url = url.clone();
         auth_url.set_password(Some("password")).unwrap();
-        let credentials = Credentials::from_url(&auth_url).unwrap();
+        let credentials = Credentials::from_url(&auth_url).unwrap().unwrap();
         assert_eq!(credentials.username(), None);
         assert_eq!(credentials.password(), Some("password"));
     }
@@ -705,7 +713,7 @@ mod tests {
     fn from_url_empty_username_with_password() {
         // Parse a URL with the format `:password@host` directly
         let url = Url::parse("https://:token@example.com/simple/first/").unwrap();
-        let credentials = Credentials::from_url(&url).unwrap();
+        let credentials = Credentials::from_url(&url).unwrap().unwrap();
         assert_eq!(credentials.username(), None);
         assert_eq!(credentials.password(), Some("token"));
         assert!(
@@ -719,7 +727,7 @@ mod tests {
         let url = &Url::parse("https://example.com/simple/first/").unwrap();
         let mut auth_url = url.clone();
         auth_url.set_username("user").unwrap();
-        let credentials = Credentials::from_url(&auth_url).unwrap();
+        let credentials = Credentials::from_url(&auth_url).unwrap().unwrap();
         assert_eq!(credentials.username(), Some("user"));
         assert_eq!(credentials.password(), None);
     }
@@ -730,10 +738,10 @@ mod tests {
         let mut auth_url = url.clone();
         auth_url.set_username("user").unwrap();
         auth_url.set_password(Some("password")).unwrap();
-        let credentials = Credentials::from_url(&auth_url).unwrap();
+        let credentials = Credentials::from_url(&auth_url).unwrap().unwrap();
 
         let mut request = Request::new(reqwest::Method::GET, url);
-        request = credentials.authenticate(request);
+        request = credentials.authenticate(request).unwrap();
 
         let mut header = request
             .headers()
@@ -752,10 +760,10 @@ mod tests {
         let mut auth_url = url.clone();
         auth_url.set_username("user@domain").unwrap();
         auth_url.set_password(Some("password")).unwrap();
-        let credentials = Credentials::from_url(&auth_url).unwrap();
+        let credentials = Credentials::from_url(&auth_url).unwrap().unwrap();
 
         let mut request = Request::new(reqwest::Method::GET, url);
-        request = credentials.authenticate(request);
+        request = credentials.authenticate(request).unwrap();
 
         let mut header = request
             .headers()
@@ -774,10 +782,10 @@ mod tests {
         let mut auth_url = url.clone();
         auth_url.set_username("user").unwrap();
         auth_url.set_password(Some("password==")).unwrap();
-        let credentials = Credentials::from_url(&auth_url).unwrap();
+        let credentials = Credentials::from_url(&auth_url).unwrap().unwrap();
 
         let mut request = Request::new(reqwest::Method::GET, url);
-        request = credentials.authenticate(request);
+        request = credentials.authenticate(request).unwrap();
 
         let mut header = request
             .headers()
@@ -809,15 +817,6 @@ mod tests {
             .expect("Authorization header should be set");
         assert_eq!(authorization.to_str().unwrap(), "Bearer token");
         assert!(request.headers().contains_key("x-ms-date"));
-        assert_eq!(
-            request
-                .headers()
-                .get("x-ms-version")
-                .expect("x-ms-version header should be set")
-                .to_str()
-                .unwrap(),
-            AZURE_STORAGE_VERSION
-        );
     }
 
     #[tokio::test]

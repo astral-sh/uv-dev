@@ -6,6 +6,7 @@ use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::Version;
 use uv_python::PythonRequest;
 
+pub(crate) mod audit;
 pub(crate) mod common;
 pub(crate) mod dir;
 pub(crate) mod install;
@@ -132,14 +133,13 @@ impl<'a> Target<'a> {
             // e.g., `ruff@latest`
             "latest" => Self::Latest(executable, name, extras),
             // e.g., `ruff@0.6.0`
+            version if let Ok(version) = Version::from_str(version) => {
+                Self::Version(executable, name, extras, version)
+            }
             version => {
-                if let Ok(version) = Version::from_str(version) {
-                    Self::Version(executable, name, extras, version)
-                } else {
-                    // e.g. `ruff@invalid`, warn and treat the whole thing as the command
-                    debug!("Ignoring invalid version request `{version}` in command");
-                    Self::Unspecified(target)
-                }
+                // e.g. `ruff@invalid`, warn and treat the whole thing as the command
+                debug!("Ignoring invalid version request `{version}` in command");
+                Self::Unspecified(target)
             }
         }
     }

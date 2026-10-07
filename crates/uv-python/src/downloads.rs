@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
@@ -11,31 +12,37 @@ use std::{env, io};
 use futures::TryStreamExt;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use reqwest::Response;
 use reqwest_retry::RetryError;
 use reqwest_retry::policies::ExponentialBackoff;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use tempfile::TempDir;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufWriter, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter, ReadBuf};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
 use tracing::{debug, instrument};
 use url::Url;
+use zstd::stream::read::Decoder;
 
+use uv_cache::{Cache, CacheBucket};
+use uv_cache_key::cache_digest;
 use uv_client::{
-    BaseClient, RetriableError, WrappedReqwestError, fetch_with_url_fallback,
+    BaseClient, BaseClientBuilder, CacheControl, CachedClient, CachedClientError, ClientBuildError,
+    Connectivity, RetriableError, RetryState, WrappedReqwestError, fetch_with_url_fallback,
     retryable_on_request_failure,
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
 use uv_fs::{Simplified, rename_with_retry};
+use uv_macros::DebugNoInline;
 use uv_platform::{self as platform, Arch, Libc, Os, Platform};
-use uv_pypi_types::{HashAlgorithm, HashDigest};
+use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_static::{
     EnvVars, astral_mirror_base_url, astral_mirror_url_from_env, custom_astral_mirror_url,
 };
 
-use crate::PythonVariant;
 use crate::implementation::{
     Error as ImplementationError, ImplementationName, LenientImplementationName,
 };
@@ -43,8 +50,9 @@ use crate::installation::PythonInstallationKey;
 use crate::managed::ManagedPythonInstallation;
 use crate::python_version::{BuildVersionError, python_build_version_from_env};
 use crate::{Interpreter, PythonRequest, PythonVersion, VersionRequest};
+use crate::{PythonDownloadMirrors, PythonVariant};
 
-#[derive(Error, Debug)]
+#[derive(Error, DebugNoInline)]
 pub enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
@@ -58,7 +66,7 @@ pub enum Error {
     EmptyRequest,
     #[error("Invalid request key (too many parts): {0}")]
     TooManyParts(String),
-    #[error("Failed to download {0}")]
+    #[error("Failed to download `{0}`")]
     NetworkError(DisplaySafeUrl, #[source] WrappedReqwestError),
     #[error(
         "Request failed after {retries} {subject} in {duration:.1}s",
@@ -71,7 +79,7 @@ pub enum Error {
         retries: u32,
         duration: Duration,
     },
-    #[error("Failed to download {0}")]
+    #[error("Failed to download `{0}`")]
     NetworkMiddlewareError(DisplaySafeUrl, #[source] anyhow::Error),
     #[error("Failed to extract archive: {0}")]
     ExtractError(String, #[source] uv_extract::Error),
@@ -87,7 +95,7 @@ pub enum Error {
     InvalidUrl(#[from] DisplaySafeUrlError),
     #[error("Invalid download URL: {0}")]
     InvalidUrlFormat(DisplaySafeUrl),
-    #[error("Invalid path in file URL: `{0}`")]
+    #[error("Invalid path in file URL: {0}")]
     InvalidFileUrl(String),
     #[error("Failed to create download directory")]
     DownloadDirError(#[source] io::Error),
@@ -111,13 +119,17 @@ pub enum Error {
     Mirror(&'static str, String),
     #[error("Failed to determine the libc used on the current platform")]
     LibcDetection(#[from] platform::LibcDetectionError),
-    #[error("Unable to parse the JSON Python download list at {0}")]
+    #[error("Unable to parse the JSON Python download list at `{0}`")]
     InvalidPythonDownloadsJSON(String, #[source] serde_json::Error),
-    #[error("This version of uv is too old to support the JSON Python download list at {0}")]
+    #[error("This version of uv is too old to support the JSON Python download list at `{0}`")]
     UnsupportedPythonDownloadsJSON(String),
-    #[error("Error while fetching remote python downloads json from '{0}'")]
+    #[error("Error while fetching remote python downloads json from `{0}`")]
     FetchingPythonDownloadsJSONError(String, #[source] Box<Self>),
-    #[error("An offline Python installation was requested, but {file} (from {url}) is missing in {}", python_builds_dir.user_display())]
+    #[error(transparent)]
+    RemotePythonDownloadsJSONClient(Box<uv_client::Error>),
+    #[error(transparent)]
+    ClientBuild(Box<ClientBuildError>),
+    #[error("An offline Python installation was requested, but `{file}` (from `{url}`) is missing in `{}`", python_builds_dir.user_display())]
     OfflinePythonMissing {
         file: Box<PythonInstallationKey>,
         url: Box<DisplaySafeUrl>,
@@ -202,7 +214,7 @@ fn effective_cpython_mirror(astral_mirror_url: Option<&str>) -> String {
 pub struct ManagedPythonDownload {
     key: PythonInstallationKey,
     url: Cow<'static, str>,
-    sha256: Option<Cow<'static, str>>,
+    sha256: Option<Digest<32>>,
     build: Option<&'static str>,
 }
 
@@ -222,7 +234,9 @@ pub struct PythonDownloadRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArchRequest {
+    /// Require an exact architecture.
     Explicit(Arch),
+    /// Allow architectures supported by the detected host architecture.
     Environment(Arch),
 }
 
@@ -234,24 +248,33 @@ pub struct PlatformRequest {
 }
 
 impl PlatformRequest {
+    /// Require an exact match for the given architecture if this request does not specify one.
+    #[must_use]
+    pub(crate) fn with_default_arch(mut self, arch: Option<Arch>) -> Self {
+        if self.arch.is_none() {
+            self.arch = arch.map(ArchRequest::Explicit);
+        }
+        self
+    }
+
     /// Check if this platform request is satisfied by a platform.
     pub(crate) fn matches(&self, platform: &Platform) -> bool {
-        if let Some(os) = self.os {
-            if !platform.os.supports(os) {
-                return false;
-            }
+        if let Some(os) = self.os
+            && !platform.os.supports(os)
+        {
+            return false;
         }
 
-        if let Some(arch) = self.arch {
-            if !arch.satisfied_by(platform) {
-                return false;
-            }
+        if let Some(arch) = self.arch
+            && !arch.satisfied_by(platform)
+        {
+            return false;
         }
 
-        if let Some(libc) = self.libc {
-            if platform.libc != libc {
-                return false;
-            }
+        if let Some(libc) = self.libc
+            && platform.libc != libc
+        {
+            return false;
         }
 
         true
@@ -346,6 +369,15 @@ impl PythonDownloadRequest {
     #[must_use]
     pub fn with_arch(mut self, arch: Arch) -> Self {
         self.arch = Some(ArchRequest::Explicit(arch));
+        self
+    }
+
+    /// Require an exact match for the given architecture if this request does not specify one.
+    #[must_use]
+    pub fn with_default_arch(mut self, arch: Option<Arch>) -> Self {
+        if self.arch.is_none() {
+            self.arch = arch.map(ArchRequest::Explicit);
+        }
         self
     }
 
@@ -555,10 +587,10 @@ impl PythonDownloadRequest {
             return false;
         }
 
-        if let Some(implementation) = &self.implementation {
-            if key.implementation != LenientImplementationName::from(*implementation) {
-                return false;
-            }
+        if let Some(implementation) = &self.implementation
+            && key.implementation != LenientImplementationName::from(*implementation)
+        {
+            return false;
         }
         // If we don't allow pre-releases, don't match a key with a pre-release tag
         if !self.allows_prereleases() && key.prerelease.is_some() {
@@ -573,10 +605,10 @@ impl PythonDownloadRequest {
             ) {
                 return false;
             }
-            if let Some(variant) = version.variant() {
-                if variant != key.variant {
-                    return false;
-                }
+            if let Some(variant) = version.variant()
+                && variant != key.variant
+            {
+                return false;
             }
         }
         true
@@ -634,14 +666,14 @@ impl PythonDownloadRequest {
 
     pub(crate) fn satisfied_by_interpreter(&self, interpreter: &Interpreter) -> bool {
         let executable = interpreter.sys_executable().display();
-        if let Some(version) = self.version() {
-            if !version.matches_interpreter(interpreter) {
-                let interpreter_version = interpreter.python_version();
-                debug!(
-                    "Skipping interpreter at `{executable}`: version `{interpreter_version}` does not match request `{version}`"
-                );
-                return false;
-            }
+        if let Some(version) = self.version()
+            && !version.matches_interpreter(interpreter)
+        {
+            let interpreter_version = interpreter.python_version();
+            debug!(
+                "Skipping interpreter at `{executable}`: version `{interpreter_version}` does not match request `{version}`"
+            );
+            return false;
         }
         let platform = self.platform();
         let interpreter_platform = Platform::from(interpreter.platform());
@@ -651,14 +683,14 @@ impl PythonDownloadRequest {
             );
             return false;
         }
-        if let Some(implementation) = self.implementation() {
-            if !implementation.matches_interpreter(interpreter) {
-                debug!(
-                    "Skipping interpreter at `{executable}`: implementation `{}` does not match request `{implementation}`",
-                    interpreter.implementation_name(),
-                );
-                return false;
-            }
+        if let Some(implementation) = self.implementation()
+            && !implementation.matches_interpreter(interpreter)
+        {
+            debug!(
+                "Skipping interpreter at `{executable}`: implementation `{}` does not match request `{implementation}`",
+                interpreter.implementation_name(),
+            );
+            return false;
         }
         true
     }
@@ -702,12 +734,7 @@ impl From<&ManagedPythonInstallation> for PythonDownloadRequest {
         let key = installation.key();
         Self::new(
             Some(VersionRequest::from(&key.version())),
-            match &key.implementation {
-                LenientImplementationName::Known(implementation) => Some(*implementation),
-                LenientImplementationName::Unknown(name) => unreachable!(
-                    "Managed Python installations are expected to always have known implementation names, found {name}"
-                ),
-            },
+            Some(installation.key_implementation()),
             Some(ArchRequest::Explicit(*key.arch())),
             Some(*key.os()),
             Some(*key.libc()),
@@ -938,14 +965,14 @@ impl FromStr for PythonDownloadRequest {
     }
 }
 
-const BUILTIN_PYTHON_DOWNLOADS_JSON: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/download-metadata-minified.json"));
+const BUILTIN_PYTHON_DOWNLOADS_ZSTD: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/download-metadata.json.zst"));
 
 pub struct ManagedPythonDownloadList {
     downloads: Vec<ManagedPythonDownload>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct JsonPythonDownload {
     name: String,
     arch: JsonArch,
@@ -956,12 +983,12 @@ struct JsonPythonDownload {
     patch: u8,
     prerelease: Option<String>,
     url: String,
-    sha256: Option<String>,
+    sha256: Option<Digest<32>>,
     variant: Option<String>,
     build: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct JsonArch {
     family: String,
     variant: Option<String>,
@@ -997,13 +1024,12 @@ impl ManagedPythonDownloadList {
             return Ok(download);
         }
 
-        if !request.allows_prereleases() {
-            if let Some(download) = self
+        if !request.allows_prereleases()
+            && let Some(download) = self
                 .iter_matching(&request.clone().with_prereleases(true))
                 .next()
-            {
-                return Ok(download);
-            }
+        {
+            return Ok(download);
         }
 
         Err(Error::NoDownloadFound(request.clone()))
@@ -1011,20 +1037,17 @@ impl ManagedPythonDownloadList {
 
     /// Load available Python distributions from a provided source or the compiled-in list.
     ///
-    /// `python_downloads_json_url` can be either `None`, to use the default list (taken from
-    /// `crates/uv-python/download-metadata.json`), or `Some` local path
-    /// or file://, http://, or https:// URL.
-    ///
     /// Returns an error if the provided list could not be opened, if the JSON is invalid, or if it
     /// does not parse into the expected data structure.
     pub async fn new(
-        client: &BaseClient,
+        client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
         python_downloads_json_url: Option<&str>,
     ) -> Result<Self, Error> {
-        // Although read_url() handles file:// URLs and converts them to local file reads, here we
-        // want to also support parsing bare filenames like "/tmp/py.json", not just
-        // "file:///tmp/py.json". Note that "C:\Temp\py.json" should be considered a filename, even
-        // though Url::parse would successfully misparse it as a URL with scheme "C".
+        // file:// URLs are converted to local file reads, and we also support parsing bare
+        // filenames like "/tmp/py.json", not just "file:///tmp/py.json". Note that
+        // "C:\Temp\py.json" should be considered a filename, even though Url::parse would
+        // successfully misparse it as a URL with scheme "C".
         enum Source<'a> {
             BuiltIn,
             Path(Cow<'a, Path>),
@@ -1047,62 +1070,123 @@ impl ManagedPythonDownloadList {
             Source::BuiltIn
         };
 
-        let buf: Cow<'_, [u8]> = match json_source {
-            Source::BuiltIn => BUILTIN_PYTHON_DOWNLOADS_JSON.into(),
-            Source::Path(ref path) => fs_err::read(path.as_ref())?.into(),
-            Source::Http(ref url) => fetch_bytes_from_url(client, url)
-                .await
-                .map_err(|e| Error::FetchingPythonDownloadsJSONError(url.to_string(), Box::new(e)))?
-                .into(),
+        let json_downloads = match json_source {
+            Source::BuiltIn => parse_builtin_downloads()?,
+            Source::Path(ref path) => parse_downloads_json(
+                &fs_err::read(path.as_ref())?,
+                path.to_string_lossy().to_string(),
+            )?,
+            Source::Http(ref url) => {
+                let client = CachedClient::new(
+                    client_builder
+                        .build()
+                        .map_err(|err| Error::ClientBuild(Box::new(err)))?,
+                );
+                fetch_downloads_from_url(&client, cache, url)
+                    .await
+                    .map_err(|e| match e {
+                        e @ (Error::InvalidPythonDownloadsJSON(..)
+                        | Error::UnsupportedPythonDownloadsJSON(..)) => e,
+                        e => Error::FetchingPythonDownloadsJSONError(url.to_string(), Box::new(e)),
+                    })?
+            }
         };
-        let json_downloads: HashMap<String, JsonPythonDownload> = serde_json::from_slice(&buf)
-            .map_err(
-                // As an explicit compatibility mechanism, if there's a top-level "version" key, it
-                // means it's a newer format than we know how to deal with.  Before reporting a
-                // parse error about the format of JsonPythonDownload, check for that key. We can do
-                // this by parsing into a Map<String, IgnoredAny> which allows any valid JSON on the
-                // value side. (Because it's zero-sized, Clippy suggests Set<String>, but that won't
-                // have the same parsing effect.)
-                #[expect(clippy::zero_sized_map_values)]
-                |e| {
-                    let source = match json_source {
-                        Source::BuiltIn => "EMBEDDED IN THE BINARY".to_owned(),
-                        Source::Path(path) => path.to_string_lossy().to_string(),
-                        Source::Http(url) => url.to_string(),
-                    };
-                    if let Ok(keys) =
-                        serde_json::from_slice::<HashMap<String, serde::de::IgnoredAny>>(&buf)
-                        && keys.contains_key("version")
-                    {
-                        Error::UnsupportedPythonDownloadsJSON(source)
-                    } else {
-                        Error::InvalidPythonDownloadsJSON(source, e)
-                    }
-                },
-            )?;
 
-        let result = parse_json_downloads(json_downloads);
-        Ok(Self { downloads: result })
+        let downloads = parse_json_downloads(json_downloads);
+        Ok(Self { downloads })
     }
 
     /// Load available Python distributions from the compiled-in list only.
     /// for testing purposes.
     pub fn new_only_embedded() -> Result<Self, Error> {
-        let json_downloads: HashMap<String, JsonPythonDownload> =
-            serde_json::from_slice(BUILTIN_PYTHON_DOWNLOADS_JSON).map_err(|e| {
-                Error::InvalidPythonDownloadsJSON("EMBEDDED IN THE BINARY".to_owned(), e)
-            })?;
+        let json_downloads = parse_builtin_downloads()?;
         let result = parse_json_downloads(json_downloads);
         Ok(Self { downloads: result })
     }
 }
 
-async fn fetch_bytes_from_url(client: &BaseClient, url: &DisplaySafeUrl) -> Result<Vec<u8>, Error> {
-    let (mut reader, size) = read_url(url, client).await?;
-    let capacity = size.and_then(|s| s.try_into().ok()).unwrap_or(1_048_576);
-    let mut buf = Vec::with_capacity(capacity);
-    reader.read_to_end(&mut buf).await?;
-    Ok(buf)
+/// Decompress and parse the embedded Python download catalog.
+fn parse_builtin_downloads() -> Result<HashMap<String, JsonPythonDownload>, Error> {
+    let mut json = Vec::new();
+    Decoder::with_buffer(BUILTIN_PYTHON_DOWNLOADS_ZSTD)?.read_to_end(&mut json)?;
+    parse_downloads_json(&json, "EMBEDDED IN THE BINARY".to_owned())
+}
+
+/// Parse the downloads JSON.
+///
+/// `source` is where the JSON came from for error reporting.
+fn parse_downloads_json(
+    buf: &[u8],
+    source: String,
+) -> Result<HashMap<String, JsonPythonDownload>, Error> {
+    match serde_json::from_slice(buf) {
+        Ok(data) => Ok(data),
+        Err(e) => {
+            // As an explicit compatibility mechanism, if there's a top-level "version" key, it
+            // means it's a newer format than we know how to deal with. Before reporting a
+            // parse error about the format of JsonPythonDownload, check for that key. We can do
+            // this by parsing into a Map<String, IgnoredAny> which allows any valid JSON on the
+            // value side. (Because it's zero-sized, Clippy suggests Set<String>, but that won't
+            // have the same parsing effect.)
+            #[expect(clippy::zero_sized_map_values)]
+            if let Ok(keys) = serde_json::from_slice::<HashMap<String, serde::de::IgnoredAny>>(buf)
+                && keys.contains_key("version")
+            {
+                Err(Error::UnsupportedPythonDownloadsJSON(source))
+            } else {
+                Err(Error::InvalidPythonDownloadsJSON(source, e))
+            }
+        }
+    }
+}
+
+async fn fetch_downloads_from_url(
+    client: &CachedClient,
+    cache: &Cache,
+    url: &DisplaySafeUrl,
+) -> Result<HashMap<String, JsonPythonDownload>, Error> {
+    let cache_entry = cache.entry(
+        CacheBucket::Python,
+        "downloads-json",
+        format!("{}.msgpack", cache_digest(&url.as_str())),
+    );
+    let cache_control = match client.uncached().connectivity() {
+        Connectivity::Online => CacheControl::from(cache.freshness(&cache_entry, None, None)?),
+        Connectivity::Offline => CacheControl::AllowStale,
+    };
+
+    let request = client
+        .uncached()
+        .for_host(url)
+        .get(Url::from(url.clone()))
+        .build()
+        .map_err(|err| Error::NetworkError(url.clone(), WrappedReqwestError::from(err)))?;
+
+    let response_callback = async |response: Response, _: &mut RetryState| {
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|err| Error::NetworkError(url.clone(), WrappedReqwestError::from(err)))?;
+        parse_downloads_json(&bytes, url.to_string())
+    };
+
+    client
+        .get_serde_with_retry(request, &cache_entry, cache_control, response_callback)
+        .await
+        .map_err(|err| match err {
+            CachedClientError::Client(err) => Error::RemotePythonDownloadsJSONClient(Box::new(err)),
+            CachedClientError::Callback {
+                err,
+                retries,
+                duration,
+            } => match err {
+                // Avoid double-wrapping errors.
+                err @ (Error::InvalidPythonDownloadsJSON(..)
+                | Error::UnsupportedPythonDownloadsJSON(..)) => err,
+                err if retries > 0 => err.into_retried(retries, duration),
+                err => err,
+            },
+        })
 }
 
 impl ManagedPythonDownload {
@@ -1118,7 +1202,7 @@ impl ManagedPythonDownload {
         self.key.os()
     }
 
-    pub(crate) fn sha256(&self) -> Option<&Cow<'static, str>> {
+    pub(crate) fn sha256(&self) -> Option<&Digest<32>> {
         self.sha256.as_ref()
     }
 
@@ -1131,7 +1215,7 @@ impl ManagedPythonDownload {
     /// For CPython without a user-configured mirror, the default Astral mirror is tried first.
     /// Each attempt tries all URLs in sequence without backoff between them; backoff is only
     /// applied after all URLs have been exhausted.
-    #[instrument(skip(client, installation_dir, scratch_dir, reporter), fields(download = % self.key()))]
+    #[instrument(skip_all, fields(download = % self.key()))]
     pub async fn fetch_with_retry(
         &self,
         client: &BaseClient,
@@ -1139,11 +1223,10 @@ impl ManagedPythonDownload {
         installation_dir: &Path,
         scratch_dir: &Path,
         reinstall: bool,
-        python_install_mirror: Option<&str>,
-        pypy_install_mirror: Option<&str>,
+        mirrors: PythonDownloadMirrors<'_>,
         reporter: Option<&dyn Reporter>,
     ) -> Result<DownloadResult, Error> {
-        let urls = self.download_urls(python_install_mirror, pypy_install_mirror)?;
+        let urls = self.download_urls(mirrors)?;
         if urls.is_empty() {
             return Err(Error::NoPythonDownloadUrlFound);
         }
@@ -1196,15 +1279,15 @@ impl ManagedPythonDownload {
 
         let temp_dir = tempfile::tempdir_in(scratch_dir).map_err(Error::DownloadDirError)?;
 
-        if let Some(python_builds_dir) =
+        let temp_dir = if let Some(python_builds_dir) =
             env::var_os(EnvVars::UV_PYTHON_CACHE_DIR).filter(|s| !s.is_empty())
         {
             let python_builds_dir = PathBuf::from(python_builds_dir);
             fs_err::create_dir_all(&python_builds_dir)?;
-            let hash_prefix = match self.sha256.as_deref() {
-                Some(sha) => {
+            let hash_prefix = match self.sha256.as_ref() {
+                Some(digest) => {
                     // Shorten the hash to avoid too-long-filename errors
-                    &sha[..9]
+                    &digest.as_str()[..9]
                 }
                 None => "none",
             };
@@ -1255,39 +1338,39 @@ impl ManagedPythonDownload {
             // Extract the downloaded archive into a temporary directory.
             self.extract_reader(
                 reader,
-                temp_dir.path(),
+                temp_dir,
                 &filename,
                 ext,
                 size,
                 reporter,
                 Direction::Extract,
             )
-            .await?;
+            .await?
         } else {
             // Avoid overlong log lines
-            debug!("Downloading {url}");
+            debug!("Downloading `{url}`");
             debug!(
-                "Extracting {filename} to temporary location: {}",
+                "Extracting `{filename}` to temporary location `{}`",
                 temp_dir.path().simplified_display()
             );
 
             let (reader, size) = read_url(&url, client).await?;
             self.extract_reader(
                 reader,
-                temp_dir.path(),
+                temp_dir,
                 &filename,
                 ext,
                 size,
                 reporter,
                 Direction::Download,
             )
-            .await?;
-        }
+            .await?
+        };
 
         // Extract the top-level directory.
         let mut extracted = match uv_extract::strip_component(temp_dir.path()) {
             Ok(top_level) => top_level,
-            Err(uv_extract::Error::NonSingularArchive(_)) => temp_dir.keep(),
+            Err(uv_extract::Error::NonSingularArchive(_)) => temp_dir.path().to_path_buf(),
             Err(err) => return Err(Error::ExtractError(filename, err)),
         };
 
@@ -1341,7 +1424,11 @@ impl ManagedPythonDownload {
         }
 
         // Persist it to the target.
-        debug!("Moving {} to {}", extracted.display(), path.user_display());
+        debug!(
+            "Moving `{}` to `{}`",
+            extracted.display(),
+            path.user_display()
+        );
         rename_with_retry(extracted, &path)
             .await
             .map_err(|err| Error::CopyError {
@@ -1362,7 +1449,7 @@ impl ManagedPythonDownload {
         target_cache_file: &Path,
     ) -> Result<(), Error> {
         debug!(
-            "Downloading {} to `{}`",
+            "Downloading `{}` to `{}`",
             url,
             target_cache_file.simplified_display()
         );
@@ -1404,50 +1491,52 @@ impl ManagedPythonDownload {
     async fn extract_reader(
         &self,
         reader: impl AsyncRead + Unpin,
-        target: &Path,
+        target: TempDir,
         filename: &String,
         ext: SourceDistExtension,
         size: Option<u64>,
         reporter: Option<&dyn Reporter>,
         direction: Direction,
-    ) -> Result<(), Error> {
-        let mut hashers = if self.sha256.is_some() {
-            vec![Hasher::from(HashAlgorithm::Sha256)]
-        } else {
-            vec![]
-        };
-        let mut hasher = uv_extract::hash::HashReader::new(reader, &mut hashers);
+    ) -> Result<TempDir, Error> {
+        let mut hashers = self
+            .sha256
+            .as_ref()
+            .map(|_| Hasher::from(HashAlgorithm::Sha256));
+        let mut hasher = uv_extract::hash::HashReader::new(reader, hashers.as_mut_slice());
 
-        if let Some(reporter) = reporter {
+        let target = if let Some(reporter) = reporter {
             let progress_key = reporter.on_request_start(direction, &self.key, size);
             let mut reader = ProgressReader::new(&mut hasher, progress_key, reporter);
-            uv_extract::stream::archive(filename, &mut reader, ext, target)
+            let (target, _) = uv_extract::stream::archive(&mut reader, ext, target)
                 .await
                 .map_err(|err| Error::ExtractError(filename.to_owned(), err))?;
             reporter.on_request_complete(direction, progress_key);
+            target
         } else {
-            uv_extract::stream::archive(filename, &mut hasher, ext, target)
+            let (target, _) = uv_extract::stream::archive(&mut hasher, ext, target)
                 .await
                 .map_err(|err| Error::ExtractError(filename.to_owned(), err))?;
-        }
+            target
+        };
         hasher.finish().await.map_err(Error::HashExhaustion)?;
 
         // Check the hash
-        if let Some(expected) = self.sha256.as_deref() {
-            let actual = HashDigest::from(hashers.pop().unwrap()).digest;
-            if !actual.eq_ignore_ascii_case(expected) {
+        if let Some((expected, hasher)) = self.sha256.as_ref().zip(hashers) {
+            let actual = HashDigest::from(hasher);
+            if actual.digest() != expected.as_str() {
                 return Err(Error::HashMismatch {
                     installation: self.key.to_string(),
-                    expected: expected.to_string(),
-                    actual: actual.to_string(),
+                    expected: expected.as_str().to_string(),
+                    actual: actual.digest().to_string(),
                 });
             }
         }
 
-        Ok(())
+        Ok(target)
     }
 
-    pub fn python_version(&self) -> PythonVersion {
+    #[cfg(test)]
+    fn python_version(&self) -> PythonVersion {
         self.key.version()
     }
 
@@ -1460,27 +1549,21 @@ impl ManagedPythonDownload {
     /// is returned with no fallback.
     pub fn download_urls(
         &self,
-        python_install_mirror: Option<&str>,
-        pypy_install_mirror: Option<&str>,
+        mirrors: PythonDownloadMirrors<'_>,
     ) -> Result<Vec<DisplaySafeUrl>, Error> {
         let custom_astral_mirror = astral_mirror_url_from_env();
-        self.download_urls_with_astral_mirror(
-            python_install_mirror,
-            pypy_install_mirror,
-            custom_astral_mirror.as_deref(),
-        )
+        self.download_urls_with_astral_mirror(mirrors, custom_astral_mirror.as_deref())
     }
 
     fn download_urls_with_astral_mirror(
         &self,
-        python_install_mirror: Option<&str>,
-        pypy_install_mirror: Option<&str>,
+        mirrors: PythonDownloadMirrors<'_>,
         astral_mirror_url: Option<&str>,
     ) -> Result<Vec<DisplaySafeUrl>, Error> {
         let astral_mirror_url = custom_astral_mirror_url(astral_mirror_url);
         match self.key.implementation {
             LenientImplementationName::Known(ImplementationName::CPython) => {
-                if let Some(mirror) = python_install_mirror {
+                if let Some(mirror) = mirrors.cpython {
                     // User-configured mirror: use it exclusively, no automatic fallback.
                     let Some(suffix) = self.url.strip_prefix(CPYTHON_DOWNLOADS_URL_PREFIX) else {
                         return Err(Error::Mirror(
@@ -1509,11 +1592,28 @@ impl ManagedPythonDownload {
             }
 
             LenientImplementationName::Known(ImplementationName::PyPy) => {
-                if let Some(mirror) = pypy_install_mirror {
+                if let Some(mirror) = mirrors.pypy {
                     let Some(suffix) = self.url.strip_prefix("https://downloads.python.org/pypy/")
                     else {
                         return Err(Error::Mirror(
                             EnvVars::UV_PYPY_INSTALL_MIRROR,
+                            self.url.to_string(),
+                        ));
+                    };
+                    return Ok(vec![DisplaySafeUrl::parse(
+                        format!("{}/{}", mirror.trim_end_matches('/'), suffix).as_str(),
+                    )?]);
+                }
+            }
+
+            LenientImplementationName::Known(ImplementationName::GraalPy) => {
+                if let Some(mirror) = mirrors.graalpy {
+                    let Some(suffix) = self
+                        .url
+                        .strip_prefix("https://github.com/oracle/graalpython/releases/download/")
+                    else {
+                        return Err(Error::Mirror(
+                            EnvVars::UV_GRAALPY_INSTALL_MIRROR,
                             self.url.to_string(),
                         ));
                     };
@@ -1544,16 +1644,16 @@ fn parse_json_downloads(
             };
 
             let arch_str = match entry.arch.family.as_str() {
-                "armv5tel" => "armv5te".to_string(),
+                "armv5tel" => Cow::Borrowed("armv5te"),
                 // The `gc` variant of riscv64 is the common base instruction set and
                 // is the target in `python-build-standalone`
                 // See https://github.com/astral-sh/python-build-standalone/issues/504
-                "riscv64" => "riscv64gc".to_string(),
-                value => value.to_string(),
+                "riscv64" => Cow::Borrowed("riscv64gc"),
+                value => Cow::Borrowed(value),
             };
 
             let arch_str = if let Some(variant) = entry.arch.variant {
-                format!("{arch_str}_{variant}")
+                Cow::Owned(format!("{arch_str}_{variant}"))
             } else {
                 arch_str
             };
@@ -1619,7 +1719,7 @@ fn parse_json_downloads(
             };
 
             let url = Cow::Owned(entry.url);
-            let sha256 = entry.sha256.map(Cow::Owned);
+            let sha256 = entry.sha256;
             let build = entry
                 .build
                 .map(|s| Box::leak(s.into_boxed_str()) as &'static str);
@@ -1791,6 +1891,7 @@ async fn read_url(
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
     use std::collections::HashSet;
 
     use crate::PythonVariant;
@@ -1799,6 +1900,46 @@ mod tests {
     use uv_platform::{Arch, Libc, Os, Platform};
 
     use super::*;
+
+    #[test]
+    fn test_download_error_debug() {
+        let errors = [
+            Error::EmptyRequest,
+            Error::Mirror("UV_PYTHON_INSTALL_MIRROR", "file:///mirror".to_owned()),
+            Error::NetworkErrorWithRetries {
+                err: Box::new(Error::InvalidPythonVersion("3.x".to_owned())),
+                retries: 2,
+                duration: Duration::from_secs(3),
+            },
+            Error::HashMismatch {
+                installation: "cpython-3.12.0-linux-x86_64-gnu".to_owned(),
+                expected: "abc".to_owned(),
+                actual: "def".to_owned(),
+            },
+        ];
+
+        insta::assert_debug_snapshot!(errors, @r#"
+        [
+            EmptyRequest,
+            Mirror(
+                "UV_PYTHON_INSTALL_MIRROR",
+                "file:///mirror",
+            ),
+            NetworkErrorWithRetries {
+                err: InvalidPythonVersion(
+                    "3.x",
+                ),
+                retries: 2,
+                duration: 3s,
+            },
+            HashMismatch {
+                installation: "cpython-3.12.0-linux-x86_64-gnu",
+                expected: "abc",
+                actual: "def",
+            },
+        ]
+        "#);
+    }
 
     /// Parse a request with all of its fields.
     #[test]
@@ -1936,7 +2077,7 @@ mod tests {
     fn test_python_download_request_from_str_too_many_parts() {
         let result = PythonDownloadRequest::from_str("cpython-3.12-linux-x86_64-gnu-extra");
 
-        assert!(matches!(result, Err(Error::TooManyParts(_))));
+        assert_matches!(result, Err(Error::TooManyParts(_)));
     }
 
     /// We don't allow an empty request.
@@ -1944,7 +2085,7 @@ mod tests {
     fn test_python_download_request_from_str_empty() {
         let result = PythonDownloadRequest::from_str("");
 
-        assert!(matches!(result, Err(Error::EmptyRequest)), "{result:?}");
+        assert_matches!(result, Err(Error::EmptyRequest));
     }
 
     /// Parse a request with all "any" segments.
@@ -1987,10 +2128,7 @@ mod tests {
     fn test_python_download_request_from_str_invalid_leading_segment() {
         let result = PythonDownloadRequest::from_str("foobar-3.14-windows");
 
-        assert!(
-            matches!(result, Err(Error::ImplementationError(_))),
-            "{result:?}"
-        );
+        assert_matches!(result, Err(Error::ImplementationError(_)));
     }
 
     /// Parse a request with segments in an invalid order.
@@ -1998,10 +2136,7 @@ mod tests {
     fn test_python_download_request_from_str_out_of_order() {
         let result = PythonDownloadRequest::from_str("3.12-cpython");
 
-        assert!(
-            matches!(result, Err(Error::InvalidRequestPlatform(_))),
-            "{result:?}"
-        );
+        assert_matches!(result, Err(Error::InvalidRequestPlatform(_)));
     }
 
     /// Parse a request with too many "any" segments.
@@ -2009,7 +2144,7 @@ mod tests {
     fn test_python_download_request_from_str_too_many_any() {
         let result = PythonDownloadRequest::from_str("any-any-any-any-any-any");
 
-        assert!(matches!(result, Err(Error::TooManyParts(_))));
+        assert_matches!(result, Err(Error::TooManyParts(_)));
     }
 
     /// Test that build filtering works correctly
@@ -2020,10 +2155,11 @@ mod tests {
             .with_implementation(ImplementationName::CPython);
         request.build = Some("20240814".to_string());
 
-        let client = uv_client::BaseClientBuilder::default()
-            .build()
-            .expect("failed to build base client");
-        let download_list = ManagedPythonDownloadList::new(&client, None).await.unwrap();
+        let client_builder = uv_client::BaseClientBuilder::default();
+        let cache = uv_cache::Cache::temp().expect("failed to create temp cache");
+        let download_list = ManagedPythonDownloadList::new(&client_builder, &cache, None)
+            .await
+            .unwrap();
 
         let downloads: Vec<_> = download_list
             .iter_all()
@@ -2048,10 +2184,11 @@ mod tests {
             .with_implementation(ImplementationName::CPython);
         request.build = Some("99999999".to_string());
 
-        let client = uv_client::BaseClientBuilder::default()
-            .build()
-            .expect("failed to build base client");
-        let download_list = ManagedPythonDownloadList::new(&client, None).await.unwrap();
+        let client_builder = uv_client::BaseClientBuilder::default();
+        let cache = uv_cache::Cache::temp().expect("failed to create temp cache");
+        let download_list = ManagedPythonDownloadList::new(&client_builder, &cache, None)
+            .await
+            .unwrap();
 
         // Should find no matching downloads
         let downloads: Vec<_> = download_list
@@ -2246,7 +2383,7 @@ mod tests {
         ManagedPythonDownload {
             key,
             url: Cow::Borrowed(url),
-            sha256: Some(Cow::Borrowed("abc123")),
+            sha256: Some(Digest::from_bytes([0xab; 32])),
             build: Some("20240713"),
         }
     }
@@ -2259,8 +2396,7 @@ mod tests {
 
         let urls = download
             .download_urls_with_astral_mirror(
-                None,
-                None,
+                PythonDownloadMirrors::default(),
                 Some("https://nexus.example.com/repository/releases.astral.sh/"),
             )
             .expect("download URLs should be valid");
@@ -2285,8 +2421,10 @@ mod tests {
 
         let urls = download
             .download_urls_with_astral_mirror(
-                Some("https://python-mirror.example.com/releases/"),
-                None,
+                PythonDownloadMirrors {
+                    cpython: Some("https://python-mirror.example.com/releases/"),
+                    ..PythonDownloadMirrors::default()
+                },
                 Some("https://nexus.example.com/repository/releases.astral.sh/"),
             )
             .expect("download URLs should be valid");
@@ -2310,10 +2448,10 @@ mod tests {
         );
 
         let default_urls = download
-            .download_urls_with_astral_mirror(None, None, None)
+            .download_urls_with_astral_mirror(PythonDownloadMirrors::default(), None)
             .expect("download URLs should be valid");
         let empty_urls = download
-            .download_urls_with_astral_mirror(None, None, Some(""))
+            .download_urls_with_astral_mirror(PythonDownloadMirrors::default(), Some(""))
             .expect("download URLs should be valid");
 
         assert_eq!(default_urls, empty_urls);

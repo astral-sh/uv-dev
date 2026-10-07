@@ -18,11 +18,11 @@ use crate::resolution::AnnotatedDist;
 #[derive(Debug, Clone)]
 /// A pinned package with its resolved distribution and all the extras that were pinned for it.
 pub(crate) struct RequirementsTxtDist<'dist> {
-    pub(crate) dist: &'dist ResolvedDist,
-    pub(crate) version: &'dist Version,
-    pub(crate) hashes: &'dist [HashDigest],
-    pub(crate) markers: MarkerTree,
-    pub(crate) extras: Vec<ExtraName>,
+    pub(super) dist: &'dist ResolvedDist,
+    pub(super) version: &'dist Version,
+    pub(super) hashes: &'dist [HashDigest],
+    pub(super) markers: MarkerTree,
+    pub(super) extras: Vec<ExtraName>,
 }
 
 impl<'dist> RequirementsTxtDist<'dist> {
@@ -182,7 +182,7 @@ impl<'dist> RequirementsTxtDist<'dist> {
             // does not have a non-trivial conflicting marker
             // that we would otherwise need to care about.
             markers: annotated.marker.combined(),
-            extras: if let Some(extra) = annotated.extra.clone() {
+            extras: if let Some(extra) = annotated.kind.extra().cloned() {
                 vec![extra]
             } else {
                 vec![]

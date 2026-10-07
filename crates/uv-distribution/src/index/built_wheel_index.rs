@@ -70,9 +70,13 @@ impl<'a> BuiltWheelIndex<'a> {
             return Ok(None);
         };
 
-        // Enforce hash-checking by omitting any wheels that don't satisfy the required hashes.
+        // Omit wheels whose source archive does not satisfy the required hashes and size.
         let revision = pointer.into_revision();
-        if !revision.satisfies(self.hasher.get(source_dist)) {
+        if !revision.satisfies(self.hasher.archive_policy(source_dist))
+            || source_dist
+                .size
+                .is_some_and(|expected| revision.size() != Some(expected))
+        {
             return Ok(None);
         }
 
@@ -82,8 +86,11 @@ impl<'a> BuiltWheelIndex<'a> {
         let config_settings = self.config_settings_for(&source_dist.name);
         let extra_build_deps = self.extra_build_requires_for(&source_dist.name);
         let extra_build_vars = self.extra_build_variables_for(&source_dist.name);
-        let build_info =
-            BuildInfo::from_settings(&config_settings, extra_build_deps, extra_build_vars);
+        let build_info = BuildInfo::from_settings(
+            config_settings.into_owned(),
+            extra_build_deps.to_vec(),
+            extra_build_vars.cloned(),
+        );
         let cache_shard = build_info
             .cache_shard()
             .map(|digest| cache_shard.shard(digest))
@@ -121,7 +128,7 @@ impl<'a> BuiltWheelIndex<'a> {
 
         // Enforce hash-checking by omitting any wheels that don't satisfy the required hashes.
         let revision = pointer.into_revision();
-        if !revision.satisfies(self.hasher.get(source_dist)) {
+        if !revision.satisfies(self.hasher.archive_policy(source_dist)) {
             return Ok(None);
         }
 
@@ -131,8 +138,11 @@ impl<'a> BuiltWheelIndex<'a> {
         let config_settings = self.config_settings_for(&source_dist.name);
         let extra_build_deps = self.extra_build_requires_for(&source_dist.name);
         let extra_build_vars = self.extra_build_variables_for(&source_dist.name);
-        let build_info =
-            BuildInfo::from_settings(&config_settings, extra_build_deps, extra_build_vars);
+        let build_info = BuildInfo::from_settings(
+            config_settings.into_owned(),
+            extra_build_deps.to_vec(),
+            extra_build_vars.cloned(),
+        );
         let cache_shard = build_info
             .cache_shard()
             .map(|digest| cache_shard.shard(digest))
@@ -172,7 +182,7 @@ impl<'a> BuiltWheelIndex<'a> {
 
         // Enforce hash-checking by omitting any wheels that don't satisfy the required hashes.
         let revision = pointer.into_revision();
-        if !revision.satisfies(self.hasher.get(source_dist)) {
+        if !revision.satisfies(self.hasher.archive_policy(source_dist)) {
             return Ok(None);
         }
 
@@ -182,8 +192,11 @@ impl<'a> BuiltWheelIndex<'a> {
         let config_settings = self.config_settings_for(&source_dist.name);
         let extra_build_deps = self.extra_build_requires_for(&source_dist.name);
         let extra_build_vars = self.extra_build_variables_for(&source_dist.name);
-        let build_info =
-            BuildInfo::from_settings(&config_settings, extra_build_deps, extra_build_vars);
+        let build_info = BuildInfo::from_settings(
+            config_settings.into_owned(),
+            extra_build_deps.to_vec(),
+            extra_build_vars.cloned(),
+        );
         let cache_shard = build_info
             .cache_shard()
             .map(|digest| cache_shard.shard(digest))
@@ -197,7 +210,11 @@ impl<'a> BuiltWheelIndex<'a> {
     /// Return the most compatible [`CachedWheel`] for a given source distribution at a git URL.
     pub fn git_directory(&self, source_dist: &GitDirectorySourceDist) -> Option<CachedWheel> {
         // Enforce hash-checking, which isn't supported for Git distributions.
-        if self.hasher.get(source_dist).requires_validation() {
+        if self
+            .hasher
+            .archive_policy(source_dist)
+            .requires_validation()
+        {
             return None;
         }
 
@@ -212,8 +229,11 @@ impl<'a> BuiltWheelIndex<'a> {
         let config_settings = self.config_settings_for(&source_dist.name);
         let extra_build_deps = self.extra_build_requires_for(&source_dist.name);
         let extra_build_vars = self.extra_build_variables_for(&source_dist.name);
-        let build_info =
-            BuildInfo::from_settings(&config_settings, extra_build_deps, extra_build_vars);
+        let build_info = BuildInfo::from_settings(
+            config_settings.into_owned(),
+            extra_build_deps.to_vec(),
+            extra_build_vars.cloned(),
+        );
         let cache_shard = build_info
             .cache_shard()
             .map(|digest| cache_shard.shard(digest))
@@ -246,7 +266,7 @@ impl<'a> BuiltWheelIndex<'a> {
         };
 
         // Enforce hash-checking by omitting any wheels that don't satisfy the required hashes.
-        if !revision.satisfies(self.hasher.get(source_dist)) {
+        if !revision.satisfies(self.hasher.archive_policy(source_dist)) {
             return Ok(None);
         }
 
@@ -254,8 +274,11 @@ impl<'a> BuiltWheelIndex<'a> {
         let config_settings = self.config_settings_for(&source_dist.name);
         let extra_build_deps = self.extra_build_requires_for(&source_dist.name);
         let extra_build_vars = self.extra_build_variables_for(&source_dist.name);
-        let build_info =
-            BuildInfo::from_settings(&config_settings, extra_build_deps, extra_build_vars);
+        let build_info = BuildInfo::from_settings(
+            config_settings.into_owned(),
+            extra_build_deps.to_vec(),
+            extra_build_vars.cloned(),
+        );
         let cache_shard = build_info
             .cache_shard()
             .map(|digest| cache_shard.shard(digest))

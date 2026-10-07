@@ -3,21 +3,22 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use tracing::warn;
+use uv_fs::find_git_repository_root;
 use walkdir::WalkDir;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum GitInfoError {
-    #[error("The repository at {0} is missing a `.git` directory")]
+    #[error("The repository at `{0}` is missing a `.git` directory")]
     MissingGitDir(PathBuf),
-    #[error("The repository at {0} is missing a `HEAD` file")]
+    #[error("The repository at `{0}` is missing a `HEAD` file")]
     MissingHead(PathBuf),
-    #[error("The repository at {0} is missing the reference `{1}`")]
+    #[error("The repository at `{0}` is missing the reference `{1}`")]
     MissingRef(PathBuf, String),
-    #[error("The repository at {0} has an invalid reference: `{1}`")]
+    #[error("The repository at `{0}` has an invalid reference: {1}")]
     InvalidRef(PathBuf, String),
-    #[error("The discovered commit has an invalid length (expected 40 characters): `{0}`")]
+    #[error("The discovered commit has an invalid length (expected 40 characters): {0}")]
     WrongLength(String),
-    #[error("The discovered commit has an invalid character (expected hexadecimal): `{0}`")]
+    #[error("The discovered commit has an invalid character (expected hexadecimal): {0}")]
     WrongDigit(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -111,11 +112,9 @@ struct GitRepository {
 impl GitRepository {
     /// Find the Git repository for a path, searching parent directories if necessary.
     fn find(path: &Path) -> Result<Self, GitInfoError> {
-        let dot_git_path = path
-            .ancestors()
-            .map(|ancestor| ancestor.join(".git"))
-            .find(|dot_git_path| dot_git_path.exists())
+        let repository_root = find_git_repository_root(path)
             .ok_or_else(|| GitInfoError::MissingGitDir(path.to_path_buf()))?;
+        let dot_git_path = repository_root.join(".git");
         let git_dir = read_git_dir(&dot_git_path)
             .ok_or_else(|| GitInfoError::MissingGitDir(path.to_path_buf()))?;
         let common_dir = read_common_dir(&git_dir)?;

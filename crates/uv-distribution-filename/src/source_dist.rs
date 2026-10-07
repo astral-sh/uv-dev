@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-use crate::SourceDistExtension;
+use crate::{SourceDistExtension, normalized_package_name_matches};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uv_normalize::{InvalidNameError, PackageName};
@@ -140,17 +140,6 @@ impl SourceDistFilename {
     }
 }
 
-fn normalized_package_name_matches(actual: &str, expected: &PackageName) -> bool {
-    actual
-        .bytes()
-        .map(|byte| match byte {
-            b'A'..=b'Z' => byte.to_ascii_lowercase(),
-            b'_' | b'.' => b'-',
-            _ => byte,
-        })
-        .eq(expected.as_ref().bytes())
-}
-
 impl Display for SourceDistFilename {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -173,7 +162,7 @@ impl Display for SourceDistFilenameError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Failed to parse source distribution filename {}: {}",
+            "Failed to parse source distribution filename `{}`: {}",
             self.filename, self.kind
         )
     }
@@ -199,7 +188,7 @@ mod tests {
 
     use uv_normalize::PackageName;
 
-    use crate::{SourceDistExtension, SourceDistFilename};
+    use crate::{SourceDistExtension, SourceDistFilename, extension::LegacySourceDistExtension};
 
     /// Only test already normalized names since the parsing is lossy
     ///
@@ -250,8 +239,14 @@ mod tests {
     fn malformed_non_ascii() {
         let package_name = PackageName::from_str("a").unwrap();
         for (filename, extension) in [
-            ("é-1.2.3.zip", SourceDistExtension::Zip),
-            ("aé1.2.3.zip", SourceDistExtension::Zip),
+            (
+                "é-1.2.3.zip",
+                SourceDistExtension::Legacy(LegacySourceDistExtension::Zip),
+            ),
+            (
+                "aé1.2.3.zip",
+                SourceDistExtension::Legacy(LegacySourceDistExtension::Zip),
+            ),
             ("é-1.zip", SourceDistExtension::TarGz),
         ] {
             assert!(SourceDistFilename::parse(filename, extension, &package_name).is_err());
@@ -268,9 +263,13 @@ mod tests {
             "Foo.Bar-1.2.3.zip",
         ] {
             assert_eq!(
-                SourceDistFilename::parse(filename, SourceDistExtension::Zip, &package_name)
-                    .unwrap()
-                    .name,
+                SourceDistFilename::parse(
+                    filename,
+                    SourceDistExtension::Legacy(LegacySourceDistExtension::Zip),
+                    &package_name
+                )
+                .unwrap()
+                .name,
                 package_name
             );
         }
@@ -281,7 +280,7 @@ mod tests {
         assert!(
             SourceDistFilename::parse(
                 "foo.zip",
-                SourceDistExtension::Zip,
+                SourceDistExtension::Legacy(LegacySourceDistExtension::Zip),
                 &PackageName::from_str("foo-lib").unwrap()
             )
             .is_err()

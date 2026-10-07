@@ -14,12 +14,7 @@ fn no_package() {
     let context = uv_test::test_context!("3.12");
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
-
-    ----- stderr -----
+    exit_code: 0 (success)
     "
     );
 }
@@ -37,10 +32,7 @@ fn prune_last_in_the_subgroup() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
@@ -55,15 +47,12 @@ fn prune_last_in_the_subgroup() {
 
     context.assert_command("import requests").success();
     uv_snapshot!(context.filters(), context.pip_tree().arg("--prune").arg("certifi"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     requests v2.31.0
     ├── charset-normalizer v3.3.2
     ├── idna v3.6
     └── urllib3 v2.2.1
-
-    ----- stderr -----
     "
     );
 }
@@ -81,10 +70,7 @@ fn single_package() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
@@ -100,16 +86,13 @@ fn single_package() {
     context.assert_command("import requests").success();
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     requests v2.31.0
     ├── certifi v2024.2.2
     ├── charset-normalizer v3.3.2
     ├── idna v3.6
     └── urllib3 v2.2.1
-
-    ----- stderr -----
     "
     );
 }
@@ -127,10 +110,7 @@ fn nested_dependencies() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
@@ -146,8 +126,7 @@ fn nested_dependencies() {
     );
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     flask v3.0.2
     ├── blinker v1.7.0
@@ -157,8 +136,6 @@ fn nested_dependencies() {
     │   └── markupsafe v2.1.5
     └── werkzeug v3.0.1
         └── markupsafe v2.1.5
-
-    ----- stderr -----
     "
     );
 }
@@ -177,10 +154,7 @@ fn reverse() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
@@ -196,8 +170,7 @@ fn reverse() {
     );
 
     uv_snapshot!(context.filters(), context.pip_tree().arg("--reverse"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     blinker v1.7.0
     └── flask v3.0.2
@@ -210,8 +183,6 @@ fn reverse() {
     │   └── flask v3.0.2
     └── werkzeug v3.0.1
         └── flask v3.0.2
-
-    ----- stderr -----
     "
     );
 }
@@ -229,10 +200,7 @@ fn invert() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
@@ -248,8 +216,7 @@ fn invert() {
     );
 
     uv_snapshot!(context.filters(), context.pip_tree().arg("--invert"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     blinker v1.7.0
     └── flask v3.0.2
@@ -262,8 +229,6 @@ fn invert() {
     │   └── flask v3.0.2
     └── werkzeug v3.0.1
         └── flask v3.0.2
-
-    ----- stderr -----
     "
     );
 }
@@ -280,10 +245,7 @@ fn depth() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
@@ -301,20 +263,16 @@ fn depth() {
     uv_snapshot!(context.filters(), context.pip_tree()
         .arg("--depth")
         .arg("0"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     flask v3.0.2
-
-    ----- stderr -----
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree()
         .arg("--depth")
         .arg("1"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     flask v3.0.2
     ├── blinker v1.7.0
@@ -322,16 +280,13 @@ fn depth() {
     ├── itsdangerous v2.1.2
     ├── jinja2 v3.1.3
     └── werkzeug v3.0.1
-
-    ----- stderr -----
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree()
         .arg("--depth")
         .arg("2"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     flask v3.0.2
     ├── blinker v1.7.0
@@ -341,8 +296,6 @@ fn depth() {
     │   └── markupsafe v2.1.5
     └── werkzeug v3.0.1
         └── markupsafe v2.1.5
-
-    ----- stderr -----
     "
     );
 }
@@ -359,10 +312,7 @@ fn prune() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
@@ -380,8 +330,7 @@ fn prune() {
     uv_snapshot!(context.filters(), context.pip_tree()
         .arg("--prune")
         .arg("werkzeug"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     flask v3.0.2
     ├── blinker v1.7.0
@@ -389,8 +338,6 @@ fn prune() {
     ├── itsdangerous v2.1.2
     └── jinja2 v3.1.3
         └── markupsafe v2.1.5
-
-    ----- stderr -----
     "
     );
 
@@ -399,24 +346,20 @@ fn prune() {
         .arg("werkzeug")
         .arg("--prune")
         .arg("jinja2"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     flask v3.0.2
     ├── blinker v1.7.0
     ├── click v8.1.7
     └── itsdangerous v2.1.2
     markupsafe v2.1.5
-
-    ----- stderr -----
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_tree()
         .arg("--prune")
         .arg("werkzeug"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     flask v3.0.2
     ├── blinker v1.7.0
@@ -424,8 +367,6 @@ fn prune() {
     ├── itsdangerous v2.1.2
     └── jinja2 v3.1.3
         └── markupsafe v2.1.5
-
-    ----- stderr -----
     "
     );
 }
@@ -444,10 +385,7 @@ fn removed_dependency() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
@@ -463,10 +401,7 @@ fn removed_dependency() {
     uv_snapshot!(context.filters(), context
         .pip_uninstall()
         .arg("requests"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 1 package in [TIME]
      - requests==2.31.0
@@ -474,15 +409,12 @@ fn removed_dependency() {
     );
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     certifi v2024.2.2
     charset-normalizer v3.3.2
     idna v3.6
     urllib3 v2.2.1
-
-    ----- stderr -----
     "
     );
 }
@@ -507,10 +439,7 @@ fn multiple_packages() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
     Prepared 6 packages in [TIME]
@@ -526,8 +455,7 @@ fn multiple_packages() {
 
     context.assert_command("import requests").success();
     uv_snapshot!(context.filters(), context.pip_tree(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     click v8.1.7
     requests v2.31.0
@@ -535,8 +463,6 @@ fn multiple_packages() {
     ├── charset-normalizer v3.3.2
     ├── idna v3.6
     └── urllib3 v2.2.1
-
-    ----- stderr -----
     "
     );
 }
@@ -562,10 +488,7 @@ fn cycle() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 10 packages in [TIME]
     Prepared 10 packages in [TIME]
@@ -584,8 +507,7 @@ fn cycle() {
     );
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     testtools v2.3.0
     ├── extras v1.0.0
@@ -603,8 +525,6 @@ fn cycle() {
         ├── six v1.16.0
         └── traceback2 v1.4.0 (*)
     (*) Package tree already displayed
-
-    ----- stderr -----
     "
     );
 }
@@ -630,10 +550,7 @@ fn multiple_packages_shared_descendant() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
@@ -647,8 +564,7 @@ fn multiple_packages_shared_descendant() {
     );
 
     uv_snapshot!(context.filters(), context.pip_tree(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     pendulum v3.0.0
     ├── python-dateutil v2.9.0.post0
@@ -657,8 +573,6 @@ fn multiple_packages_shared_descendant() {
     │   └── python-dateutil v2.9.0.post0 (*)
     └── tzdata v2024.1
     (*) Package tree already displayed
-
-    ----- stderr -----
     "
     );
 }
@@ -684,10 +598,7 @@ fn no_dedupe_and_invert() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
@@ -701,8 +612,7 @@ fn no_dedupe_and_invert() {
     );
 
     uv_snapshot!(context.filters(), context.pip_tree().arg("--no-dedupe").arg("--invert"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     six v1.16.0
     └── python-dateutil v2.9.0.post0
@@ -711,8 +621,6 @@ fn no_dedupe_and_invert() {
             └── pendulum v3.0.0
     tzdata v2024.1
     └── pendulum v3.0.0
-
-    ----- stderr -----
     "
     );
 }
@@ -737,10 +645,7 @@ fn no_dedupe() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
@@ -755,8 +660,7 @@ fn no_dedupe() {
 
     uv_snapshot!(context.filters(), context.pip_tree()
         .arg("--no-dedupe"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     pendulum v3.0.0
     ├── python-dateutil v2.9.0.post0
@@ -765,8 +669,6 @@ fn no_dedupe() {
     │   └── python-dateutil v2.9.0.post0
     │       └── six v1.16.0
     └── tzdata v2024.1
-
-    ----- stderr -----
     "
     );
 }
@@ -781,10 +683,7 @@ fn with_editable() {
         .pip_install()
         .arg("-e")
         .arg(context.workspace_root.join("test/packages/hatchling_editable")), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Prepared 2 packages in [TIME]
@@ -794,20 +693,11 @@ fn with_editable() {
     "
     );
 
-    let filters = context
-        .filters()
-        .into_iter()
-        .chain(vec![(r"\-\-\-\-\-\-+.*", "[UNDERLINE]"), ("  +", " ")])
-        .collect::<Vec<_>>();
-
-    uv_snapshot!(filters, context.pip_tree(), @"
-    success: true
-    exit_code: 0
+    uv_snapshot!(context.filters(), context.pip_tree(), @"
+    exit_code: 0 (success)
     ----- stdout -----
     hatchling-editable v0.1.0
     └── iniconfig v2.0.1.dev6+g9cae431
-
-    ----- stderr -----
     "
     );
 }
@@ -825,10 +715,7 @@ fn package_flag() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
@@ -849,13 +736,10 @@ fn package_flag() {
         .arg("--package")
         .arg("werkzeug"),
         @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     werkzeug v3.0.1
     └── markupsafe v2.1.5
-
-    ----- stderr -----
     "
     );
 
@@ -867,15 +751,12 @@ fn package_flag() {
         .arg("--package")
         .arg("jinja2"),
         @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     jinja2 v3.1.3
     └── markupsafe v2.1.5
     werkzeug v3.0.1
     └── markupsafe v2.1.5
-
-    ----- stderr -----
     "
     );
 }
@@ -893,10 +774,7 @@ fn show_version_specifiers_simple() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
@@ -910,16 +788,13 @@ fn show_version_specifiers_simple() {
     );
 
     uv_snapshot!(context.filters(), context.pip_tree().arg("--show-version-specifiers"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     requests v2.31.0
     ├── certifi v2024.2.2 [required: >=2017.4.17]
     ├── charset-normalizer v3.3.2 [required: >=2, <4]
     ├── idna v3.6 [required: >=2.5, <4]
     └── urllib3 v2.2.1 [required: >=1.21.1, <3]
-
-    ----- stderr -----
     "
     );
 }
@@ -937,10 +812,7 @@ fn show_version_specifiers_with_invert() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
@@ -960,8 +832,7 @@ fn show_version_specifiers_with_invert() {
         context.pip_tree()
         .arg("--show-version-specifiers")
         .arg("--invert"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     blinker v1.7.0
     └── flask v3.0.2 [requires: blinker >=1.6.2]
@@ -974,8 +845,6 @@ fn show_version_specifiers_with_invert() {
     │   └── flask v3.0.2 [requires: jinja2 >=3.1.2]
     └── werkzeug v3.0.1 [requires: markupsafe >=2.1.1]
         └── flask v3.0.2 [requires: werkzeug >=3.0.0]
-
-    ----- stderr -----
     "
     );
 }
@@ -993,10 +862,7 @@ fn show_version_specifiers_with_package() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 7 packages in [TIME]
     Prepared 7 packages in [TIME]
@@ -1017,13 +883,10 @@ fn show_version_specifiers_with_package() {
         .arg("--show-version-specifiers")
         .arg("--package")
         .arg("werkzeug"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     werkzeug v3.0.1
     └── markupsafe v2.1.5 [required: >=2.1.1]
-
-    ----- stderr -----
     "
     );
 }
@@ -1041,10 +904,7 @@ fn print_output_even_with_quite_flag() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     Prepared 5 packages in [TIME]
@@ -1059,11 +919,7 @@ fn print_output_even_with_quite_flag() {
 
     context.assert_command("import requests").success();
     uv_snapshot!(context.filters(), context.pip_tree().arg("--quiet"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
-    ----- stderr -----
+    exit_code: 0 (success)
     "
     );
 }
@@ -1081,10 +937,7 @@ fn outdated() {
         .arg("-r")
         .arg("requirements.txt")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
     Prepared 6 packages in [TIME]
@@ -1101,8 +954,7 @@ fn outdated() {
     uv_snapshot!(
         context.filters(),
         context.pip_tree().arg("--outdated"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     flask v2.0.0 (latest: v3.0.2)
     ├── click v8.1.7
@@ -1111,8 +963,6 @@ fn outdated() {
     │   └── markupsafe v2.1.5
     └── werkzeug v3.0.1
         └── markupsafe v2.1.5
-
-    ----- stderr -----
     "
     );
 }
@@ -1159,10 +1009,7 @@ fn no_duplicate_dependencies_with_markers() {
         .pip_install()
         .arg(project.path())
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
@@ -1175,13 +1022,10 @@ fn no_duplicate_dependencies_with_markers() {
     // Ensure that the dependency is only listed once, even though `debug` declares multiple
     // marker-specific requirements for the same dependency.
     uv_snapshot!(context.filters(), context.pip_tree(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     debug v0.1.0
     └── sniffio v1.3.1
-
-    ----- stderr -----
     "
     );
 
@@ -1189,13 +1033,10 @@ fn no_duplicate_dependencies_with_markers() {
         context.filters(),
         context.pip_tree().arg("--show-version-specifiers"),
         @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     debug v0.1.0
     └── sniffio v1.3.1 [required: >=1.0.1]
-
-    ----- stderr -----
     "
     );
 
@@ -1211,10 +1052,7 @@ fn no_duplicate_dependencies_with_markers() {
         .pip_install()
         .arg(project.path())
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
     Prepared [N] packages in [TIME]
@@ -1228,13 +1066,10 @@ fn no_duplicate_dependencies_with_markers() {
         context.filters(),
         context.pip_tree().arg("--show-version-specifiers"),
         @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     debug v0.1.0
     └── sniffio v1.3.1 [required: >=1.0.2]
-
-    ----- stderr -----
     "
     );
 }

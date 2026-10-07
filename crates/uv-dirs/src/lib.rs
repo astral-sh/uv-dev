@@ -134,7 +134,7 @@ fn locate_system_config_xdg(value: Option<&str>) -> Option<PathBuf> {
     let default = "/etc/xdg";
     let config_dirs = value.filter(|s| !s.is_empty()).unwrap_or(default);
 
-    for dir in config_dirs.split(':').take_while(|s| !s.is_empty()) {
+    for dir in config_dirs.split(':').filter(|s| !s.is_empty()) {
         let uv_toml_path = Path::new(dir).join("uv").join("uv.toml");
         if uv_toml_path.is_file() {
             return Some(uv_toml_path);
@@ -161,32 +161,31 @@ fn locate_system_config_windows(system_drive: impl AsRef<Path>) -> Option<PathBu
 ///
 /// On Windows, uses `%SYSTEMDRIVE%\ProgramData\uv\uv.toml`.
 pub fn system_config_file() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        env::var(EnvVars::SYSTEMDRIVE)
-            .ok()
-            .and_then(|system_drive| locate_system_config_windows(format!("{system_drive}\\")))
-    }
-
-    #[cfg(not(windows))]
-    {
-        if let Some(path) =
-            locate_system_config_xdg(env::var(EnvVars::XDG_CONFIG_DIRS).ok().as_deref())
-        {
-            return Some(path);
-        }
-
-        // Fallback to `/etc/uv/uv.toml` if `XDG_CONFIG_DIRS` is not set or no valid
-        // path is found.
-        let candidate = Path::new("/etc/uv/uv.toml");
-        match candidate.try_exists() {
-            Ok(true) => Some(candidate.to_path_buf()),
-            Ok(false) => None,
-            Err(err) => {
-                tracing::warn!("Failed to query system configuration file: {err}");
-                None
+    cfg_select! {
+        windows => {
+            env::var(EnvVars::SYSTEMDRIVE)
+                .ok()
+                .and_then(|system_drive| locate_system_config_windows(format!("{system_drive}\\")))
+        },
+        _ => {
+            if let Some(path) =
+                locate_system_config_xdg(env::var(EnvVars::XDG_CONFIG_DIRS).ok().as_deref())
+            {
+                return Some(path);
             }
-        }
+
+            // Fallback to `/etc/uv/uv.toml` if `XDG_CONFIG_DIRS` is not set or no valid
+            // path is found.
+            let candidate = Path::new("/etc/uv/uv.toml");
+            match candidate.try_exists() {
+                Ok(true) => Some(candidate.to_path_buf()),
+                Ok(false) => None,
+                Err(err) => {
+                    tracing::warn!("Failed to query system configuration file: {err}");
+                    None
+                }
+            }
+        },
     }
 }
 
@@ -239,6 +238,68 @@ mod test {
             ))
             .unwrap(),
             first_config.path()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn test_locate_system_config_xdg_empty_entries() -> Result<(), FixtureError> {
+        let context = assert_fs::TempDir::new()?;
+        let config = context.child("uv").child("uv.toml");
+        config.write_str("")?;
+        let missing = context.child("missing");
+
+        let directory = context.to_string_lossy();
+        let missing = missing.to_string_lossy();
+        for value in [
+            format!(":{directory}"),
+            format!("{missing}::{directory}"),
+            format!("{missing}:::{directory}"),
+            format!("{directory}:"),
+            format!("{missing}::{directory}::"),
+        ] {
+            assert_eq!(
+                locate_system_config_xdg(Some(&value)),
+                Some(config.path().to_path_buf()),
+                "{value}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn test_locate_system_config_xdg_empty_entries_precedence() -> Result<(), FixtureError> {
+        let context = assert_fs::TempDir::new()?;
+        let first = context.child("first");
+        let first_config = first.child("uv").child("uv.toml");
+        first_config.write_str("")?;
+        let second = context.child("second");
+        let second_config = second.child("uv").child("uv.toml");
+        second_config.write_str("")?;
+        let missing = context.child("missing");
+
+        let first = first.to_string_lossy();
+        let second = second.to_string_lossy();
+        let missing = missing.to_string_lossy();
+        for value in [
+            format!(":{first}:{second}"),
+            format!("{missing}::{first}:{second}"),
+            format!("{first}::{second}"),
+            format!("::{first}:::{second}::"),
+        ] {
+            assert_eq!(
+                locate_system_config_xdg(Some(&value)),
+                Some(first_config.path().to_path_buf()),
+                "{value}"
+            );
+        }
+        assert_eq!(
+            locate_system_config_xdg(Some(&format!("::{second}::{first}::"))),
+            Some(second_config.path().to_path_buf())
         );
 
         Ok(())

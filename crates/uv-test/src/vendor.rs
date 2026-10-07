@@ -238,26 +238,24 @@ async fn ensure_cached_artifact(artifact: &VendorArtifact, path: &Path) -> Resul
     })?;
     temp.write_all(&bytes)
         .with_context(|| format!("failed to write `{}`", artifact.filename))?;
-    temp.as_file_mut()
+    temp.as_file()
         .sync_all()
         .with_context(|| format!("failed to sync `{}`", artifact.filename))?;
 
     match persist_with_retry_sync(temp, path) {
         Ok(()) => Ok(()),
-        Err(error) => {
+        Err(_)
             if let Ok(bytes) = fs_err::read(path)
-                && verify_bytes(artifact, &bytes).is_ok()
-            {
-                Ok(())
-            } else {
-                Err(error).with_context(|| {
-                    format!(
-                        "failed to persist cached vendor artifact `{}`",
-                        path.display()
-                    )
-                })
-            }
+                && verify_bytes(artifact, &bytes).is_ok() =>
+        {
+            Ok(())
         }
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to persist cached vendor artifact `{}`",
+                path.display()
+            )
+        }),
     }
 }
 
@@ -278,7 +276,7 @@ fn artifact_lock_path(path: &Path) -> Result<PathBuf> {
 }
 
 fn verify_bytes(artifact: &VendorArtifact, bytes: &[u8]) -> Result<()> {
-    let actual = format!("{:x}", Sha256::digest(bytes));
+    let actual = hex::encode(Sha256::digest(bytes));
     if actual == artifact.sha256 {
         Ok(())
     } else {

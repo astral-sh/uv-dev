@@ -11,6 +11,7 @@ use uv_fs::Simplified;
 use uv_warnings::warn_user;
 
 use uv_cache::Cache;
+use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_client::{BaseClient, BaseClientBuilder};
 use uv_pep440::{Prerelease, Version};
 use uv_platform::{Arch, Libc, Os, Platform};
@@ -26,8 +27,9 @@ use crate::downloads::{
 use crate::implementation::LenientImplementationName;
 use crate::managed::{ManagedPythonInstallation, ManagedPythonInstallations};
 use crate::{
-    Error, ImplementationName, Interpreter, MissingPythonHint, PythonDownloads, PythonPreference,
-    PythonSource, PythonVariant, PythonVersion, downloads,
+    Error, ImplementationName, Interpreter, MissingPythonHint, PythonArchitecture,
+    PythonDownloadMirrors, PythonDownloads, PythonPreference, PythonSource, PythonVariant,
+    PythonVersion, downloads,
 };
 
 /// A Python interpreter and accompanying tools.
@@ -49,7 +51,7 @@ impl PythonInstallation {
 
     /// Return a new installation with the given [`PythonSource`].
     #[must_use]
-    pub(crate) fn with_source(self, source: PythonSource) -> Self {
+    fn with_source(self, source: PythonSource) -> Self {
         Self { source, ..self }
     }
 
@@ -107,10 +109,11 @@ impl PythonInstallation {
         request: &PythonRequest,
         environments: EnvironmentPreference,
         preference: PythonPreference,
+        arch: Option<PythonArchitecture>,
         download_list: &ManagedPythonDownloadList,
         cache: &Cache,
     ) -> Result<Self, Error> {
-        let installation = Self::find_existing(request, environments, preference, cache)?;
+        let installation = Self::find_existing(request, environments, preference, arch, cache)?;
         installation.warn_if_outdated_prerelease(request, download_list);
         Ok(installation)
     }
@@ -120,12 +123,14 @@ impl PythonInstallation {
         request: &PythonRequest,
         environments: EnvironmentPreference,
         preference: PythonPreference,
+        arch: Option<PythonArchitecture>,
         cache: &Cache,
     ) -> Result<Self, Error> {
         Ok(find_python_installation(
             request,
             environments,
             preference,
+            arch,
             cache,
         )??)
     }
@@ -136,12 +141,12 @@ impl PythonInstallation {
         request: &PythonRequest,
         environments: EnvironmentPreference,
         preference: PythonPreference,
+        arch: Option<PythonArchitecture>,
         python_downloads: PythonDownloads,
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
         reporter: Option<&dyn Reporter>,
-        python_install_mirror: Option<&str>,
-        pypy_install_mirror: Option<&str>,
+        mirrors: PythonDownloadMirrors<'_>,
         python_downloads_json_url: Option<&str>,
     ) -> Result<Self, Error> {
         let downloads_enabled = preference.allows_managed()
@@ -151,12 +156,12 @@ impl PythonInstallation {
             request,
             environments,
             preference,
+            arch,
             downloads_enabled,
             client_builder,
             cache,
             reporter,
-            python_install_mirror,
-            pypy_install_mirror,
+            mirrors,
             python_downloads_json_url,
         )
         .await?;
@@ -164,6 +169,7 @@ impl PythonInstallation {
             .download_and_warn_if_outdated_prerelease(
                 request,
                 client_builder,
+                cache,
                 python_downloads_json_url,
             )
             .await?;
@@ -177,22 +183,23 @@ impl PythonInstallation {
         request: Option<&PythonRequest>,
         environments: EnvironmentPreference,
         preference: PythonPreference,
+        arch: Option<PythonArchitecture>,
         python_downloads: PythonDownloads,
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
         reporter: Option<&dyn Reporter>,
-        python_install_mirror: Option<&str>,
-        pypy_install_mirror: Option<&str>,
+        mirrors: PythonDownloadMirrors<'_>,
         python_downloads_json_url: Option<&str>,
     ) -> Result<Self, Error> {
         let request = request.unwrap_or(&PythonRequest::Default);
 
-        let err = match Self::find_existing(request, environments, preference, cache) {
+        let err = match Self::find_existing(request, environments, preference, arch, cache) {
             Ok(installation) => {
                 installation
                     .download_and_warn_if_outdated_prerelease(
                         request,
                         client_builder,
+                        cache,
                         python_downloads_json_url,
                     )
                     .await?;
@@ -215,9 +222,8 @@ impl PythonInstallation {
             return Err(err);
         };
 
-        let download_list_client = client_builder.build()?;
         let download_list =
-            ManagedPythonDownloadList::new(&download_list_client, python_downloads_json_url)
+            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
                 .await?;
 
         let downloads_enabled = preference.allows_managed()
@@ -226,6 +232,7 @@ impl PythonInstallation {
 
         let download = download_request
             .clone()
+            .with_default_arch(arch.map(PythonArchitecture::into_inner))
             .fill()
             .map(|request| download_list.find(&request));
 
@@ -302,8 +309,7 @@ impl PythonInstallation {
             &retry_policy,
             cache,
             reporter,
-            python_install_mirror,
-            pypy_install_mirror,
+            mirrors,
         )
         .await?;
 
@@ -319,8 +325,7 @@ impl PythonInstallation {
         retry_policy: &ExponentialBackoff,
         cache: &Cache,
         reporter: Option<&dyn Reporter>,
-        python_install_mirror: Option<&str>,
-        pypy_install_mirror: Option<&str>,
+        mirrors: PythonDownloadMirrors<'_>,
     ) -> Result<Self, Error> {
         let installations = ManagedPythonInstallations::from_settings(None)?.init()?;
         let installations_dir = installations.root();
@@ -335,8 +340,7 @@ impl PythonInstallation {
                 installations_dir,
                 &scratch_dir,
                 false,
-                python_install_mirror,
-                pypy_install_mirror,
+                mirrors,
                 reporter,
             )
             .await?;
@@ -346,7 +350,7 @@ impl PythonInstallation {
             DownloadResult::Fetched(path) => path,
         };
 
-        let installed = ManagedPythonInstallation::new(path, download);
+        let installed = ManagedPythonInstallation::new(path, download)?;
         installed.ensure_externally_managed()?;
         installed.ensure_sysconfig_patched()?;
         installed.ensure_canonical_executables()?;
@@ -529,15 +533,15 @@ impl PythonInstallation {
         &self,
         request: &PythonRequest,
         client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
         python_downloads_json_url: Option<&str>,
     ) -> Result<(), Error> {
         if !self.should_check_outdated_prerelease_warning(request) {
             return Ok(());
         }
 
-        let download_list_client = client_builder.build()?;
         let download_list =
-            ManagedPythonDownloadList::new(&download_list_client, python_downloads_json_url)
+            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
                 .await?;
         self.warn_if_outdated_prerelease(request, &download_list);
 
@@ -553,13 +557,13 @@ pub enum PythonInstallationKeyError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PythonInstallationKey {
-    pub(crate) implementation: LenientImplementationName,
-    pub(crate) major: u8,
-    pub(crate) minor: u8,
-    pub(crate) patch: u8,
-    pub(crate) prerelease: Option<Prerelease>,
-    pub(crate) platform: Platform,
-    pub(crate) variant: PythonVariant,
+    pub(super) implementation: LenientImplementationName,
+    pub(super) major: u8,
+    pub(super) minor: u8,
+    pub(super) patch: u8,
+    pub(super) prerelease: Option<Prerelease>,
+    pub(super) platform: Platform,
+    pub(super) variant: PythonVariant,
 }
 
 impl PythonInstallationKey {
@@ -712,6 +716,12 @@ impl fmt::Display for PythonInstallationKey {
             variant,
             self.platform
         )
+    }
+}
+
+impl CacheKey for PythonInstallationKey {
+    fn cache_key(&self, state: &mut CacheKeyHasher) {
+        self.hash(state);
     }
 }
 
@@ -885,6 +895,12 @@ impl Hash for PythonInstallationMinorVersionKey {
         self.0.minor.hash(state);
         self.0.platform.hash(state);
         self.0.variant.hash(state);
+    }
+}
+
+impl CacheKey for PythonInstallationMinorVersionKey {
+    fn cache_key(&self, state: &mut CacheKeyHasher) {
+        self.hash(state);
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "uv"
-version = "0.11.20"
+version = "0.12.23"
 description = "A Python package and project manager"
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -39,6 +39,7 @@ uv-git = { workspace = true }
 uv-git-types = { workspace = true }
 uv-install-wheel = { workspace = true, default-features = false }
 uv-installer = { workspace = true }
+uv-lock = { workspace = true }
 uv-logging = { workspace = true }
 uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
@@ -58,6 +59,7 @@ uv-scripts = { workspace = true }
 uv-settings = { workspace = true }
 uv-shell = { workspace = true }
 uv-static = { workspace = true }
+uv-threads = { workspace = true }
 uv-test = { workspace = true, optional = true }
 uv-tool = { workspace = true }
 uv-torch = { workspace = true }
@@ -70,7 +72,7 @@ uv-workspace = { workspace = true, features = ["clap"] }
 
 anstream = { workspace = true }
 anyhow = { workspace = true }
-async_zip = { workspace = true }
+async_zip = { workspace = true, features = ["zstd"] }
 axoupdater = { workspace = true, features = [
   "github_releases",
   "tokio",
@@ -90,28 +92,26 @@ indexmap = { workspace = true }
 indicatif = { workspace = true }
 indoc = { workspace = true }
 itertools = { workspace = true }
-miette = { workspace = true, features = ["fancy-no-backtrace"] }
-open = { workspace = true }
 owo-colors = { workspace = true }
 petgraph = { workspace = true }
-reqwest = { workspace = true }
 rkyv = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tar-codec = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
+toml_parser = { workspace = true }
 tracing = { workspace = true }
 tracing-durations-export = { workspace = true, features = ["plot"], optional = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "registry"] }
 tracing-tree = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
-uuid = { workspace = true, features = ["v4"] }
 version-ranges = { workspace = true }
 walkdir = { workspace = true }
 which = { workspace = true }
@@ -137,6 +137,7 @@ byteorder = { workspace = true }
 bytes = { workspace = true }
 filetime = { workspace = true }
 flate2 = { workspace = true, default-features = false }
+hex = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
@@ -144,9 +145,8 @@ indoc = { workspace = true }
 insta = { workspace = true }
 predicates = { workspace = true }
 regex = { workspace = true }
-reqwest = { workspace = true, features = ["blocking"], default-features = false }
+reqwest = { workspace = true, default-features = false }
 sha2 = { workspace = true }
-astral-tokio-tar = { workspace = true }
 tempfile = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
@@ -157,7 +157,7 @@ nix = { workspace = true }
 uv-unix = { workspace = true }
 
 [features]
-default = ["performance", "uv-distribution/static", "test-defaults"]
+default = ["performance", "test-defaults"]
 native-auth = []
 # Use better memory allocators, etc.
 performance = ["performance-memory-allocator"]
@@ -181,7 +181,8 @@ test-defaults = [
   "test-python-managed",
   "test-python-eol",
   "test-slow",
-  "test-ecosystem"
+  "test-ecosystem",
+  "test-universal"
 ]
 # Introduces a testing dependency on crates.io.
 test-crates-io = []
@@ -205,6 +206,8 @@ test-python-managed = []
 test-slow = []
 # Includes test cases that require ecosystem packages
 test-ecosystem = []
+# Includes test cases for universal, platform-independent behavior.
+test-universal = []
 # Includes test cases that write to the Windows registry. These tests mutate
 # global state (the Windows registry).
 # We don't run these tests by default locally; the CI for Windows enables them.

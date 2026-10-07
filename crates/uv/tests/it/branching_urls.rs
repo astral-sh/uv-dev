@@ -25,11 +25,8 @@ fn branching_urls_disjoint() -> Result<()> {
     "# };
     make_project(context.temp_dir.path(), "a", deps)?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&context.temp_dir), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     "
@@ -59,16 +56,13 @@ fn branching_urls_overlapping() -> Result<()> {
     "# };
     make_project(context.temp_dir.path(), "a", deps)?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&context.temp_dir), @"
-    success: false
-    exit_code: 1
-    ----- stdout -----
-
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to resolve dependencies for `a` (v0.1.0)
-      ╰─▶ Requirements contain conflicting URLs for package `iniconfig` in split `python_full_version == '3.11.*'`:
-          - https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl
-          - https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
+    error: Failed to resolve dependencies for package `a==0.1.0`
+      cause: Requirements contain conflicting URLs for package `iniconfig` in split `python_full_version == '3.11.*'`:
+             - https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl
+             - https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
     "
     );
 
@@ -127,16 +121,13 @@ fn root_package_splits_but_transitive_conflict() -> Result<()> {
     "# };
     make_project(&context.temp_dir.path().join("b2"), "b2", deps)?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&context.temp_dir), @"
-    success: false
-    exit_code: 1
-    ----- stdout -----
-
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to resolve dependencies for `b2` (v0.1.0)
-      ╰─▶ Requirements contain conflicting URLs for package `iniconfig` in split `python_full_version >= '3.12'`:
-          - https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl
-          - https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
+    error: Failed to resolve dependencies for package `b2==0.1.0`
+      cause: Requirements contain conflicting URLs for package `iniconfig` in split `python_full_version >= '3.12'`:
+             - https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl
+             - https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
 
     hint: `b2` (v0.1.0) was included because `a` (v0.1.0) depends on `b` (v0.1.0) which depends on `b2`
     "
@@ -150,8 +141,8 @@ fn root_package_splits_but_transitive_conflict() -> Result<()> {
 ///
 /// Requirements:
 /// ```text
-/// a -> anyio==4.4.0 ; python_version >= '3.12'
-///  a -> anyio==4.3.0 ; python_version < '3.12'
+/// a -> anyio==4.3.0 ; python_version >= '3.12'
+///  a -> anyio==4.2.0 ; python_version < '3.12'
 /// a -> b -> b1 ; python_version < '3.12' -> https://../iniconfig-1.1.1-py3-none-any.whl
 /// a -> b -> b2 ; python_version >= '3.12' -> https://../iniconfig-2.0.0-py3-none-any.whl
 /// ```
@@ -199,11 +190,8 @@ fn root_package_splits_transitive_too() -> Result<()> {
     "# };
     make_project(&context.temp_dir.path().join("b2"), "b2", deps)?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&context.temp_dir), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 10 packages in [TIME]
     "
@@ -211,7 +199,7 @@ fn root_package_splits_transitive_too() -> Result<()> {
 
     assert_snapshot!(context.read("uv.lock"), @r#"
     version = 1
-    revision = 3
+    revision = 5
     requires-python = ">=3.11, <3.13"
     resolution-markers = [
         "python_full_version >= '3.12'",
@@ -246,8 +234,8 @@ fn root_package_splits_transitive_too() -> Result<()> {
         "python_full_version < '3.12'",
     ]
     dependencies = [
-        { name = "idna", marker = "python_full_version < '3.12'" },
-        { name = "sniffio", marker = "python_full_version < '3.12'" },
+        { name = "idna" },
+        { name = "sniffio" },
     ]
     sdist = { url = "https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz", hash = "sha256:e1875bb4b4e2de1669f4bc7869b6d3f54231cdced71605e6e64c9be77e3be50f", size = 158770, upload-time = "2023-12-16T17:06:57.709Z" }
     wheels = [
@@ -262,8 +250,8 @@ fn root_package_splits_transitive_too() -> Result<()> {
         "python_full_version >= '3.12'",
     ]
     dependencies = [
-        { name = "idna", marker = "python_full_version >= '3.12'" },
-        { name = "sniffio", marker = "python_full_version >= '3.12'" },
+        { name = "idna" },
+        { name = "sniffio" },
     ]
     sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
     wheels = [
@@ -290,7 +278,7 @@ fn root_package_splits_transitive_too() -> Result<()> {
     version = "0.1.0"
     source = { directory = "b1" }
     dependencies = [
-        { name = "iniconfig", version = "1.1.1", source = { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl" }, marker = "python_full_version < '3.12'" },
+        { name = "iniconfig", version = "1.1.1", source = { url = "https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl" } },
     ]
 
     [package.metadata]
@@ -301,7 +289,7 @@ fn root_package_splits_transitive_too() -> Result<()> {
     version = "0.1.0"
     source = { directory = "b2" }
     dependencies = [
-        { name = "iniconfig", version = "2.0.0", source = { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" }, marker = "python_full_version >= '3.12'" },
+        { name = "iniconfig", version = "2.0.0", source = { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl" } },
     ]
 
     [package.metadata]
@@ -356,8 +344,8 @@ fn root_package_splits_transitive_too() -> Result<()> {
 ///
 /// Requirements:
 /// ```
-/// a -> anyio==4.4.0 ; python_version >= '3.12'
-/// a -> anyio==4.3.0 ; python_version < '3.12'
+/// a -> anyio==4.3.0 ; python_version >= '3.12'
+/// a -> anyio==4.2.0 ; python_version < '3.12'
 /// a -> b1 ; python_version < '3.12' -> iniconfig==1.1.1
 /// a -> b2 ; python_version >= '3.12' -> iniconfig==2.0.0
 /// ```
@@ -396,11 +384,8 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
     "# };
     make_project(&context.temp_dir.path().join("b2"), "b2", deps)?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&context.temp_dir), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 9 packages in [TIME]
     "
@@ -408,7 +393,7 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
 
     assert_snapshot!(context.read("uv.lock"), @r#"
     version = 1
-    revision = 3
+    revision = 5
     requires-python = ">=3.11, <3.13"
     resolution-markers = [
         "python_full_version >= '3.12'",
@@ -445,8 +430,8 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
         "python_full_version < '3.12'",
     ]
     dependencies = [
-        { name = "idna", marker = "python_full_version < '3.12'" },
-        { name = "sniffio", marker = "python_full_version < '3.12'" },
+        { name = "idna" },
+        { name = "sniffio" },
     ]
     sdist = { url = "https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz", hash = "sha256:e1875bb4b4e2de1669f4bc7869b6d3f54231cdced71605e6e64c9be77e3be50f", size = 158770, upload-time = "2023-12-16T17:06:57.709Z" }
     wheels = [
@@ -461,8 +446,8 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
         "python_full_version >= '3.12'",
     ]
     dependencies = [
-        { name = "idna", marker = "python_full_version >= '3.12'" },
-        { name = "sniffio", marker = "python_full_version >= '3.12'" },
+        { name = "idna" },
+        { name = "sniffio" },
     ]
     sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
     wheels = [
@@ -474,7 +459,7 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
     version = "0.1.0"
     source = { directory = "b1" }
     dependencies = [
-        { name = "iniconfig", version = "1.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+        { name = "iniconfig", version = "1.1.1", source = { registry = "https://pypi.org/simple" } },
     ]
 
     [package.metadata]
@@ -485,7 +470,7 @@ fn root_package_splits_other_dependencies_too() -> Result<()> {
     version = "0.1.0"
     source = { directory = "b2" }
     dependencies = [
-        { name = "iniconfig", version = "2.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+        { name = "iniconfig", version = "2.0.0", source = { registry = "https://pypi.org/simple" } },
     ]
 
     [package.metadata]
@@ -558,11 +543,8 @@ fn branching_between_registry_and_direct_url() -> Result<()> {
     "# };
     make_project(context.temp_dir.path(), "a", deps)?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&context.temp_dir), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     "
@@ -571,7 +553,7 @@ fn branching_between_registry_and_direct_url() -> Result<()> {
     // We have source dist and wheel for the registry, but only the wheel for the direct URL.
     assert_snapshot!(context.read("uv.lock"), @r#"
     version = 1
-    revision = 3
+    revision = 5
     requires-python = ">=3.11, <3.13"
     resolution-markers = [
         "python_full_version >= '3.12'",
@@ -645,11 +627,8 @@ fn branching_urls_of_different_sources_disjoint() -> Result<()> {
     "# };
     make_project(context.temp_dir.path(), "a", deps)?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&context.temp_dir), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     "
@@ -658,7 +637,7 @@ fn branching_urls_of_different_sources_disjoint() -> Result<()> {
     // We have source dist and wheel for the registry, but only the wheel for the direct URL.
     assert_snapshot!(context.read("uv.lock"), @r#"
     version = 1
-    revision = 3
+    revision = 5
     requires-python = ">=3.11, <3.13"
     resolution-markers = [
         "python_full_version >= '3.12'",
@@ -729,16 +708,13 @@ fn branching_urls_of_different_sources_conflict() -> Result<()> {
     "# };
     make_project(context.temp_dir.path(), "a", deps)?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&context.temp_dir), @"
-    success: false
-    exit_code: 1
-    ----- stdout -----
-
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 1 (failure)
     ----- stderr -----
-      × Failed to resolve dependencies for `a` (v0.1.0)
-      ╰─▶ Requirements contain conflicting URLs for package `iniconfig` in split `python_full_version == '3.11.*'`:
-          - git+https://github.com/pytest-dev/iniconfig@93f5930e668c0d1ddf4597e38dd0dea4e2665e7a
-          - https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl
+    error: Failed to resolve dependencies for package `a==0.1.0`
+      cause: Requirements contain conflicting URLs for package `iniconfig` in split `python_full_version == '3.11.*'`:
+             - git+https://github.com/pytest-dev/iniconfig@93f5930e668c0d1ddf4597e38dd0dea4e2665e7a
+             - https://files.pythonhosted.org/packages/9b/dd/b3c12c6d707058fa947864b67f0c4e0c39ef8610988d7baea9578f3c48f3/iniconfig-1.1.1-py2.py3-none-any.whl
     "
     );
 
@@ -776,11 +752,8 @@ fn dont_pre_visit_url_packages() -> Result<()> {
     " };
     make_project(&context.temp_dir.join("c"), "c", deps)?;
 
-    uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&context.temp_dir), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     "
@@ -788,7 +761,7 @@ fn dont_pre_visit_url_packages() -> Result<()> {
 
     assert_snapshot!(context.read("uv.lock"), @r#"
     version = 1
-    revision = 3
+    revision = 5
     requires-python = ">=3.11, <3.13"
 
     [options]

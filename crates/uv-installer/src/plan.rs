@@ -26,7 +26,7 @@ use uv_python::PythonEnvironment;
 use uv_redacted::DisplaySafeUrl;
 use uv_types::HashStrategy;
 
-use crate::satisfies::RequirementSatisfaction;
+use crate::satisfies::{BuildSettings, RequirementSatisfaction};
 use crate::{InstallationStrategy, SitePackages};
 
 /// A wheel dependency is incompatible with the current platform.
@@ -221,7 +221,7 @@ impl fmt::Display for IncompatibleWheelError {
 
 impl std::error::Error for IncompatibleWheelError {}
 
-impl uv_errors::Hint for IncompatibleWheelError {
+impl uv_errors::Hinted for IncompatibleWheelError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if let Some(hint) = &self.compatibility_hint {
             uv_errors::Hints::from(hint.to_string())
@@ -334,10 +334,12 @@ impl<'a> Planner<'a> {
                             dist.version(),
                             installation,
                             tags,
-                            config_settings,
-                            config_settings_package,
-                            extra_build_requires,
-                            extra_build_variables,
+                            Some(BuildSettings {
+                                config_settings,
+                                config_settings_package,
+                                extra_build_requires,
+                                extra_build_variables,
+                            }),
                         ) {
                             RequirementSatisfaction::Mismatch => {
                                 debug!(
@@ -399,21 +401,7 @@ impl<'a> Planner<'a> {
             // Identify any cached distributions that satisfy the requirement.
             match dist.as_ref() {
                 Dist::Built(BuiltDist::Registry(wheel)) => {
-                    if let Some(distribution) = registry_index.get(wheel.name()).find_map(|entry| {
-                        if *entry.index().url() != wheel.best_wheel().index {
-                            return None;
-                        }
-                        if entry.dist().filename != wheel.best_wheel().filename {
-                            return None;
-                        }
-                        if entry.is_built() && no_build {
-                            return None;
-                        }
-                        if !entry.is_built() && no_binary {
-                            return None;
-                        }
-                        Some(entry.dist())
-                    }) {
+                    if let Some(distribution) = registry_index.wheel(wheel, no_build, no_binary) {
                         debug!("Registry requirement already cached: {distribution}");
                         cached.push(CachedDist::Registry(distribution.clone()));
                         continue;
@@ -453,11 +441,15 @@ impl<'a> Planner<'a> {
                             let cache_info = pointer.to_cache_info();
                             let build_info = pointer.to_build_info();
                             let archive = pointer.into_archive();
-                            if archive.satisfies(hasher.get(dist.as_ref())) {
+                            if archive.satisfies(hasher.archive_policy(dist.as_ref()))
+                                && wheel
+                                    .size
+                                    .is_none_or(|expected| archive.size == Some(expected))
+                            {
                                 let cached_dist = CachedDirectUrlDist {
                                     filename: wheel.filename.clone(),
                                     url: VerbatimParsedUrl {
-                                        parsed_url: wheel.parsed_url(),
+                                        parsed_url: wheel.to_parsed_url(),
                                         verbatim: wheel.url.clone(),
                                     },
                                     hashes: archive.hashes,
@@ -471,7 +463,7 @@ impl<'a> Planner<'a> {
                                 continue;
                             }
                             debug!(
-                                "Cached URL wheel requirement does not match expected hash policy for: {wheel}"
+                                "Cached URL wheel requirement does not match expected hashes or size for: {wheel}"
                             );
                         }
                         Ok(None) => {}
@@ -522,11 +514,11 @@ impl<'a> Planner<'a> {
                                     let cache_info = pointer.to_cache_info();
                                     let build_info = pointer.to_build_info();
                                     let archive = pointer.into_archive();
-                                    if archive.satisfies(hasher.get(dist.as_ref())) {
+                                    if archive.satisfies(hasher.archive_policy(dist.as_ref())) {
                                         let cached_dist = CachedDirectUrlDist {
                                             filename: wheel.filename.clone(),
                                             url: VerbatimParsedUrl {
-                                                parsed_url: wheel.parsed_url(),
+                                                parsed_url: wheel.to_parsed_url(),
                                                 verbatim: wheel.url.clone(),
                                             },
                                             hashes: archive.hashes,
@@ -546,7 +538,7 @@ impl<'a> Planner<'a> {
                                 }
                             }
                             Err(err) => {
-                                debug!("Failed to get timestamp for wheel {wheel} ({err})");
+                                debug!("Failed to get timestamp for wheel `{wheel}` ({err})");
                             }
                         },
                         Ok(None) => {}
@@ -586,11 +578,11 @@ impl<'a> Planner<'a> {
                             let cache_info = pointer.to_cache_info();
                             let build_info = pointer.to_build_info();
                             let archive = pointer.into_archive();
-                            if archive.satisfies(hasher.get(dist.as_ref())) {
+                            if archive.satisfies(hasher.archive_policy(dist.as_ref())) {
                                 let cached_dist = CachedDirectUrlDist {
                                     filename: wheel.filename.clone(),
                                     url: VerbatimParsedUrl {
-                                        parsed_url: wheel.parsed_url(),
+                                        parsed_url: wheel.to_parsed_url(),
                                         verbatim: wheel.url.clone(),
                                     },
                                     hashes: archive.hashes,
@@ -607,24 +599,7 @@ impl<'a> Planner<'a> {
                     }
                 }
                 Dist::Source(SourceDist::Registry(sdist)) => {
-                    if let Some(distribution) = registry_index.get(sdist.name()).find_map(|entry| {
-                        if *entry.index().url() != sdist.index {
-                            return None;
-                        }
-                        if entry.dist().filename.name != sdist.name {
-                            return None;
-                        }
-                        if entry.dist().filename.version != sdist.version {
-                            return None;
-                        }
-                        if entry.is_built() && no_build {
-                            return None;
-                        }
-                        if !entry.is_built() && no_binary {
-                            return None;
-                        }
-                        Some(entry.dist())
-                    }) {
+                    if let Some(distribution) = registry_index.source(sdist, no_build, no_binary) {
                         debug!("Registry requirement already cached: {distribution}");
                         cached.push(CachedDist::Registry(distribution.clone()));
                         continue;
@@ -636,14 +611,17 @@ impl<'a> Planner<'a> {
                     match built_index.url(sdist) {
                         Ok(Some(wheel)) => {
                             if wheel.filename().name == sdist.name {
-                                let cached_dist = wheel.into_url_dist(sdist);
+                                let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                                    parsed_url: sdist.to_parsed_url(),
+                                    verbatim: sdist.url.clone(),
+                                });
                                 debug!("URL source requirement already cached: {cached_dist}");
                                 cached.push(CachedDist::Url(cached_dist));
                                 continue;
                             }
 
                             warn!(
-                                "Cached wheel filename does not match requested distribution for: `{}` (found: `{}`)",
+                                "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
                                 sdist,
                                 wheel.filename()
                             );
@@ -661,14 +639,17 @@ impl<'a> Planner<'a> {
                     // the filename in advance.
                     if let Some(wheel) = built_index.git_path(sdist)? {
                         if wheel.filename().name == sdist.name {
-                            let cached_dist = wheel.into_git_path_dist(sdist);
+                            let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                                parsed_url: sdist.to_parsed_url(),
+                                verbatim: sdist.url.clone(),
+                            });
                             debug!("Git source requirement already cached: {cached_dist}");
                             cached.push(CachedDist::Url(cached_dist));
                             continue;
                         }
 
                         warn!(
-                            "Cached wheel filename does not match requested distribution for: `{}` (found: `{}`)",
+                            "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
                             sdist,
                             wheel.filename()
                         );
@@ -679,14 +660,17 @@ impl<'a> Planner<'a> {
                     // the filename in advance.
                     if let Some(wheel) = built_index.git_directory(sdist) {
                         if wheel.filename().name == sdist.name {
-                            let cached_dist = wheel.into_git_dist(sdist);
+                            let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                                parsed_url: sdist.to_parsed_url(),
+                                verbatim: sdist.url.clone(),
+                            });
                             debug!("Git source requirement already cached: {cached_dist}");
                             cached.push(CachedDist::Url(cached_dist));
                             continue;
                         }
 
                         warn!(
-                            "Cached wheel filename does not match requested distribution for: `{}` (found: `{}`)",
+                            "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
                             sdist,
                             wheel.filename()
                         );
@@ -703,14 +687,17 @@ impl<'a> Planner<'a> {
                     match built_index.path(sdist) {
                         Ok(Some(wheel)) => {
                             if wheel.filename().name == sdist.name {
-                                let cached_dist = wheel.into_path_dist(sdist);
+                                let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                                    parsed_url: sdist.to_parsed_url(),
+                                    verbatim: sdist.url.clone(),
+                                });
                                 debug!("Path source requirement already cached: {cached_dist}");
                                 cached.push(CachedDist::Url(cached_dist));
                                 continue;
                             }
 
                             warn!(
-                                "Cached wheel filename does not match requested distribution for: `{}` (found: `{}`)",
+                                "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
                                 sdist,
                                 wheel.filename()
                             );
@@ -734,7 +721,10 @@ impl<'a> Planner<'a> {
                     match built_index.directory(sdist) {
                         Ok(Some(wheel)) => {
                             if wheel.filename().name == sdist.name {
-                                let cached_dist = wheel.into_directory_dist(sdist);
+                                let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                                    parsed_url: sdist.to_parsed_url(),
+                                    verbatim: sdist.url.clone(),
+                                });
                                 debug!(
                                     "Directory source requirement already cached: {cached_dist}"
                                 );
@@ -743,7 +733,7 @@ impl<'a> Planner<'a> {
                             }
 
                             warn!(
-                                "Cached wheel filename does not match requested distribution for: `{}` (found: `{}`)",
+                                "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
                                 sdist,
                                 wheel.filename()
                             );
@@ -939,7 +929,7 @@ mod tests {
             Arch::X86_64,
         );
         let tags = Tags::from_env(
-            &platform,
+            platform,
             (3, 14),   // python_version
             "cpython", // implementation_name
             (3, 14),   // implementation_version
@@ -975,7 +965,7 @@ mod tests {
             Arch::X86_64,
         );
         let tags = Tags::from_env(
-            &platform,
+            platform,
             (3, 14),   // python_version
             "cpython", // implementation_name
             (3, 14),   // implementation_version
@@ -1011,7 +1001,7 @@ mod tests {
             Arch::X86_64,
         );
         let tags = Tags::from_env(
-            &platform,
+            platform,
             (3, 14),   // python_version
             "cpython", // implementation_name
             (3, 14),   // implementation_version
