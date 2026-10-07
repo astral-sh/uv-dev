@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "All three parent regressions passed with the undesirable behavior and failed when changed to require usable environments. Fixing cleanup after parent death and parallel-build cancellation requires a design for workspace ownership and retention; a local workaround would leave confirmed failures or change cleanup behavior. Diagnostic edits were restored, leaving the checkout unchanged. The requested README remains read-only; the revised handoff is saved at /tmp/uv-22338-fix-investigation/README.md.",
+  "validation": [],
+  "pull_request": null
+}
