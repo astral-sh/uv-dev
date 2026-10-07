@@ -1,6 +1,6 @@
 #![expect(clippy::disallowed_types)]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
@@ -8,8 +8,9 @@ use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
+use uv_cache::Cache;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
-use uv_python_interpreter::PyVenvConfiguration;
+use uv_python_interpreter::{PyVenvConfiguration, PythonEnvironment};
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -2015,6 +2016,52 @@ fn run_with_overlay_interpreter() -> Result<()> {
         .arg("--relocatable")
         .assert()
         .success();
+
+    // Relocatable environments must expose the same metadata from the existing and fresh caches.
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
+    assert_eq!(cached.root(), queried.root());
+    assert_eq!(
+        cached.site_packages().collect::<Vec<_>>(),
+        queried.site_packages().collect::<Vec<_>>()
+    );
+    let cached = cached.interpreter();
+    let queried = queried.interpreter();
+    assert_eq!(cached.platform(), queried.platform());
+    assert_eq!(cached.markers(), queried.markers());
+    assert_eq!(cached.virtualenv().purelib, queried.virtualenv().purelib);
+    assert_eq!(cached.virtualenv().platlib, queried.virtualenv().platlib);
+    assert_eq!(cached.virtualenv().scripts, queried.virtualenv().scripts);
+    assert_eq!(cached.virtualenv().data, queried.virtualenv().data);
+    assert_eq!(cached.virtualenv().include, queried.virtualenv().include);
+    assert_eq!(cached.sys_base_prefix(), queried.sys_base_prefix());
+    assert_eq!(cached.sys_prefix(), queried.sys_prefix());
+    assert_eq!(cached.sys_executable(), queried.sys_executable());
+    assert_eq!(cached.real_executable(), queried.real_executable());
+    assert_eq!(
+        cached.runtime_site_packages(),
+        queried.runtime_site_packages()
+    );
+    assert_eq!(cached.stdlib(), queried.stdlib());
+    assert_eq!(cached.extension_suffixes(), queried.extension_suffixes());
+    assert_eq!(
+        cached.manylinux_compatible(),
+        queried.manylinux_compatible()
+    );
+    assert_eq!(
+        cached.pointer_size().is_64(),
+        queried.pointer_size().is_64()
+    );
+    assert_eq!(cached.gil_disabled(), queried.gil_disabled());
+    assert_eq!(cached.debug_enabled(), queried.debug_enabled());
+    #[cfg(unix)]
+    assert_eq!(cached.is_standalone(), queried.is_standalone());
 
     // Cleanup previous shutil
     fs_err::remove_file(context.temp_dir.child("main"))?;
