@@ -17,15 +17,13 @@ use tracing::{debug, warn};
 use url::Url;
 use uv_bin_install::{Binary, find_matching_version};
 use uv_client::{BaseClientBuilder, RetriableError, WrappedReqwestError, fetch_with_url_fallback};
+use uv_command_support::{ExitStatus, Printer};
 use uv_fs::Simplified;
 use uv_pep440::{Version as Pep440Version, VersionSpecifier, VersionSpecifiers};
 use uv_redacted::DisplaySafeUrl;
 use uv_static::{
     EnvVars, astral_mirror_base_url, astral_mirror_url_from_env, custom_astral_mirror_url,
 };
-
-use crate::commands::ExitStatus;
-use crate::printer::Printer;
 
 const UV_GITHUB_RELEASES_DOWNLOAD_PREFIX: &str =
     "https://github.com/astral-sh/uv/releases/download/";
@@ -517,7 +515,7 @@ async fn execute_official_installer(
     modify_path: bool,
     target_version: &Pep440Version,
     astral_mirror_url: Option<&str>,
-) -> Result<(), AxoupdateError> {
+) -> Result<(), Box<AxoupdateError>> {
     let mut command = if cfg!(windows) {
         let mut command = Command::new("powershell");
         command.arg("-ExecutionPolicy").arg("ByPass");
@@ -528,11 +526,11 @@ async fn execute_official_installer(
     };
 
     let to_restore = if cfg!(windows) {
-        let old_path = std::env::current_exe()?;
+        let old_path = std::env::current_exe().map_err(AxoupdateError::from)?;
         let mut previous_path = old_path.as_os_str().to_os_string();
         previous_path.push(".previous.exe");
         let previous_path = PathBuf::from(previous_path);
-        fs_err::rename(&old_path, &previous_path)?;
+        fs_err::rename(&old_path, &previous_path).map_err(AxoupdateError::from)?;
         Some((previous_path, old_path))
     } else {
         None
@@ -556,7 +554,7 @@ async fn execute_official_installer(
 
     if let Some((previous_path, old_path)) = to_restore.as_ref() {
         if failed {
-            fs_err::rename(previous_path, old_path)?;
+            fs_err::rename(previous_path, old_path).map_err(AxoupdateError::from)?;
         } else {
             #[cfg(windows)]
             self_replace::self_delete_at(previous_path)
@@ -564,7 +562,7 @@ async fn execute_official_installer(
         }
     }
 
-    let output = result?;
+    let output = result.map_err(AxoupdateError::from)?;
     if output.status.success() {
         return Ok(());
     }
@@ -573,11 +571,11 @@ async fn execute_official_installer(
         (!output.stdout.is_empty()).then(|| String::from_utf8_lossy(&output.stdout).to_string());
     let stderr =
         (!output.stderr.is_empty()).then(|| String::from_utf8_lossy(&output.stderr).to_string());
-    Err(AxoupdateError::InstallFailed {
+    Err(Box::new(AxoupdateError::InstallFailed {
         status: output.status.code(),
         stdout,
         stderr,
-    })
+    }))
 }
 
 /// Read whether the existing standalone install opted out of PATH modification.
@@ -1172,7 +1170,7 @@ mod tests {
             status,
             stdout,
             stderr,
-        } = err
+        } = *err
         else {
             panic!("expected InstallFailed error");
         };

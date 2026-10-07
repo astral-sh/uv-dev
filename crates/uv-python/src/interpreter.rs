@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{debug, trace, warn};
 
-use uv_cache::{Cache, CacheBucket, CachedByTimestamp, Freshness};
+use uv_cache::{Cache, CacheBucket, CacheEntry, CachedByTimestamp, Freshness};
 use uv_cache_info::Timestamp;
 use uv_cache_key::cache_digest;
 use uv_fs::{
@@ -27,6 +27,7 @@ use uv_pep508::{MarkerEnvironment, StringVersion};
 use uv_platform::{Arch, Libc, Os};
 use uv_platform_tags::{Platform, Tags, TagsError, TagsOptions};
 use uv_pypi_types::{ResolverMarkerEnvironment, Scheme};
+use uv_static::EnvVars;
 
 use crate::implementation::LenientImplementationName;
 use crate::managed::ManagedPythonInstallations;
@@ -41,7 +42,7 @@ use windows::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_CANT_ACCESS_FI
 
 /// A Python executable and its associated platform markers.
 #[expect(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Interpreter {
     platform: Platform,
     markers: Box<MarkerEnvironment>,
@@ -68,7 +69,8 @@ pub struct Interpreter {
 impl Interpreter {
     /// Detect the interpreter info for the given Python executable.
     pub fn query(executable: impl AsRef<Path>, cache: &Cache) -> Result<Self, Error> {
-        let info = InterpreterInfo::query_cached(executable.as_ref(), cache)?;
+        let executable = executable.as_ref();
+        let info = InterpreterInfo::query_cached(executable, cache)?;
 
         debug_assert!(
             info.sys_executable.is_absolute(),
@@ -96,13 +98,53 @@ impl Interpreter {
             tags: OnceLock::new(),
             target: None,
             prefix: None,
-            real_executable: executable.as_ref().to_path_buf(),
+            real_executable: executable.to_path_buf(),
         })
+    }
+
+    /// Remove any cached metadata for the given Python executable.
+    pub fn clear_cache(executable: impl AsRef<Path>, cache: &Cache) -> Result<(), Error> {
+        let absolute = std::path::absolute(executable.as_ref())?;
+        let canonical = canonicalize_executable(&absolute)?;
+        let cache_entry = InterpreterInfo::cache_entry(&absolute, &canonical, cache);
+
+        match fs::remove_file(cache_entry.path()) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
     }
 
     /// Return a new [`Interpreter`] with the given virtual environment root.
     #[must_use]
     pub fn with_virtualenv(self, virtualenv: VirtualEnvironment) -> Self {
+        // Match `site.getsitepackages()` for the new environment instead of retaining the
+        // parent interpreter's site-packages paths.
+        // Note: This is not `sys.path`, but a distinct list.
+        let mut site_packages = Vec::new();
+        if self.markers.os_name() == "nt" {
+            site_packages.push(virtualenv.root.clone());
+            site_packages.push(virtualenv.scheme.purelib.clone());
+        } else {
+            if virtualenv.scheme.platlib == virtualenv.scheme.purelib {
+                site_packages.push(virtualenv.scheme.purelib.clone());
+            } else {
+                site_packages.push(virtualenv.scheme.platlib.clone());
+                site_packages.push(virtualenv.scheme.purelib.clone());
+            }
+            // Some distributions add import paths that are not part of the installation scheme,
+            // e.g., Debian's `dist-packages`. Build those paths as relative to the new environment,
+            // excluding paths outside the parent's prefix (such as an existing venv's system site
+            // packages).
+            for path in &self.site_packages {
+                if let Ok(relative) = path.strip_prefix(&self.sys_prefix) {
+                    let path = virtualenv.root.join(relative);
+                    if !site_packages.contains(&path) {
+                        site_packages.push(path);
+                    }
+                }
+            }
+        }
         Self {
             scheme: virtualenv.scheme,
             sys_base_executable: Some(virtualenv.base_executable),
@@ -110,7 +152,7 @@ impl Interpreter {
             sys_prefix: virtualenv.root,
             target: None,
             prefix: None,
-            site_packages: vec![],
+            site_packages,
             ..self
         }
     }
@@ -850,7 +892,7 @@ pub enum Error {
     Encode(#[from] rmp_serde::encode::Error),
 }
 
-impl uv_errors::Hint for Error {
+impl uv_errors::Hinted for Error {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
             Self::BrokenLink(err) => err.hints(),
@@ -887,7 +929,7 @@ impl Display for BrokenLink {
     }
 }
 
-impl uv_errors::Hint for BrokenLink {
+impl uv_errors::Hinted for BrokenLink {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if self.venv {
             uv_errors::Hints::from(format!(
@@ -935,7 +977,7 @@ pub enum InterpreterInfoError {
 
 #[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct InterpreterInfo {
+pub(crate) struct InterpreterInfo {
     platform: Platform,
     markers: MarkerEnvironment,
     scheme: Scheme,
@@ -957,6 +999,69 @@ struct InterpreterInfo {
 }
 
 impl InterpreterInfo {
+    /// Build metadata for virtual environment discovery without querying Python or using the cache.
+    pub(crate) fn from_virtualenv(interpreter: &Interpreter) -> Result<Self, Error> {
+        // Python reports ordinary Windows paths even when the venv was created with a verbatim path.
+        let scheme = Scheme {
+            purelib: interpreter.scheme.purelib.simplified().to_path_buf(),
+            platlib: interpreter.scheme.platlib.simplified().to_path_buf(),
+            scripts: interpreter.scheme.scripts.simplified().to_path_buf(),
+            // Joining the empty relative data path adds a trailing separator that sysconfig omits.
+            data: interpreter.scheme.data.simplified().components().collect(),
+            include: interpreter.scheme.include.simplified().to_path_buf(),
+        };
+        Ok(Self {
+            platform: interpreter.platform.clone(),
+            markers: (*interpreter.markers).clone(),
+            scheme,
+            virtualenv: interpreter.virtualenv.clone(),
+            manylinux_compatible: interpreter.manylinux_compatible,
+            sys_prefix: interpreter.sys_prefix.simplified().to_path_buf(),
+            // These fields are unused by `Interpreter`, but retained in the cache format.
+            sys_base_exec_prefix: PathBuf::new(),
+            sys_path: Vec::new(),
+            sys_base_prefix: interpreter.sys_base_prefix.clone(),
+            sys_base_executable: interpreter.sys_base_executable.clone(),
+            sys_executable: std::path::absolute(interpreter.sys_executable())?
+                .simplified()
+                .to_path_buf(),
+            site_packages: interpreter
+                .site_packages
+                .iter()
+                .map(|path| path.simplified().to_path_buf())
+                .collect(),
+            stdlib: interpreter.stdlib.clone(),
+            extension_suffixes: interpreter.extension_suffixes.clone(),
+            standalone: interpreter.standalone,
+            pointer_size: interpreter.pointer_size,
+            gil_disabled: interpreter.gil_disabled,
+            debug_enabled: interpreter.debug_enabled,
+        })
+    }
+
+    /// Cache already prepared metadata for this executable.
+    pub(crate) fn cache(&self, executable: &Path, cache: &Cache) -> Result<(), Error> {
+        // The lookup must use the original path, which may differ from Python's `sys.executable`.
+        let absolute = std::path::absolute(executable)?;
+        let canonical = canonicalize_executable(&absolute)?;
+        let cache_entry = Self::cache_entry(&absolute, &canonical, cache);
+        let modified = Timestamp::from_path(&canonical)?;
+        self.write_cache(&cache_entry, modified)
+    }
+
+    /// Write interpreter metadata using the same format for queried and inferred interpreters.
+    fn write_cache(&self, cache_entry: &CacheEntry, modified: Timestamp) -> Result<(), Error> {
+        fs::create_dir_all(cache_entry.dir())?;
+        write_atomic_sync(
+            cache_entry.path(),
+            rmp_serde::to_vec(&CachedByTimestamp {
+                timestamp: modified,
+                data: self,
+            })?,
+        )?;
+        Ok(())
+    }
+
     /// Return the resolved [`InterpreterInfo`] for the given Python executable.
     fn query(interpreter: &Path, cache: &Cache) -> Result<Self, Error> {
         let tempdir = tempfile::tempdir_in(cache.root())?;
@@ -1116,6 +1221,38 @@ impl InterpreterInfo {
         Ok(())
     }
 
+    /// Return the cache entry for an interpreter's absolute and canonical executable paths.
+    fn cache_entry(absolute: &Path, canonical: &Path, cache: &Cache) -> CacheEntry {
+        let python_executable = env::var_os(EnvVars::PYTHONEXECUTABLE).map(PathBuf::from);
+        let pyvenv_launcher = env::var_os(EnvVars::PYVENV_LAUNCHER).map(PathBuf::from);
+        // We use the absolute path for the cache entry to avoid cache collisions for relative
+        // paths. But we don't want to query the executable with symbolic links resolved because
+        // that can change reported values, e.g., `sys.executable`. We include the canonical
+        // path in the cache entry as well, otherwise we can have cache collisions if an
+        // absolute path refers to different interpreters with matching ctimes, e.g., if you
+        // have a `.venv/bin/python` pointing to both Python 3.12 and Python 3.13 that were
+        // modified at the same time.
+        //
+        // Launcher overrides can also change the reported executable and virtual environment
+        // without changing either executable path.
+        let file_stem = cache_digest(&(absolute, canonical, &python_executable, &pyvenv_launcher));
+        cache.entry(
+            CacheBucket::Interpreter,
+            // Shard interpreter metadata by host architecture, operating system, and version, to
+            // invalidate the cache (e.g.) on OS upgrades.
+            cache_digest(&(
+                ARCH,
+                uv_platform::OsType::from_env()
+                    .map(|os_type| os_type.to_string())
+                    .unwrap_or_default(),
+                uv_platform::OsRelease::from_env()
+                    .map(|os_release| os_release.to_string())
+                    .unwrap_or_default(),
+            )),
+            format!("{file_stem}.msgpack"),
+        )
+    }
+
     /// A wrapper around [`markers::query_interpreter_info`] to cache the computed markers.
     ///
     /// Running a Python script is (relatively) expensive, and the markers won't change
@@ -1149,29 +1286,7 @@ impl InterpreterInfo {
         };
 
         let canonical = canonicalize_executable(&absolute).map_err(handle_io_error)?;
-
-        let cache_entry = cache.entry(
-            CacheBucket::Interpreter,
-            // Shard interpreter metadata by host architecture, operating system, and version, to
-            // invalidate the cache (e.g.) on OS upgrades.
-            cache_digest(&(
-                ARCH,
-                uv_platform::OsType::from_env()
-                    .map(|os_type| os_type.to_string())
-                    .unwrap_or_default(),
-                uv_platform::OsRelease::from_env()
-                    .map(|os_release| os_release.to_string())
-                    .unwrap_or_default(),
-            )),
-            // We use the absolute path for the cache entry to avoid cache collisions for relative
-            // paths. But we don't want to query the executable with symbolic links resolved because
-            // that can change reported values, e.g., `sys.executable`. We include the canonical
-            // path in the cache entry as well, otherwise we can have cache collisions if an
-            // absolute path refers to different interpreters with matching ctimes, e.g., if you
-            // have a `.venv/bin/python` pointing to both Python 3.12 and Python 3.13 that were
-            // modified at the same time.
-            format!("{}.msgpack", cache_digest(&(&absolute, &canonical))),
-        );
+        let cache_entry = Self::cache_entry(&absolute, &canonical, cache);
 
         // We check the timestamp of the canonicalized executable to check if an underlying
         // interpreter has been modified.
@@ -1201,7 +1316,7 @@ impl InterpreterInfo {
                     }
                     Err(err) => {
                         warn!(
-                            "Broken interpreter cache entry at {}, removing: {err}",
+                            "Broken interpreter cache entry at `{}`, removing: {err}",
                             cache_entry.path().user_display()
                         );
                         let _ = fs_err::remove_file(cache_entry.path());
@@ -1212,7 +1327,7 @@ impl InterpreterInfo {
 
         // Otherwise, run the Python script.
         trace!(
-            "Querying interpreter executable at {}",
+            "Querying interpreter executable at `{}`",
             executable.display()
         );
         let info = Self::query(executable, cache)?;
@@ -1220,14 +1335,7 @@ impl InterpreterInfo {
         // If `executable` is a pyenv shim, a bash script that redirects to the activated
         // python executable at another path, we're not allowed to cache the interpreter info.
         if is_same_file(executable, &info.sys_executable).unwrap_or(false) {
-            fs::create_dir_all(cache_entry.dir())?;
-            write_atomic_sync(
-                cache_entry.path(),
-                rmp_serde::to_vec(&CachedByTimestamp {
-                    timestamp: modified,
-                    data: info.clone(),
-                })?,
-            )?;
+            info.write_cache(&cache_entry, modified)?;
         }
 
         Ok(info)
@@ -1332,23 +1440,23 @@ fn python_home(interpreter: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+    use std::time::{Duration, UNIX_EPOCH};
 
+    use anyhow::Result;
     use fs_err as fs;
     use indoc::{formatdoc, indoc};
+    use serde_json::Value;
     use tempfile::tempdir;
 
-    use uv_cache::{Cache, CacheBucket};
+    use uv_cache::{Cache, CacheBucket, CachedByTimestamp};
     use uv_cache_info::Timestamp;
     use uv_pep440::Version;
 
     use crate::Interpreter;
+    use crate::interpreter::{InterpreterInfo, canonicalize_executable};
 
-    #[tokio::test]
-    async fn test_cache_invalidation() {
-        let mock_dir = tempdir().unwrap();
-        let mocked_interpreter = mock_dir.path().join("python");
-        let query_log = mock_dir.path().join("queries");
-        let json = indoc! {r##"
+    fn mocked_interpreter_response() -> &'static str {
+        indoc! {r##"
         {
             "result": "success",
             "platform": {
@@ -1406,12 +1514,19 @@ mod tests {
             "debug_enabled": false
         }
     "##}
-        .replace(
+    }
+
+    #[tokio::test]
+    async fn test_cache_invalidation() -> Result<()> {
+        let mock_dir = tempdir()?;
+        let mocked_interpreter = mock_dir.path().join("python");
+        let query_log = mock_dir.path().join("queries");
+        let json = mocked_interpreter_response().replace(
             "{sys_executable}",
             &mocked_interpreter.display().to_string(),
         );
 
-        let cache = Cache::temp().unwrap().init().await.unwrap();
+        let cache = Cache::temp()?.init().await?;
 
         fs::write(
             &mocked_interpreter,
@@ -1420,30 +1535,38 @@ mod tests {
         echo queried >> '{}'
         echo '{json}'
         ", query_log.display()},
-        )
-        .unwrap();
+        )?;
 
         fs::set_permissions(
             &mocked_interpreter,
             std::os::unix::fs::PermissionsExt::from_mode(0o770),
-        )
-        .unwrap();
-        let interpreter = Interpreter::query(&mocked_interpreter, &cache).unwrap();
+        )?;
+        let interpreter = Interpreter::query(&mocked_interpreter, &cache)?;
         assert_eq!(
             interpreter.markers.python_version().version,
-            Version::from_str("3.12").unwrap()
+            Version::from_str("3.12")?
         );
         assert!(cache.bucket(CacheBucket::Interpreter).is_dir());
-        assert_eq!(fs::read_to_string(&query_log).unwrap(), "queried\n");
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\n");
 
-        let interpreter = Interpreter::query(&mocked_interpreter, &cache).unwrap();
+        let interpreter = Interpreter::query(&mocked_interpreter, &cache)?;
         assert_eq!(
             interpreter.markers.python_version().version,
-            Version::from_str("3.12").unwrap()
+            Version::from_str("3.12")?
         );
-        assert_eq!(fs::read_to_string(&query_log).unwrap(), "queried\n");
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\n");
 
-        let timestamp = Timestamp::from_path(&mocked_interpreter).unwrap();
+        let absolute = std::path::absolute(&mocked_interpreter)?;
+        let canonical = canonicalize_executable(&absolute)?;
+        let cache_entry = InterpreterInfo::cache_entry(&absolute, &canonical, &cache);
+        let mut cached: CachedByTimestamp<InterpreterInfo> =
+            rmp_serde::from_slice(&fs::read(cache_entry.path())?)?;
+        assert_eq!(cached.timestamp, Timestamp::from_path(&canonical)?);
+        assert_eq!(
+            cached.data.markers.python_version().version,
+            Version::from_str("3.12")?
+        );
+
         fs::write(
             &mocked_interpreter,
             formatdoc! {r"
@@ -1451,20 +1574,107 @@ mod tests {
         echo queried >> '{}'
         echo '{}'
         ", query_log.display(), json.replace("3.12", "3.13")},
-        )
-        .unwrap();
-        assert_ne!(
-            Timestamp::from_path(&mocked_interpreter).unwrap(),
-            timestamp
-        );
-        let interpreter = Interpreter::query(&mocked_interpreter, &cache).unwrap();
+        )?;
+
+        // Back-to-back writes can share a Unix `ctime`. Store a well-formed entry with a
+        // different timestamp to exercise stale-cache rejection deterministically.
+        let modified = Timestamp::from_path(&canonical)?;
+        cached.timestamp = if modified == Timestamp::from(UNIX_EPOCH) {
+            Timestamp::from(UNIX_EPOCH + Duration::from_secs(1))
+        } else {
+            Timestamp::from(UNIX_EPOCH)
+        };
+        fs::write(cache_entry.path(), rmp_serde::to_vec(&cached)?)?;
+        assert_ne!(cached.timestamp, Timestamp::from_path(&canonical)?);
+
+        let interpreter = Interpreter::query(&mocked_interpreter, &cache)?;
         assert_eq!(
             interpreter.markers.python_version().version,
-            Version::from_str("3.13").unwrap()
+            Version::from_str("3.13")?
+        );
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\nqueried\n");
+
+        let refreshed: CachedByTimestamp<InterpreterInfo> =
+            rmp_serde::from_slice(&fs::read(cache_entry.path())?)?;
+        assert_eq!(refreshed.timestamp, Timestamp::from_path(&canonical)?);
+        assert_eq!(
+            refreshed.data.markers.python_version().version,
+            Version::from_str("3.13")?
+        );
+
+        let interpreter = Interpreter::query(&mocked_interpreter, &cache)?;
+        assert_eq!(
+            interpreter.markers.python_version().version,
+            Version::from_str("3.13")?
+        );
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\nqueried\n");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cache_eviction_with_unchanged_executable() -> Result<()> {
+        let mock_dir = tempdir()?;
+        let mocked_interpreter = mock_dir.path().join("python");
+        let response_file = mock_dir.path().join("response.json");
+        let query_count = mock_dir.path().join("queries");
+
+        let mut response = serde_json::from_str::<Value>(mocked_interpreter_response())?;
+        response["sys_executable"] = serde_json::to_value(&mocked_interpreter)?;
+        fs::write(&response_file, serde_json::to_vec(&response)?)?;
+        fs::write(
+            &mocked_interpreter,
+            formatdoc! {r#"
+                #!/bin/sh
+                printf '.' >> "{}"
+                cat "{}"
+            "#, query_count.display(), response_file.display()},
+        )?;
+        fs::set_permissions(
+            &mocked_interpreter,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+
+        let cache = Cache::temp()?.init().await?;
+        let original_version = Version::from_str("3.12.0")?;
+        let updated_version = Version::from_str("3.12.13")?;
+
+        assert_eq!(
+            Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+            &original_version
+        );
+
+        response["markers"]["implementation_version"] = "3.12.13".into();
+        response["markers"]["python_full_version"] = "3.12.13".into();
+        fs::write(&response_file, serde_json::to_vec(&response)?)?;
+
+        assert_eq!(
+            Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+            &original_version,
+            "an unchanged executable should retain its cached interpreter metadata"
+        );
+
+        Interpreter::clear_cache(&mocked_interpreter, &cache)?;
+        assert_eq!(
+            fs::read_to_string(&query_count)?,
+            ".",
+            "clearing cached metadata should not query the interpreter"
         );
         assert_eq!(
-            fs::read_to_string(&query_log).unwrap(),
-            "queried\nqueried\n"
+            Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+            &updated_version,
+            "clearing the cache should force the next query to run the interpreter"
         );
+        assert_eq!(
+            Interpreter::query(&mocked_interpreter, &cache)?.python_version(),
+            &updated_version,
+            "the next query should persist the updated interpreter metadata"
+        );
+        assert_eq!(
+            fs::read_to_string(&query_count)?,
+            "..",
+            "the updated interpreter metadata should be cached again"
+        );
+
+        Ok(())
     }
 }

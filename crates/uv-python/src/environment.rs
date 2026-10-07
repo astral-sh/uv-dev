@@ -1,7 +1,7 @@
 use std::borrow::Cow;
-use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{env, fmt};
 
 use owo_colors::OwoColorize;
 use tracing::debug;
@@ -9,20 +9,22 @@ use tracing::debug;
 use uv_cache::Cache;
 use uv_fs::{LockedFile, LockedFileError, Simplified};
 use uv_pep440::Version;
+use uv_static::EnvVars;
 
 use crate::discovery::find_python_installation;
 use crate::installation::PythonInstallation;
+use crate::interpreter::InterpreterInfo;
 use crate::virtualenv::{PyVenvConfiguration, virtualenv_python_executable};
 use crate::{
-    EnvironmentPreference, Error, Interpreter, Prefix, PythonNotFound, PythonPreference,
-    PythonRequest, Target,
+    EnvironmentPreference, Error, Interpreter, Prefix, PythonArchitecture, PythonNotFound,
+    PythonPreference, PythonRequest, Target,
 };
 
 /// A Python environment, consisting of a Python [`Interpreter`] and its associated paths.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PythonEnvironment(Arc<PythonEnvironmentShared>);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 struct PythonEnvironmentShared {
     root: PathBuf,
     interpreter: Interpreter,
@@ -152,13 +154,19 @@ impl PythonEnvironment {
         request: &PythonRequest,
         preference: EnvironmentPreference,
         python_preference: PythonPreference,
+        python_arch: Option<PythonArchitecture>,
         cache: &Cache,
     ) -> Result<Self, Error> {
-        let installation =
-            match find_python_installation(request, preference, python_preference, cache)? {
-                Ok(installation) => installation,
-                Err(err) => return Err(EnvironmentNotFound::from(err).into()),
-            };
+        let installation = match find_python_installation(
+            request,
+            preference,
+            python_preference,
+            python_arch,
+            cache,
+        )? {
+            Ok(installation) => installation,
+            Err(err) => return Err(EnvironmentNotFound::from(err).into()),
+        };
         Ok(Self::from_installation(installation))
     }
 
@@ -167,7 +175,7 @@ impl PythonEnvironment {
     /// N.B. This function also works for system Python environments and users depend on this.
     pub fn from_root(root: impl AsRef<Path>, cache: &Cache) -> Result<Self, Error> {
         debug!(
-            "Checking for Python environment at: `{}`",
+            "Checking for Python environment at: {}",
             root.as_ref().user_display()
         );
         match root.as_ref().try_exists() {
@@ -361,5 +369,44 @@ impl PythonEnvironment {
         };
 
         (cfg_version != exe_version).then_some((cfg_version, exe_version))
+    }
+
+    /// Cache the interpreter metadata for this venv.
+    ///
+    /// Derive the metadata from the base interpreter without running the venv's Python.
+    pub fn cache_virtualenv(&self, system_site_packages: bool, cache: &Cache) -> Result<(), Error> {
+        // Launcher overrides can change `sys.executable` and `sys.prefix`, while
+        // `sys._base_executable` isn't affected. Instead of trying to stitch together this edge
+        // case, query the actual metadata on the next run.
+        if env::var_os(EnvVars::PYTHONEXECUTABLE).is_some()
+            || env::var_os(EnvVars::PYVENV_LAUNCHER).is_some()
+        {
+            return Ok(());
+        }
+
+        // TODO: Handle system-site-packages correctly.
+        // We should infer the site packages path from the base interpreter,
+        // but for that, we first need to fix cache invalidation when it changes.
+        // https://github.com/astral-sh/uv/issues/18510
+        if system_site_packages {
+            return Ok(());
+        }
+
+        // An upgradeable venv can use a minor-version link instead of the selected base
+        // interpreter. Python may report different base paths when started through that link.
+        if let Some(home) = self.cfg()?.home
+            && self
+                .interpreter()
+                .to_base_python()?
+                .parent()
+                .is_some_and(|base| base.simplified() != home.simplified())
+        {
+            Interpreter::clear_cache(self.interpreter().sys_executable(), cache)?;
+            return Ok(());
+        }
+
+        let info = InterpreterInfo::from_virtualenv(self.interpreter())?;
+        info.cache(self.interpreter().sys_executable(), cache)?;
+        Ok(())
     }
 }
