@@ -8,7 +8,6 @@
 //! `/files/*` routes as scenario packages.
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -18,7 +17,7 @@ use wiremock::{
     matchers::{header_exists, method, path},
 };
 
-use uv_distribution_filename::WheelFilename;
+use uv_distribution_filename::DistFilename;
 use uv_normalize::PackageName;
 use uv_pep440::VersionSpecifiers;
 
@@ -197,28 +196,23 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
     }
 
     for artifact in vendor_artifacts() {
-        if !Path::new(artifact.filename)
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("whl"))
-        {
+        let Some(filename) = DistFilename::try_from_normalized_filename(artifact.filename) else {
             continue;
-        }
-
-        let wheel_filename =
-            WheelFilename::from_str(artifact.filename).expect("invalid vendor wheel filename");
+        };
 
         files.insert(artifact.filename.to_string(), FileData::Vendor(artifact));
-        packages
-            .entry(wheel_filename.name)
+        let dists = &mut packages
+            .entry(filename.name().clone())
             .or_insert_with(|| PackageEntry { dists: Vec::new() })
-            .dists
-            .push(DistInfo {
-                filename: artifact.filename.to_string(),
-                sha256: artifact.sha256.to_string(),
-                requires_python: None,
-                upload_time: None,
-                yanked: false,
-            });
+            .dists;
+        dists.retain(|dist| dist.filename != artifact.filename);
+        dists.push(DistInfo {
+            filename: artifact.filename.to_string(),
+            sha256: artifact.sha256.to_string(),
+            requires_python: None,
+            upload_time: None,
+            yanked: false,
+        });
     }
 
     ServerIndex { packages, files }
@@ -257,7 +251,7 @@ fn handle_request(
 }
 
 /// Build a response for a distribution file, including support for single byte ranges.
-pub fn distribution_file_response(req: &Request, filename: &str, bytes: &[u8]) -> ResponseTemplate {
+fn distribution_file_response(req: &Request, filename: &str, bytes: &[u8]) -> ResponseTemplate {
     let content_type = content_type_for_filename(filename);
     let Some(range) = req.headers.get("range") else {
         return ResponseTemplate::new(200)
@@ -436,11 +430,7 @@ mod tests {
     fn server_index_construction_does_not_load_vendor_artifacts() {
         let _index = build_server_index(&Scenario::empty());
 
-        assert!(
-            vendor_artifacts()
-                .iter()
-                .all(|artifact| !artifact.is_loaded())
-        );
+        assert!(vendor_artifacts().all(|artifact| !artifact.is_loaded()));
     }
 
     #[tokio::test]
