@@ -160,8 +160,8 @@ pub struct RequirementsTxt {
     pub find_links: Vec<VerbatimUrl>,
     /// Whether to ignore the index, specified with `--no-index`.
     pub no_index: bool,
-    /// Whether all requirements must be hashed, specified with `--require-hashes`.
-    pub require_hashes: bool,
+    /// The first input that enabled `--require-hashes`, including nested inputs.
+    pub require_hashes: Option<RequirementsInput>,
     /// Whether to disallow wheels, specified with `--no-binary`.
     pub no_binary: NoBinary,
     /// Whether to allow only wheels, specified with `--only-binary`.
@@ -483,7 +483,7 @@ impl RequirementsTxt {
                     for constraint in sub_constraints.constraints {
                         data.constraints.push(constraint);
                     }
-                    data.require_hashes |= sub_constraints.require_hashes;
+                    data.require_hashes = data.require_hashes.or(sub_constraints.require_hashes);
                 }
                 RequirementsTxtStatement::RequirementEntry(requirement_entry) => {
                     data.requirements.push(requirement_entry);
@@ -512,7 +512,8 @@ impl RequirementsTxt {
                     data.no_index = true;
                 }
                 RequirementsTxtStatement::RequireHashes => {
-                    data.require_hashes = true;
+                    data.require_hashes
+                        .get_or_insert_with(|| requirements_txt.clone());
                 }
                 RequirementsTxtStatement::NoBinary(no_binary) => {
                     data.no_binary.extend(no_binary);
@@ -578,7 +579,7 @@ impl RequirementsTxt {
         self.extra_index_urls.extend(extra_index_urls);
         self.find_links.extend(find_links);
         self.no_index = self.no_index || no_index;
-        self.require_hashes = self.require_hashes || require_hashes;
+        self.require_hashes = self.require_hashes.take().or(require_hashes);
         self.no_binary.extend(no_binary);
         self.only_binary.extend(only_binary);
     }
@@ -2062,7 +2063,7 @@ mod test {
                 extra_index_urls: [],
                 find_links: [],
                 no_index: false,
-                require_hashes: false,
+                require_hashes: None,
                 no_binary: None,
                 only_binary: None,
             }
@@ -2123,7 +2124,7 @@ mod test {
                 extra_index_urls: [],
                 find_links: [],
                 no_index: false,
-                require_hashes: false,
+                require_hashes: None,
                 no_binary: Packages(
                     [
                         PackageName(
@@ -2231,7 +2232,7 @@ mod test {
                 extra_index_urls: [],
                 find_links: [],
                 no_index: true,
-                require_hashes: false,
+                require_hashes: None,
                 no_binary: None,
                 only_binary: None,
             }
@@ -2483,7 +2484,7 @@ mod test {
                 extra_index_urls: [],
                 find_links: [],
                 no_index: false,
-                require_hashes: false,
+                require_hashes: None,
                 no_binary: All,
                 only_binary: None,
             }
@@ -2850,7 +2851,7 @@ mod test {
                 extra_index_urls: [],
                 find_links: [],
                 no_index: false,
-                require_hashes: false,
+                require_hashes: None,
                 no_binary: None,
                 only_binary: None,
             }

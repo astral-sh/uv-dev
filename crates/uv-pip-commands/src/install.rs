@@ -178,7 +178,8 @@ pub async fn pip_install(
 
     override_dependencies.extend(overrides_from_workspace);
 
-    let hash_checking = HashCheckingMode::from_requirements_txt(hash_checking, require_hashes);
+    let hash_checking =
+        HashCheckingMode::from_requirements_txt(hash_checking, require_hashes.is_some());
     let build_hash_checking = resolve_build_hash_checking(hash_checking, build_hash_checking);
 
     if pylock.is_some() {
@@ -414,7 +415,8 @@ pub async fn pip_install(
                 .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
             Some(&marker_env),
             hash_checking,
-        )?
+        )
+        .map_err(|err| err.with_require_hashes_source(require_hashes))?
     } else {
         HashStrategy::default()
     };
