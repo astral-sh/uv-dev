@@ -1,5 +1,13 @@
+name: "code quality review"
+
 on:
   workflow_call:
+  workflow_dispatch:
+    inputs:
+      pull-request:
+        description: "uv-dev pull request number"
+        required: true
+        type: string
 
 permissions: {}
 
@@ -9,7 +17,7 @@ env:
 jobs:
   review:
     name: "code quality review"
-    if: github.event_name == 'pull_request' && github.repository == 'astral-sh/uv-dev' && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.repository == 'astral-sh/uv-dev' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: depot-ubuntu-24.04-16
     environment: automations
     timeout-minutes: 30
@@ -19,6 +27,8 @@ jobs:
       pull-requests: read
     outputs:
       result: ${{ steps.review.outputs.final-message }}
+      pull-request-number: ${{ steps.pull-request.outputs.number }}
+      head-sha: ${{ steps.pull-request.outputs.head-sha }}
     steps:
       - name: "Checkout review helpers"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,6 +52,34 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: "Resolve pull request revisions"
+        id: pull-request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_REQUEST_NUMBER: ${{ github.event.inputs.pull-request || github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! [[ "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "A positive pull request number is required." >&2
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER" \
+            > "$REVIEW_CONFIG/pull-request.json"
+          if ! jq --exit-status --arg repository "$GITHUB_REPOSITORY" \
+            '.head.repo.full_name == $repository' "$REVIEW_CONFIG/pull-request.json" > /dev/null; then
+            echo "The pull request must come from a branch in $GITHUB_REPOSITORY." >&2
+            exit 1
+          fi
+          if [ -n "$HEAD_SHA" ] && ! jq --exit-status --arg head "$HEAD_SHA" \
+            '.head.sha == $head' "$REVIEW_CONFIG/pull-request.json" > /dev/null; then
+            echo "The pull request head changed during review setup." >&2
+            exit 1
+          fi
+          jq --raw-output --arg base "$BASE_SHA" \
+            '"number=\(.number)\nbase-sha=\(if $base == "" then .base.sha else $base end)\nhead-sha=\(.head.sha)"' \
+            "$REVIEW_CONFIG/pull-request.json" >> "$GITHUB_OUTPUT"
+
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
@@ -49,8 +87,6 @@ jobs:
           checksum: "745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
 
       - name: "Prepare review configuration"
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           cp agents/codex/config.toml "$REVIEW_CONFIG/codex/"
           cp agents/prompts/pull-request-code-quality-review.md "$REVIEW_CONFIG/prompt.md"
@@ -61,15 +97,25 @@ jobs:
           export UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/pull-request-code-quality-review-tools"
           uv sync --locked --only-dev
           echo "$UV_PROJECT_ENVIRONMENT/bin" >> "$GITHUB_PATH"
+
+      - name: "Checkout pull request"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_REQUEST_NUMBER: ${{ steps.pull-request.outputs.number }}
+          BASE_SHA: ${{ steps.pull-request.outputs.base-sha }}
+          HEAD_SHA: ${{ steps.pull-request.outputs.head-sha }}
+        run: |
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+            fetch --no-tags origin "$BASE_SHA" "refs/pull/$PULL_REQUEST_NUMBER/head"
           git checkout --detach "$HEAD_SHA"
 
       - name: "Collect pull request context"
         run: bash "$REVIEW_CONFIG/collect-pull-request-review-context.sh"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PULL_REQUEST_NUMBER: ${{ steps.pull-request.outputs.number }}
+          BASE_SHA: ${{ steps.pull-request.outputs.base-sha }}
+          HEAD_SHA: ${{ steps.pull-request.outputs.head-sha }}
 
       # codex-action configures these only on GitHub-hosted runners.
       - name: "Enable Linux user namespaces for bubblewrap"
@@ -102,17 +148,27 @@ jobs:
           allow-bot-users: "astral-automations-bot[bot],renovate[bot]"
           prompt-file: "${{ env.REVIEW_CONFIG }}/prompt.md"
           output-schema-file: "${{ env.REVIEW_CONFIG }}/schema.json"
-          output-file: "${{ runner.temp }}/pull-request-code-quality-review-result.json"
+          output-file: "${{ env.REVIEW_CONFIG }}/result.json"
 
       - name: "Check reviewed checkout"
         env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ steps.pull-request.outputs.head-sha }}
         run: |
           if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]; then
             echo "The review changed the checked-out revision." >&2
             exit 1
           fi
           git diff --no-ext-diff --no-textconv --exit-code HEAD --
+
+      - name: "Upload review findings"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: code-quality-review-pr-${{ steps.pull-request.outputs.number }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.REVIEW_CONFIG }}/result.json
+            ${{ env.REVIEW_CONFIG }}/context/event.json
+            ${{ env.REVIEW_CONFIG }}/context/revisions.json
+          if-no-files-found: error
 
       - name: "Upload Codex thread"
         if: always()
@@ -150,12 +206,12 @@ jobs:
         id: comments
         run: bash security-pr-review/scripts/prepare.sh
         env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ needs.review.outputs.head-sha }}
           REVIEW_RESULT: ${{ needs.review.outputs.result }}
 
   report:
-    needs: prepare
-    if: needs.prepare.outputs.result != '' && fromJSON(needs.prepare.outputs.result).comments[0] != null
+    needs: [review, prepare]
+    if: github.event_name == 'pull_request' && needs.prepare.outputs.result != '' && fromJSON(needs.prepare.outputs.result).comments[0] != null
     runs-on: github-ubuntu-24.04-x86_64-4
     environment: automations
     timeout-minutes: 5
@@ -198,6 +254,6 @@ jobs:
           done
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ needs.review.outputs.head-sha }}
+          PULL_REQUEST_NUMBER: ${{ needs.review.outputs.pull-request-number }}
           REVIEW_RESULT: ${{ needs.prepare.outputs.result }}
