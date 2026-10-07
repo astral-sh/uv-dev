@@ -4168,6 +4168,7 @@ fn sync_extra_build_dependencies_setuptools_legacy() -> Result<()> {
     let setup_py = child.child("setup.py");
     setup_py.write_str(indoc! {r#"
         import sys
+        from importlib.metadata import version
         from setuptools import setup, find_packages
 
         try:
@@ -4176,6 +4177,9 @@ fn sync_extra_build_dependencies_setuptools_legacy() -> Result<()> {
         except ModuleNotFoundError:
             print("Missing `anyio` module", file=sys.stderr)
             sys.exit(1)
+
+        # The pin must survive the second resolution for setuptools' dynamic wheel requirement.
+        assert version("setuptools") == "69.1.1"
 
         setup(
             name="child",
@@ -4225,7 +4229,7 @@ fn sync_extra_build_dependencies_setuptools_legacy() -> Result<()> {
         child = { path = "child" }
 
         [tool.uv.extra-build-dependencies]
-        child = ["anyio"]
+        child = ["anyio", "setuptools==69.1.1"]
     "#})?;
 
     context.venv().arg("--clear").assert().success();
