@@ -17,6 +17,8 @@ pub enum Error {
     #[error(transparent)]
     Hash(#[from] uv_types::HashStrategyError),
     #[error(transparent)]
+    ScopedOverride(#[from] uv_configuration::ScopedOverrideSourceError),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Fmt(#[from] std::fmt::Error),
@@ -45,6 +47,7 @@ impl Error {
             }
             Self::Resolve(_)
             | Self::Hash(_)
+            | Self::ScopedOverride(_)
             | Self::Io(_)
             | Self::Fmt(_)
             | Self::Requirements(_)
@@ -65,6 +68,7 @@ impl Error {
             error @ (Self::NoSolution { .. }
             | Self::Resolve(_)
             | Self::Hash(_)
+            | Self::ScopedOverride(_)
             | Self::Io(_)
             | Self::Fmt(_)
             | Self::Requirements(_)
@@ -87,6 +91,7 @@ impl Error {
             }
             error @ (Self::Resolve(_)
             | Self::Hash(_)
+            | Self::ScopedOverride(_)
             | Self::Io(_)
             | Self::Fmt(_)
             | Self::ExtrasWithoutSource { .. }
@@ -102,9 +107,11 @@ impl Error {
             Self::Requirements(error) | Self::RequirementsWithContext { source: error, .. } => {
                 error.is_user_failure()
             }
-            Self::Io(_) | Self::Fmt(_) | Self::ExtrasWithoutSource { .. } | Self::Anyhow(_) => {
-                false
-            }
+            Self::Io(_)
+            | Self::Fmt(_)
+            | Self::ScopedOverride(_)
+            | Self::ExtrasWithoutSource { .. }
+            | Self::Anyhow(_) => false,
         }
     }
 }
@@ -149,6 +156,7 @@ impl uv_errors::Hinted for Error {
                 })
             }
             Self::Hash(_)
+            | Self::ScopedOverride(_)
             | Self::Io(_)
             | Self::Fmt(_)
             | Self::Requirements(_)
