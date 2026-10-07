@@ -1,0 +1,179 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index bcd89c7a0e..b31c41d371 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -4104,6 +4104,7 @@ checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
+ dependencies = [
+  "base64 0.22.1",
+  "bytes",
++ "futures-channel",
+  "futures-core",
+  "futures-util",
+  "h2",
+@@ -5885,6 +5886,7 @@ dependencies = [
+  "astral-version-ranges",
+  "astral_async_zip",
+  "axoupdater",
++ "backon",
+  "byteorder",
+  "bytes",
+  "clap",
+@@ -5917,6 +5919,7 @@ dependencies = [
+  "petgraph",
+  "predicates",
+  "regex",
++ "reqwest",
+  "rkyv",
+  "rustc-hash",
+  "self-replace",
+diff --git a/crates/uv/Cargo.toml b/crates/uv/Cargo.toml
+index 03a4e5b25b..064f9f87a4 100644
+--- a/crates/uv/Cargo.toml
++++ b/crates/uv/Cargo.toml
+@@ -132,6 +132,7 @@ uv-test = { workspace = true }
+ 
+ assert_cmd = { workspace = true }
+ assert_fs = { workspace = true }
++backon = { workspace = true }
+ byteorder = { workspace = true }
+ bytes = { workspace = true }
+ filetime = { workspace = true }
+@@ -144,6 +145,7 @@ indoc = { workspace = true }
+ insta = { workspace = true }
+ predicates = { workspace = true }
+ regex = { workspace = true }
++reqwest = { workspace = true, features = ["blocking"], default-features = false }
+ sha2 = { workspace = true }
+ tempfile = { workspace = true }
+ tokio-stream = { workspace = true }
+diff --git a/crates/uv/tests/build/extract.rs b/crates/uv/tests/build/extract.rs
+index acdb52a151..5c561c4439 100644
+--- a/crates/uv/tests/build/extract.rs
++++ b/crates/uv/tests/build/extract.rs
+@@ -1,5 +1,62 @@
+ use std::path::Path;
+ 
++use backon::{BackoffBuilder, Retryable};
++use futures::TryStreamExt;
++use tokio_util::compat::FuturesAsyncReadCompatExt;
++
++async fn r2_unzip(url: &str) -> anyhow::Result<(), uv_extract::Error> {
++    let backoff = backon::ExponentialBuilder::default()
++        .with_min_delay(std::time::Duration::from_millis(500))
++        .with_max_times(5)
++        .build();
++
++    let download = || async {
++        let response = reqwest::get(url).await?;
++        Ok::<_, reqwest::Error>(response)
++    };
++
++    let response = download.retry(backoff).await.unwrap();
++
++    let reader = response
++        .bytes_stream()
++        .map_err(std::io::Error::other)
++        .into_async_read();
++
++    let target = tempfile::TempDir::new().map_err(uv_extract::Error::Io)?;
++    uv_extract::stream::unzip(reader.compat(), target.path()).await?;
++    Ok(())
++}
++
++async fn r2_unzip_seekable(url: &str) -> anyhow::Result<(), uv_extract::Error> {
++    let backoff = backon::ExponentialBuilder::default()
++        .with_min_delay(std::time::Duration::from_millis(500))
++        .with_max_times(5)
++        .build();
++
++    let download = || async {
++        let response = reqwest::get(url).await?;
++        Ok::<_, reqwest::Error>(response)
++    };
++
++    let response = download.retry(backoff).await.unwrap();
++    let bytes = response
++        .bytes()
++        .await
++        .map_err(std::io::Error::other)
++        .map_err(uv_extract::Error::Io)?;
++
++    let archive = tempfile::NamedTempFile::new().map_err(uv_extract::Error::Io)?;
++    fs_err::write(archive.path(), bytes).map_err(uv_extract::Error::Io)?;
++    let archive = fs_err::File::open(archive.path()).map_err(uv_extract::Error::Io)?;
++
++    let target = tempfile::TempDir::new().map_err(uv_extract::Error::Io)?;
++    let target_path = target.path().to_path_buf();
++    tokio::task::spawn_blocking(move || uv_extract::unzip(archive, &target_path))
++        .await
++        .expect("seekable ZIP extraction task should not panic")?;
++    Ok(())
++}
++
+ fn workspace_root() -> &'static Path {
+     Path::new(env!("CARGO_MANIFEST_DIR"))
+         .parent()
+@@ -9,6 +66,16 @@ fn workspace_root() -> &'static Path {
+ }
+ 
+ async fn unzip(path: &Path) -> Result<(), uv_extract::Error> {
++    if std::env::var_os("UV_RUNNER_EXPERIMENT_R2").is_some() {
++        let relative = path
++            .strip_prefix("test/archives/malo")
++            .expect("known fixture path");
++        let url = format!(
++            "https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/0723f54ceb33a4fdc7f2eddc19635cd704d61c84/{}",
++            relative.display()
++        );
++        return r2_unzip(&url).await;
++    }
+     let data = fs_err::read(workspace_root().join(path)).map_err(uv_extract::Error::Io)?;
+     let target = tempfile::TempDir::new().map_err(uv_extract::Error::Io)?;
+     uv_extract::stream::unzip(data.as_slice(), target.path()).await?;
+@@ -16,6 +83,16 @@ async fn unzip(path: &Path) -> Result<(), uv_extract::Error> {
+ }
+ 
+ async fn unzip_seekable(path: &Path) -> Result<(), uv_extract::Error> {
++    if std::env::var_os("UV_RUNNER_EXPERIMENT_R2").is_some() {
++        let relative = path
++            .strip_prefix("test/archives/malo")
++            .expect("known fixture path");
++        let url = format!(
++            "https://pub-c6f28d316acd406eae43501e51ad30fa.r2.dev/0723f54ceb33a4fdc7f2eddc19635cd704d61c84/{}",
++            relative.display()
++        );
++        return r2_unzip_seekable(&url).await;
++    }
+     let archive = fs_err::File::open(workspace_root().join(path)).map_err(uv_extract::Error::Io)?;
+     let target = tempfile::TempDir::new().map_err(uv_extract::Error::Io)?;
+     let target_path = target.path().to_path_buf();
+diff --git a/crates/uv/tests/it/auth.rs b/crates/uv/tests/it/auth.rs
+index 2f0f0cf2b2..bdcd748ccc 100644
+--- a/crates/uv/tests/it/auth.rs
++++ b/crates/uv/tests/it/auth.rs
+@@ -232,14 +232,17 @@ async fn token_native_auth() -> Result<()> {
+     let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+     let proxy = crate::pypi_proxy::start().await;
+ 
+-    // Clear state before the test
+-    context
+-        .auth_logout()
+-        .arg(proxy.url("/basic-auth/simple"))
+-        .arg("--username")
+-        .arg("public")
+-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+-        .status()?;
++    // The proxy can reuse a port from an earlier test, including one that stored a token.
++    // Clear both identities so the no-credentials assertions cannot find a stale token.
++    for username in ["public", "__token__"] {
++        context
++            .auth_logout()
++            .arg(proxy.url("/basic-auth/simple"))
++            .arg("--username")
++            .arg(username)
++            .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
++            .status()?;
++    }
+ 
+     // Without persisted credentials
+     uv_snapshot!(context.filters(), context.auth_token()
