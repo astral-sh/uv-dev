@@ -73,9 +73,9 @@ impl GitSource {
 
             // If we have a locked revision, and we have a pre-existing database which has that
             // revision, then no update needs to happen.
-            // Any Git LFS objects are fetched in the checkout clone, not in the shared database.
+            // Git LFS objects also live in the shared database so older uv versions can reuse it.
             if let (Some(rev), Some(db)) = (self.git.precise(), &maybe_db) {
-                if db.contains(rev) {
+                if db.contains(rev) && (!lfs_requested || db.contains_lfs_artifacts(rev)) {
                     debug!("Using existing Git source `{}`", self.git.url());
                     return Ok((
                         maybe_db
