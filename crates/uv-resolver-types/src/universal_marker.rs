@@ -178,16 +178,17 @@ impl UniversalMarker {
             return;
         }
 
-        // Normalize unreachable selections before restriction so equivalent markers simplify to
-        // the same expression. An environment-only result does not need to repeat the conflicts.
-        let restricted = if self.has_conflict_marker() {
-            self.marker.and(conflicts.marker).restrict(conflicts.marker)
-        } else {
-            self.marker
-        };
-        if !restricted.is_false() && restricted == restricted.without_extras() {
-            self.marker = restricted;
-            self.pep508 = restricted;
+        if !self.has_conflict_marker() && !self.marker.is_false() {
+            return;
+        }
+
+        // If every valid conflict selection has the same environment marker, that marker does
+        // not need to repeat the conflicts.
+        let reachable = self.marker.and(conflicts.marker);
+        let environment = reachable.without_extras();
+        if !environment.is_false() && reachable == environment.and(conflicts.marker) {
+            self.marker = environment;
+            self.pep508 = environment;
             return;
         }
 
