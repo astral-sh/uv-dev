@@ -4,6 +4,8 @@ use std::fmt::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(unix)]
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use assert_cmd::prelude::*;
@@ -20,6 +22,12 @@ use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(unix)]
+use tokio::net::TcpListener;
+#[cfg(unix)]
+use tokio::time::timeout;
 use url::Url;
 use walkdir::WalkDir;
 use wiremock::{
@@ -6974,6 +6982,115 @@ fn requires_python_source_dist_installed_incompatible_registry() {
      + iniconfig==2.3.0
     "
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_parallel_build_removes_live_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    for name in ["slow", "fail"] {
+        context
+            .temp_dir
+            .child(name)
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+                [project]
+                name = "{name}"
+                version = "0.1.0"
+
+                [build-system]
+                requires = []
+                build-backend = "backend"
+                backend-path = ["."]
+            "#})?;
+    }
+    context.temp_dir.child("slow/backend.py").write_str(indoc! {r#"
+        import os
+        from pathlib import Path
+        import socket
+        import sys
+        import sysconfig
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            environment = Path(sys.prefix)
+            assert environment.is_dir()
+            module = Path(sysconfig.get_path("purelib")) / "build_dependency.py"
+            module.write_text("VALUE = 42\n")
+            import build_dependency
+            assert build_dependency.VALUE == 42
+            del sys.modules["build_dependency"]
+
+            with socket.create_connection(("127.0.0.1", int(os.environ["BACKEND_PORT"])), timeout=30) as connection:
+                Path(os.environ["BUILD_READY"]).touch()
+                assert connection.recv(1) == b"R"
+                observations = [f"environment exists: {environment.is_dir()}"]
+                try:
+                    (environment / "probe").write_text("still running")
+                    observations.append("write: succeeded")
+                except OSError as error:
+                    observations.append(f"write: {type(error).__name__}")
+                try:
+                    import build_dependency
+                    observations.append("import: succeeded")
+                except ImportError as error:
+                    observations.append(f"import: {type(error).__name__}")
+                connection.sendall("\n".join(observations).encode())
+            raise SystemExit(0)
+    "#})?;
+    context
+        .temp_dir
+        .child("fail/backend.py")
+        .write_str(indoc! {r#"
+        import os
+        from pathlib import Path
+        import time
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            ready = Path(os.environ["BUILD_READY"])
+            deadline = time.monotonic() + 30
+            while not ready.exists():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("the other backend did not start")
+                time.sleep(0.01)
+            raise SystemExit("deliberate build failure")
+    "#})?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--offline", "--no-deps", "./slow", "./fail"])
+        .env(EnvVars::UV_CONCURRENT_BUILDS, "2")
+        .env("BACKEND_PORT", listener.local_addr()?.port().to_string())
+        .env("BUILD_READY", context.temp_dir.join("ready")), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Failed to build `fail @ file://[TEMP_DIR]/fail`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_wheel` failed (exit status: 1)
+
+             [stderr]
+             deliberate build failure
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    ");
+
+    // uv has exited, but the other backend is still waiting for permission to use its environment.
+    let (mut backend, _) = timeout(Duration::from_secs(30), listener.accept()).await??;
+    backend.write_all(b"R").await?;
+    let mut observations = String::new();
+    timeout(
+        Duration::from_secs(30),
+        backend.read_to_string(&mut observations),
+    )
+    .await??;
+    // Cancelling one build must not break a live backend's writes and imports: astral-sh/uv#22338.
+    assert_snapshot!(observations, @"
+    environment exists: False
+    write: FileNotFoundError
+    import: ModuleNotFoundError
+    ");
+
+    Ok(())
 }
 
 /// Install with `--no-build-isolation`, to disable isolation during PEP 517 builds.
