@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21379,
+        "title": "Avoid duplicate concurrent wheel downloads",
+        "url": "https://github.com/astral-sh/uv/pull/21379",
+        "state": "merged",
+        "reason": "Introduced per-wheel advisory locking on all platforms, held across cache lookup, download, extraction, and publication. Released in 0.12.8, it explains the Linux wheel-lock contention in this report; it addressed redundant downloads, not blocking-pool starvation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21372,
+        "title": "Run streaming ZIP extraction in a blocking task",
+        "url": "https://github.com/astral-sh/uv/pull/21372",
+        "state": "merged",
+        "reason": "Moved streaming ZIP extraction into one blocking task per archive, released in 0.12.9. This supplies the extraction side of the reported shared-pool dependency. Its cancellation tests do not establish recovery when file-lock waiters exhaust the pool."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16342,
+        "title": "Add a 5 min default timeout for deadlocks",
+        "url": "https://github.com/astral-sh/uv/pull/16342",
+        "state": "merged",
+        "reason": "Added UV_LOCK_TIMEOUT and the timeout around blocking lock acquisition. Its motivating problem was cache clean/prune waiting on another running process. The new report concerns same-process wheel-cache contention and why that timeout does not restore progress."
+      },
+      {
+        "kind": "issue",
+        "number": 17512,
+        "title": "Investigate why uv holds so many file handles open",
+        "url": "https://github.com/astral-sh/uv/issues/17512",
+        "state": "open",
+        "reason": "Discusses large workspaces acquiring cache locks before build-process concurrency limits apply. Its demonstrated failure is file-descriptor exhaustion during sync, not contended wheel locks starving Tokio; useful adjacent concurrency work, not an established duplicate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17633,
+        "title": "fix(install): limit preparer concurrency to prevent file handle exhaustion",
+        "url": "https://github.com/astral-sh/uv/pull/17633",
+        "state": "open",
+        "reason": "Proposes limiting source-distribution preparation before taking cache locks, addressing astral-sh/uv#17512. Relevant to the suggested earlier concurrency bound, but it targets file-handle exhaustion and does not establish a fix for this workspace-build wheel-lock starvation."
+      }
+    ],
+    "search_scope": "Searched open/closed issues and open/closed/merged PRs using authenticated gh. Literal searches covered all-packages with hang/deadlock, cold cache, UV_NO_CACHE, UV_LOCK_TIMEOUT, Waiting to acquire exclusive lock, LockedFile, lock_wheel, spawn_blocking, and 0.12.23. Conceptual searches covered starvation, Tokio/512, wheel-cache contention, workspace stalls, build concurrency, and area:cache. PR keyword searches returned no matches, so supplemented them with 1,000 recent PRs, source-file commit history, linked discussions, diffs, and release notes. Inspected but ruled out astral-sh/uv#19321 and astral-sh/uv#20116 (cache maintenance blocked by long-lived children), astral-sh/uv#6691 and astral-sh/uv#6790 (synchronous Git-lock acquisition blocking the runtime), astral-sh/uv#3724 and astral-sh/uv#3987 (OnceMap notification race), astral-sh/uv#10255 (build dependency cycles), and astral-sh/uv#15307 and astral-sh/uv#18054 (backend-process semaphore scope). No existing discussion of the same starvation defect was found."
+  },
+  "type": "bug",
+  "type_reason": "A build that indefinitely stops progressing is incorrect behavior. Source confirms unbounded workspace-member fan-out, blocking-pool file-lock waits, wheel locks held across extraction, and errors rendered only after all member futures complete. These support the reported starvation mechanism, but the incident and exact triggering schedule were not reproduced. The closest existing items address different failures or introduced the relevant behavior; no duplicate or recurrence of a previously fixed starvation bug was established.",
+  "summary": "No exact duplicate found. astral-sh/uv#21379, astral-sh/uv#21372, and astral-sh/uv#16342 explain the relevant locking, extraction, and timeout implementation. astral-sh/uv#17512 and astral-sh/uv#17633 cover adjacent preparation-concurrency problems. The required issue-context README could not be updated because the filesystem is read-only; saving a temporary copy was also blocked.",
+  "draft_response": "This looks like a bug. The current code holds wheel-cache locks across extraction, and both contended lock waits and extraction use Tokio's blocking pool. The changes in astral-sh/uv#21379 and astral-sh/uv#21372 support your diagnosis, though the reported deadlock still needs reproduction.\n\nThere is also a reason timeout errors may remain invisible: workspace builds collect every member's result before displaying errors, and timing out a wait does not stop an already-running blocking lock task.\n\nCould you share a minimal workspace or generator, including the resolved build-requirement versions, so we can reproduce the cold-cache stall and verify a regression test? Your bounded separate-process workaround is useful in the meantime."
+}
