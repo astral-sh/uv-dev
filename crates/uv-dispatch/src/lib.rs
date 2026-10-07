@@ -13,7 +13,7 @@ use rustc_hash::FxHashMap;
 use thiserror::Error;
 use tracing::{debug, instrument, trace};
 
-use uv_build_backend::check_direct_build;
+use uv_build_backend::{Error as BuildBackendError, check_direct_build};
 use uv_build_frontend::{SourceBuild, SourceBuildContext};
 use uv_cache::Cache;
 use uv_client::RegistryClient;
@@ -48,6 +48,9 @@ use uv_workspace::WorkspaceCache;
 pub enum BuildDispatchError {
     #[error(transparent)]
     BuildFrontend(#[from] AnyErrorBuild),
+
+    #[error(transparent)]
+    BuildBackend(#[from] BuildBackendError),
 
     #[error(transparent)]
     Tags(#[from] uv_platform_tags::TagsError),
@@ -86,7 +89,11 @@ impl uv_errors::Hinted for BuildDispatchError {
                 }
                 uv_errors::Hints::none()
             }
-            _ => uv_errors::Hints::none(),
+            Self::BuildBackend(_)
+            | Self::Tags(_)
+            | Self::Join(_)
+            | Self::Prepare(_)
+            | Self::Lookahead(_) => uv_errors::Hints::none(),
         }
     }
 }
@@ -102,13 +109,14 @@ impl IsBuildBackendError for BuildDispatchError {
                 .chain()
                 .find_map(|cause| cause.downcast_ref::<uv_resolver::ResolveError>())
                 .is_some_and(uv_resolver::ResolveError::is_user_failure),
-            Self::Tags(_) | Self::Join(_) => false,
+            Self::BuildBackend(_) | Self::Tags(_) | Self::Join(_) => false,
         }
     }
 
     fn is_build_backend_error(&self) -> bool {
         match self {
-            Self::Tags(_)
+            Self::BuildBackend(_)
+            | Self::Tags(_)
             | Self::Resolve(_)
             | Self::Join(_)
             | Self::Anyhow(_)
@@ -629,7 +637,7 @@ impl BuildContext for BuildDispatch<'_> {
         debug!("Performing direct build for {identifier}");
 
         let output_dir = output_dir.to_path_buf();
-        let filename = tokio::task::spawn_blocking(move || -> Result<_> {
+        let filename = tokio::task::spawn_blocking(move || -> Result<_, BuildBackendError> {
             let filename = match build_kind {
                 BuildKind::Wheel => {
                     let wheel = uv_build_backend::build_wheel(
