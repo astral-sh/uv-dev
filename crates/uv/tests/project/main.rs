@@ -15,6 +15,9 @@ mod export;
 #[cfg(all(feature = "test-python", feature = "test-r2"))]
 mod format;
 
+#[cfg(all(feature = "test-python", feature = "test-git"))]
+mod git_worktrees;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi", feature = "test-git"))]
 mod init;
 
