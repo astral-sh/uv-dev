@@ -4025,6 +4025,7 @@ fn preview_features() {
     +            ArtifactHashFiltering,
     +            ContentAddressedCache,
     +            GitPartialFetches,
+    +            GitWorktrees,
     +            MissingExcludeNewerPackageLock,
     +            ResolutionInputs,
     +            BatchExport,

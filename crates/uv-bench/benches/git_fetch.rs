@@ -107,6 +107,7 @@ fn git_fetch(criterion: &mut Criterion<WallTime>) {
         }
 
         // A long-lived CI cache accumulates checkouts as Git dependencies are upgraded.
+        let settings = settings.with_worktrees(true);
         for count in [1, 4, 10] {
             let Some(selected) = fixture.revisions.get(..count) else {
                 continue;
@@ -131,7 +132,9 @@ fn git_fetch(criterion: &mut Criterion<WallTime>) {
                         || tempfile::tempdir().expect("Failed to create Git cache"),
                         |cache| {
                             for git in &revisions {
-                                black_box(fetch(&runtime, git, cache.path(), settings));
+                                let fetched = fetch(&runtime, git, cache.path(), settings);
+                                assert!(fetched.path().join(".git").is_file());
+                                black_box(fetched);
                             }
                             black_box(cache)
                         },
