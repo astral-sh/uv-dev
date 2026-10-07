@@ -155,15 +155,14 @@ impl CandidateSelector {
         // from the version maps, use the installed version.
         if let Some(installed) = installed
             && compatible.as_ref().is_none_or(|compatible| {
-                // A local wheel can be rebuilt without changing its version or filename. Keep it
-                // as an installable candidate so the planner can compare its cache metadata.
+                // A local wheel can be rebuilt without changing its version or filename. Read
+                // its metadata again only when it has changed since installation.
                 if upgrade
                     && installed.version() == compatible.version()
-                    && matches!(
-                        compatible.compatible(),
-                        Some(CompatibleDist::CompatibleWheel { wheel, .. })
-                            if matches!(wheel.index, IndexUrl::Path(_))
-                    )
+                    && let Some(CompatibleDist::InstalledDist(installed)) = installed.compatible()
+                    && let Some(CompatibleDist::CompatibleWheel { wheel, .. }) =
+                        compatible.compatible()
+                    && installed.is_local_wheel_out_of_date(wheel)
                 {
                     return false;
                 }

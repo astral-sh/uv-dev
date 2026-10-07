@@ -8478,6 +8478,22 @@ fn find_links_local_html() -> Result<()> {
     "
     );
 
+    // A local HTML index can also link to remote wheels.
+    let server = FindLinksServer::new(wheels.path());
+    index.write_str(&format!(
+        r#"<a href="{}/{wheel_filename}">{wheel_filename}</a>"#,
+        server.url()
+    ))?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("tqdm==1000.0.0")
+        .arg("--upgrade"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    "
+    );
+
     Ok(())
 }
 
