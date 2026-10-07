@@ -1,6 +1,6 @@
 #![expect(clippy::disallowed_types)]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
@@ -8,9 +8,10 @@ use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
+use uv_cache::Cache;
 use uv_fs::copy_dir_all;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
-use uv_python_interpreter::PyVenvConfiguration;
+use uv_python_interpreter::{PyVenvConfiguration, PythonEnvironment};
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1981,6 +1982,18 @@ fn run_with_overlay_interpreter() -> Result<()> {
         .arg(context.venv.path())
         .assert()
         .success();
+
+    // Relocatable environments must expose the same metadata with and without cached inference.
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    assert_eq!(
+        PythonEnvironment::from_root(context.venv.path(), &cache)?,
+        PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?
+    );
 
     // Cleanup previous shutil
     fs_err::remove_file(context.temp_dir.child("main"))?;
