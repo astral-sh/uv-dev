@@ -52,7 +52,9 @@ use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::PythonVersionFile;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::VersionFileDiscoveryOptions;
-use uv_python_interpreter::{Interpreter, PyVenvConfiguration, PythonEnvironment};
+use uv_python_interpreter::{
+    CreatedVirtualEnvironment, Interpreter, PyVenvConfiguration, PythonEnvironment,
+};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -497,7 +499,8 @@ pub async fn run(
                     false,
                     uv_virtualenv::Seed::Disabled,
                     UpgradePolicy::Fixed,
-                )?;
+                )?
+                .into_environment();
 
                 Some(environment.into_interpreter())
             }
@@ -691,6 +694,7 @@ pub async fn run(
                     uv_virtualenv::Seed::Disabled,
                     UpgradePolicy::Fixed,
                 )?
+                .into_environment()
             } else {
                 // If we're not isolating the environment, reuse the base environment for the
                 // project.
@@ -894,7 +898,8 @@ pub async fn run(
                     false,
                     uv_virtualenv::Seed::Disabled,
                     UpgradePolicy::Fixed,
-                )?;
+                )?
+                .into_environment();
                 venv.into_interpreter()
             } else {
                 interpreter
@@ -1027,6 +1032,7 @@ pub async fn run(
                 uv_virtualenv::Seed::Disabled,
                 UpgradePolicy::Fixed,
             )
+            .map(CreatedVirtualEnvironment::into_environment)
         })
         .transpose()?;
 

@@ -28,10 +28,8 @@ use uv_platform_tags::{Platform, Tags, TagsError, TagsOptions};
 use uv_pypi_types::{ResolverMarkerEnvironment, Scheme};
 use uv_static::EnvVars;
 
-use crate::PointerSize;
-use crate::PyVenvConfiguration;
-use crate::VirtualEnvironment;
 use crate::virtualenv::virtualenv_python_executable;
+use crate::{CreatedVirtualEnvironment, PointerSize, PyVenvConfiguration, VirtualEnvironment};
 use uv_python_types::{
     ImplementationName, LenientImplementationName, Prefix, PythonDownloadRequest,
     PythonInstallationKey, PythonRequest, PythonVariant, Target, VersionRequest,
@@ -42,8 +40,8 @@ use which::which;
 use windows::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_CANT_ACCESS_FILE, WIN32_ERROR};
 
 /// A Python executable and its associated platform markers.
-#[cfg_attr(unix, expect(clippy::struct_excessive_bools))]
-#[derive(Debug, Clone)]
+#[expect(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Interpreter {
     platform: Platform,
     markers: Box<MarkerEnvironment>,
@@ -57,7 +55,6 @@ pub struct Interpreter {
     site_packages: Vec<PathBuf>,
     stdlib: PathBuf,
     extension_suffixes: Vec<Box<str>>,
-    #[cfg(unix)]
     standalone: bool,
     tags: OnceLock<Tags>,
     target: Option<Target>,
@@ -96,7 +93,6 @@ impl Interpreter {
             site_packages: info.site_packages,
             stdlib: info.stdlib,
             extension_suffixes: info.extension_suffixes,
-            #[cfg(unix)]
             standalone: info.standalone,
             tags: OnceLock::new(),
             target: None,
@@ -118,19 +114,46 @@ impl Interpreter {
         }
     }
 
-    /// Return a new [`Interpreter`] with the given virtual environment root.
-    #[must_use]
-    pub fn with_virtualenv(self, virtualenv: VirtualEnvironment) -> Self {
-        Self {
+    /// Infer interpreter metadata for a newly created [`VirtualEnvironment`].
+    pub fn with_virtualenv(self, virtualenv: VirtualEnvironment) -> CreatedVirtualEnvironment {
+        // Match `site.getsitepackages()` for the new environment instead of retaining the
+        // parent interpreter's site-packages paths.
+        // Note: This is not `sys.path`, but a distinct list.
+        let mut site_packages = Vec::new();
+        if self.markers.os_name() == "nt" {
+            site_packages.push(virtualenv.root.clone());
+            site_packages.push(virtualenv.scheme.purelib.clone());
+        } else {
+            if virtualenv.scheme.platlib == virtualenv.scheme.purelib {
+                site_packages.push(virtualenv.scheme.purelib.clone());
+            } else {
+                site_packages.push(virtualenv.scheme.platlib.clone());
+                site_packages.push(virtualenv.scheme.purelib.clone());
+            }
+            // Some distributions add import paths that are not part of the installation scheme,
+            // e.g., Debian's `dist-packages`. Build those paths as relative to the new environment,
+            // excluding paths outside the parent's prefix (such as an existing venv's system site
+            // packages).
+            for path in &self.site_packages {
+                if let Ok(relative) = path.strip_prefix(&self.sys_prefix) {
+                    let path = virtualenv.root.join(relative);
+                    if !site_packages.contains(&path) {
+                        site_packages.push(path);
+                    }
+                }
+            }
+        }
+        let interpreter = Self {
             scheme: virtualenv.scheme,
             sys_base_executable: Some(virtualenv.base_executable),
             sys_executable: virtualenv.executable,
             sys_prefix: virtualenv.root,
             target: None,
             prefix: None,
-            site_packages: vec![],
+            site_packages,
             ..self
-        }
+        };
+        CreatedVirtualEnvironment::new(interpreter, virtualenv.system_site_packages)
     }
 
     /// Return a new [`Interpreter`] to install into the given `--target` directory.
@@ -1120,7 +1143,7 @@ pub enum InterpreterInfoError {
 
 #[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Deserialize, Serialize, Clone)]
-struct InterpreterInfo {
+pub(crate) struct InterpreterInfo {
     platform: Platform,
     markers: MarkerEnvironment,
     scheme: Scheme,
@@ -1141,7 +1164,78 @@ struct InterpreterInfo {
     debug_enabled: bool,
 }
 
+impl TryFrom<&Interpreter> for InterpreterInfo {
+    type Error = Error;
+
+    /// Convert interpreter metadata to the cache representation without querying Python.
+    fn try_from(interpreter: &Interpreter) -> Result<Self, Self::Error> {
+        // Python reports ordinary Windows paths even when uv uses a verbatim path.
+        let scheme = Scheme {
+            purelib: interpreter.scheme.purelib.simplified().to_path_buf(),
+            platlib: interpreter.scheme.platlib.simplified().to_path_buf(),
+            scripts: interpreter.scheme.scripts.simplified().to_path_buf(),
+            // Joining the empty relative data path adds a trailing separator that sysconfig omits.
+            data: interpreter.scheme.data.simplified().components().collect(),
+            include: interpreter.scheme.include.simplified().to_path_buf(),
+        };
+        Ok(Self {
+            platform: interpreter.platform.clone(),
+            markers: (*interpreter.markers).clone(),
+            scheme,
+            virtualenv: interpreter.virtualenv.clone(),
+            manylinux_compatible: interpreter.manylinux_compatible,
+            sys_prefix: interpreter.sys_prefix.simplified().to_path_buf(),
+            // These fields are unused by `Interpreter`, but retained in the cache format.
+            sys_base_exec_prefix: PathBuf::new(),
+            sys_path: Vec::new(),
+            sys_base_prefix: interpreter.sys_base_prefix.clone(),
+            sys_base_executable: interpreter
+                .sys_base_executable
+                .as_deref()
+                .map(canonicalize_executable)
+                .transpose()?,
+            sys_executable: std::path::absolute(interpreter.sys_executable())?
+                .simplified()
+                .to_path_buf(),
+            site_packages: interpreter
+                .site_packages
+                .iter()
+                .map(|path| path.simplified().to_path_buf())
+                .collect(),
+            stdlib: interpreter.stdlib.clone(),
+            extension_suffixes: interpreter.extension_suffixes.clone(),
+            standalone: interpreter.standalone,
+            pointer_size: interpreter.pointer_size,
+            gil_disabled: interpreter.gil_disabled,
+            debug_enabled: interpreter.debug_enabled,
+        })
+    }
+}
+
 impl InterpreterInfo {
+    /// Cache already prepared metadata for this executable.
+    pub(crate) fn cache(&self, executable: &Path, cache: &Cache) -> Result<(), Error> {
+        // The lookup must use the original path, which may differ from Python's `sys.executable`.
+        let absolute = std::path::absolute(executable)?;
+        let canonical = canonicalize_executable(&absolute)?;
+        let cache_entry = Self::cache_entry(&absolute, &canonical, cache);
+        let modified = Timestamp::from_path(&canonical)?;
+        self.write_cache(&cache_entry, modified)
+    }
+
+    /// Write interpreter metadata using the same format for queried and inferred interpreters.
+    fn write_cache(&self, cache_entry: &CacheEntry, modified: Timestamp) -> Result<(), Error> {
+        fs::create_dir_all(cache_entry.dir())?;
+        write_atomic_sync(
+            cache_entry.path(),
+            rmp_serde::to_vec(&CachedByTimestamp {
+                timestamp: modified,
+                data: self,
+            })?,
+        )?;
+        Ok(())
+    }
+
     /// Return the resolved [`InterpreterInfo`] for the given Python executable.
     fn query(interpreter: &Path, cache: &Cache) -> Result<Self, Error> {
         let tempdir = tempfile::tempdir_in(cache.root())?;

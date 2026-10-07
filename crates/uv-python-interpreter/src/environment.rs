@@ -1,7 +1,7 @@
 use std::borrow::Cow;
-use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{env, fmt};
 
 use owo_colors::OwoColorize;
 use thiserror::Error;
@@ -10,8 +10,10 @@ use tracing::debug;
 use uv_cache::Cache;
 use uv_fs::{LockedFile, LockedFileError, Simplified};
 use uv_pep440::Version;
+use uv_static::EnvVars;
 
 use crate::Interpreter;
+use crate::interpreter::InterpreterInfo;
 use crate::virtualenv::{PyVenvConfiguration, virtualenv_python_executable};
 use uv_python_types::{EnvironmentPreference, Prefix, PythonRequest, Target};
 
@@ -43,13 +45,81 @@ impl uv_errors::Hinted for Error {
 }
 
 /// A Python environment, consisting of a Python [`Interpreter`] and its associated paths.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PythonEnvironment(Arc<PythonEnvironmentShared>);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 struct PythonEnvironmentShared {
     root: PathBuf,
     interpreter: Interpreter,
+}
+
+/// A newly created virtual environment whose interpreter metadata was inferred from its base.
+///
+/// Produced by [`Interpreter::with_virtualenv`]. Consume it with [`Self::cache`] to cache
+/// eligible metadata, or [`Self::into_environment`] for temporary environments.
+#[derive(Debug)]
+#[must_use]
+pub struct CreatedVirtualEnvironment {
+    environment: PythonEnvironment,
+    system_site_packages: bool,
+}
+
+impl CreatedVirtualEnvironment {
+    pub(crate) fn new(interpreter: Interpreter, system_site_packages: bool) -> Self {
+        Self {
+            environment: PythonEnvironment::from_interpreter(interpreter),
+            system_site_packages,
+        }
+    }
+
+    /// Use the environment without caching its inferred interpreter metadata.
+    pub fn into_environment(self) -> PythonEnvironment {
+        self.environment
+    }
+
+    /// Cache eligible interpreter metadata before using the environment.
+    ///
+    /// If creation cannot infer the metadata Python would report, the next lookup queries Python.
+    pub fn cache(self, cache: &Cache) -> Result<PythonEnvironment, Error> {
+        let Self {
+            environment,
+            system_site_packages,
+        } = self;
+
+        // Launcher overrides can change `sys.executable` and `sys.prefix`, while
+        // `sys._base_executable` isn't affected. Query the actual metadata on the next run.
+        if env::var_os(EnvVars::PYTHONEXECUTABLE).is_some()
+            || env::var_os(EnvVars::PYVENV_LAUNCHER).is_some()
+        {
+            return Ok(environment);
+        }
+
+        // TODO: Handle system-site-packages correctly.
+        // We should infer the site packages path from the base interpreter,
+        // but for that, we first need to fix cache invalidation when it changes.
+        // https://github.com/astral-sh/uv/issues/18510
+        if system_site_packages {
+            return Ok(environment);
+        }
+
+        // An upgradeable venv can use a minor-version link instead of the selected base
+        // interpreter. Python may report different base paths when started through that link.
+        if let Some(home) = environment.cfg()?.home
+            && environment
+                .interpreter()
+                .to_base_python()?
+                .parent()
+                .is_some_and(|base| base.simplified() != home.simplified())
+        {
+            Interpreter::clear_cache(environment.interpreter().sys_executable(), cache)?;
+            return Ok(environment);
+        }
+
+        let info = InterpreterInfo::try_from(environment.interpreter())?;
+        info.cache(environment.interpreter().sys_executable(), cache)?;
+        Ok(environment)
+    }
 }
 
 /// The result of failed environment discovery.
