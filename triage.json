@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22234,
+        "title": "Track optional-extra activation when exporting locked dependencies",
+        "url": "https://github.com/astral-sh/uv/pull/22234",
+        "state": "merged",
+        "reason": "Closest match: prevents optional dependencies from becoming active through paths that do not request their extra, and reprocesses packages when extra activation changes independently of package reachability. The conditional msal[broker] and plain-msal paths match this failure mode. Merged October 6, after uv 0.12.23's October 3 release and before this report. The reporter's exact lockfile has not been tested against the fix."
+      },
+      {
+        "kind": "issue",
+        "number": 20147,
+        "title": "\"Redundant\" env markers removed in 0.11.25 break exported lockfile",
+        "url": "https://github.com/astral-sh/uv/issues/20147",
+        "state": "closed",
+        "reason": "Historical conditional-extra export bug: backports-zstd lost its Python marker after lockfile simplification, causing installation in unsupported environments. Fixed in uv 0.11.27. The new report's multiple dependency paths align more closely with the subsequent activation fix in astral-sh/uv#22234."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20148,
+        "title": "Preserve conditional extra markers in exports",
+        "url": "https://github.com/astral-sh/uv/pull/20148",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#20147 by combining optional-edge markers with extra activation markers; the reporter confirmed the fix. Its absent-activation fallback still used package reachability, which astral-sh/uv#22234 subsequently corrected. This establishes historical context without proving that the earlier fixed reproduction regressed."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues for pymsalruntime, azure-cli, adlfs, sys_platform and 0.12.23; separately searched export marker loss, conditional/transitive extras, command differences and hash failures. Conceptual searches covered environment markers, shared dependencies, activation, reachability and unconditional requirements. Open, closed and merged PR searches returned no matches even for known relevant PRs, so additionally inspected the 2,500 most recent PR titles across all states and all 597 open PRs. Followed issue timelines to fixes and inspected candidate comments, reviews, diffs, source and release notes. Ruled out the especially plausible astral-sh/uv#16661 because it concerns unsupported negative extra expressions. Also distinguished astral-sh/uv#17226 (target-platform export), astral-sh/uv#8658 and astral-sh/uv#8659 (dependency-group markers), astral-sh/uv#18887 (workspace conflict extras), astral-sh/uv#4584 and astral-sh/uv#4595 (pip compile cycles), and astral-sh/uv#21804 (relative-marker APIs)."
+  },
+  "type": "duplicate",
+  "type_reason": "The combined-dependency trigger closely matches the optional-extra activation problem addressed by astral-sh/uv#22234. Current package metadata confirms conditional msal[broker] through azure-cli-core and unconditional plain msal through adlfs and azure-identity. That fix predates this issue but postdates the reported release. The older astral-sh/uv#20147 fix left the fallback subsequently corrected by astral-sh/uv#22234; no evidence establishes that its fixed reproduction regressed. Verification with the reporter's exact lockfile remains outstanding.",
+  "summary": "Closest match: astral-sh/uv#22234, merged after uv 0.12.23. astral-sh/uv#20147 and astral-sh/uv#20148 provide historical context. The required README update failed because /home/runner/work/_temp/issue-context/README.md is on a read-only filesystem; saving a fallback under /tmp also failed. No checkout files or GitHub state were changed.",
+  "draft_response": "This appears to match the optional-extra activation bug addressed by astral-sh/uv#22234, merged after uv 0.12.23. That fix prevents a path that does not request an extra from activating its dependencies. Please retest with a build containing that change; if the marker is still missing, share your pyproject.toml and uv.lock so we can check the exact dependency graph.\n\nuv pip compile omitting pymsalruntime on Linux is expected: it resolves for the current platform unless you pass --universal."
+}
