@@ -3481,7 +3481,7 @@ fn require_hashes_in_requirements_txt() -> Result<()> {
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: anyio
 
-    hint: `--require-hashes` was enabled in `requirements.txt`
+    hint: `--require-hashes` was enabled by `requirements.txt` at line 1
     "
     );
 
@@ -3497,7 +3497,7 @@ fn require_hashes_in_requirements_txt() -> Result<()> {
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
 
-    hint: `--require-hashes` was enabled in `requirements.txt`
+    hint: `--require-hashes` was enabled by `requirements.txt` at line 1
     "
     );
 
@@ -3531,7 +3531,7 @@ fn require_hashes_in_nested_requirements_txt() -> Result<()> {
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
 
-    hint: `--require-hashes` was enabled in `nested/hashes.txt`
+    hint: `--require-hashes` was enabled by `nested/hashes.txt` at line 1 (included from `requirements.txt` at line 1 -> `constraints.txt` at line 1)
     ");
 
     Ok(())

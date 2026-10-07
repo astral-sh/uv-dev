@@ -8,7 +8,7 @@ use tracing::info_span;
 
 use uv_client::BaseClientBuilder;
 use uv_configuration::{BuildOptions, HashCheckingMode, RequirementsInput, TargetTriple};
-use uv_distribution_types::{RequiresPython, Resolution};
+use uv_distribution_types::{RequiresPython, Resolution, Sourced};
 use uv_lock::{PylockToml, PylockTomlError};
 use uv_normalize::{ExtraName, GroupName};
 use uv_pep440::Version;
@@ -103,7 +103,7 @@ pub(crate) fn resolve_pylock_toml(
     extras: &[ExtraName],
     groups: &[GroupName],
     build_options: &BuildOptions,
-    hash_checking: Option<HashCheckingMode>,
+    hash_checking: Option<Sourced<HashCheckingMode>>,
 ) -> Result<(Resolution, HashStrategy), PylockResolutionError> {
     if let Some(requires_python) = lock.requires_python.as_ref() {
         if !requires_python.contains(interpreter.python_version()) {

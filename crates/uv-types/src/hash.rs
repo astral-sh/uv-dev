@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use uv_configuration::{Constraints, HashCheckingMode, RequirementsInput};
+use uv_configuration::{Constraints, HashCheckingMode};
 use uv_distribution_types::{
     ArchiveHashPolicy, DistributionMetadata, HashCollection, HashValidation, MetadataHashPolicy,
-    Name, Requirement, RequirementSource, Resolution, UnresolvedRequirement, VersionId,
+    Name, Requirement, RequirementSource, Resolution, SettingSources, Sourced,
+    UnresolvedRequirement, VersionId,
 };
 use uv_errors::{Hinted, Hints};
 use uv_normalize::PackageName;
@@ -24,6 +25,7 @@ use uv_redacted::DisplaySafeUrl;
 pub struct HashStrategy {
     collection: HashCollection,
     verification: HashVerification,
+    verification_sources: SettingSources,
 }
 
 /// The trusted hashes to enforce when retrieving distributions.
@@ -61,6 +63,7 @@ impl HashStrategy {
     #[must_use]
     pub fn with_verification(mut self, verification: HashVerification) -> Self {
         self.verification = verification;
+        self.verification_sources = SettingSources::default();
         self
     }
 
@@ -69,9 +72,29 @@ impl HashStrategy {
     /// Preserve hash collection and require hashes if either strategy requires them. Constraints
     /// for identities absent from this strategy remain available for newly resolved dependencies.
     pub fn with_constraint_hashes(mut self, constraints: &Self) -> Result<Self, HashStrategyError> {
+        let sources = match (&self.verification, &constraints.verification) {
+            (
+                HashVerification::Required(_),
+                HashVerification::None | HashVerification::IfPresent(_),
+            ) => self.verification_sources.clone(),
+            (
+                HashVerification::None | HashVerification::IfPresent(_),
+                HashVerification::Required(_),
+            ) => constraints.verification_sources.clone(),
+            (HashVerification::Required(_), HashVerification::Required(_))
+            | (
+                HashVerification::None | HashVerification::IfPresent(_),
+                HashVerification::None | HashVerification::IfPresent(_),
+            ) => {
+                let mut sources = self.verification_sources.clone();
+                sources.extend(&constraints.verification_sources);
+                sources
+            }
+        };
         let (requirement_hashes, mode) = match &self.verification {
             HashVerification::None => {
                 self.verification = constraints.verification.clone();
+                self.verification_sources = constraints.verification_sources.clone();
                 return Ok(self);
             }
             HashVerification::IfPresent(hashes) => {
@@ -106,7 +129,8 @@ impl HashStrategy {
                 digests.retain(|digest| digest.algorithm() != HashAlgorithm::Md5);
             }
             let digests = if let Some(constraint) = constraints.hashes_for_id(id) {
-                combine_constraint_hashes(id, digests, constraint, id, mode)?
+                combine_constraint_hashes(id, digests, constraint, id, mode)
+                    .map_err(|err| err.with_sources(sources.clone()))?
             } else {
                 digests
             };
@@ -118,6 +142,7 @@ impl HashStrategy {
             HashCheckingMode::Verify => HashVerification::IfPresent(Arc::new(hashes)),
             HashCheckingMode::Require => HashVerification::Required(Arc::new(hashes)),
         };
+        self.verification_sources = sources;
         Ok(self)
     }
 
@@ -129,6 +154,11 @@ impl HashStrategy {
     /// Return the hash verification policy.
     pub fn verification(&self) -> &HashVerification {
         &self.verification
+    }
+
+    /// Return the declarations responsible for the effective hash-checking policy.
+    pub fn sources(&self) -> &SettingSources {
+        &self.verification_sources
     }
 
     /// Return the [`ArchiveHashPolicy`] for the given distribution.
@@ -300,6 +330,20 @@ impl HashStrategy {
         requirements: impl Iterator<Item = (&'a UnresolvedRequirement, &'a [String])>,
         constraints: impl Iterator<Item = (&'a Requirement, &'a [String])>,
         marker_env: Option<&ResolverMarkerEnvironment>,
+        mode: impl Into<Sourced<HashCheckingMode>>,
+    ) -> Result<Self, HashStrategyError> {
+        let (mode, sources) = mode.into().into_parts();
+        let mut strategy =
+            Self::from_requirements_inner(requirements, constraints, marker_env, mode)
+                .map_err(|err| err.with_sources(sources.clone()))?;
+        strategy.verification_sources = sources;
+        Ok(strategy)
+    }
+
+    fn from_requirements_inner<'a>(
+        requirements: impl Iterator<Item = (&'a UnresolvedRequirement, &'a [String])>,
+        constraints: impl Iterator<Item = (&'a Requirement, &'a [String])>,
+        marker_env: Option<&ResolverMarkerEnvironment>,
         mode: HashCheckingMode,
     ) -> Result<Self, HashStrategyError> {
         let mut constraint_hashes = FxHashMap::<VersionId, Vec<HashDigest>>::default();
@@ -318,7 +362,7 @@ impl HashStrategy {
                     return Err(HashStrategyError::UnpinnedRequirement(
                         requirement.to_string(),
                         mode,
-                        None,
+                        SettingSources::default(),
                     ));
                 }
                 continue;
@@ -365,7 +409,7 @@ impl HashStrategy {
                             return Err(HashStrategyError::UnpinnedRequirement(
                                 requirement.to_string(),
                                 mode,
-                                None,
+                                SettingSources::default(),
                             ));
                         }
                         continue;
@@ -416,13 +460,13 @@ impl HashStrategy {
                             requirement.to_string(),
                             HashAlgorithm::Md5,
                             mode,
-                            None,
+                            SettingSources::default(),
                         ));
                     }
                     return Err(HashStrategyError::MissingHashes(
                         requirement.to_string(),
                         mode,
-                        None,
+                        SettingSources::default(),
                     ));
                 }
                 continue;
@@ -447,7 +491,7 @@ impl HashStrategy {
     pub fn from_constraints(
         constraints: &Constraints,
         marker_env: Option<&ResolverMarkerEnvironment>,
-        mode: HashCheckingMode,
+        mode: impl Into<Sourced<HashCheckingMode>>,
     ) -> Result<Self, HashStrategyError> {
         Self::from_requirements(
             std::iter::empty(),
@@ -462,8 +506,9 @@ impl HashStrategy {
     /// Read the required hashes from a [`Resolution`].
     pub fn from_resolution(
         resolution: &Resolution,
-        mode: HashCheckingMode,
+        mode: impl Into<Sourced<HashCheckingMode>>,
     ) -> Result<Self, HashStrategyError> {
+        let (mode, sources) = mode.into().into_parts();
         let mut hashes = FxHashMap::<VersionId, Vec<HashDigest>>::default();
 
         for (dist, digests) in resolution.hashes() {
@@ -473,7 +518,7 @@ impl HashStrategy {
                     return Err(HashStrategyError::MissingHashes(
                         dist.name().to_string(),
                         mode,
-                        None,
+                        sources,
                     ));
                 }
                 continue;
@@ -481,10 +526,12 @@ impl HashStrategy {
             hashes.insert(dist.version_id(), digests.to_vec());
         }
 
-        match mode {
-            HashCheckingMode::Verify => Ok(Self::verify(Arc::new(hashes))),
-            HashCheckingMode::Require => Ok(Self::require(Arc::new(hashes))),
-        }
+        let mut strategy = match mode {
+            HashCheckingMode::Verify => Self::verify(Arc::new(hashes)),
+            HashCheckingMode::Require => Self::require(Arc::new(hashes)),
+        };
+        strategy.verification_sources = sources;
+        Ok(strategy)
     }
 
     /// Augment an existing set of hashes with archive URL hashes discovered in additional
@@ -616,7 +663,7 @@ fn combine_constraint_hashes(
                 return Err(HashStrategyError::NoIntersection(
                     requirement.to_string(),
                     mode,
-                    None,
+                    SettingSources::default(),
                 ));
             }
         }
@@ -697,37 +744,28 @@ pub enum HashStrategyError {
     #[error(
         "In `{1}` mode, all requirements must have their versions pinned with `==`, but found: {0}"
     )]
-    UnpinnedRequirement(String, HashCheckingMode, Option<Box<RequirementsInput>>),
+    UnpinnedRequirement(String, HashCheckingMode, SettingSources),
     #[error(
         "`{1}` hashes are insecure and cannot be used with `{2}` but no other hashes are available for: {0}"
     )]
-    InsecureHashAlgorithm(
-        String,
-        HashAlgorithm,
-        HashCheckingMode,
-        Option<Box<RequirementsInput>>,
-    ),
+    InsecureHashAlgorithm(String, HashAlgorithm, HashCheckingMode, SettingSources),
     #[error("In `{1}` mode, all requirements must have a hash, but none were provided for: {0}")]
-    MissingHashes(String, HashCheckingMode, Option<Box<RequirementsInput>>),
+    MissingHashes(String, HashCheckingMode, SettingSources),
     #[error(
         "In `{1}` mode, all requirements must have a hash, but there were no overlapping hashes between the requirements and constraints for: {0}"
     )]
-    NoIntersection(String, HashCheckingMode, Option<Box<RequirementsInput>>),
+    NoIntersection(String, HashCheckingMode, SettingSources),
 }
 
 impl HashStrategyError {
-    /// Attach the input that enabled `--require-hashes` to errors caused by that mode.
+    /// Attach the declarations responsible for the effective hash-checking policy.
     #[must_use]
-    pub fn with_require_hashes_source(mut self, source: Option<RequirementsInput>) -> Self {
+    pub fn with_sources(mut self, sources: SettingSources) -> Self {
         match &mut self {
-            Self::UnpinnedRequirement(_, mode, origin)
-            | Self::InsecureHashAlgorithm(_, _, mode, origin)
-            | Self::MissingHashes(_, mode, origin)
-            | Self::NoIntersection(_, mode, origin) => {
-                if mode.is_require() {
-                    *origin = source.map(Box::new);
-                }
-            }
+            Self::UnpinnedRequirement(_, _, origin)
+            | Self::InsecureHashAlgorithm(_, _, _, origin)
+            | Self::MissingHashes(_, _, origin)
+            | Self::NoIntersection(_, _, origin) => *origin = sources,
             Self::Hash(_) | Self::ConflictingArchiveUrlHashes(..) => {}
         }
         self
@@ -736,23 +774,17 @@ impl HashStrategyError {
 
 impl Hinted for HashStrategyError {
     fn hints(&self) -> Hints<'_> {
-        let origin = match self {
-            Self::UnpinnedRequirement(_, _, origin)
-            | Self::InsecureHashAlgorithm(_, _, _, origin)
-            | Self::MissingHashes(_, _, origin)
-            | Self::NoIntersection(_, _, origin) => origin,
+        let (mode, sources) = match self {
+            Self::UnpinnedRequirement(_, mode, sources)
+            | Self::InsecureHashAlgorithm(_, _, mode, sources)
+            | Self::MissingHashes(_, mode, sources)
+            | Self::NoIntersection(_, mode, sources) => (mode, sources),
             Self::Hash(_) | Self::ConflictingArchiveUrlHashes(..) => return Hints::none(),
         };
-        match origin.as_deref() {
-            Some(RequirementsInput::Stdin) => {
-                Hints::from("`--require-hashes` was enabled in requirements read from stdin")
-            }
-            Some(origin) => Hints::from(format!(
-                "`--require-hashes` was enabled in `{}`",
-                origin.user_display()
-            )),
-            None => Hints::none(),
-        }
+        Hints::from_iter(sources.enabled_hints(match mode {
+            HashCheckingMode::Require => "--require-hashes",
+            HashCheckingMode::Verify => "--verify-hashes",
+        }))
     }
 }
 
@@ -768,7 +800,8 @@ mod tests {
     use uv_distribution_filename::DistExtension;
     use uv_distribution_types::{
         ArchiveHashPolicy, HashCollection, HashValidation, MetadataHashPolicy, Requirement,
-        RequirementScope, RequirementSource, UnresolvedRequirement, VersionId,
+        RequirementScope, RequirementSource, SettingSource, Sourced, UnresolvedRequirement,
+        VersionId,
     };
     use uv_normalize::PackageName;
     use uv_pep440::Version;
@@ -776,6 +809,46 @@ mod tests {
     use uv_redacted::DisplaySafeUrl;
 
     use super::{HashStrategy, HashVerification};
+
+    /// A required policy must not attribute its errors to a weaker verification policy.
+    #[test]
+    fn constraint_hashes_retain_effective_policy_sources() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let required = HashStrategy::from_requirements(
+            std::iter::empty(),
+            std::iter::empty(),
+            None,
+            Sourced::new(
+                HashCheckingMode::Require,
+                SettingSource::Environment("UV_REQUIRE_HASHES"),
+            ),
+        )?;
+        let verified = HashStrategy::from_requirements(
+            std::iter::empty(),
+            std::iter::empty(),
+            None,
+            Sourced::new(
+                HashCheckingMode::Verify,
+                SettingSource::Configuration {
+                    input: Path::new("uv.toml").into(),
+                    key: "pip.verify-hashes".to_string(),
+                },
+            ),
+        )?;
+        for strategy in [
+            required.clone().with_constraint_hashes(&verified)?,
+            verified.with_constraint_hashes(&required)?,
+        ] {
+            assert_eq!(
+                strategy
+                    .sources()
+                    .enabled_hints("--require-hashes")
+                    .collect::<Vec<_>>(),
+                ["`--require-hashes` was enabled by environment variable `UV_REQUIRE_HASHES`"]
+            );
+        }
+        Ok(())
+    }
 
     fn requirement(url: &str) -> Requirement {
         Requirement {

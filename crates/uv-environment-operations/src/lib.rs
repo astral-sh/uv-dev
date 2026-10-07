@@ -2077,7 +2077,7 @@ fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: 
 
     if settings.index_locations.no_index() {
         // Nothing to do, we're ignoring the URLs anyway.
-    } else if *no_index {
+    } else if *no_index.value() {
         warn_user_once!(
             "Ignoring `--no-index` from requirements file. Instead, use the `--no-index` command-line argument, or set `no-index` in a `uv.toml` or `pyproject.toml` file."
         );

@@ -1032,7 +1032,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             PackageSource::Url(url) => {
                 // Verify that the package is allowed under the hash-checking policy.
                 if !self.hasher.allows_url(&url.verbatim) {
-                    return Err(ResolveError::UnhashedPackage(name.clone()));
+                    return Err(ResolveError::UnhashedPackage(
+                        name.clone(),
+                        self.hasher.sources().clone(),
+                    ));
                 }
 
                 // Emit a request to fetch the metadata for this distribution.
@@ -1718,7 +1721,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             .hasher
                             .allows_package(candidate.name(), candidate.version())
                         {
-                            return Err(ResolveError::UnhashedPackage(candidate.name().clone()));
+                            return Err(ResolveError::UnhashedPackage(
+                                candidate.name().clone(),
+                                self.hasher.sources().clone(),
+                            ));
                         }
                         Ok(())
                     },

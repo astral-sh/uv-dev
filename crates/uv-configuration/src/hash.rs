@@ -1,3 +1,5 @@
+use uv_distribution_types::Sourced;
+
 #[derive(Debug, Default, Copy, Clone)]
 pub enum HashCheckingMode {
     /// Hashes should be validated against a pre-defined list of hashes. Every requirement must
@@ -27,10 +29,37 @@ impl HashCheckingMode {
         }
     }
 
-    /// Apply the `--require-hashes` setting from a requirements file.
-    pub fn from_requirements_txt(mode: Option<Self>, require_hashes: bool) -> Option<Self> {
-        if require_hashes {
-            Some(Self::Require)
+    /// Resolve hash checking while retaining the source of the effective policy.
+    pub fn from_settings(
+        require_hashes: Option<Sourced<bool>>,
+        verify_hashes: Option<Sourced<bool>>,
+    ) -> Option<Sourced<Self>> {
+        let mode = Self::from_args(
+            require_hashes.as_ref().map(|setting| *setting.value()),
+            verify_hashes.as_ref().map(|setting| *setting.value()),
+        )?;
+        match mode {
+            Self::Require => require_hashes.map(|setting| setting.map(|_| mode)),
+            Self::Verify => {
+                Some(verify_hashes.map_or_else(|| mode.into(), |setting| setting.map(|_| mode)))
+            }
+        }
+    }
+
+    /// Apply cumulative requirements-file directives to the selected hash-checking policy.
+    pub fn from_requirements_txt(
+        mode: Option<Sourced<Self>>,
+        require_hashes: Sourced<bool>,
+    ) -> Option<Sourced<Self>> {
+        if *require_hashes.value() {
+            let required = require_hashes.map(|_| Self::Require);
+            Some(
+                if let Some(mode) = mode.filter(|mode| mode.value().is_require()) {
+                    mode.with_sources(required.sources())
+                } else {
+                    required
+                },
+            )
         } else {
             mode
         }

@@ -17,7 +17,9 @@ use uv_pypi_types::HashAlgorithm;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
 
-use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Verbatim};
+use crate::{
+    ExcludeNewerOverride, Index, IndexStatusCodeStrategy, SettingSources, Sourced, Verbatim,
+};
 
 pub static PYPI_URL: LazyLock<DisplaySafeUrl> =
     LazyLock::new(|| DisplaySafeUrl::parse("https://pypi.org/simple").unwrap());
@@ -262,16 +264,20 @@ impl Deref for IndexUrl {
 pub struct IndexLocations {
     indexes: Vec<Index>,
     flat_index: Vec<Index>,
-    no_index: bool,
+    no_index: Sourced<bool>,
 }
 
 impl IndexLocations {
     /// Determine the index URLs to use for fetching packages.
-    pub fn new(indexes: Vec<Index>, flat_index: Vec<Index>, no_index: bool) -> Self {
+    pub fn new(
+        indexes: Vec<Index>,
+        flat_index: Vec<Index>,
+        no_index: impl Into<Sourced<bool>>,
+    ) -> Self {
         Self {
             indexes,
             flat_index,
-            no_index,
+            no_index: no_index.into(),
         }
     }
 
@@ -282,11 +288,16 @@ impl IndexLocations {
     ///
     /// If the current index location has an `index` set, it will be preserved.
     #[must_use]
-    pub fn combine(self, indexes: Vec<Index>, flat_index: Vec<Index>, no_index: bool) -> Self {
+    pub fn combine(
+        self,
+        indexes: Vec<Index>,
+        flat_index: Vec<Index>,
+        no_index: impl Into<Sourced<bool>>,
+    ) -> Self {
         Self {
             indexes: self.indexes.into_iter().chain(indexes).collect(),
             flat_index: self.flat_index.into_iter().chain(flat_index).collect(),
-            no_index: self.no_index || no_index,
+            no_index: self.no_index.or(no_index.into()),
         }
     }
 
@@ -318,7 +329,7 @@ impl<'a> IndexLocations {
     ///
     /// If no index is provided, use the `PyPI` index.
     pub fn default_index(&'a self) -> Option<&'a Index> {
-        if self.no_index {
+        if *self.no_index.value() {
             None
         } else {
             self.configured_indexes()
@@ -331,7 +342,7 @@ impl<'a> IndexLocations {
     ///
     /// Default and explicit indexes are excluded.
     pub fn implicit_indexes(&'a self) -> impl Iterator<Item = &'a Index> + 'a {
-        if self.no_index {
+        if *self.no_index.value() {
             Either::Left(std::iter::empty())
         } else {
             Either::Right(
@@ -345,7 +356,7 @@ impl<'a> IndexLocations {
     ///
     /// Explicit indexes are only used when pinned via `tool.uv.sources`.
     pub fn explicit_indexes(&'a self) -> impl Iterator<Item = &'a Index> + 'a {
-        if self.no_index {
+        if *self.no_index.value() {
             Either::Left(std::iter::empty())
         } else {
             Either::Right(self.configured_indexes().filter(|index| index.explicit))
@@ -379,7 +390,7 @@ impl<'a> IndexLocations {
     ///
     /// If `no_index` was enabled, then this always returns an empty iterator.
     pub fn simple_indexes(&'a self) -> impl Iterator<Item = &'a Index> + 'a {
-        if self.no_index {
+        if *self.no_index.value() {
             Either::Left(std::iter::empty())
         } else {
             Either::Right(self.configured_indexes())
@@ -393,7 +404,12 @@ impl<'a> IndexLocations {
 
     /// Return the `--no-index` flag.
     pub fn no_index(&self) -> bool {
-        self.no_index
+        *self.no_index.value()
+    }
+
+    /// Return the declarations responsible for disabling index lookups.
+    pub fn no_index_sources(&self) -> &SettingSources {
+        self.no_index.sources()
     }
 
     /// Return a vector containing all allowed [`Index`] entries.
@@ -403,7 +419,7 @@ impl<'a> IndexLocations {
     /// The indexes will be returned in the reverse of the order in which they were defined, such
     /// that the last-defined index is the first item in the vector.
     pub fn allowed_indexes(&'a self) -> Vec<&'a Index> {
-        if self.no_index {
+        if *self.no_index.value() {
             self.flat_index.iter().rev().collect()
         } else {
             let mut indexes = vec![];
@@ -442,7 +458,7 @@ impl<'a> IndexLocations {
     /// The indexes will be returned in the reverse of the order in which they were defined, such
     /// that the last-defined index is the first item in the vector.
     pub fn known_indexes(&'a self) -> impl Iterator<Item = &'a Index> {
-        if self.no_index {
+        if *self.no_index.value() {
             Either::Left(self.flat_index.iter().rev())
         } else {
             Either::Right(
@@ -463,7 +479,7 @@ impl<'a> IndexLocations {
     ///
     /// If `no_index` was enabled, then this always returns an empty iterator.
     pub fn defined_indexes(&'a self) -> impl Iterator<Item = &'a Index> + 'a {
-        if self.no_index {
+        if *self.no_index.value() {
             return Either::Left(std::iter::empty());
         }
 

@@ -30,7 +30,7 @@ use uv_distribution_filename::{
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, IndexLocations,
-    NameRequirementSpecification, PackageConfigSettings, Requirement, SourceDist,
+    NameRequirementSpecification, PackageConfigSettings, Requirement, SourceDist, Sourced,
 };
 use uv_errors::{Hinted, Hints};
 use uv_fs::{Simplified, normalize_path, relative_to};
@@ -127,6 +127,7 @@ impl From<PythonSelectionError> for Error {
 impl Hinted for Error {
     fn hints(&self) -> Hints<'_> {
         match self {
+            Self::HashStrategy(err) => err.hints(),
             Self::BuildBackend(err) => err.hints(),
             Self::BuildFrontend(err) => err.hints(),
             Self::BuildDispatch(err) => err.hints(),
@@ -222,7 +223,7 @@ pub async fn build_frontend(
     clear: bool,
     build_constraints: Vec<RequirementsSource>,
     build_constraints_from_workspace: Vec<NameRequirementSpecification>,
-    hash_checking: Option<HashCheckingMode>,
+    hash_checking: Option<Sourced<HashCheckingMode>>,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
     settings: &ResolverSettings,
@@ -422,7 +423,7 @@ pub async fn build_frontend(
             printer,
             index_locations,
             client_builder.clone(),
-            hash_checking,
+            hash_checking.clone(),
             *build_hash_checking,
             build_logs,
             gitignore,
@@ -496,7 +497,7 @@ async fn build_package(
     printer: Printer,
     index_locations: &IndexLocations,
     client_builder: BaseClientBuilder<'_>,
-    hash_checking: Option<HashCheckingMode>,
+    hash_checking: Option<Sourced<HashCheckingMode>>,
     build_hash_checking: HashCheckingMode,
     build_logs: bool,
     gitignore: bool,
@@ -593,7 +594,7 @@ async fn build_package(
     );
 
     let hash_checking = match build_hash_checking {
-        HashCheckingMode::Require => Some(HashCheckingMode::Require),
+        HashCheckingMode::Require => Some(HashCheckingMode::Require.into()),
         HashCheckingMode::Verify => hash_checking,
     };
     let hasher = if let Some(hash_checking) = hash_checking {
@@ -604,7 +605,7 @@ async fn build_package(
                 build_constraints_from_workspace
                     .iter()
                     .filter(|entry| {
-                        !hash_checking.is_require()
+                        !hash_checking.value().is_require()
                             || build_hash_checking.is_require()
                             || !entry.hashes.is_empty()
                     })
