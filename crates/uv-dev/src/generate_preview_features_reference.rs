@@ -129,6 +129,7 @@ mod tests {
         - <a id="format-command" href="#format-command"><code>format-command</code></a>: Allows using `uv format`.
         - <a id="frozen-lockfile" href="#frozen-lockfile"><code>frozen-lockfile</code></a>: Allows using frozen project commands without a workspace manifest.
         - <a id="gcs-endpoint" href="#gcs-endpoint"><code>gcs-endpoint</code></a>: Allows signing requests to configured Google Cloud Storage endpoints.
+        - <a id="git-partial-fetches" href="#git-partial-fetches"><code>git-partial-fetches</code></a>: Fetches Git trees and blobs lazily when checking out source repositories.
         - <a id="index-by-name" href="#index-by-name"><code>index-by-name</code></a>: Allows selecting configured package indexes by name with `--index` and `--default-index`.
         - <a id="index-exclude-newer" href="#index-exclude-newer"><code>index-exclude-newer</code></a>: Allows setting `exclude-newer` on configured package indexes.
         - <a id="index-hash-algorithm" href="#index-hash-algorithm"><code>index-hash-algorithm</code></a>: Allows requiring a hash algorithm for configured package indexes.

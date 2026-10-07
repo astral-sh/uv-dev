@@ -3648,6 +3648,7 @@ fn install_git_private_https_pat_and_username() {
 #[cfg(all(not(windows), feature = "test-git"))]
 fn install_git_private_https_pat_not_authorized() {
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION)
+        .with_env(EnvVars::UV_PREVIEW_FEATURES, "git-partial-fetches")
         .with_filter(("`.*/git fetch (.*)`", "`git fetch $1`"));
 
     // A revoked token
@@ -3663,11 +3664,24 @@ fn install_git_private_https_pat_not_authorized() {
     error: Failed to download and build `uv-private-pypackage @ git+https://git:****@github.com/astral-test/uv-private-pypackage`
       cause: Git operation failed
       cause: failed to clone into: [CACHE_DIR]/git-v1/db/8401f5508e3e612d
-      cause: process didn't exit successfully: `git fetch --force --update-head-ok 'https://git:****@github.com/astral-test/uv-private-pypackage' '+HEAD:refs/remotes/origin/HEAD'` (exit status: 128)
+      cause: process didn't exit successfully: `git fetch --force --update-head-ok '--filter=tree:0' origin '+HEAD:refs/remotes/origin/HEAD'` (exit status: 128)
              --- stderr
              remote: Invalid username or token. Password authentication is not supported for Git operations.
              fatal: Authentication failed for 'https://github.com/astral-test/uv-private-pypackage/'
     ");
+
+    let config = fs::read_to_string(
+        context
+            .cache_dir
+            .child("git-v1")
+            .child("db")
+            .child("8401f5508e3e612d")
+            .child(".git")
+            .child("config"),
+    )
+    .expect("Git config should exist");
+    assert!(!config.contains(token));
+    assert!(config.contains("url = https://github.com/astral-test/uv-private-pypackage"));
 }
 
 /// Install a package from a private GitHub repository using a PAT
@@ -3752,7 +3766,7 @@ fn install_git_private_https_interactive() {
     error: Failed to download and build `uv-private-pypackage @ git+https://github.com/astral-test/uv-private-pypackage`
       cause: Git operation failed
       cause: failed to clone into: [CACHE_DIR]/git-v1/db/8401f5508e3e612d
-      cause: process didn't exit successfully: `/usr/bin/git fetch --force --update-head-ok 'https://github.com/astral-test/uv-private-pypackage' '+HEAD:refs/remotes/origin/HEAD'` (exit status: 128)
+      cause: process didn't exit successfully: `/usr/bin/git fetch --force --update-head-ok --no-filter 'https://github.com/astral-test/uv-private-pypackage' '+HEAD:refs/remotes/origin/HEAD'` (exit status: 128)
              --- stderr
              fatal: could not read Username for 'https://github.com': terminal prompts disabled
     ");
