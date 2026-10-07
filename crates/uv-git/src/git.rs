@@ -3,11 +3,11 @@
 //! Source: <https://github.com/rust-lang/cargo/blob/23eb492cf920ce051abfc56bbaf838514dc8365c/src/cargo/sources/git/utils.rs>
 use std::env;
 use std::fmt::Display;
-use std::path::{Path, PathBuf};
+use std::path::{Path, PathBuf, absolute};
 use std::str::{self};
 use std::sync::LazyLock;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use cargo_util::{ProcessBuilder, ProcessError, paths};
 use owo_colors::OwoColorize;
 use tracing::{debug, instrument, warn};
@@ -376,6 +376,8 @@ impl GitRepository {
             .arg("fsck")
             .arg("--objects")
             .arg(refname)
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .env(EnvVars::GIT_ALLOW_PROTOCOL, "file")
             .cwd(&self.path)
             .exec_with_output();
 
@@ -451,8 +453,18 @@ impl GitRemote {
             };
 
             if let Some(rev) = resolved_commit_hash {
+                if with_lfs {
+                    let lfs_ready = fetch_lfs(
+                        &db.repo,
+                        &self.url,
+                        &rev,
+                        settings.disable_ssl,
+                        settings.offline,
+                    )
+                    .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
+                    db = db.with_lfs_ready(Some(lfs_ready));
+                }
                 db.remote = self;
-                db = db.with_lfs_ready(with_lfs.then_some(true));
                 return Ok((db, rev));
             }
         }
@@ -474,12 +486,24 @@ impl GitRemote {
             Some(rev) => rev,
             None => reference.resolve(&repo)?,
         };
+        let lfs_ready = with_lfs
+            .then(|| {
+                fetch_lfs(
+                    &repo,
+                    &self.url,
+                    &rev,
+                    settings.disable_ssl,
+                    settings.offline,
+                )
+                .with_context(|| format!("failed to fetch LFS objects at {rev}"))
+            })
+            .transpose()?;
 
         Ok((
             GitDatabase {
                 remote: self,
                 repo,
-                lfs_ready: with_lfs.then_some(true),
+                lfs_ready,
             },
             rev,
         ))
@@ -519,7 +543,8 @@ impl GitDatabase {
                     if co.repo.lfs_fsck_objects(rev.as_str()) {
                         co.with_lfs_ready(Some(true))
                     } else {
-                        let lfs_ready = co.reset(self.lfs_ready, self.remote.url(), settings)?;
+                        let lfs_ready = self.copy_lfs_to(&co)?;
+                        let lfs_ready = co.reset(lfs_ready, self.remote.url(), settings)?;
                         co.with_lfs_ready(lfs_ready)
                     }
                 } else {
@@ -529,6 +554,20 @@ impl GitDatabase {
             None => GitCheckout::clone_into(destination, self, rev, settings)?,
         };
         Ok(checkout)
+    }
+
+    /// Copy LFS objects from the shared database into a checkout clone.
+    fn copy_lfs_to(&self, checkout: &GitCheckout) -> Result<Option<bool>> {
+        match self.lfs_ready {
+            None => Ok(None),
+            Some(false) => Ok(Some(false)),
+            Some(true) => {
+                let path = absolute(&self.repo.path)?;
+                let url = DisplaySafeUrl::from_file_path(&path)
+                    .map_err(|()| anyhow!("Invalid Git database path: {}", path.user_display()))?;
+                fetch_lfs(&checkout.repo, &url, &checkout.revision, false, true).map(Some)
+            }
+        }
     }
 
     /// Get a short OID for a `revision`, usually 7 chars or more if ambiguous.
@@ -550,6 +589,11 @@ impl GitDatabase {
     /// Checks if `oid` resolves to a commit in this database.
     pub(crate) fn contains(&self, oid: GitOid) -> bool {
         self.repo.rev_parse(&format!("{oid}^0")).is_ok()
+    }
+
+    /// Checks whether the shared database contains the revision's LFS objects.
+    pub(crate) fn contains_lfs_artifacts(&self, oid: GitOid) -> bool {
+        self.repo.lfs_fsck_objects(&format!("{oid}^0"))
     }
 
     /// Set the Git LFS validation state (if any).
@@ -634,7 +678,8 @@ impl GitCheckout {
         }
 
         let checkout = Self::new(revision, GitRepository::open(into)?);
-        let lfs_ready = checkout.reset(database.lfs_ready, database.remote.url(), settings)?;
+        let lfs_ready = database.copy_lfs_to(&checkout)?;
+        let lfs_ready = checkout.reset(lfs_ready, database.remote.url(), settings)?;
         Ok(checkout.with_lfs_ready(lfs_ready))
     }
 
@@ -693,16 +738,6 @@ impl GitCheckout {
         if settings.partial_fetches || self.repo.has_promisor_remote()? {
             self.repo
                 .configure_promisor_remote(CHECKOUT_REMOTE, original_remote_url)?;
-        } else if with_lfs == Some(true) {
-            // LFS smudge filters must retrieve objects from the source repository,
-            // since the local Git database does not contain LFS objects.
-            GIT.as_ref()
-                .cloned()?
-                .arg("config")
-                .arg(format!("remote.{CHECKOUT_REMOTE}.url"))
-                .arg(without_credentials(original_remote_url).as_str())
-                .cwd(&self.repo.path)
-                .exec_with_output()?;
         }
 
         // We want to skip smudge if lfs was disabled for the repository
@@ -783,21 +818,12 @@ impl GitCheckout {
             .map_err(|err| git_command_error(err, original_remote_url, settings.offline))
             .map(drop)?;
 
-        // Fetch and validate Git LFS objects (if needed) after the reset.
+        // Validate Git LFS objects (if needed) after the reset.
         // See `fetch_lfs` why we do this.
         let lfs_validation = match with_lfs {
             None => None,
             Some(false) => Some(false),
-            Some(true) => Some(
-                fetch_lfs(
-                    &self.repo,
-                    original_remote_url,
-                    &self.revision,
-                    settings.disable_ssl,
-                    settings.offline,
-                )
-                .with_context(|| format!("failed to fetch LFS objects at {}", self.revision))?,
-            ),
+            Some(true) => Some(self.repo.lfs_fsck_objects(self.revision.as_str())),
         };
 
         // The .ok file should be written when the reset is successful.
@@ -1106,6 +1132,72 @@ pub static GIT_LFS: LazyLock<Result<ProcessBuilder>> = LazyLock::new(|| {
     Ok(cmd)
 });
 
+/// Fetch the Git objects needed to scan one revision's tree for LFS pointers.
+fn fetch_lfs_git_objects(
+    repo: &GitRepository,
+    url: &DisplaySafeUrl,
+    revision: &GitOid,
+    disable_ssl: bool,
+    offline: bool,
+) -> Result<()> {
+    if !repo.has_promisor_remote()? {
+        return Ok(());
+    }
+
+    // Git LFS scans objects without retrieving missing promisor blobs. Fetch
+    // the selected tree and its blobs in batches, without traversing history.
+    let mut requested = Vec::new();
+    loop {
+        let output = GIT
+            .as_ref()
+            .cloned()?
+            .arg("rev-list")
+            .arg("--objects")
+            .arg("--no-object-names")
+            .arg("--missing=print")
+            .arg("--no-walk")
+            .arg(revision.as_str())
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .env(EnvVars::GIT_ALLOW_PROTOCOL, "file")
+            .cwd(&repo.path)
+            .exec_with_output()?;
+        let mut missing = str::from_utf8(&output.stdout)?
+            .lines()
+            .filter_map(|line| line.strip_prefix('?'))
+            .map(str::parse::<GitOid>)
+            .collect::<Result<Vec<_>, _>>()?;
+        if missing.is_empty() {
+            return Ok(());
+        }
+        missing.sort_unstable();
+        ensure!(
+            missing != requested,
+            "Git did not provide the objects required by {revision}"
+        );
+
+        repo.configure_promisor_remote(CHECKOUT_REMOTE, url)?;
+        let mut fetch = GIT.as_ref().cloned()?;
+        configure_git_network(&mut fetch, url, disable_ssl, offline);
+        fetch
+            .arg("fetch")
+            .arg("--no-tags")
+            .arg("--filter=blob:none")
+            .arg("--stdin")
+            .arg(CHECKOUT_REMOTE)
+            .stdin(
+                missing
+                    .iter()
+                    .map(GitOid::as_str)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .cwd(&repo.path)
+            .exec_with_output()
+            .map_err(|err| git_command_error(err, url, offline))?;
+        requested = missing;
+    }
+}
+
 /// Attempts to use `git-lfs` CLI to fetch required LFS objects for a given revision.
 fn fetch_lfs(
     repo: &GitRepository,
@@ -1123,12 +1215,12 @@ fn fetch_lfs(
         return Ok(false);
     };
 
+    fetch_lfs_git_objects(repo, url, revision, disable_ssl, offline)?;
     configure_git_network(&mut cmd, url, disable_ssl, offline);
 
     cmd.arg("fetch")
         .arg(url.as_str())
         .arg(revision.as_str())
-        .env(EnvVars::GIT_TERMINAL_PROMPT, "0")
         // We should not support requesting LFS artifacts with skip smudge being set.
         // While this may not be necessary, it's added to avoid any potential future issues.
         .env_remove(EnvVars::GIT_LFS_SKIP_SMUDGE)
