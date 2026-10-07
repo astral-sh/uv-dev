@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8186,
+        "title": "Make UV_PYTHON_INSTALL_MIRROR configurable in uv.toml",
+        "url": "https://github.com/astral-sh/uv/issues/8186",
+        "state": "closed",
+        "reason": "Requested configuration settings for CPython and PyPy mirrors, including enterprise security requirements. This is the closest configuration precedent, but it did not request GraalPy support."
+      },
+      {
+        "kind": "pull_request",
+        "number": 8695,
+        "title": "Make Python and PyPy install mirrors configurable in uv.toml",
+        "url": "https://github.com/astral-sh/uv/pull/8695",
+        "state": "merged",
+        "reason": "Implemented astral-sh/uv#8186, threading CPython/PyPy mirror configuration through relevant commands. Merged November 13, 2024; provides an implementation precedent without adding GraalPy controls."
+      },
+      {
+        "kind": "issue",
+        "number": 8068,
+        "title": "uv python install with custom UV_PYTHON_INSTALL_MIRROR is not respected for pypy",
+        "url": "https://github.com/astral-sh/uv/issues/8068",
+        "state": "closed",
+        "reason": "Maintainers explained that CPython and PyPy have separate mirror variables because their URL layouts differ. PyPy already had its requested control, whereas GraalPy lacks one."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13172,
+        "title": "Add downloading of GraalPy",
+        "url": "https://github.com/astral-sh/uv/pull/13172",
+        "state": "merged",
+        "reason": "Merged May 6, 2025, adding GraalPy download metadata and recognition of GraalPy catalog entries. It enabled interpreter downloads without introducing mirror overrides."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10939,
+        "title": "Add `UV_PYTHON_DOWNLOADS_JSON_URL` to set custom managed python sources",
+        "url": "https://github.com/astral-sh/uv/pull/10939",
+        "state": "merged",
+        "reason": "Introduced custom download catalogs, providing an interim workaround. Current source accepts GraalPy entries and uses their supplied archive URLs. Maintaining a replacement catalog differs from configuring a dedicated mirror."
+      }
+    ],
+    "search_scope": "Used authenticated gh searches covering open/closed issues and open/closed/merged PRs. Searched environment-variable and configuration claims separately using UV_GRAALPY_INSTALL_MIRROR, graalpy-install-mirror, UV_PYPY_INSTALL_MIRROR, and python-install-mirror. Expanded to GraalPy/graalpython downloads, proxies, managed interpreters, offline mirrors, configuration labels, comments, closed reports, and version 0.12.23. PR searches returned no hits even for known historical work, so relevant PRs were recovered through comments and timelines and inspected directly; PR search coverage is therefore limited. Ruled out astral-sh/uv#13114 (basic GraalPy installation), astral-sh/uv#8015 and astral-sh/uv#12838 (custom catalogs and mirror tooling), astral-sh/uv#18525 (Astral-hosted assets), and astral-sh/uv#15024 (dependency source builds). No matching GraalPy mirror request or historical fix was found."
+  },
+  "type": "enhancement",
+  "type_reason": "The report requests new environment-variable and configuration controls. PythonInstallMirrors exposes only CPython/PyPy mirror fields, and download_urls_with_astral_mirror applies overrides only to those implementations. GraalPy uses its catalog URLs. No failure of an existing GraalPy mirror feature, regression, or matching duplicate was established.",
+  "summary": "The closest precedents are astral-sh/uv#8186 and astral-sh/uv#8695 for mirror configuration, with astral-sh/uv#10939 providing a custom-catalog workaround. No matching GraalPy mirror request was found. The required README update failed because $RUNNER_TEMP/issue-context/README.md is on a read-only filesystem.",
+  "draft_response": "You're right: uv currently provides dedicated install-mirror settings for CPython and PyPy, but none for GraalPy. Adding a GraalPy environment variable and setting would extend that support, following the precedent in astral-sh/uv#8186 and astral-sh/uv#8695.\n\nFor now, you can set UV_PYTHON_DOWNLOADS_JSON_URL to a local copy of the download metadata with the GraalPy archive URLs changed to your proxy repository. This replaces the built-in catalog, so include all distributions you need and retain their checksums.\n\nIf your team would like to contribute, please outline the proposed URL mapping here first so maintainers can agree on the behavior before you start a PR."
+}
