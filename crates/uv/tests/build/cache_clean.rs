@@ -2,10 +2,26 @@
 use std::fs::Permissions;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::process::Stdio;
+#[cfg(unix)]
+use std::time::Duration;
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
+#[cfg(unix)]
+use indoc::indoc;
+#[cfg(unix)]
+use insta::assert_snapshot;
+#[cfg(unix)]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(unix)]
+use tokio::net::{TcpListener, TcpStream};
+#[cfg(unix)]
+use tokio::process::{Child, Command as TokioCommand};
+#[cfg(unix)]
+use tokio::time::timeout;
 
 #[cfg(target_os = "linux")]
 use std::process::Command;
@@ -15,9 +31,106 @@ use uv_cache::Cache;
 use uv_fs::link::{LinkMode, LinkOptions, link_dir};
 use uv_static::EnvVars;
 
-#[cfg(unix)]
-use uv_test::assert_path_missing;
 use uv_test::uv_snapshot;
+#[cfg(unix)]
+use uv_test::{TestContext, assert_path_missing};
+
+/// Start a backend that waits until cache cleanup completes before using its environment again.
+#[cfg(unix)]
+pub(super) async fn start_build_backend(context: &TestContext) -> Result<(Child, TcpStream)> {
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        import os
+        from pathlib import Path
+        import socket
+        import sys
+        import sysconfig
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            environment = Path(sys.prefix)
+            assert environment.is_dir()
+            module = Path(sysconfig.get_path("purelib")) / "build_dependency.py"
+            module.write_text("VALUE = 42\n")
+            import build_dependency
+            assert build_dependency.VALUE == 42
+            del sys.modules["build_dependency"]
+
+            with socket.create_connection(("127.0.0.1", int(os.environ["BACKEND_PORT"])), timeout=30) as connection:
+                connection.sendall(b"R")
+                assert connection.recv(1) == b"R"
+                observations = [f"environment exists: {environment.is_dir()}"]
+                try:
+                    (environment / "probe").write_text("still running")
+                    observations.append("write: succeeded")
+                except OSError as error:
+                    observations.append(f"write: {type(error).__name__}")
+                try:
+                    import build_dependency
+                    observations.append("import: succeeded")
+                except ImportError as error:
+                    observations.append(f"import: {type(error).__name__}")
+                connection.sendall("\n".join(observations).encode())
+            raise SystemExit(0)
+    "#})?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let mut command = context.build();
+    command
+        .args(["--wheel", "--offline", "--python", "3.12"])
+        .arg(project.path())
+        .env("BACKEND_PORT", listener.local_addr()?.port().to_string());
+    let child = TokioCommand::from(command)
+        .kill_on_drop(true)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let (mut backend, _) = timeout(Duration::from_secs(30), listener.accept()).await??;
+    let mut ready = [0];
+    timeout(Duration::from_secs(30), backend.read_exact(&mut ready)).await??;
+    assert_eq!(&ready, b"R");
+    Ok((child, backend))
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn clean_live_build_environment_after_parent_exit() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_sizes_and_units();
+    let (mut child, mut backend) = start_build_backend(&context).await?;
+
+    // Kill only uv; the backend remains blocked on its connection to the test.
+    child.kill().await?;
+
+    uv_snapshot!(context.filters(), context.clean().env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Clearing cache at: [CACHE_DIR]/
+    Removed [N] files ([SIZE])
+    ");
+
+    backend.write_all(b"R").await?;
+    let mut observations = String::new();
+    timeout(
+        Duration::from_secs(30),
+        backend.read_to_string(&mut observations),
+    )
+    .await??;
+    // Removing a live backend's environment breaks its writes and imports: astral-sh/uv#22338.
+    assert_snapshot!(observations, @"
+    environment exists: False
+    write: FileNotFoundError
+    import: ModuleNotFoundError
+    ");
+
+    Ok(())
+}
 
 /// `cache clean` should remove all packages.
 #[test]
