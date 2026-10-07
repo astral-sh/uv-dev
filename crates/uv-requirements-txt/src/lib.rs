@@ -43,7 +43,7 @@ use std::str::FromStr;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 use unscanny::{Pattern, Scanner};
-use url::Url;
+use url::{ParseError, Url};
 
 #[cfg(feature = "http")]
 use uv_client::{BaseClient, ClientBuildError};
@@ -55,10 +55,11 @@ use uv_distribution_types::{
     Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_fs::normalize_path;
-use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, expand_env_vars};
+use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, VerbatimUrlError, expand_env_vars};
 use uv_pypi_types::VerbatimParsedUrl;
 #[cfg(feature = "http")]
 use uv_redacted::DisplaySafeUrl;
+use uv_redacted::DisplaySafeUrlError;
 
 pub use crate::requirement::{MakeEditableError, RequirementsTxtRequirement};
 use crate::shquote::unquote;
@@ -806,14 +807,28 @@ fn parse_entry(
                 })?
             }
             Ok(RequirementsInput::Local(path)) => {
-                let path = std::path::absolute(path).map_err(RequirementsTxtParserError::Io)?;
-                VerbatimUrl::from_absolute_path(path).map_err(|err| {
-                    RequirementsTxtParserError::VerbatimUrl {
-                        source: err,
-                        url: given.to_string(),
-                        start,
-                        end: s.cursor(),
+                let path = std::path::absolute(path);
+                let url = if let Ok(path) = &path
+                    && path.exists()
+                {
+                    VerbatimUrl::from_absolute_path(path)
+                } else {
+                    // URL parsing ignores tabs and newlines that can prevent scheme detection.
+                    match VerbatimUrl::parse_url(expanded.as_ref()) {
+                        Ok(url) => Ok(url),
+                        Err(VerbatimUrlError::Url(DisplaySafeUrlError::Url(
+                            ParseError::RelativeUrlWithoutBase,
+                        ))) => VerbatimUrl::from_absolute_path(
+                            path.map_err(RequirementsTxtParserError::Io)?,
+                        ),
+                        Err(err) => Err(err),
                     }
+                };
+                url.map_err(|err| RequirementsTxtParserError::VerbatimUrl {
+                    source: err,
+                    url: given.to_string(),
+                    start,
+                    end: s.cursor(),
                 })?
             }
             Ok(RequirementsInput::Remote(url)) => VerbatimUrl::from_url(url),
