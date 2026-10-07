@@ -424,6 +424,8 @@ pub enum PreviewFeature {
     /// can share a cache entry, reducing duplication when the same wheel contents are encountered
     /// more than once.
     ContentAddressedCache,
+    /// Fetches Git trees and blobs lazily when checking out source repositories.
+    GitPartialFetches,
     /// uv omits `exclude-newer-package` entries from the lockfile when the corresponding packages
     /// are absent from the resolved dependencies. This keeps cutoffs for unrelated packages out of
     /// `uv.lock`.
