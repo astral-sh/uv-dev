@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 19206,
+        "title": "Add Astral mirror URL override",
+        "url": "https://github.com/astral-sh/uv/pull/19206",
+        "state": "merged",
+        "reason": "Added UV_ASTRAL_MIRROR_URL support for self-update metadata, installer downloads, and forwarding UV_DOWNLOAD_URL. Merged before the reported versions and documented since 0.11.14. Its diff does not change the success-message URL."
+      },
+      {
+        "kind": "issue",
+        "number": 18525,
+        "title": "Add support for customizing Astral mirror URLs",
+        "url": "https://github.com/astral-sh/uv/issues/18525",
+        "state": "closed",
+        "reason": "Requested configurable mirrors for restricted environments and was resolved by astral-sh/uv#19206. It concerns routing downloads through mirrors; this report confirms downloads work and identifies misleading success output."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18682,
+        "title": "Fetch uv from Astral mirror during self-update",
+        "url": "https://github.com/astral-sh/uv/pull/18682",
+        "state": "merged",
+        "reason": "Introduced the official updater's mirror-based installer flow. Its validation transcript already shows a mirror download followed by a GitHub release-page link. This provides historical context but predates custom-mirror support and does not fix this logging behavior."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and query open, closed, and merged PRs in astral-sh/uv. Literal searches included UV_ASTRAL_MIRROR_URL, UV_DOWNLOAD_URL, self_update.rs, Upgraded uv, and self update with mirror/logging/success. Conceptual searches covered release links/pages/notes, hardcoded output, private-server updates, and area:tracing, area:cli, area:network, and internal:releases. Followed comments and timelines through astral-sh/uv#18525 and astral-sh/uv#18503 to merged PRs; inspected discussions, the mirror-override diff, source, and release timing. Ruled out astral-sh/uv#9134, astral-sh/uv#16519, and astral-sh/uv#17255 as download/configuration problems; astral-sh/uv#4748 concerns displaying the previous version, and astral-sh/uv#18412 concerns quiet output. PR keyword searches missed directly retrievable historical PRs, so negative PR results are not conclusive. No exact duplicate or previous logging fix was established."
+  },
+  "type": "bug",
+  "type_reason": "crates/uv/src/commands/self_update.rs confirms that run_official_updater uses the custom mirror for downloads, then unconditionally prints a GitHub release-page URL at line 390. This is misleading user-facing output. The related historical changes implement mirror downloads, not this output correction; no previously fixed logging behavior or regression was established.",
+  "summary": "No exact duplicate found. astral-sh/uv#18525 and astral-sh/uv#19206 cover custom-mirror support; astral-sh/uv#18682 documents the earlier output. The requested README could not be updated because $RUNNER_TEMP/issue-context/README.md is read-only; no writable temporary directory was available for a fallback.",
+  "draft_response": "You're right: the updater uses UV_ASTRAL_MIRROR_URL for its downloads, then prints a hard-coded GitHub release-page link. Printing that link does not itself contact GitHub, but the output is misleading with a custom mirror. Mirror support landed in astral-sh/uv#19206 without changing this message. The next step is a focused output fix with snapshot coverage for custom-mirror and default behavior. The replacement needs to account for mirrors that serve metadata and artifacts without hosting GitHub release pages."
+}
