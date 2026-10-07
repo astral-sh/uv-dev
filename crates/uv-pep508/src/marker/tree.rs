@@ -2575,6 +2575,39 @@ mod test {
     }
 
     #[test]
+    fn simplify_extras_preserves_canonical_ranges() {
+        let marker = MarkerTree::from_str(
+            "(python_version >= '3.10' or sys_platform == 'linux') \
+             and extra != 'encoded' and extra == 'local'",
+        )
+        .expect("valid marker expression");
+        let encoded = ExtraName::from_str("encoded").expect("valid extra name");
+        let local = ExtraName::from_str("local").expect("valid extra name");
+        let encoded_activation =
+            MarkerTree::from_str("sys_platform == 'darwin'").expect("valid marker expression");
+        let local_activation =
+            MarkerTree::from_str("python_version >= '3.12'").expect("valid marker expression");
+        let expected =
+            MarkerTree::from_str("python_version >= '3.12' and sys_platform != 'darwin'")
+                .expect("valid marker expression");
+
+        for substitutions in [
+            [(&encoded, encoded_activation), (&local, local_activation)],
+            [(&local, local_activation), (&encoded, encoded_activation)],
+        ] {
+            let mut transformed = marker;
+            for (extra, activation) in substitutions {
+                let activated = transformed.simplify_extras_with(|candidate| candidate == extra);
+                let activated = activated.and(activation);
+                let inactive = transformed.simplify_not_extras_with(|candidate| candidate == extra);
+                let inactive = inactive.and(activation.negate());
+                transformed = activated.or(inactive);
+            }
+            assert_eq!(transformed, expected);
+        }
+    }
+
+    #[test]
     fn test_marker_simplification() {
         assert_false("python_version == '3.9.1'");
         assert_true("python_version != '3.9.1'");

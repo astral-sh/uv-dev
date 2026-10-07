@@ -688,6 +688,101 @@ fn requirements_txt_simplifies_selected_root_extra_markers_from_lock() -> Result
 
 #[cfg(feature = "test-universal")]
 #[test]
+fn requirements_txt_resolves_large_conflict_markers_from_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let extras = (0..16)
+        .map(|index| format!("e{index:02} = []"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let conflicts = (0..16)
+        .map(|index| format!(r#"{{ package = "project", extra = "e{index:02}" }}"#))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let provides_extras = (0..16)
+        .map(|index| format!("\"e{index:02}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let invalid_selections = (0..16)
+        .flat_map(|left| {
+            (left + 1..16).map(move |right| {
+                format!(
+                    "(extra == 'extra-7-project-e{left:02}' and extra == 'extra-7-project-e{right:02}')"
+                )
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" or ");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.10"
+        dependencies = ["shared"]
+
+        [project.optional-dependencies]
+        {extras}
+
+        [tool.uv]
+        conflicts = [[{conflicts}]]
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(&formatdoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.10"
+        resolution-markers = ["python_full_version < '3.12'", "python_full_version >= '3.12'"]
+        conflicts = [[{conflicts}]]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = {{ virtual = "." }}
+        dependencies = [
+            {{ name = "shared", version = "1.0.0", source = {{ registry = "https://pypi.org/simple" }}, marker = "python_full_version < '3.12' or {invalid_selections}" }},
+            {{ name = "shared", version = "2.0.0", source = {{ registry = "https://pypi.org/simple" }}, marker = "python_full_version >= '3.12' or {invalid_selections}" }},
+        ]
+
+        [package.optional-dependencies]
+        {extras}
+
+        [package.metadata]
+        requires-dist = [{{ name = "shared" }}]
+        provides-extras = [{provides_extras}]
+
+        [[package]]
+        name = "shared"
+        version = "1.0.0"
+        source = {{ registry = "https://pypi.org/simple" }}
+        resolution-markers = ["python_full_version < '3.12'"]
+
+        [[package]]
+        name = "shared"
+        version = "2.0.0"
+        source = {{ registry = "https://pypi.org/simple" }}
+        resolution-markers = ["python_full_version >= '3.12'"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--no-header")
+        .arg("--no-hashes")
+        .arg("--no-annotate")
+        .arg("--extra").arg("e00"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    shared==1.0.0 ; python_full_version < '3.12'
+    shared==2.0.0 ; python_full_version >= '3.12'
+    ");
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
 fn requirements_txt_prune() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
