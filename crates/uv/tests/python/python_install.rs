@@ -3621,13 +3621,57 @@ fn python_install_build_version() {
     let build_content = fs_err::read_to_string(&build_file_path).unwrap();
     assert_eq!(build_content, "20240814");
 
-    // We should find the build
+    let stale_file = cpython_dir.child("stale-file");
+    stale_file.touch().unwrap();
+    fs_err::write(&build_file_path, "19000101").unwrap();
+
+    // Without a build pin, the installed patch version is sufficient.
+    uv_snapshot!(context.filters(), context.python_install().arg("3.12.5"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Python 3.12.5 is already installed
+    ");
+    assert!(stale_file.exists());
+
+    // An explicit build pin must replace the interpreter, not just its BUILD marker.
+    uv_snapshot!(context.filters(), context.python_install()
+        .arg("3.12.5")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "20240814"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.12.5 in [TIME]
+     ~ cpython-3.12.5-[PLATFORM]
+    ");
+    assert!(!stale_file.exists());
+    assert_eq!(
+        fs_err::read_to_string(&build_file_path).unwrap(),
+        "20240814"
+    );
+
+    // A newer installed patch must not hide another installation that matches the build pin.
+    uv_snapshot!(context.filters(), context.python_install().arg("3.12.10"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.12.10 in [TIME]
+     + cpython-3.12.10-[PLATFORM] (python3.12)
+    ");
+    stale_file.touch().unwrap();
+    uv_snapshot!(context.filters(), context.python_install()
+        .arg("3.12")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "20240814"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Python 3.12 is already installed
+    ");
+    assert!(stale_file.exists());
+
+    // The build pin selects the older patch even though the minor-version link selects 3.12.10.
     uv_snapshot!(context.filters(), context.python_find()
         .arg("3.12")
         .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, "20240814"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [TEMP_DIR]/managed/cpython-3.12-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    [TEMP_DIR]/managed/cpython-3.12.5-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
     // If the build number does not match, we should ignore the installation
