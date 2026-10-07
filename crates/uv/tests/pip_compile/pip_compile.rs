@@ -7533,6 +7533,8 @@ fn no_index_requirements_txt() -> Result<()> {
       cause: Because tqdm was not found in the provided package locations and you require tqdm, we can conclude that your requirements are unsatisfiable.
 
     hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+
+    hint: `--no-index` was enabled by `requirements.in` at line 1
     "
     );
     assert_eq!(output.stderr.last(), Some(&b'\n'));

@@ -25,7 +25,7 @@ impl<T> Sourced<T> {
     pub fn new(value: T, source: SettingSource) -> Self {
         Self {
             value,
-            sources: SettingSources(vec![source]),
+            sources: SettingSources(Box::new([source])),
         }
     }
 
@@ -35,10 +35,6 @@ impl<T> Sourced<T> {
 
     pub fn sources(&self) -> &SettingSources {
         &self.sources
-    }
-
-    pub fn into_value(self) -> T {
-        self.value
     }
 
     pub fn into_parts(self) -> (T, SettingSources) {
@@ -60,7 +56,7 @@ impl<T> Sourced<T> {
 
     /// Associate a deserialized setting with its configuration file and key.
     pub fn set_source(&mut self, source: SettingSource) {
-        self.sources = SettingSources(vec![source]);
+        self.sources = SettingSources(Box::new([source]));
     }
 
     /// Record the parent input through which a requirements directive was reached.
@@ -146,19 +142,21 @@ impl<T: JsonSchema> JsonSchema for Sourced<T> {
 
 /// The declarations that contribute to an effective setting, in encounter order.
 #[derive(Debug, Clone, Default)]
-pub struct SettingSources(Vec<SettingSource>);
+pub struct SettingSources(Box<[SettingSource]>);
 
 impl SettingSources {
-    pub fn iter(&self) -> impl Iterator<Item = &SettingSource> {
+    fn iter(&self) -> impl Iterator<Item = &SettingSource> {
         self.0.iter()
     }
 
     pub fn extend(&mut self, other: &Self) {
+        let mut sources = std::mem::take(&mut self.0).into_vec();
         for source in &other.0 {
-            if !self.0.contains(source) {
-                self.0.push(source.clone());
+            if !sources.contains(source) {
+                sources.push(source.clone());
             }
         }
+        self.0 = sources.into_boxed_slice();
     }
 
     /// Explain indirect enabling declarations. An explicit command-line flag needs no extra hint.
