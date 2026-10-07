@@ -225,6 +225,10 @@ mod tests {
         identify the endpoint; authentication uses `GOOGLE_APPLICATION_CREDENTIALS` or Application
         Default Credentials.
 
+        ### `git-partial-fetches` {#git-partial-fetches}
+
+        Fetches Git trees and blobs lazily when checking out source repositories.
+
         ### `index-by-name` {#index-by-name}
 
         The `--index` and `--default-index` options accept the names of configured package indexes
