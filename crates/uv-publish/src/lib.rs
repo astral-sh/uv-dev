@@ -1350,6 +1350,7 @@ impl PublishSession<'_> {
         let status_code = response.status();
         debug!("Response code for {registry}: {status_code}");
         trace!(
+            response_url = %DisplaySafeUrl::ref_cast(response.url()),
             "Response headers for {registry}: {:?}",
             DisplaySafeHeaders(response.headers())
         );
