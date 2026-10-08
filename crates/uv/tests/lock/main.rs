@@ -1,6 +1,6 @@
 //! Integration tests for `uv lock`.
 
-#[cfg(feature = "test-python")]
+#[cfg(all(feature = "test-python", feature = "test-universal"))]
 mod metadata_extras;
 
 #[cfg(all(
