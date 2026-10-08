@@ -49,7 +49,7 @@ pub struct Interpreter {
     markers: Box<MarkerEnvironment>,
     scheme: Scheme,
     virtualenv: Scheme,
-    manylinux_compatible: bool,
+    manylinux_compatible: ManylinuxCompatibility,
     sys_prefix: PathBuf,
     sys_base_prefix: PathBuf,
     sys_base_executable: Option<PathBuf>,
@@ -84,7 +84,7 @@ impl Interpreter {
             markers: Box::new(info.markers),
             scheme: info.scheme,
             virtualenv: info.virtualenv,
-            manylinux_compatible: info.manylinux_compatible.into(),
+            manylinux_compatible: info.manylinux_compatible,
             sys_prefix: info.sys_prefix,
             pointer_size: info.pointer_size,
             gil_disabled: info.gil_disabled,
@@ -295,7 +295,7 @@ impl Interpreter {
                 self.implementation_name(),
                 self.implementation_tuple(),
                 TagsOptions {
-                    manylinux_compatible: self.manylinux_compatible,
+                    manylinux_compatible: self.manylinux_compatible.into(),
                     gil_disabled: self.gil_disabled,
                     debug_enabled: self.debug_enabled,
                     is_cross: false,
@@ -515,7 +515,7 @@ impl Interpreter {
 
     /// Return whether this interpreter is `manylinux` compatible.
     pub fn manylinux_compatible(&self) -> bool {
-        self.manylinux_compatible
+        self.manylinux_compatible.into()
     }
 
     /// Return the [`PointerSize`] of the Python interpreter (i.e., 32- vs. 64-bit).
@@ -1186,7 +1186,10 @@ impl From<bool> for ManylinuxCompatibility {
 
 impl From<ManylinuxCompatibility> for bool {
     fn from(compatibility: ManylinuxCompatibility) -> Self {
-        matches!(compatibility, ManylinuxCompatibility::Compatible)
+        match compatibility {
+            ManylinuxCompatibility::Compatible => true,
+            ManylinuxCompatibility::Incompatible => false,
+        }
     }
 }
 
@@ -1207,7 +1210,7 @@ impl InterpreterInfo {
             markers: (*interpreter.markers).clone(),
             scheme,
             virtualenv: interpreter.virtualenv.clone(),
-            manylinux_compatible: interpreter.manylinux_compatible.into(),
+            manylinux_compatible: interpreter.manylinux_compatible,
             sys_prefix: interpreter.sys_prefix.simplified().to_path_buf(),
             // These fields are unused by `Interpreter`, but retained in the cache format.
             sys_base_exec_prefix: PathBuf::new(),
