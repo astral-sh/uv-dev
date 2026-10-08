@@ -26,6 +26,6 @@ pub(crate) use python_version::python_build_version_from_env;
 pub use python_version::{BuildVersionError, PythonVersion, python_build_versions_from_env};
 pub use request::{
     EnvironmentPreference, ExecutableName, PythonDownloads, PythonPreference, PythonRequest,
-    PythonRequestError, PythonSource, PythonVariant, VersionRequest,
+    PythonRequestError, PythonSource, PythonVariant, UnsupportedVersionRequest, VersionRequest,
 };
 pub use target::Target;
