@@ -583,11 +583,13 @@ impl Cache {
     pub fn clear(self, reporter: Box<dyn CleanReporter>) -> Result<Removal, io::Error> {
         // A configured directory link selects the cache to clear. Keep the link and its target
         // directory usable, while links within the cache remain entries to unlink.
-        let is_directory_link = fs_err::symlink_metadata(&self.root)?.is_symlink();
+        // Terminal directory markers would make metadata inspection follow the selected link.
+        let root = self.root.components().as_path();
+        let is_directory_link = fs_err::symlink_metadata(root)?.is_symlink();
         let root = if is_directory_link {
-            fs_err::canonicalize(&self.root)?
+            fs_err::canonicalize(root)?
         } else {
-            self.root.clone()
+            root.to_path_buf()
         };
 
         // Remove everything but `.lock`, Windows does not allow removal of a locked file
