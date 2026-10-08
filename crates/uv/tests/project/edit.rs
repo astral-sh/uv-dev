@@ -30,7 +30,7 @@ use uv_fs::Simplified;
 use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::uv_snapshot;
 
 /// Add a PyPI requirement.
 #[test]
@@ -13455,17 +13455,7 @@ async fn add_index_url_in_keyring() -> Result<()> {
     let keyring_context = uv_test::test_context!("3.12");
 
     // Install our keyring plugin
-    keyring_context
-        .pip_install()
-        .arg(
-            keyring_context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = keyring_context.install_keyring_plugin();
 
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
@@ -13491,7 +13481,7 @@ async fn add_index_url_in_keyring() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().arg("anyio")
         .env(EnvVars::index_username("PROXY"), "public")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{}": {{"public": "heron"}}}}"#, proxy.url("/basic-auth/simple")))
-        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 0 (success)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
@@ -13513,17 +13503,7 @@ async fn add_full_url_in_keyring() -> Result<()> {
     let keyring_context = uv_test::test_context!("3.12");
 
     // Install our keyring plugin
-    keyring_context
-        .pip_install()
-        .arg(
-            keyring_context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = keyring_context.install_keyring_plugin();
 
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
@@ -13549,7 +13529,7 @@ async fn add_full_url_in_keyring() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().arg("anyio")
         .env(EnvVars::index_username("PROXY"), "public")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{}": {{"public": "heron"}}}}"#, proxy.url("/basic-auth/simple/anyio")))
-        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
@@ -14274,17 +14254,7 @@ async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
     let keyring_context = uv_test::test_context!("3.12");
 
     // Install our keyring plugin
-    keyring_context
-        .pip_install()
-        .arg(
-            keyring_context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = keyring_context.install_keyring_plugin();
 
     let context = uv_test::test_context!("3.12").with_filter((r"127\.0\.0\.1:\d*", "[LOCALHOST]"));
     let proxy = crate::pypi_proxy::start().await;
@@ -14320,7 +14290,7 @@ async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
         .arg(redirect_url.as_str())
         .arg("anyio")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"public": "heron"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/

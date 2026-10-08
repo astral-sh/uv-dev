@@ -8,7 +8,7 @@ use std::env::current_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use uv_static::EnvVars;
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::uv_snapshot;
 use wiremock::matchers::{basic_auth, body_json, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -295,17 +295,7 @@ fn check_keyring_behaviours() {
         .with_filtered_http_retries();
 
     // Install our keyring plugin
-    context
-        .pip_install()
-        .arg(
-            context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = context.install_keyring_plugin();
 
     // Ok: The keyring may be used for the index page.
     uv_snapshot!(context.filters(), context.publish()
@@ -320,7 +310,7 @@ fn check_keyring_behaviours() {
         .arg("--publish-url")
         .arg("https://test.pypi.org/legacy/?ok")
         .arg(dummy_wheel())
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to https://test.pypi.org/legacy/?ok
@@ -342,7 +332,7 @@ fn check_keyring_behaviours() {
         .arg("--publish-url")
         .arg("https://test.pypi.org/legacy/?ok")
         .arg(dummy_wheel())
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)),  @"
+        .env(EnvVars::PATH, &keyring_bin),  @"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to https://test.pypi.org/legacy/?ok
@@ -366,7 +356,7 @@ fn check_keyring_behaviours() {
         .arg("--publish-url")
         .arg("https://test.pypi.org/legacy/?ok")
         .arg(dummy_wheel())
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to https://test.pypi.org/legacy/?ok
@@ -393,7 +383,7 @@ fn check_keyring_behaviours() {
         .arg("https://test.pypi.org/legacy/?ok")
         .arg(dummy_wheel())
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, r#"{"https://test.pypi.org/legacy/?ok": {"dummy": "dummy"}}"#)
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to https://test.pypi.org/legacy/?ok
