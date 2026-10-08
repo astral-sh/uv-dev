@@ -19,8 +19,8 @@ use uv_pypi_types::{DirectUrl, MetadataError};
 use uv_redacted::DisplaySafeUrl;
 
 use crate::{
-    BuildInfo, DistributionMetadata, IndexUrl, InstalledMetadata, InstalledVersion, Name,
-    RegistryBuiltWheel, VersionOrUrlRef,
+    BuildInfo, DistributionMetadata, InstalledMetadata, InstalledVersion, Name, RegistryBuiltWheel,
+    VersionOrUrlRef,
 };
 
 #[derive(Error, Debug)]
@@ -380,16 +380,12 @@ impl InstalledDist {
         }
     }
 
-    /// Returns `true` if a wheel from a local flat index has changed since this registry
+    /// Returns `true` if a local wheel has changed since this registry
     /// distribution was installed.
     pub fn is_local_wheel_out_of_date(&self, wheel: &RegistryBuiltWheel) -> bool {
         let InstalledDistKind::Registry(installed) = &self.kind else {
             return false;
         };
-        if !matches!(wheel.index, IndexUrl::Path(_)) {
-            return false;
-        }
-
         let Ok(url) = wheel.file.url.to_url() else {
             debug!("Failed to read local wheel URL for: {}", wheel.filename);
             return true;

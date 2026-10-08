@@ -8686,16 +8686,16 @@ fn find_links_relative_to_working_directory() -> Result<()> {
 }
 
 /// Upgrade rebuilt direct and transitive wheels without changing their versions.
-#[test]
-fn upgrade_rebuilt_find_links_wheels() -> Result<()> {
+#[tokio::test]
+async fn upgrade_rebuilt_find_links_wheels() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let links = context.temp_dir.child("links");
     links.create_dir_all()?;
 
-    let write_wheels = |value: &str, timestamp: i64| -> Result<()> {
+    let write_wheels = |value: &str, timestamp: i64, transitive_requires| -> Result<()> {
         for (name, requires) in [
             ("direct", vec!["transitive==1.0.0".parse()?]),
-            ("transitive", vec![]),
+            ("transitive", transitive_requires),
         ] {
             let (filename, wheel) = generate_wheel_with_files(
                 &name.parse()?,
@@ -8713,11 +8713,38 @@ fn upgrade_rebuilt_find_links_wheels() -> Result<()> {
         Ok(())
     };
 
-    write_wheels("before", 1_700_000_000)?;
+    write_wheels("before", 1_700_000_000, Vec::new())?;
+    let (filename, wheel) = generate_wheel(
+        &"added".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    fs::write(links.child(filename), wheel)?;
+
+    // Remote find-links pages can point to local files, which still need timestamp validation.
+    let server = MockServer::start().await;
+    let links_url = Url::from_directory_path(links.path())
+        .map_err(|()| anyhow!("Failed to convert wheel directory to URL"))?;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{links_url}direct-1.0.0-py3-none-any.whl">direct</a>
+<a href="{links_url}transitive-1.0.0-py3-none-any.whl">transitive</a>
+<a href="{links_url}added-1.0.0-py3-none-any.whl">added</a>"#
+            ),
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("direct")
         .arg("--no-index")
-        .arg("--find-links").arg(links.path()), @"
+        .arg("--find-links").arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -8727,13 +8754,13 @@ fn upgrade_rebuilt_find_links_wheels() -> Result<()> {
      + transitive==1.0.0
     ");
 
-    write_wheels("after", 1_800_000_000)?;
+    write_wheels("after", 1_800_000_000, vec!["added==1.0.0".parse()?])?;
 
     // Without an upgrade, installed versions continue to satisfy named requirements.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("direct")
         .arg("--no-index")
-        .arg("--find-links").arg(links.path()), @"
+        .arg("--find-links").arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Checked 1 package in [TIME]
@@ -8749,13 +8776,14 @@ fn upgrade_rebuilt_find_links_wheels() -> Result<()> {
         .arg("direct")
         .arg("--upgrade")
         .arg("--no-index")
-        .arg("--find-links").arg(links.path()), @"
+        .arg("--find-links").arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
     Uninstalled 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + added==1.0.0
      ~ direct==1.0.0
      ~ transitive==1.0.0
     ");
@@ -8766,16 +8794,18 @@ fn upgrade_rebuilt_find_links_wheels() -> Result<()> {
         .assert_command("from transitive.value import VALUE; assert VALUE == 'after'")
         .success();
 
+    context.assert_installed("added", "1.0.0");
+
     // An unchanged wheel does not need another installation.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("direct")
         .arg("--upgrade")
         .arg("--no-index")
-        .arg("--find-links").arg(links.path()), @"
+        .arg("--find-links").arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Checked 2 packages in [TIME]
+    Resolved 3 packages in [TIME]
+    Checked 3 packages in [TIME]
     ");
 
     Ok(())
