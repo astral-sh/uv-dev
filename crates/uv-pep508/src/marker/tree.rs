@@ -1169,6 +1169,12 @@ impl MarkerTree {
 
     /// Returns true if this marker simplifies to true if the given set of extras is activated.
     pub fn evaluate_only_extras(self, extras: &[ExtraName]) -> bool {
+        if self.is_true() {
+            return true;
+        }
+        if self.is_false() {
+            return false;
+        }
         if extras.len() < 8 {
             return self.evaluate_only_extras_impl(extras);
         }

@@ -53,6 +53,16 @@ fn evaluate_only_extras(c: &mut Criterion<WallTime>) {
             .into_iter()
             .chain(suffix_extras)
             .collect::<Vec<_>>();
+        c.bench_function(&format!("evaluate_only_extras true {width}"), |benchmark| {
+            benchmark.iter(|| black_box(MarkerTree::TRUE).evaluate_only_extras(black_box(&extras)));
+        });
+        c.bench_function(
+            &format!("evaluate_only_extras false {width}"),
+            |benchmark| {
+                benchmark
+                    .iter(|| black_box(MarkerTree::FALSE).evaluate_only_extras(black_box(&extras)));
+            },
+        );
         c.bench_function(&format!("evaluate_only_extras {width}"), |benchmark| {
             benchmark.iter(|| black_box(marker).evaluate_only_extras(black_box(&extras)));
         });
