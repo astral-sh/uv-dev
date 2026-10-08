@@ -5868,3 +5868,79 @@ fn boolean_environment_uninstall_precedence() -> anyhow::Result<()> {
     diff_uv_snapshot!(context.filters(), &disabled, command().arg("--no-break-system-packages").env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "true"), @"");
     Ok(())
 }
+
+/// `--frozen` conflicts with a selected environment source override on each project command.
+#[test]
+fn boolean_environment_no_sources_frozen_conflict() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("no-sources = true")?;
+
+    for command in [
+        vec!["run"],
+        vec!["sync"],
+        vec!["add", "iniconfig"],
+        vec!["remove", "iniconfig"],
+        vec!["version"],
+        vec!["tree"],
+        vec!["export"],
+        vec!["check"],
+        vec!["audit"],
+    ] {
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), context.command()
+                .args(&command)
+                .arg("--frozen")
+                .env(EnvVars::UV_NO_SOURCES, "true"), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: the argument `--frozen` cannot be used with `UV_NO_SOURCES` (environment variable)
+            ");
+        }
+
+        // An explicit false value, file-only policy, and package-specific overrides do not conflict.
+        for args in [
+            vec!["--frozen"],
+            vec!["--frozen", "--no-sources-package", "iniconfig"],
+        ] {
+            context
+                .command()
+                .args(&command)
+                .args(args)
+                .arg("--show-settings")
+                .env(EnvVars::UV_NO_SOURCES, "false")
+                .output()?
+                .assert()
+                .success();
+        }
+        context
+            .command()
+            .args(&command)
+            .args(["--frozen", "--show-settings"])
+            .output()?
+            .assert()
+            .success();
+
+        // `UV_FROZEN` does not introduce the CLI-only conflict, nor does an overridden CLI flag.
+        context
+            .command()
+            .args(&command)
+            .arg("--show-settings")
+            .env(EnvVars::UV_FROZEN, "true")
+            .env(EnvVars::UV_NO_SOURCES, "true")
+            .output()?
+            .assert()
+            .success();
+        context
+            .command()
+            .args(&command)
+            .args(["--frozen", "--no-frozen", "--show-settings"])
+            .env(EnvVars::UV_NO_SOURCES, "true")
+            .output()?
+            .assert()
+            .success();
+    }
+    Ok(())
+}

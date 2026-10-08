@@ -650,6 +650,26 @@ fn resolve_lock_flags(
     }
 }
 
+/// Check the `--frozen` CLI conflict with CLI and environment source overrides.
+///
+/// Workspace configuration and `UV_FROZEN` do not participate in this argument conflict.
+fn check_frozen_no_sources(frozen: bool, no_sources: bool) -> anyhow::Result<()> {
+    if frozen {
+        let no_sources = if no_sources {
+            Flag::from_cli("no-sources")
+        } else if env_flag(None, EnvVars::UV_NO_SOURCES)? == Some(true) {
+            Flag::Enabled {
+                source: FlagSource::Env(EnvVars::UV_NO_SOURCES),
+                name: "no-sources",
+            }
+        } else {
+            Flag::disabled()
+        };
+        check_conflicts(Flag::from_cli("frozen"), no_sources)?;
+    }
+    Ok(())
+}
+
 /// Resolve frozen mode and its source from CLI arguments and the environment.
 fn resolve_frozen(
     enabled: bool,
@@ -775,6 +795,8 @@ impl RunSettings {
             no_env_file,
             max_recursion_depth,
         } = args;
+
+        check_frozen_no_sources(frozen, installer.sources.no_sources)?;
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
@@ -1889,6 +1911,8 @@ impl SyncSettings {
             no_check,
             output_format,
         } = args;
+
+        check_frozen_no_sources(frozen, installer.sources.no_sources)?;
         let filesystem_install_mirrors = filesystem
             .as_ref()
             .map(|fs| fs.install_mirrors.clone())
@@ -2310,6 +2334,8 @@ impl AddSettings {
             only_install_package,
         } = args;
 
+        check_frozen_no_sources(frozen, installer.sources.no_sources)?;
+
         // Resolve flags from CLI and environment variables.
         let dev = dev || environment.dev.value == Some(true);
         let (editable, no_editable) = resolve_flag_pair(
@@ -2545,6 +2571,8 @@ impl RemoveSettings {
             python,
         } = args;
 
+        check_frozen_no_sources(frozen, installer.sources.no_sources)?;
+
         // Resolve flags from CLI and environment variables.
         let dev = dev || environment.dev.value == Some(true);
 
@@ -2652,6 +2680,8 @@ impl VersionSettings {
             python,
         } = args;
 
+        check_frozen_no_sources(frozen, installer.sources.no_sources)?;
+
         let filesystem_install_mirrors = filesystem
             .as_ref()
             .map(|fs| fs.install_mirrors.clone())
@@ -2752,6 +2782,8 @@ impl TreeSettings {
             python_platform,
             python,
         } = args;
+
+        check_frozen_no_sources(frozen, resolver.sources.no_sources)?;
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
@@ -2897,6 +2929,8 @@ impl ExportSettings {
             script,
             python,
         } = args;
+
+        check_frozen_no_sources(frozen_cli, resolver.sources.no_sources)?;
         let filesystem_install_mirrors = filesystem
             .as_ref()
             .map(|fs| fs.install_mirrors.clone())
@@ -3108,6 +3142,8 @@ impl CheckSettings {
             refresh,
         } = args;
 
+        check_frozen_no_sources(frozen, installer.sources.no_sources)?;
+
         let filesystem_install_mirrors = filesystem
             .as_ref()
             .map(|fs| fs.install_mirrors.clone())
@@ -3238,6 +3274,8 @@ impl AuditSettings {
             build,
             resolver,
         } = args;
+
+        check_frozen_no_sources(frozen, resolver.sources.no_sources)?;
 
         let filesystem_install_mirrors = filesystem
             .as_ref()
