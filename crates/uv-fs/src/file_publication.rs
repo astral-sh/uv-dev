@@ -263,6 +263,15 @@ fn destination(path: &Path) -> io::Result<PathBuf> {
             }
             Ok(_) => return fs_err::canonicalize(target),
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                // `file_name` normalizes trailing separators and `.` components, but these
+                // require a directory and must not become a newly created regular file.
+                let bytes = target.as_os_str().as_encoded_bytes();
+                let final_component = bytes
+                    .rsplit(|byte| std::path::is_separator(char::from(*byte)))
+                    .next();
+                if let Some(b"" | b"." | b"..") = final_component {
+                    return Err(err);
+                }
                 let parent = target
                     .parent()
                     .filter(|path| !path.as_os_str().is_empty())
@@ -432,6 +441,10 @@ mod tests {
     use std::io::{self, Write};
     #[cfg(target_os = "linux")]
     use std::os::fd::AsRawFd;
+    #[cfg(target_os = "macos")]
+    use std::os::macos::fs::MetadataExt as _;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    use std::os::unix::fs::MetadataExt;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
@@ -440,9 +453,86 @@ mod tests {
     use std::process::Command;
 
     #[cfg(target_os = "linux")]
-    use rustix::fs::{IFlags, ioctl_getflags, ioctl_setflags};
+    use rustix::fs::{
+        AtFlags, CWD, IFlags, Mode, OFlags, ResolveFlags, StatxFlags, ioctl_getflags,
+        ioctl_setflags, openat2, statx,
+    };
 
     use super::{FilePublication, write_file};
+
+    /// Check the fixture's filesystem capabilities independently of publication's admission rules.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[expect(
+        clippy::print_stderr,
+        reason = "report unavailable staging prerequisites"
+    )]
+    fn staging_prerequisites(path: &Path) -> io::Result<bool> {
+        let file = fs_err::File::open(path)?;
+        let parent = path.parent().expect("fixture has a parent");
+        let peer = tempfile::Builder::new()
+            .prefix(".uv-publish-probe-")
+            .tempfile_in(parent)?;
+        let metadata = file.metadata()?;
+        let peer_metadata = peer.as_file().metadata()?;
+        let mut supported = metadata.is_file()
+            && metadata.nlink() == 1
+            && metadata.mode() & 0o7000 == 0
+            && metadata.uid() == peer_metadata.uid()
+            && metadata.gid() == peer_metadata.gid()
+            && [file.file(), peer.as_file()].into_iter().all(|file| {
+                rustix::fs::flistxattr(file, &mut [0u8; 0]).is_ok_and(|length| length == 0)
+            });
+        #[cfg(target_os = "linux")]
+        {
+            supported &= [file.file(), peer.as_file()].into_iter().all(|file| {
+                ioctl_getflags(file)
+                    .is_ok_and(|flags| flags.bits() & !linux_raw_sys::general::FS_EXTENT_FL == 0)
+            });
+            let mask = StatxFlags::MNT_ID;
+            supported &= match (
+                statx(&file, "", AtFlags::EMPTY_PATH, mask),
+                statx(CWD, parent, AtFlags::empty(), mask),
+            ) {
+                (Ok(file), Ok(parent)) => {
+                    file.stx_mask & mask.bits() != 0
+                        && parent.stx_mask & mask.bits() != 0
+                        && file.stx_mnt_id == parent.stx_mnt_id
+                }
+                _ => false,
+            };
+            supported &= openat2(
+                CWD,
+                path,
+                OFlags::PATH | OFlags::CLOEXEC,
+                Mode::empty(),
+                ResolveFlags::NO_MAGICLINKS,
+            )
+            .is_ok();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            supported &= metadata.st_flags() == 0 && peer_metadata.st_flags() == 0;
+            for path in [path, peer.path()] {
+                let acl = Command::new("ls")
+                    .args(["-lde"])
+                    .env("LC_ALL", "C")
+                    .arg(path)
+                    .output()?;
+                supported &= acl.status.success()
+                    && String::from_utf8_lossy(&acl.stdout)
+                        .split_whitespace()
+                        .next()
+                        .is_some_and(|permissions| !permissions.contains('+'));
+            }
+        }
+        if !supported {
+            eprintln!(
+                "skipping staged replacement assertions: filesystem metadata or path lookup is unsupported for `{}`",
+                path.display()
+            );
+        }
+        Ok(supported)
+    }
 
     #[test]
     #[cfg(unix)]
@@ -533,6 +623,9 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("pyproject.toml");
         fs_err::write(&path, "original")?;
+        if !staging_prerequisites(&path)? {
+            return Ok(());
+        }
         {
             let mut publication = FilePublication::new(&path)?;
             assert!(publication.is_staged());
@@ -551,6 +644,9 @@ mod tests {
         let path = directory.path().join("script.py");
         fs_err::write(&path, "original")?;
         fs_err::set_permissions(&path, std::fs::Permissions::from_mode(0o751))?;
+        if !staging_prerequisites(&path)? {
+            return Ok(());
+        }
         let mut reader = fs_err::File::open(&path)?;
         write_file(&path, b"replacement")?;
         let mut previous = String::new();
@@ -569,6 +665,9 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("pyproject.toml");
         fs_err::write(&path, "original")?;
+        if !staging_prerequisites(&path)? {
+            return Ok(());
+        }
         let mut publication = FilePublication::new(&path)?;
         assert!(publication.is_staged());
         publication.writer().write_all(b"replacement")?;
@@ -627,6 +726,9 @@ mod tests {
         let path = directory.path().join("uv.lock");
         let target = directory.path().join("target");
         fs_err::write(&target, "original")?;
+        if !staging_prerequisites(&target)? {
+            return Ok(());
+        }
         assert!(FilePublication::new(&target)?.is_staged());
         let mut descriptor = fs_err::File::open(&target)?;
         let link = format!("/proc/self/fd/{}", descriptor.as_raw_fd());
@@ -661,12 +763,59 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn dangling_link_to_directory_suffix_is_not_created() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        fs_err::os::unix::fs::symlink("missing/", &path)?;
+        let error = write_file(&path, b"replacement").expect_err("target requires a directory");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(fs_err::read_link(&path)?, Path::new("missing/"));
+        assert!(!directory.path().join("missing").exists());
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn dangling_link_to_dot_directory_is_not_created() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        fs_err::os::unix::fs::symlink("missing/.", &path)?;
+        let error = write_file(&path, b"replacement").expect_err("target requires a directory");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(fs_err::read_link(&path)?, Path::new("missing/."));
+        assert!(!directory.path().join("missing").exists());
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_directory_destinations_are_not_created() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        assert!(write_file(&directory.path().join("missing/"), b"bytes").is_err());
+        assert!(write_file(&directory.path().join("missing/."), b"bytes").is_err());
+        assert!(write_file(&directory.path().join("missing//"), b"bytes").is_err());
+        assert!(write_file(&directory.path().join("missing/../"), b"bytes").is_err());
+        #[cfg(windows)]
+        {
+            assert!(write_file(&directory.path().join("missing\\"), b"bytes").is_err());
+            assert!(write_file(&directory.path().join("missing\\."), b"bytes").is_err());
+        }
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn a_retargeted_path_keeps_its_symbolic_link() -> io::Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("pyproject.toml");
         let moved = directory.path().join("moved.toml");
         fs_err::write(&path, "original")?;
+        if !staging_prerequisites(&path)? {
+            return Ok(());
+        }
         let mut publication = FilePublication::new(&path)?;
         publication.writer().write_all(b"replacement")?;
         fs_err::rename(&path, &moved)?;
@@ -795,11 +944,9 @@ mod tests {
             let target = root.join("pyproject.toml");
             fs_err::write(&source, "original")?;
             fs_err::write(&target, "covered file")?;
-            let source_file = fs_err::OpenOptions::new().write(true).open(&source)?;
-            assert!(
-                super::can_replace(&source_file),
-                "the fixture must satisfy the non-mount replacement checks"
-            );
+            if !staging_prerequisites(&source)? {
+                return Ok(());
+            }
             let mounted = Command::new("mount")
                 .arg("--bind")
                 .arg(&source)
