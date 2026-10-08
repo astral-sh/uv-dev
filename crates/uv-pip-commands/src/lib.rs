@@ -15,3 +15,19 @@ pub mod uninstall;
 mod install_report;
 mod pylock;
 mod reporters;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvironmentValidation {
+    Enabled,
+    Disabled,
+}
+
+impl EnvironmentValidation {
+    pub const fn from_args(strict: bool) -> Self {
+        if strict {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+}

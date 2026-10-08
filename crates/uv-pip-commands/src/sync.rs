@@ -45,6 +45,7 @@ use uv_warnings::warn_user;
 use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
+use crate::EnvironmentValidation;
 use crate::install_report::write_install_report;
 use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::reporters::report_target_environment;
@@ -88,10 +89,10 @@ pub async fn pip_sync(
     python_platform: Option<TargetTriple>,
     python_downloads: PythonDownloads,
     install_mirrors: PythonInstallMirrors,
-    strict: bool,
+    environment_validation: EnvironmentValidation,
     exclude_newer: ExcludeNewer,
     python: Option<String>,
-    system: bool,
+    environment_preference: EnvironmentPreference,
     break_system_packages: bool,
     target: Option<Target>,
     prefix: Option<Prefix>,
@@ -184,8 +185,8 @@ pub async fn pip_sync(
 
         let installation = PythonInstallation::find_or_download(
             python_request.as_ref(),
-            EnvironmentPreference::from_system_flag(system, false),
-            python_preference.with_system_flag(system),
+            environment_preference,
+            python_preference.with_environment_preference(environment_preference),
             python_arch,
             python_downloads,
             &client_builder,
@@ -203,8 +204,8 @@ pub async fn pip_sync(
                 .as_deref()
                 .map(PythonRequest::parse)
                 .unwrap_or_default(),
-            EnvironmentPreference::from_system_flag(system, true),
-            PythonPreference::default().with_system_flag(system),
+            environment_preference.for_mutable(),
+            PythonPreference::default().with_environment_preference(environment_preference),
             python_arch,
             &cache,
         )?;
@@ -559,7 +560,7 @@ pub async fn pip_sync(
     uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
     // Notify the user of any environment diagnostics.
-    if strict && !dry_run.enabled() {
+    if matches!(environment_validation, EnvironmentValidation::Enabled) && !dry_run.enabled() {
         uv_install_operations::diagnose_environment(
             resolution.distributions().map(Name::name),
             &environment,

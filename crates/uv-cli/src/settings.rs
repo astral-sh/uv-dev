@@ -38,7 +38,8 @@ use uv_pep508::{MarkerTree, RequirementOrigin};
 use uv_preview::Preview;
 use uv_pypi_types::SupportedEnvironments;
 use uv_python_types::{
-    Prefix, PythonArchitecture, PythonDownloads, PythonPreference, PythonVersion, Target,
+    EnvironmentPreference, Prefix, PythonArchitecture, PythonDownloads, PythonPreference,
+    PythonVersion, Target,
 };
 use uv_redacted::DisplaySafeUrl;
 use uv_settings::{
@@ -1702,7 +1703,7 @@ pub struct PythonFindSettings {
     pub show_version: bool,
     pub resolve_links: bool,
     pub no_project: bool,
-    pub system: bool,
+    pub environment_preference: EnvironmentPreference,
     pub python_downloads_json_url: Option<String>,
 }
 
@@ -1748,7 +1749,9 @@ impl PythonFindSettings {
             show_version,
             resolve_links,
             no_project,
-            system: flag(system, no_system, "system")?.unwrap_or_default(),
+            environment_preference: EnvironmentPreference::from_system_flag(
+                flag(system, no_system, "system")?.unwrap_or_default(),
+            ),
             python_downloads_json_url,
         })
     }
@@ -4521,7 +4524,7 @@ pub struct PipSettings {
     pub index_locations: IndexLocations,
     pub python: Option<String>,
     pub install_mirrors: PythonInstallMirrors,
-    pub system: bool,
+    pub environment_preference: EnvironmentPreference,
     pub extras: ExtrasSpecification,
     pub groups: Vec<PipGroupName>,
     pub break_system_packages: bool,
@@ -4885,7 +4888,9 @@ impl PipSettings {
                 args.verify_hashes.combine(verify_hashes),
             ),
             python: args.python.combine(python),
-            system: args.system.combine(system).unwrap_or_default(),
+            environment_preference: EnvironmentPreference::from_system_flag(
+                args.system.combine(system).unwrap_or_default(),
+            ),
             break_system_packages: args
                 .break_system_packages
                 .combine(break_system_packages)

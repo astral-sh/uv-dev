@@ -28,7 +28,7 @@ pub async fn pip_uninstall(
     python_arch: Option<PythonArchitecture>,
     sources: &[RequirementsSource],
     python: Option<String>,
-    system: bool,
+    environment_preference: EnvironmentPreference,
     break_system_packages: bool,
     target: Option<Target>,
     prefix: Option<Prefix>,
@@ -51,8 +51,8 @@ pub async fn pip_uninstall(
             .as_deref()
             .map(PythonRequest::parse)
             .unwrap_or_default(),
-        EnvironmentPreference::from_system_flag(system, true),
-        PythonPreference::default().with_system_flag(system),
+        environment_preference.for_mutable(),
+        PythonPreference::default().with_environment_preference(environment_preference),
         python_arch,
         &cache,
     )?;

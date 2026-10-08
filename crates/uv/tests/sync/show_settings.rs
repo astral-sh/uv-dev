@@ -262,7 +262,7 @@ fn pip_compile_baseline() {
                 pyodide_install_mirror: None,
                 python_downloads_json_url: None,
             },
-            system: false,
+            environment_preference: Any,
             extras: ExtrasSpecification(
                 ExtrasSpecificationInner {
                     include: Some(
@@ -658,7 +658,7 @@ fn pip_install_baseline() {
                 pyodide_install_mirror: None,
                 python_downloads_json_url: None,
             },
-            system: false,
+            environment_preference: Any,
             extras: ExtrasSpecification(
                 ExtrasSpecificationInner {
                     include: Some(
