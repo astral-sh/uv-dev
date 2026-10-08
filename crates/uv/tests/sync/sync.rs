@@ -19895,3 +19895,59 @@ fn project_build_hashes_locked_script_run_with_no_sync() -> Result<()> {
         .assert(predicate::path::missing());
     Ok(())
 }
+
+#[test]
+fn sync_boolean_environment_source_and_bytecode_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+
+        [tool.uv]
+        no-sources = true
+        no-binary = true
+        compile-bytecode = true
+
+        [tool.uv.sources]
+        ok = { path = "ok-1.0.0-py3-none-any.whl" }
+    "#})?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        context.temp_dir.join("ok-1.0.0-py3-none-any.whl"),
+    )?;
+    let command = || {
+        let mut command = context.sync();
+        command
+            .arg("--offline")
+            .env(EnvVars::UV_NO_SOURCES, "false")
+            .env(EnvVars::UV_NO_BINARY, "false")
+            .env(EnvVars::UV_COMPILE_BYTECODE, "false");
+        command
+    };
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0 (from file://[TEMP_DIR]/ok-1.0.0-py3-none-any.whl)
+    ");
+    context.assert_installed("ok", "1.0.0");
+    assert!(!context.site_packages().join("ok/__pycache__").exists());
+
+    uv_snapshot!(context.filters(), command().arg("--compile-bytecode"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Bytecode compiled 2 files in [TIME]
+    ");
+    assert!(context.site_packages().join("ok/__pycache__").exists());
+    Ok(())
+}

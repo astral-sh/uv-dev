@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
@@ -1940,4 +1940,76 @@ fn new_tool_index() -> PackseServer {
     "#})
     .expect("new tool scenario should parse");
     PackseServer::from_scenario(&scenario)
+}
+
+#[test]
+fn tool_upgrade_boolean_environment_overrides_receipt() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "tool-boolean-policy"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        entry_points = ["example"]
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .args(["example", "--index-url"])
+        .arg(index.index_url())
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    let receipt_path = context.temp_dir.child("tools/example/uv-receipt.toml");
+    let mut receipt: toml::Value = toml::from_str(&fs_err::read_to_string(&receipt_path)?)?;
+    receipt["tool"]["options"]
+        .as_table_mut()
+        .ok_or_else(|| anyhow!("Expected tool options"))?
+        .insert("no-binary".to_string(), toml::Value::Boolean(true));
+    let receipt = toml::to_string(&receipt)?;
+    receipt_path.write_str(&receipt)?;
+
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["example", "--reinstall"])
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade example
+      cause: Because example==1.0.0 has no source distribution and only example==1.0.0 is available, we can conclude that all versions of example cannot be used.
+             And because you require example, we can conclude that your requirements are unsatisfiable.
+
+    hint: A source distribution is required for `example` because using pre-built wheels is disabled for all packages (i.e., with `--no-binary`)
+    ");
+
+    receipt_path.write_str(&receipt)?;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["example", "--reinstall"])
+        .env(EnvVars::UV_NO_BINARY, "false")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Modified example environment
+     ~ example==1.0.0
+    Nothing to upgrade
+    ");
+
+    receipt_path.write_str(&receipt)?;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["example", "--reinstall", "--no-binary-package", "example"])
+        .env(EnvVars::UV_NO_BINARY, "false")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade example
+      cause: Because example==1.0.0 has no source distribution and only example==1.0.0 is available, we can conclude that all versions of example cannot be used.
+             And because you require example, we can conclude that your requirements are unsatisfiable.
+
+    hint: A source distribution is required for `example` because using pre-built wheels is disabled for `example` (i.e., with `--no-binary-package example`)
+    ");
+    Ok(())
 }

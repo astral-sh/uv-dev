@@ -5579,3 +5579,292 @@ fn no_cache_env_override() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Boolean environment values form a layer between CLI options and configuration.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_project_precedence() -> anyhow::Result<()> {
+    for action in ["sync", "lock"] {
+        for (key, variable, enabled_flag, disabled_flag, package) in [
+            (
+                "compile-bytecode",
+                EnvVars::UV_COMPILE_BYTECODE,
+                "--compile-bytecode",
+                Some("--no-compile-bytecode"),
+                None,
+            ),
+            (
+                "no-build-isolation",
+                EnvVars::UV_NO_BUILD_ISOLATION,
+                "--no-build-isolation",
+                Some("--build-isolation"),
+                Some(("no-build-isolation-package", None)),
+            ),
+            (
+                "no-sources",
+                EnvVars::UV_NO_SOURCES,
+                "--no-sources",
+                None,
+                Some(("no-sources-package", Some(EnvVars::UV_NO_SOURCES_PACKAGE))),
+            ),
+            (
+                "no-build",
+                EnvVars::UV_NO_BUILD,
+                "--no-build",
+                Some("--build"),
+                Some(("no-build-package", Some(EnvVars::UV_NO_BUILD_PACKAGE))),
+            ),
+            (
+                "no-binary",
+                EnvVars::UV_NO_BINARY,
+                "--no-binary",
+                Some("--binary"),
+                Some(("no-binary-package", Some(EnvVars::UV_NO_BINARY_PACKAGE))),
+            ),
+        ] {
+            if action == "lock" && key == "compile-bytecode" {
+                continue;
+            }
+            let context = uv_test::test_context!("3.12");
+            let command = || {
+                let mut command = add_shared_args(context.command());
+                command.args([action, "--show-settings"]);
+                command
+            };
+            let enabled = capture_uv_snapshot!(context.filters(), command().arg(enabled_flag));
+            let mut disabled_command = command();
+            if let Some(flag) = disabled_flag {
+                disabled_command.arg(flag);
+            }
+            let disabled = capture_uv_snapshot!(context.filters(), disabled_command);
+            let package_setting = package.map_or_else(String::new, |(key, _)| {
+                format!("{key} = [\"configured\"]\n")
+            });
+            let configuration = context.temp_dir.child("uv.toml");
+            configuration.write_str(&format!("{key} = true\n{package_setting}"))?;
+            insta::allow_duplicates! {
+                diff_uv_snapshot!(context.filters(), &disabled, command().env(variable, "false"), @"");
+            }
+
+            if let Some((package_key, package_variable)) = package {
+                // CLI packages apply after the environment has cleared configured restrictions.
+                configuration.write_str("")?;
+                let package_flag = format!("--{package_key}");
+                let expected = capture_uv_snapshot!(
+                    context.filters(),
+                    command().args([&package_flag, "explicit"])
+                );
+                configuration.write_str(&format!("{key} = true\n{package_setting}"))?;
+                let mut selected = command();
+                selected
+                    .args([&package_flag, "explicit"])
+                    .env(variable, "0");
+                if let Some(variable) = package_variable {
+                    selected.env(variable, "environment");
+                }
+                insta::allow_duplicates! {
+                    diff_uv_snapshot!(context.filters(), &expected, selected, @"");
+                }
+            }
+
+            configuration.write_str(&format!("{key} = false\n"))?;
+            insta::allow_duplicates! {
+                diff_uv_snapshot!(context.filters(), &enabled, command().env(variable, "true"), @"");
+                diff_uv_snapshot!(context.filters(), &enabled, command().arg(enabled_flag).env(variable, "false"), @"");
+                diff_uv_snapshot!(context.filters(), &enabled, command().arg(enabled_flag).env(variable, "invalid"), @"");
+            }
+            if let Some(flag) = disabled_flag {
+                configuration.write_str(&format!("{key} = true\n{package_setting}"))?;
+                insta::allow_duplicates! {
+                    diff_uv_snapshot!(context.filters(), &disabled, command().arg(flag).env(variable, "true"), @"");
+                    diff_uv_snapshot!(context.filters(), &disabled, command().arg(flag).env(variable, "invalid"), @"");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_precedence() -> anyhow::Result<()> {
+    for action in ["install", "sync"] {
+        for (key, variable, enabled_flag, disabled_flag, enabled_value) in [
+            (
+                "compile-bytecode",
+                EnvVars::UV_COMPILE_BYTECODE,
+                "--compile-bytecode",
+                Some("--no-compile-bytecode"),
+                true,
+            ),
+            (
+                "no-build-isolation",
+                EnvVars::UV_NO_BUILD_ISOLATION,
+                "--no-build-isolation",
+                Some("--build-isolation"),
+                true,
+            ),
+            (
+                "no-sources",
+                EnvVars::UV_NO_SOURCES,
+                "--no-sources",
+                None,
+                true,
+            ),
+            (
+                "break-system-packages",
+                EnvVars::UV_BREAK_SYSTEM_PACKAGES,
+                "--break-system-packages",
+                Some("--no-break-system-packages"),
+                true,
+            ),
+            (
+                "require-hashes",
+                EnvVars::UV_REQUIRE_HASHES,
+                "--require-hashes",
+                Some("--no-require-hashes"),
+                true,
+            ),
+            (
+                "verify-hashes",
+                EnvVars::UV_NO_VERIFY_HASHES,
+                "--no-verify-hashes",
+                Some("--verify-hashes"),
+                false,
+            ),
+        ] {
+            let context = uv_test::test_context!("3.12");
+            let command = || {
+                let mut command = add_shared_args(context.command());
+                command.args(["pip", action, "--show-settings", "anyio"]);
+                command
+            };
+            let enabled = capture_uv_snapshot!(context.filters(), command().arg(enabled_flag));
+            let mut disabled_command = command();
+            if let Some(flag) = disabled_flag {
+                disabled_command.arg(flag);
+            }
+            let disabled = capture_uv_snapshot!(context.filters(), disabled_command);
+            let configuration = context.temp_dir.child("uv.toml");
+            configuration.write_str(&format!("[pip]\n{key} = {enabled_value}\n"))?;
+            insta::allow_duplicates! {
+                diff_uv_snapshot!(context.filters(), &disabled, command().env(variable, "false"), @"");
+            }
+            configuration.write_str(&format!("[pip]\n{key} = {}\n", !enabled_value))?;
+            insta::allow_duplicates! {
+                diff_uv_snapshot!(context.filters(), &enabled, command().env(variable, "true"), @"");
+                diff_uv_snapshot!(context.filters(), &enabled, command().arg(enabled_flag).env(variable, "false"), @"");
+                diff_uv_snapshot!(context.filters(), &enabled, command().arg(enabled_flag).env(variable, "invalid"), @"");
+            }
+            if let Some(flag) = disabled_flag {
+                configuration.write_str(&format!("[pip]\n{key} = {enabled_value}\n"))?;
+                insta::allow_duplicates! {
+                    diff_uv_snapshot!(context.filters(), &disabled, command().arg(flag).env(variable, "true"), @"");
+                    diff_uv_snapshot!(context.filters(), &disabled, command().arg(flag).env(variable, "invalid"), @"");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_pip_package_precedence() -> anyhow::Result<()> {
+    for action in ["install", "sync", "compile"] {
+        for (key, variable) in [
+            ("no-sources", EnvVars::UV_NO_SOURCES),
+            ("no-build-isolation", EnvVars::UV_NO_BUILD_ISOLATION),
+        ] {
+            let context = uv_test::test_context!("3.12");
+            let package_flag = format!("--{key}-package");
+            let command = || {
+                let mut command = add_shared_args(context.command());
+                command.args([
+                    "pip",
+                    action,
+                    "--show-settings",
+                    "anyio",
+                    &package_flag,
+                    "explicit",
+                ]);
+                command
+            };
+            let expected = capture_uv_snapshot!(context.filters(), command());
+            context.temp_dir.child("uv.toml").write_str(&format!("{key} = true\n{key}-package = [\"top-level\"]\n[pip]\n{key} = true\n{key}-package = [\"pip\"]\n"))?;
+            insta::allow_duplicates! {
+                diff_uv_snapshot!(context.filters(), &expected, command().env(variable, "false"), @"");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_python_bytecode_precedence() {
+    let context = uv_test::test_context!("3.12");
+    for action in ["install", "upgrade"] {
+        let command = || {
+            let mut command = add_shared_args(context.command());
+            command.args(["python", action, "--show-settings"]);
+            command
+        };
+        let enabled = capture_uv_snapshot!(context.filters(), command().arg("--compile-bytecode"));
+        let disabled =
+            capture_uv_snapshot!(context.filters(), command().arg("--no-compile-bytecode"));
+        insta::allow_duplicates! {
+            diff_uv_snapshot!(context.filters(), &enabled, command().env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+            diff_uv_snapshot!(context.filters(), &disabled, command().env(EnvVars::UV_COMPILE_BYTECODE, "false"), @"");
+            diff_uv_snapshot!(context.filters(), &enabled, command().arg("--compile-bytecode").env(EnvVars::UV_COMPILE_BYTECODE, "invalid"), @"");
+            diff_uv_snapshot!(context.filters(), &disabled, command().arg("--no-compile-bytecode").env(EnvVars::UV_COMPILE_BYTECODE, "true"), @"");
+        }
+    }
+}
+
+#[test]
+fn boolean_environment_rejects_selected_invalid_value() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_COMPILE_BYTECODE, "invalid"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse environment variable `UV_COMPILE_BYTECODE` with invalid value `invalid`: expected a boolish value
+    ");
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn boolean_environment_uninstall_precedence() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let command = || {
+        let mut command = add_shared_args(context.pip_uninstall());
+        command.args(["--show-settings", "anyio"]);
+        command
+    };
+    let disabled = capture_uv_snapshot!(
+        context.filters(),
+        command().arg("--no-break-system-packages")
+    );
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("[pip]\nbreak-system-packages = true\n")?;
+    diff_uv_snapshot!(context.filters(), &disabled, command().env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "false"), @"");
+    diff_uv_snapshot!(context.filters(), &disabled, command().arg("--no-break-system-packages").env(EnvVars::UV_BREAK_SYSTEM_PACKAGES, "true"), @"");
+    Ok(())
+}
