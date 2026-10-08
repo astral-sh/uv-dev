@@ -1,3 +1,5 @@
+use std::env;
+
 use anyhow::Result;
 use assert_cmd::prelude::OutputAssertExt;
 use assert_fs::prelude::*;
@@ -2867,7 +2869,36 @@ fn init_vcs_none() {
 /// Fixture commits have stable metadata while explicitly authored Git settings still apply.
 #[test]
 fn git_fixture_configuration() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
+    // Re-execute with host settings present before constructing the child test context.
+    // This keeps process-global environment changes out of concurrently running tests.
+    if env::var_os("UV_TEST_GIT_FIXTURE_CHILD").is_none() {
+        let context = uv_test::test_context_with_versions!(&[]);
+        context
+            .external_command(env::current_exe()?)
+            .args(["--exact", "init::git_fixture_configuration", "--nocapture"])
+            .env("UV_TEST_GIT_FIXTURE_CHILD", "1")
+            .env(
+                EnvVars::CARGO_MANIFEST_DIR,
+                env::var(EnvVars::CARGO_MANIFEST_DIR)?,
+            )
+            .env("GIT_AUTHOR_NAME", "Host author")
+            .env("GIT_COMMITTER_NAME", "Host committer")
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "fixture.inherited")
+            .env("GIT_CONFIG_VALUE_0", "true")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("1 passed"));
+        return Ok(());
+    }
+
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .external_command("git")
+        .args(["config", "--get", "fixture.inherited"])
+        .assert()
+        .code(1);
+    let context = context
         .with_env("GIT_CONFIG_COUNT", "1")
         .with_env("GIT_CONFIG_KEY_0", "user.email")
         .with_env("GIT_CONFIG_VALUE_0", "fixture@example.com");

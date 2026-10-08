@@ -8,7 +8,6 @@ use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-#[cfg(feature = "test-git")]
 use tempfile::tempdir_in;
 use url::Url;
 use wiremock::matchers::{basic_auth, body_string_contains, method, path};
