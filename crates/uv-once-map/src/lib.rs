@@ -1,16 +1,19 @@
+mod entry;
 mod registered;
+
+use entry::Entry;
+pub use entry::{Abandoned, Producer};
 
 pub use registered::{RegisteredEntry, RegisteredOnceMap, Registration};
 
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::hash::{BuildHasher, Hash, RandomState};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
 use papaya::{HashMap, ResizeMode};
-use tokio::sync::Notify;
 
-/// Run tasks only once and store the results in a parallel hash map.
+/// Coordinate shared tasks and store their results in a parallel hash map.
 ///
 /// We often have jobs `Fn(K) -> V` that we only want to run once and memoize, e.g. network
 /// requests for metadata. When multiple tasks start the same query in parallel, e.g. through source
@@ -20,7 +23,7 @@ use tokio::sync::Notify;
 /// Note that this always clones the value out of the underlying map. Because
 /// of this, it's common to wrap the `V` in an `Arc<V>` to make cloning cheap.
 pub struct OnceMap<K, V, S = RandomState> {
-    items: HashMap<K, Value<V>, S>,
+    items: HashMap<K, Arc<Entry<V>>, S>,
 }
 
 impl<K: Eq + Hash + Debug, V: Debug, S: BuildHasher + Clone> Debug for OnceMap<K, V, S> {
@@ -30,88 +33,61 @@ impl<K: Eq + Hash + Debug, V: Debug, S: BuildHasher + Clone> Debug for OnceMap<K
 }
 
 impl<K: Eq + Hash + Clone, V: Clone, H: BuildHasher + Clone> OnceMap<K, V, H> {
-    /// Register that you want to start a job.
-    ///
-    /// If this method returns `true`, you need to start a job and call [`OnceMap::done`] eventually
-    /// or other tasks will hang. If it returns `false`, this job is already in progress and you
-    /// can call [`OnceMap::register_or_wait`] to wait for the result.
-    fn register(&self, key: K) -> bool {
+    fn entry(&self, key: K) -> Arc<Entry<V>> {
         self.items
             .pin()
-            .try_insert_with(key, || Value::Waiting(Arc::new(Notify::new())))
-            .is_ok()
+            .get_or_insert_with(key, || Arc::new(Entry::vacant()))
+            .clone()
     }
 
-    /// Register that you want to start a job, unless it was already started, then wait for its
-    /// result.
-    ///
-    /// Use this method for once-only operations.
-    ///
-    /// Returns `None` if the job needs to be started, otherwise returns the result of the job.
-    ///
-    ///  # Example
-    ///
-    /// ```rust,ignore
-    /// if let Some(response) = cache.register_or_wait(&id).await {
-    ///     response
-    /// } else {
-    ///     let response = fetch(&id).await;
-    ///     cache.done(id, response.clone());
-    ///     response
-    /// }
-    /// ```
-    pub async fn register_or_wait(&self, key: &K) -> Option<V> {
-        let notify = {
-            let items = self.items.pin();
-            match items.try_insert_with(key.clone(), || Value::Waiting(Arc::new(Notify::new()))) {
-                Ok(_) => return None,
-                Err(value) => match value {
-                    Value::Filled(_) => return value.get(),
-                    Value::Waiting(notify) => notify.clone(),
-                },
-            }
-        };
+    /// Register work whose completion is owned by an external request queue.
+    fn register(&self, key: K) -> bool {
+        self.entry(key).claim().is_some()
+    }
 
-        self.wait_pending(key, notify).await
+    /// Claim a job, or wait for its cached result.
+    ///
+    /// [`Registration::New`] owns the obligation to publish with [`Producer::done`]. Dropping
+    /// that producer wakes waiters to compete for a new claim. Ordinary results, including
+    /// errors, remain cached until removed. Exactly one waiter can claim each retry.
+    ///
+    /// ```
+    /// use uv_once_map::{OnceMap, Registration};
+    /// # async fn example(cache: &OnceMap<String, usize>, id: String) -> usize {
+    /// match cache.register_or_wait(&id).await {
+    ///     Registration::Existing(value) => value,
+    ///     Registration::New(producer) => {
+    ///         let value = id.len();
+    ///         producer.done(value);
+    ///         value
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    pub async fn register_or_wait(&self, key: &K) -> Registration<Producer<V>, V> {
+        loop {
+            let entry = self.entry(key.clone());
+            if let Some(value) = entry.get() {
+                return Registration::Existing(value);
+            }
+            if let Some(generation) = entry.claim() {
+                return Registration::New(Producer::new(entry, generation));
+            }
+            if let Some(value) = entry.wait().await {
+                return Registration::Existing(value);
+            }
+        }
     }
 
     /// Wait for an existing entry without registering a missing key.
     async fn wait_registered(&self, key: &K) -> Option<V> {
-        let notify = {
-            let items = self.items.pin();
-            match items.get(key)? {
-                value @ Value::Filled(_) => return value.get(),
-                Value::Waiting(notify) => notify.clone(),
-            }
-        };
-        self.wait_pending(key, notify).await
+        let entry = self.items.pin().get(key)?.clone();
+        entry.wait().await
     }
 
-    async fn wait_pending(&self, key: &K, notify: Arc<Notify>) -> Option<V> {
-        // Register the waiter for calls to `notify_waiters`.
-        let notification = notify.notified();
-
-        // Make sure the value wasn't inserted in-between us checking the map and registering the waiter.
-        if let Some(value) = self.items.pin().get(key).expect("map is append-only").get() {
-            return Some(value);
-        }
-
-        // Wait until the value is inserted.
-        notification.await;
-
-        let items = self.items.pin();
-        let value = items.get(key).expect("map is append-only");
-        match value {
-            Value::Filled(_) => value.get(),
-            Value::Waiting(_) => unreachable!("notify was called"),
-        }
-    }
-
-    /// Submit the result of a job you registered.
+    /// Submit the result of externally queued work, or seed a completed result.
     pub fn done(&self, key: K, value: V) {
-        if let Some(Value::Waiting(notify)) = self.items.pin().insert(key, Value::filled(value)) {
-            notify.notify_waiters();
-        }
+        self.entry(key).done(value);
     }
 
     /// Return the result of a previous job, if any.
@@ -153,41 +129,8 @@ where
         Self {
             items: iter
                 .into_iter()
-                .map(|(k, v)| (k, Value::filled(v)))
+                .map(|(k, v)| (k, Arc::new(Entry::filled(v))))
                 .collect(),
-        }
-    }
-}
-
-#[derive(Debug)]
-enum Value<V> {
-    Waiting(Arc<Notify>),
-    /// The mutex is a workaround to papaya always returning borrowed instead of owned values.
-    Filled(Mutex<Option<V>>),
-}
-
-impl<V> Value<V> {
-    fn filled(value: V) -> Self {
-        Self::Filled(Mutex::new(Some(value)))
-    }
-
-    fn lock(value: &Mutex<Option<V>>) -> MutexGuard<'_, Option<V>> {
-        value.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn take(&self) -> Option<V> {
-        match self {
-            Self::Filled(value) => Self::lock(value).take(),
-            Self::Waiting(_) => None,
-        }
-    }
-}
-
-impl<V: Clone> Value<V> {
-    fn get(&self) -> Option<V> {
-        match self {
-            Self::Filled(value) => Self::lock(value).clone(),
-            Self::Waiting(_) => None,
         }
     }
 }
