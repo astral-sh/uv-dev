@@ -1,45 +1,29 @@
-use std::path::{Path, PathBuf};
 #[cfg(unix)]
-use std::{env, fs::Permissions, os::unix::fs::PermissionsExt};
+use std::{env, fs::Permissions, io, os::unix::fs::PermissionsExt};
 
 use anyhow::Result;
+#[cfg(unix)]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 #[cfg(unix)]
 use indoc::indoc;
 
-use uv_fs::is_same_file_allow_missing;
 #[cfg(unix)]
 use uv_static::EnvVars;
-use uv_test::TestContext;
-
-fn assert_base_interpreter(context: &TestContext, expected: &Path) -> Result<()> {
-    let assert = context
-        .python_command()
-        .args([
-            "-c",
-            "import json, sys; print(json.dumps(sys._base_executable))",
-        ])
-        .assert()
-        .success();
-    let executable: PathBuf = serde_json::from_slice(&assert.get_output().stdout)?;
-    let executable = fs_err::canonicalize(executable)?;
-    let expected = fs_err::canonicalize(expected)?;
-    assert_eq!(
-        is_same_file_allow_missing(&executable, &expected),
-        Some(true)
-    );
-    assert!(context.site_packages().is_dir());
-    Ok(())
-}
+use uv_test::uv_snapshot;
 
 #[test]
 fn venv_uses_retained_default_interpreter() -> Result<()> {
     let mut context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
-    let selected = context.python_versions[0].1.clone();
 
     context.reset_venv();
-    assert_base_interpreter(&context, &selected)?;
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import sys; print(sys._base_executable)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.12]
+    ");
+    assert!(context.site_packages().is_dir());
 
     let sentinel = context.venv.child("sentinel.txt");
     sentinel.write_str("removed when resetting the environment")?;
@@ -48,7 +32,13 @@ fn venv_uses_retained_default_interpreter() -> Result<()> {
     context.python_versions.reverse();
     context.reset_venv();
     assert!(!sentinel.exists());
-    assert_base_interpreter(&context, &selected)?;
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import sys; print(sys._base_executable)"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.12]
+    ");
+    assert!(context.site_packages().is_dir());
     Ok(())
 }
 
@@ -62,6 +52,19 @@ fn venv_does_not_rediscover_selected_interpreter() -> Result<()> {
     }
 
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    // Discover the actual installations before the wrapper disables discovery for venv creation.
+    let python_dirs = context
+        .python_versions
+        .iter()
+        .map(|(_, executable)| {
+            fs_err::canonicalize(executable).map(|path| {
+                path.parent()
+                    .expect("Python executable has a parent directory")
+                    .to_path_buf()
+            })
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let python_path = env::join_paths(python_dirs)?;
     let empty = context.temp_dir.child("empty");
     empty.create_dir_all()?;
     let wrapper = context.temp_dir.child("uv-without-discovery");
@@ -88,7 +91,7 @@ fn venv_does_not_rediscover_selected_interpreter() -> Result<()> {
         .env_remove("NEXTEST_BIN_EXE_uv")
         .env(EnvVars::CARGO_MANIFEST_DIR, env!("CARGO_MANIFEST_DIR"))
         .env(EnvVars::UV_PYTHON_INSTALL_DIR, empty.path())
-        .env(EnvVars::UV_PYTHON_SEARCH_PATH, context.python_path())
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, python_path)
         .env(EnvVars::PATH, empty.path())
         .assert()
         .success();
