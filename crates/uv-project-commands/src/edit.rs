@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -275,15 +277,27 @@ impl FileSnapshot {
         }
         // Identify the opened file before truncating it. A newly discovered path must not replace
         // a file another writer created after the original absent snapshot.
-        let file = fs_err::OpenOptions::new()
+        let created = expected.is_none();
+        let mut file = fs_err::OpenOptions::new()
             .write(true)
-            .create_new(expected.is_none())
+            .create_new(created)
             .truncate(false)
             .open(&self.path)?;
-        self.write_opened(file, contents)
+        let result = self.write_opened(&mut file, contents);
+        if result.is_err()
+            && created
+            && self.written.is_none()
+            && let Err(err) = remove_created_file(&self.path, file)
+        {
+            warn_user!(
+                "Failed to remove newly created `{}`: {err}",
+                self.path.user_display()
+            );
+        }
+        result
     }
 
-    fn write_opened(&mut self, mut file: fs_err::File, contents: &[u8]) -> io::Result<()> {
+    fn write_opened(&mut self, file: &mut fs_err::File, contents: &[u8]) -> io::Result<()> {
         let identity = Handle::from_file(file.file().try_clone()?)?;
         if let Some(expected) = self.written.as_ref().or(self.original.as_ref())
             && identity != expected.identity
@@ -384,6 +398,28 @@ impl FileSnapshot {
     }
 }
 
+/// Clean up creation when handle setup fails before the first write is recorded.
+fn remove_created_file(path: &Path, file: fs_err::File) -> io::Result<()> {
+    // Consume the original descriptor rather than duplicating it: creation may have used the
+    // process's last available descriptor. Retain it until after the identity comparison.
+    let created = Handle::from_file(file.into_file())?;
+    let current = match fs_err::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    #[cfg(unix)]
+    let same = current.dev() == created.dev() && current.ino() == created.ino();
+    #[cfg(not(unix))]
+    let same = Handle::from_path(path)? == created;
+    if !same || !current.is_file() || current.len() != 0 {
+        return Err(io::Error::other(
+            "file changed outside this project edit; leaving it unchanged",
+        ));
+    }
+    fs_err::remove_file(path)
+}
+
 /// Attempt every restoration even if an earlier file cannot be restored.
 fn revert(files: &mut Vec<FileSnapshot>) {
     for file in files.drain(..) {
@@ -437,6 +473,71 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn created_file_setup_failure_is_cleaned() -> Result<()> {
+        const CHILD: &str = "UV_TEST_PROJECT_EDIT_DESCRIPTOR_LIMIT";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "edit::tests::created_file_setup_failure_is_cleaned",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()?;
+            assert!(output.status.success(), "{output:?}");
+            return Ok(());
+        }
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let state = EditState::new([path.clone()])?;
+        // This limit belongs to the isolated child, never the test runner's other tests.
+        uv_unix::set_open_file_limit(64)?;
+        let mut descriptors = Vec::new();
+        while let Ok(file) = fs_err::File::open("/dev/null") {
+            descriptors.push(file);
+        }
+        // Creation can take the final descriptor, but duplicating it for identity tracking fails.
+        drop(descriptors.pop());
+        let result = state.write_file(&path, b"lock contents");
+        state.finish(false);
+        let exists = path.try_exists()?;
+        drop(descriptors);
+        let Err(error) = result else {
+            bail!("descriptor exhaustion did not fail handle setup");
+        };
+        assert_eq!(error.raw_os_error(), Some(24)); // EMFILE on Unix.
+        assert!(
+            !exists,
+            "setup failure left the newly created lockfile behind"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn created_file_cleanup_preserves_foreign_changes() -> Result<()> {
+        for replacement in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("uv.lock");
+            let file = fs_err::File::create_new(&path)?;
+            if replacement {
+                let external = directory.path().join("external");
+                fs_err::write(&external, "")?;
+                fs_err::rename(external, &path)?;
+            } else {
+                fs_err::write(&path, "external")?;
+            }
+            assert!(super::remove_created_file(&path, file).is_err());
+            assert_eq!(
+                fs_err::read_to_string(&path)?,
+                if replacement { "" } else { "external" }
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn opened_replacement_is_rejected_before_truncation() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("pyproject.toml");
@@ -451,8 +552,8 @@ mod tests {
         let replacement = directory.path().join("replacement");
         fs_err::write(&replacement, "external")?;
         fs_err::rename(replacement, &path)?;
-        let opened = fs_err::OpenOptions::new().write(true).open(&path)?;
-        assert!(snapshot.write_opened(opened, b"edited").is_err());
+        let mut opened = fs_err::OpenOptions::new().write(true).open(&path)?;
+        assert!(snapshot.write_opened(&mut opened, b"edited").is_err());
         assert_eq!(fs_err::read_to_string(&path)?, "external");
         assert!(snapshot.written.is_none());
         Ok(())
