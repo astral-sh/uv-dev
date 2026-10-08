@@ -581,13 +581,20 @@ impl Cache {
 
     /// Clear the cache, removing all entries.
     pub fn clear(self, reporter: Box<dyn CleanReporter>) -> Result<Removal, io::Error> {
+        // A configured directory link selects the cache to clear. Keep the link and its target
+        // directory usable, while links within the cache remain entries to unlink.
+        let is_directory_link = fs_err::symlink_metadata(&self.root)?.is_symlink();
+        let root = if is_directory_link {
+            fs_err::canonicalize(&self.root)?
+        } else {
+            self.root.clone()
+        };
+
         // Remove everything but `.lock`, Windows does not allow removal of a locked file
         let mut removal = Remover::new(reporter)
             .with_removal_accounting(self.removal_accounting)
-            .rm_rf(&self.root, true)?;
-        let Self {
-            root, lock_file, ..
-        } = self;
+            .rm_rf(&root, true)?;
+        let Self { lock_file, .. } = self;
 
         // Remove the `.lock` file, unlocking it first
         if let Some(lock) = lock_file {
@@ -595,6 +602,10 @@ impl Cache {
             fs_err::remove_file(root.join(".lock"))?;
         }
         removal.num_files += 1;
+
+        if is_directory_link {
+            return Ok(removal);
+        }
 
         // Remove the root directory
         match fs_err::remove_dir(root) {
