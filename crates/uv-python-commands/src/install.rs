@@ -532,7 +532,7 @@ async fn perform_install(
                             "Build version mismatch for `{}`, will upgrade",
                             installation.key()
                         );
-                        changelog.existing.insert(installation.key().clone());
+                        changelog.existing.insert(request.download.key().clone());
                         unsatisfied.push(Cow::Borrowed(request));
                     }
                 } else {
