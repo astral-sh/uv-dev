@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::Write as _;
 #[cfg(unix)]
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::PathBuf;
@@ -65,15 +66,6 @@ fn setuptools_fixture(context: &TestContext, name: &str) -> Result<PathBuf> {
 
         def get_requires_for_build_wheel(config_settings=None):
             with source_mutation("requires"):
-                if "{name}" == "failing":
-                    raise RuntimeError("intentional hook failure")
-                if "{name}" == "parent":
-                    return ["helper @ " + (root.parent / "helper").as_uri()]
-                if "{name}" == "helper":
-                    import fcntl
-                    with open(os.environ["UV_TEST_PARENT_SOURCE_LOCK"], "r+") as lock:
-                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        fcntl.flock(lock, fcntl.LOCK_UN)
                 return []
 
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
@@ -278,6 +270,18 @@ async fn failed_requirement_discovery_cancels_another_protected_hook() -> Result
     let context = uv_test::test_context!("3.12");
     let blocked = setuptools_fixture(&context, "blocked")?;
     let failing = setuptools_fixture(&context, "failing")?;
+    fs_err::OpenOptions::new()
+        .append(true)
+        .open(failing.join("setuptools/build_meta.py"))?
+        .write_all(
+            indoc! {r#"
+
+            def get_requires_for_build_wheel(config_settings=None):
+                with source_mutation("requires"):
+                    raise RuntimeError("intentional hook failure")
+        "#}
+            .as_bytes(),
+        )?;
     context
         .temp_dir
         .child("requirements.in")
@@ -293,6 +297,7 @@ async fn failed_requirement_discovery_cancels_another_protected_hook() -> Result
     command
         .arg("requirements.in")
         .args(["--offline", "--no-index"])
+        .env(EnvVars::UV_CONCURRENT_BUILDS, "2")
         .env("UV_TEST_HOOK_ADDRESS", listener.local_addr()?.to_string())
         .env("UV_TEST_HOOK_PHASE", "requires");
     let command = tokio::process::Command::from(command)
@@ -320,9 +325,12 @@ async fn failed_requirement_discovery_cancels_another_protected_hook() -> Result
         .failure()
         .stderr(predicates::str::contains("intentional hook failure"));
     let mut byte = [0];
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(30), blocked.stream.read(&mut byte)).await??,
-        0
+    let closed =
+        tokio::time::timeout(Duration::from_secs(30), blocked.stream.read(&mut byte)).await?;
+    assert!(
+        matches!(&closed, Ok(0))
+            || matches!(&closed, Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset),
+        "the canceled hook must close its connection: {closed:?}"
     );
     #[cfg(unix)]
     assert_process_exited(&context, blocked.pid);
@@ -393,7 +401,35 @@ async fn interrupting_a_protected_build_exits_the_process_group() -> Result<()> 
 fn setuptools_setup_releases_source_before_building_extra_requirements() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let source = setuptools_fixture(&context, "parent")?;
-    setuptools_fixture(&context, "helper")?;
+    let helper = setuptools_fixture(&context, "helper")?;
+    fs_err::OpenOptions::new()
+        .append(true)
+        .open(source.join("setuptools/build_meta.py"))?
+        .write_all(
+            indoc! {r#"
+
+            def get_requires_for_build_wheel(config_settings=None):
+                with source_mutation("requires"):
+                    return ["helper @ " + (root.parent / "helper").as_uri()]
+        "#}
+            .as_bytes(),
+        )?;
+    fs_err::OpenOptions::new()
+        .append(true)
+        .open(helper.join("setuptools/build_meta.py"))?
+        .write_all(
+            indoc! {r#"
+
+            def get_requires_for_build_wheel(config_settings=None):
+                import fcntl
+                with source_mutation("requires"):
+                    with open(os.environ["UV_TEST_PARENT_SOURCE_LOCK"], "r+") as lock:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        fcntl.flock(lock, fcntl.LOCK_UN)
+                return []
+        "#}
+            .as_bytes(),
+        )?;
     let lock = std::env::temp_dir().join(format!(
         "uv-setuptools-{}.lock",
         cache_digest(&fs_err::canonicalize(&source)?)

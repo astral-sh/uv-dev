@@ -10,6 +10,23 @@ use uv_fs::LockedFile;
 
 use crate::{Printer, PythonRunnerOutput};
 
+struct ProtectedHookWorker {
+    cancellation: Option<oneshot::Sender<()>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for ProtectedHookWorker {
+    fn drop(&mut self) {
+        // The CLI shuts its Tokio runtime down without waiting for background tasks. Cancellation
+        // therefore joins this worker synchronously, rather than detaching child cleanup. The
+        // worker has its own runtime and thread, so it can kill and reap independently of us.
+        drop(self.cancellation.take());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
 /// Keep protected hooks owned through child exit, including cancellation of their async caller.
 pub(super) async fn run(
     command: Command,
@@ -23,22 +40,33 @@ pub(super) async fn run(
     };
 
     // Dropping the caller closes this channel. The worker can still kill and reap its child
-    // while the caller's runtime is shutting down and waiting for blocking workers.
+    // while the caller's runtime is shutting down.
     let (cancel, cancellation) = oneshot::channel();
+    let (completed, completion) = oneshot::channel();
     let command = command.into_std();
     let span = tracing::Span::current();
-    let worker = tokio::task::spawn_blocking(move || {
-        let (_source_tree_lock, _permit) = (source_tree_lock, permit);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        runtime.block_on(
-            run_child(Command::from(command), printer, Some(cancellation)).instrument(span),
-        )
-    });
-    let output = worker.await.map_err(io::Error::other)?;
-    drop(cancel);
-    output
+    let worker = std::thread::Builder::new()
+        .name("uv-build-hook".to_owned())
+        .spawn(move || {
+            let result = {
+                let (_source_tree_lock, _permit) = (source_tree_lock, permit);
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .and_then(|runtime| {
+                        runtime.block_on(
+                            run_child(Command::from(command), printer, Some(cancellation))
+                                .instrument(span),
+                        )
+                    })
+            };
+            let _ = completed.send(result);
+        })?;
+    let _worker = ProtectedHookWorker {
+        cancellation: Some(cancel),
+        worker: Some(worker),
+    };
+    completion.await.map_err(io::Error::other)?
 }
 
 async fn run_child(
@@ -172,6 +200,12 @@ mod tests {
                 "--ignored",
                 "--nocapture",
             ])
+            // Panic-abort libtest normally adds a wrapper process. Run the fixture itself so
+            // cancellation exercises the direct child owned by the protected hook worker.
+            .env(
+                "__RUST_TEST_INVOKE",
+                "process::tests::protected_hook_fixture",
+            )
             .env("UV_TEST_HOOK_ADDRESS", listener.local_addr()?.to_string())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -196,9 +230,11 @@ mod tests {
         }
         let _next = admission??;
         let mut byte = [0];
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(30), gate.read(&mut byte)).await??,
-            0
+        let closed = tokio::time::timeout(Duration::from_secs(30), gate.read(&mut byte)).await?;
+        assert!(
+            matches!(&closed, Ok(0))
+                || matches!(&closed, Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset),
+            "the reaped fixture must close its connection: {closed:?}"
         );
         assert_eq!(slots.available_permits(), 1);
         Ok(())
@@ -227,12 +263,16 @@ mod tests {
                     "--ignored",
                     "--nocapture",
                 ])
+                .env(
+                    "__RUST_TEST_INVOKE",
+                    "process::tests::protected_hook_fixture",
+                )
                 .env("UV_TEST_HOOK_ADDRESS", address)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
             runtime.spawn(run(command, Some(lock), permit, Printer::Quiet));
             runtime.block_on(request_shutdown)?;
-            drop(runtime);
+            runtime.shutdown_background();
             let _ = finished.send(());
             Ok(())
         });
@@ -255,9 +295,11 @@ mod tests {
         completed??;
         assert!(LockedFile::acquire_no_wait(&path, LockedFileMode::Exclusive, "source").is_some());
         let mut byte = [0];
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(30), gate.read(&mut byte)).await??,
-            0
+        let closed = tokio::time::timeout(Duration::from_secs(30), gate.read(&mut byte)).await?;
+        assert!(
+            matches!(&closed, Ok(0))
+                || matches!(&closed, Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset),
+            "the reaped fixture must close its connection: {closed:?}"
         );
         assert_eq!(slots.available_permits(), 1);
         Ok(())
