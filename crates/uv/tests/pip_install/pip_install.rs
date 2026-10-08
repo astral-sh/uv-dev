@@ -15890,7 +15890,7 @@ fn reject_cached_foreign_python_host_platform() {
     ----- stderr -----
     Resolved 1 package in [TIME]
     error: Failed to determine installation plan
-    cause: A path ([WORKSPACE]/test/links/wheel_tag_test-0.1.0-py3-none-win_amd64.whl) dependency is incompatible with the current platform
+      cause: A path ([WORKSPACE]/test/links/wheel_tag_test-0.1.0-py3-none-win_amd64.whl) dependency is incompatible with the current platform
 
     hint: The wheel is compatible with Windows (`win_amd64`), but you're on [PLATFORM] (`[TAG]`)
     ");
