@@ -1268,7 +1268,7 @@ mod tests {
 
     #[test]
     fn test_is_upgrade_of_different_build_name() {
-        let default = create_test_installation(
+        let mut previous = create_test_installation(
             ImplementationName::CPython,
             3,
             10,
@@ -1277,13 +1277,25 @@ mod tests {
             PythonVariant::Default,
             None,
         );
-        let mut custom = default.clone();
-        custom.key = custom
-            .key
-            .with_build_name(PythonBuildName::from_str("custom").unwrap());
+        let newer = create_test_installation(
+            ImplementationName::CPython,
+            3,
+            10,
+            9,
+            None,
+            PythonVariant::Default,
+            None,
+        );
+        assert!(newer.is_upgrade_of(&previous));
 
-        assert!(!custom.is_upgrade_of(&default));
-        assert!(!default.is_upgrade_of(&custom));
+        let build_name = PythonBuildName::from_str("custom").expect("valid build name");
+        let mut custom = newer.clone();
+        custom.key = custom.key.with_build_name(build_name.clone());
+        assert!(!custom.is_upgrade_of(&previous));
+
+        previous.key = previous.key.with_build_name(build_name);
+        assert!(custom.is_upgrade_of(&previous));
+        assert!(!newer.is_upgrade_of(&previous));
     }
 
     #[test]

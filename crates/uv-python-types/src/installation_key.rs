@@ -160,10 +160,6 @@ impl PythonInstallationKey {
         self.build_name.as_ref()
     }
 
-    fn executable_name_variant_suffix(&self) -> String {
-        self.variant.executable_suffix().to_string()
-    }
-
     fn display_variant_suffix(&self) -> String {
         let mut suffix = match self.variant {
             PythonVariant::Default => String::new(),
@@ -183,7 +179,7 @@ impl PythonInstallationKey {
             name = self.implementation().executable_install_name(),
             maj = self.major,
             min = self.minor,
-            var = self.executable_name_variant_suffix(),
+            var = self.variant.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
@@ -194,7 +190,7 @@ impl PythonInstallationKey {
             "{name}{maj}{var}{exe}",
             name = self.implementation().executable_install_name(),
             maj = self.major,
-            var = self.executable_name_variant_suffix(),
+            var = self.variant.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
@@ -204,7 +200,7 @@ impl PythonInstallationKey {
         format!(
             "{name}{var}{exe}",
             name = self.implementation().executable_install_name(),
-            var = self.executable_name_variant_suffix(),
+            var = self.variant.executable_suffix(),
             exe = std::env::consts::EXE_SUFFIX
         )
     }
