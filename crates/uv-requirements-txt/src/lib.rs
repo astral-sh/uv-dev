@@ -43,7 +43,6 @@ use std::str::FromStr;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 use unscanny::{Pattern, Scanner};
-
 #[cfg(feature = "http")]
 use uv_client::{BaseClient, ClientBuildError};
 use uv_client::{BaseClientBuilder, Connectivity};
@@ -271,6 +270,7 @@ impl RequirementsTxt {
                 RequirementsInput::Remote(url) => {
                     #[cfg(not(feature = "http"))]
                     {
+                        let _ = url;
                         return Err(RequirementsTxtFileError {
                             file: Box::new(requirements_txt.clone()),
                             error: RequirementsTxtParserError::Io(io::Error::new(
