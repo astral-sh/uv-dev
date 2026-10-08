@@ -9,6 +9,7 @@ use uv_git_types::{GitUrl, GitUrlParseError};
 use uv_pep508::{
     Pep508Url, UnnamedRequirementUrl, VerbatimUrl, VerbatimUrlError, looks_like_git_repository,
 };
+use uv_redacted::policy::Stripped;
 use uv_redacted::{SafeUrl, SafeUrlError};
 
 use crate::{ArchiveInfo, DirInfo, DirectUrl, VcsInfo, VcsKind};
@@ -564,7 +565,7 @@ impl From<&ParsedUrl> for DirectUrl {
 impl From<&ParsedPathUrl> for DirectUrl {
     fn from(value: &ParsedPathUrl) -> Self {
         Self::ArchiveUrl {
-            url: value.url.to_string(),
+            url: value.url.clone().with_policy(Stripped),
             archive_info: ArchiveInfo {
                 hash: None,
                 hashes: None,
@@ -577,7 +578,7 @@ impl From<&ParsedPathUrl> for DirectUrl {
 impl From<&ParsedDirectoryUrl> for DirectUrl {
     fn from(value: &ParsedDirectoryUrl) -> Self {
         Self::LocalDirectory {
-            url: value.url.to_string(),
+            url: value.url.clone().with_policy(Stripped),
             dir_info: DirInfo {
                 editable: value.editable,
             },
@@ -589,8 +590,7 @@ impl From<&ParsedDirectoryUrl> for DirectUrl {
 impl From<&ParsedArchiveUrl> for DirectUrl {
     fn from(value: &ParsedArchiveUrl) -> Self {
         Self::ArchiveUrl {
-            // Query parameters identify the source, so only strip username and password credentials.
-            url: value.url.without_credentials().as_str().to_owned(),
+            url: value.url.clone().with_policy(Stripped),
             archive_info: ArchiveInfo {
                 hash: None,
                 hashes: None,
@@ -603,7 +603,7 @@ impl From<&ParsedArchiveUrl> for DirectUrl {
 impl From<&ParsedGitDirectoryUrl> for DirectUrl {
     fn from(value: &ParsedGitDirectoryUrl) -> Self {
         Self::VcsUrl {
-            url: value.url.url().to_string(),
+            url: value.url.url().clone().with_policy(Stripped),
             vcs_info: VcsInfo {
                 vcs: VcsKind::Git,
                 commit_id: value.url.precise().as_ref().map(ToString::to_string),
@@ -619,7 +619,7 @@ impl From<&ParsedGitDirectoryUrl> for DirectUrl {
 impl From<&ParsedGitPathUrl> for DirectUrl {
     fn from(value: &ParsedGitPathUrl) -> Self {
         Self::VcsUrl {
-            url: value.url.url().to_string(),
+            url: value.url.url().clone().with_policy(Stripped),
             vcs_info: VcsInfo {
                 vcs: VcsKind::Git,
                 commit_id: value.url.precise().as_ref().map(ToString::to_string),
@@ -767,6 +767,16 @@ mod tests {
             assert_eq!(expected, actual);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn direct_url_deserializes_protocol_urls() -> Result<()> {
+        let direct_url: DirectUrl = serde_json::from_str(
+            r#"{"url":"https://example.com/files/project:build@nightly?sig=abc%2Bdef%3D","archive_info":{}}"#,
+        )?;
+        let url = SafeUrl::try_from(&direct_url)?;
+        insta::assert_snapshot!(url.as_str(), @"https://example.com/files/project:build@nightly?sig=abc%2Bdef%3D");
         Ok(())
     }
 

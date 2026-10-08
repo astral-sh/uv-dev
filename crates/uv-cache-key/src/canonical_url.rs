@@ -93,7 +93,8 @@ impl CanonicalUrl {
         Self(url)
     }
 
-    pub fn parse(url: &str) -> Result<Self, SafeUrlError> {
+    #[cfg(test)]
+    fn parse(url: &str) -> Result<Self, SafeUrlError> {
         Ok(Self::new(SafeUrl::parse(url)?))
     }
 }

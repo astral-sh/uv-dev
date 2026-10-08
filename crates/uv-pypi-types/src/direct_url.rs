@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use uv_redacted::policy::Stripped;
 use uv_redacted::{SafeUrl, SafeUrlError};
 
 use crate::{HashAlgorithm, Hashes};
@@ -9,15 +10,24 @@ use crate::{HashAlgorithm, Hashes};
 /// Metadata for a distribution that was installed via a direct URL.
 ///
 /// See: <https://packaging.python.org/en/latest/specifications/direct-url-data-structure/>
+pub type ParsedDirectUrl = DirectUrl<SafeUrl<Stripped>>;
+
+/// Direct URL metadata whose URL has not yet been parsed.
+#[derive(Deserialize)]
+#[serde(transparent)]
+// hide the `Serialize` and `Debug` implementations to avoid accidentally leaking credentials
+pub struct DirectUrlMetadata(DirectUrl<String>);
+
+/// The shared schema for parsed and unparsed direct URL metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", untagged)]
-pub enum DirectUrl {
+pub enum DirectUrl<UrlType> {
     /// The direct URL is a local directory. For example:
     /// ```json
     /// {"url": "file:///home/user/project", "dir_info": {}}
     /// ```
     LocalDirectory {
-        url: String,
+        url: UrlType,
         dir_info: DirInfo,
         #[serde(skip_serializing_if = "Option::is_none")]
         subdirectory: Option<Box<Path>>,
@@ -31,7 +41,7 @@ pub enum DirectUrl {
         ///
         /// For example, for `pip install git+https://github.com/tqdm/tqdm@cc372d09dcd5a5eabdc6ed4cf365bdb0be004d44#subdirectory=.`,
         /// the URL is `https://github.com/tqdm/tqdm`.
-        url: String,
+        url: UrlType,
         archive_info: ArchiveInfo,
         #[serde(skip_serializing_if = "Option::is_none")]
         subdirectory: Option<Box<Path>>,
@@ -41,13 +51,55 @@ pub enum DirectUrl {
     /// {"url": "https://github.com/pallets/flask.git", "vcs_info": {"commit_id": "8d9519df093864ff90ca446d4af2dc8facd3c542", "vcs": "git", "git_lfs": true }}
     /// ```
     VcsUrl {
-        url: String,
+        url: UrlType,
         vcs_info: VcsInfo,
         #[serde(skip_serializing_if = "Option::is_none")]
         subdirectory: Option<Box<Path>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         path: Option<PathBuf>,
     },
+}
+
+impl DirectUrlMetadata {
+    /// Parse the URL after the rest of the metadata has been deserialized.
+    pub fn into_direct_url(self) -> Result<ParsedDirectUrl, SafeUrlError> {
+        let parse_url = |url: &str| {
+            SafeUrl::parse_relaxed(url)
+                .map(|url| url.with_policy(Stripped))
+                .map_err(SafeUrlError::from)
+        };
+        Ok(match self.0 {
+            DirectUrl::LocalDirectory {
+                url,
+                dir_info,
+                subdirectory,
+            } => DirectUrl::LocalDirectory {
+                url: parse_url(&url)?,
+                dir_info,
+                subdirectory,
+            },
+            DirectUrl::ArchiveUrl {
+                url,
+                archive_info,
+                subdirectory,
+            } => DirectUrl::ArchiveUrl {
+                url: parse_url(&url)?,
+                archive_info,
+                subdirectory,
+            },
+            DirectUrl::VcsUrl {
+                url,
+                vcs_info,
+                subdirectory,
+                path,
+            } => DirectUrl::VcsUrl {
+                url: parse_url(&url)?,
+                vcs_info,
+                subdirectory,
+                path,
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -98,17 +150,17 @@ impl std::fmt::Display for VcsKind {
     }
 }
 
-impl TryFrom<&DirectUrl> for SafeUrl {
+impl TryFrom<&ParsedDirectUrl> for SafeUrl {
     type Error = SafeUrlError;
 
-    fn try_from(value: &DirectUrl) -> Result<Self, Self::Error> {
+    fn try_from(value: &ParsedDirectUrl) -> Result<Self, Self::Error> {
         match value {
             DirectUrl::LocalDirectory {
                 url,
                 subdirectory,
                 dir_info: _,
             } => {
-                let mut url = Self::parse(url)?;
+                let mut url = url.as_url().clone();
                 if let Some(subdirectory) = subdirectory {
                     url.set_fragment(Some(&format!("subdirectory={}", subdirectory.display())));
                 }
@@ -119,7 +171,7 @@ impl TryFrom<&DirectUrl> for SafeUrl {
                 subdirectory,
                 archive_info,
             } => {
-                let mut url = Self::parse(url)?;
+                let mut url = url.as_url().clone();
                 let mut fragments = Vec::new();
                 if let Some(subdirectory) = subdirectory {
                     fragments.push(format!("subdirectory={}", subdirectory.display()));
@@ -152,7 +204,7 @@ impl TryFrom<&DirectUrl> for SafeUrl {
                 subdirectory,
                 path,
             } => {
-                let mut url = Self::parse(&format!("{}+{}", vcs_info.vcs, url))?;
+                let mut url = Self::parse_relaxed(&format!("{}+{}", vcs_info.vcs, url.as_str()))?;
                 if let Some(commit_id) = &vcs_info.commit_id {
                     let path = format!("{}@{commit_id}", url.path());
                     url.set_path(&path);
