@@ -1076,9 +1076,7 @@ fn auth_text_store_signed_service_urls() -> Result<()> {
     Stored credentials for user@https://example.com/service?sig=****&X-Amz-Credential=****
     ");
 
-    let stored: toml::Value = toml::from_str(&fs_err::read_to_string(
-        context.temp_dir.child("credentials.toml"),
-    )?)?;
+    let stored: toml::Value = toml::from_str(&context.read("credentials.toml"))?;
     assert_eq!(stored["credential"][0]["service"].as_str(), Some(service));
 
     uv_snapshot!(context.auth_token()
