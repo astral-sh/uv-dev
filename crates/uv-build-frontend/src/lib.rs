@@ -2,6 +2,7 @@
 //!
 //! <https://packaging.python.org/en/latest/specifications/source-distribution-format/>
 
+mod environment;
 mod error;
 mod pipreqs;
 
@@ -224,7 +225,7 @@ impl Pep517Backend {
 pub struct SourceBuildContext {
     /// An in-memory resolution of the default backend's requirements for PEP 517 builds.
     default_resolution: Arc<Mutex<Option<ResolvedRequirements>>>,
-    /// A shared semaphore to limit the number of concurrent builds.
+    /// A shared semaphore for backend execution and isolated environment creation.
     concurrent_build_slots: Arc<Semaphore>,
 }
 
@@ -372,22 +373,31 @@ impl SourceBuild {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Create a virtual environment, or install into the shared environment if requested.
-        let venv = if let Some(venv) = build_isolation.shared_environment(package_name.as_ref()) {
-            venv.clone()
-        } else {
-            uv_virtualenv::create_venv(
-                temp_dir.path(),
-                interpreter.clone(),
-                uv_virtualenv::Prompt::None,
-                false,
-                uv_virtualenv::OnExisting::Remove(
-                    uv_virtualenv::RemovalReason::TemporaryEnvironment,
-                ),
-                false,
-                uv_virtualenv::Seed::Disabled,
-                UpgradePolicy::Fixed,
-            )?
-        };
+        let (temp_dir, venv) =
+            if let Some(venv) = build_isolation.shared_environment(package_name.as_ref()) {
+                (temp_dir, venv.clone())
+            } else {
+                let interpreter = interpreter.clone();
+                environment::create_isolated_environment(
+                    temp_dir,
+                    source_build_context.concurrent_build_slots.clone(),
+                    move |path| {
+                        uv_virtualenv::create_venv(
+                            path,
+                            interpreter,
+                            uv_virtualenv::Prompt::None,
+                            false,
+                            uv_virtualenv::OnExisting::Remove(
+                                uv_virtualenv::RemovalReason::TemporaryEnvironment,
+                            ),
+                            false,
+                            uv_virtualenv::Seed::Disabled,
+                            UpgradePolicy::Fixed,
+                        )
+                    },
+                )
+                .await?
+            };
 
         // Set up the build environment. If build isolation is disabled, we assume the build
         // environment is already set up.
