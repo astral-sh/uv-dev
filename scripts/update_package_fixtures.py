@@ -3,6 +3,7 @@
 import argparse
 import csv
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -10,7 +11,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from package_fixtures import FIXTURES, load_profiles, normalize_name
+from package_fixtures import FIXTURES, FixtureIndex, load_profiles, normalize_name
 
 
 def resolve(uv, requirements, profile):
@@ -30,6 +31,8 @@ def resolve(uv, requirements, profile):
                 "pip",
                 "compile",
                 str(source),
+                "--default-index",
+                "https://pypi.org/simple",
                 "--python-version",
                 profile["resolution_python"],
                 "--python-platform",
@@ -40,6 +43,7 @@ def resolve(uv, requirements, profile):
                 str(destination),
             ],
             check=True,
+            env=FixtureIndex.environment(os.environ),
         )
         result = {}
         for line in destination.read_text().splitlines():

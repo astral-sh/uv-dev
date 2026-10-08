@@ -841,7 +841,7 @@ jobs:
 
   system-test-windows-embedded-python-310:
     timeout-minutes: 10
-    name: "embedded python3.10 on windows x86-64"
+    name: "embedded python3.11 on windows x86-64"
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

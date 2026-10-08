@@ -161,5 +161,396 @@
     "roots": {
       "homeassistant": "2026.10.0"
     }
+  },
+  "embedded-3.11": {
+    "build_requirements": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "build_roots": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "platforms": ["win32"],
+    "requirements": {
+      "astroid": "4.3.4",
+      "colorama": "0.4.6",
+      "dill": "0.4.1",
+      "isort": "9.0.2",
+      "mccabe": "0.7.0",
+      "mypy-extensions": "1.1.0",
+      "numpy": "2.3.3",
+      "pip": "26.2",
+      "platformdirs": "4.12.4",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "tomlkit": "0.15.1",
+      "wheel": "0.45.1"
+    },
+    "resolution_platform": "x86_64-pc-windows-msvc",
+    "resolution_python": "3.11.8",
+    "roots": {
+      "numpy": "2.3.3",
+      "pip": "26.2",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    }
+  },
+  "system-3.10": {
+    "build_requirements": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "build_roots": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "platforms": ["darwin", "linux", "win32"],
+    "requirements": {
+      "astroid": "4.3.4",
+      "colorama": "0.4.6",
+      "dill": "0.4.1",
+      "isort": "9.0.2",
+      "mccabe": "0.7.0",
+      "mypy-extensions": "1.1.0",
+      "pip": "26.2",
+      "platformdirs": "4.12.4",
+      "pydantic-core": "2.49.0",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "tomli": "2.5.0",
+      "tomlkit": "0.15.1",
+      "typing-extensions": "4.16.0",
+      "wheel": "0.45.1"
+    },
+    "resolution_platform": "x86_64-pc-windows-msvc",
+    "resolution_python": "3.10.0",
+    "roots": {
+      "pip": "26.2",
+      "pydantic-core": "2.49.0",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    }
+  },
+  "system-3.11": {
+    "build_requirements": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "build_roots": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "platforms": ["darwin", "linux", "win32"],
+    "requirements": {
+      "astroid": "4.3.4",
+      "colorama": "0.4.6",
+      "dill": "0.4.1",
+      "isort": "9.0.2",
+      "mccabe": "0.7.0",
+      "mypy-extensions": "1.1.0",
+      "pip": "26.2",
+      "platformdirs": "4.12.4",
+      "pydantic-core": "2.49.0",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "tomlkit": "0.15.1",
+      "typing-extensions": "4.16.0",
+      "wheel": "0.45.1"
+    },
+    "resolution_platform": "x86_64-pc-windows-msvc",
+    "resolution_python": "3.11.0",
+    "roots": {
+      "pip": "26.2",
+      "pydantic-core": "2.49.0",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    }
+  },
+  "system-3.12": {
+    "build_requirements": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "build_roots": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "platforms": ["darwin", "linux", "win32"],
+    "requirements": {
+      "astroid": "4.3.4",
+      "colorama": "0.4.6",
+      "dill": "0.4.1",
+      "isort": "9.0.2",
+      "mccabe": "0.7.0",
+      "mypy-extensions": "1.1.0",
+      "pip": "26.2",
+      "platformdirs": "4.12.4",
+      "pydantic-core": "2.49.0",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "tomlkit": "0.15.1",
+      "typing-extensions": "4.16.0",
+      "wheel": "0.45.1"
+    },
+    "resolution_platform": "x86_64-pc-windows-msvc",
+    "resolution_python": "3.12.0",
+    "roots": {
+      "pip": "26.2",
+      "pydantic-core": "2.49.0",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    }
+  },
+  "system-3.13": {
+    "build_requirements": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "build_roots": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "platforms": ["darwin", "linux", "win32"],
+    "requirements": {
+      "astroid": "4.3.4",
+      "colorama": "0.4.6",
+      "dill": "0.4.1",
+      "isort": "9.0.2",
+      "mccabe": "0.7.0",
+      "mypy-extensions": "1.1.0",
+      "pip": "26.2",
+      "platformdirs": "4.12.4",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "tomlkit": "0.15.1",
+      "wheel": "0.45.1"
+    },
+    "resolution_platform": "x86_64-pc-windows-msvc",
+    "resolution_python": "3.13.0",
+    "roots": {
+      "pip": "26.2",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    }
+  },
+  "system-3.14": {
+    "build_requirements": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "build_roots": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "platforms": ["darwin", "linux", "win32"],
+    "requirements": {
+      "astroid": "4.3.4",
+      "colorama": "0.4.6",
+      "dill": "0.4.1",
+      "isort": "9.0.2",
+      "mccabe": "0.7.0",
+      "mypy-extensions": "1.1.0",
+      "pip": "26.2",
+      "platformdirs": "4.12.4",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "tomlkit": "0.15.1",
+      "wheel": "0.45.1"
+    },
+    "resolution_platform": "x86_64-pc-windows-msvc",
+    "resolution_python": "3.14.0",
+    "roots": {
+      "pip": "26.2",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    }
+  },
+  "system-3.15": {
+    "build_requirements": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "build_roots": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "platforms": ["darwin", "linux", "win32"],
+    "requirements": {
+      "astroid": "4.3.4",
+      "colorama": "0.4.6",
+      "dill": "0.4.1",
+      "isort": "9.0.2",
+      "mccabe": "0.7.0",
+      "mypy-extensions": "1.1.0",
+      "pip": "26.2",
+      "platformdirs": "4.12.4",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "tomlkit": "0.15.1",
+      "wheel": "0.45.1"
+    },
+    "resolution_platform": "x86_64-pc-windows-msvc",
+    "resolution_python": "3.15.0",
+    "roots": {
+      "pip": "26.2",
+      "pylint": "4.1.2",
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    }
+  },
+  "system-3.6": {
+    "build_requirements": {
+      "setuptools": "59.6.0",
+      "wheel": "0.37.1"
+    },
+    "build_roots": {
+      "setuptools": "59.6.0",
+      "wheel": "0.37.1"
+    },
+    "platforms": ["darwin", "linux", "win32"],
+    "requirements": {
+      "astroid": "2.9.3",
+      "colorama": "0.4.6",
+      "isort": "5.10.1",
+      "lazy-object-proxy": "1.7.1",
+      "mccabe": "0.6.1",
+      "pip": "21.3.1",
+      "platformdirs": "2.4.0",
+      "pylint": "2.12.2",
+      "setuptools": "59.6.0",
+      "toml": "0.10.2",
+      "typed-ast": "1.5.5",
+      "typing-extensions": "4.1.1",
+      "wheel": "0.37.1",
+      "wrapt": "1.13.3"
+    },
+    "resolution_platform": "x86_64-pc-windows-msvc",
+    "resolution_python": "3.6.15",
+    "roots": {
+      "pip": "21.3.1",
+      "pylint": "2.12.2",
+      "setuptools": "59.6.0",
+      "wheel": "0.37.1"
+    }
+  },
+  "system-3.7": {
+    "build_requirements": {
+      "setuptools": "59.6.0",
+      "wheel": "0.37.1"
+    },
+    "build_roots": {
+      "setuptools": "59.6.0",
+      "wheel": "0.37.1"
+    },
+    "platforms": ["darwin", "linux", "win32"],
+    "requirements": {
+      "astroid": "2.15.8",
+      "colorama": "0.4.6",
+      "dill": "0.3.7",
+      "isort": "5.11.5",
+      "lazy-object-proxy": "1.9.0",
+      "mccabe": "0.7.0",
+      "pip": "24.0",
+      "platformdirs": "4.0.0",
+      "pydantic-core": "2.14.6",
+      "pylint": "2.17.7",
+      "setuptools": "59.6.0",
+      "tomli": "2.0.1",
+      "tomlkit": "0.12.5",
+      "typed-ast": "1.5.5",
+      "typing-extensions": "4.7.1",
+      "wheel": "0.37.1",
+      "wrapt": "1.16.0"
+    },
+    "resolution_platform": "x86_64-pc-windows-msvc",
+    "resolution_python": "3.7.17",
+    "roots": {
+      "pip": "24.0",
+      "pydantic-core": "2.14.6",
+      "pylint": "2.17.7",
+      "setuptools": "59.6.0",
+      "wheel": "0.37.1"
+    }
+  },
+  "system-3.8": {
+    "build_requirements": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "build_roots": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "platforms": ["darwin", "linux", "win32"],
+    "requirements": {
+      "astroid": "3.2.4",
+      "colorama": "0.4.6",
+      "dill": "0.4.0",
+      "isort": "5.13.2",
+      "mccabe": "0.7.0",
+      "pip": "25.0.1",
+      "platformdirs": "4.3.6",
+      "pydantic-core": "2.27.2",
+      "pylint": "3.2.7",
+      "setuptools": "75.3.2",
+      "tomli": "2.5.0",
+      "tomlkit": "0.13.3",
+      "typing-extensions": "4.13.2",
+      "wheel": "0.45.1"
+    },
+    "resolution_platform": "x86_64-pc-windows-msvc",
+    "resolution_python": "3.8.20",
+    "roots": {
+      "pip": "25.0.1",
+      "pydantic-core": "2.27.2",
+      "pylint": "3.2.7",
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    }
+  },
+  "system-3.9": {
+    "build_requirements": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "build_roots": {
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    },
+    "platforms": ["darwin", "linux", "win32"],
+    "requirements": {
+      "astroid": "3.3.11",
+      "colorama": "0.4.6",
+      "dill": "0.4.1",
+      "importlib-metadata": "8.7.1",
+      "isort": "6.1.0",
+      "mccabe": "0.7.0",
+      "pip": "25.3",
+      "platformdirs": "4.4.0",
+      "pydantic-core": "2.33.2",
+      "pylint": "3.3.9",
+      "setuptools": "75.3.2",
+      "tomli": "2.5.0",
+      "tomlkit": "0.15.1",
+      "typing-extensions": "4.16.0",
+      "wheel": "0.45.1",
+      "zipp": "3.23.1"
+    },
+    "resolution_platform": "x86_64-pc-windows-msvc",
+    "resolution_python": "3.9.13",
+    "roots": {
+      "pip": "25.3",
+      "pydantic-core": "2.33.2",
+      "pylint": "3.3.9",
+      "setuptools": "75.3.2",
+      "wheel": "0.45.1"
+    }
   }
 }
