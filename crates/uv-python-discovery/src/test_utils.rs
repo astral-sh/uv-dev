@@ -99,37 +99,41 @@ pub(crate) fn mock_interpreter_response(
         json.replace("{PREFIX}", "/home/ferris/projects/uv/.venv")
     };
 
-    json.replace("\"{PATH}\"", &format!("{path:?}"))
-        .replace("{FULL_VERSION}", &version.to_string())
-        .replace(
-            "{VERSION}",
-            &format!("{}.{}", version.major(), version.minor()),
-        )
-        .replace("{PLATFORM_OS}", platform_os)
-        .replace("{PLATFORM_ARCH}", platform_arch)
-        .replace("{MANYLINUX_COMPATIBLE}", &manylinux_compatible.to_string())
-        .replace("{OS_NAME}", os_name)
-        .replace("{PLATFORM_MACHINE}", platform_machine)
-        .replace("{PLATFORM_SYSTEM}", platform_system)
-        .replace("{SYS_PLATFORM}", sys_platform)
-        .replace("{FREE_THREADED}", &free_threaded.to_string())
-        .replace("{IMPLEMENTATION}", implementation.long_name())
+    json.replace(
+        "\"{PATH}\"",
+        &serde_json::to_string(path).expect("Test interpreter path is serializable"),
+    )
+    .replace("{FULL_VERSION}", &version.to_string())
+    .replace(
+        "{VERSION}",
+        &format!("{}.{}", version.major(), version.minor()),
+    )
+    .replace("{PLATFORM_OS}", platform_os)
+    .replace("{PLATFORM_ARCH}", platform_arch)
+    .replace("{MANYLINUX_COMPATIBLE}", &manylinux_compatible.to_string())
+    .replace("{OS_NAME}", os_name)
+    .replace("{PLATFORM_MACHINE}", platform_machine)
+    .replace("{PLATFORM_SYSTEM}", platform_system)
+    .replace("{SYS_PLATFORM}", sys_platform)
+    .replace("{FREE_THREADED}", &free_threaded.to_string())
+    .replace("{IMPLEMENTATION}", implementation.long_name())
 }
 
 #[test]
 fn mock_interpreter_response_escapes_executable_path() {
-    let path = Path::new(r"C:\Python with spaces\python.bat");
-    let response = mock_interpreter_response(
-        path,
-        &"3.12.1".parse().expect("Test uses a valid Python version"),
-        ImplementationName::CPython,
-        true,
-        false,
-    );
-    assert_eq!(
-        response
-            .lines()
-            .find(|line| line.trim_start().starts_with("\"sys_executable\"")),
-        Some(r#"    "sys_executable": "C:\\Python with spaces\\python.bat","#),
-    );
+    for path in [
+        Path::new(r"C:\Python with spaces\python.bat"),
+        Path::new("C:\\Python cafe\u{301}\\python.bat"),
+    ] {
+        let response = mock_interpreter_response(
+            path,
+            &"3.12.1".parse().expect("Test uses a valid Python version"),
+            ImplementationName::CPython,
+            true,
+            false,
+        );
+        let response: serde_json::Value =
+            serde_json::from_str(&response).expect("Mock response is valid JSON");
+        assert_eq!(response["sys_executable"].as_str(), path.to_str());
+    }
 }
