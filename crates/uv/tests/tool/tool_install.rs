@@ -21,6 +21,8 @@ use sha2::{Digest, Sha256};
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::packse::{
     PackseServer, generate_wheel, generate_wheel_with_files, scenario::Scenario,
@@ -5614,18 +5616,40 @@ fn tool_install_with_executables_from_no_entrypoints() {
     ");
 }
 
-#[test]
-fn tool_install_find_links() {
+#[tokio::test]
+async fn tool_install_find_links() -> Result<()> {
     let context = uv_test::test_context!("3.13")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
 
+    let server = MockServer::start().await;
+    let filename = "basic_app-0.1.0-py3-none-any.whl";
+    Mock::given(method("GET"))
+        .and(path("/flat"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/html")
+                .insert_header("cache-control", "no-store")
+                .set_body_string(format!("<a href='/files/{filename}'>{filename}</a>")),
+        )
+        // Each resolution reads the index once; installation needs no second lookup.
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(path(format!("/files/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(fs_err::read(
+            context.workspace_root.join("test/links").join(filename),
+        )?))
+        .mount(&server)
+        .await;
+    let find_links = format!("{}/flat", server.uri());
+
     // Run with `--find-links`.
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/"))
+        .arg(&find_links)
         .arg("basic-app"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -5641,7 +5665,7 @@ fn tool_install_find_links() {
     // Install with `--find-links`.
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/"))
+        .arg(&find_links)
         .arg("basic-app")
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
@@ -5687,7 +5711,7 @@ fn tool_install_find_links() {
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--offline")
         .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/"))
+        .arg(&find_links)
         .arg("basic-app"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -5706,6 +5730,9 @@ fn tool_install_find_links() {
 
     hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
+
+    server.verify().await;
+    Ok(())
 }
 
 #[test]

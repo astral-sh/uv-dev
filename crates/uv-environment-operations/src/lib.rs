@@ -47,8 +47,8 @@ use uv_workspace::{ProjectEnvironmentSelection, Workspace, WorkspaceCache};
 
 use crate::install_target::{InstallTarget, PackageSelection};
 use uv_command_support::{Printer, conjunction};
-use uv_install_operations::Changelog;
 use uv_install_operations::loggers::InstallLogger;
+use uv_install_operations::{Changelog, InstallationPlan};
 use uv_python_context::{
     CompatibleProjectPython, EnvironmentIncompatibilityError, EnvironmentKind,
     ProjectPythonRequest, PythonDownloadReporter, ScriptInterpreter,
@@ -1656,13 +1656,35 @@ pub async fn sync_environment(
     let dry_run = DryRun::default();
     let workspace_cache = WorkspaceCache::default();
 
-    // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
-
     // Lower the extra build dependencies, if any.
     let extra_build_requires =
         LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
             .into_inner();
+
+    let installation_plan = InstallationPlan::build(
+        resolution,
+        site_packages,
+        InstallationStrategy::Permissive,
+        reinstall,
+        build_options,
+        &hasher,
+        index_locations,
+        config_setting,
+        config_settings_package,
+        &extra_build_requires,
+        extra_build_variables,
+        cache,
+        &venv,
+        tags,
+    )?;
+
+    // Runtime distributions are already resolved. Only source builds need indexes to resolve
+    // their build dependencies; cached and remote wheels need no further resolution.
+    let flat_index = if installation_plan.requires_source_build() {
+        FlatIndex::load(&client, cache, index_locations).await?
+    } else {
+        FlatIndex::default()
+    };
 
     // Create a build dispatch.
     let build_dispatch = BuildDispatch::new(
@@ -1692,30 +1714,28 @@ pub async fn sync_environment(
     );
 
     // Sync the environment.
-    uv_install_operations::install(
-        resolution,
-        site_packages,
-        InstallationStrategy::Permissive,
-        modifications,
-        reinstall,
-        build_options,
-        link_mode,
-        compile_bytecode.then_some(uv_install_operations::BytecodeCompilation::All),
-        &hasher,
-        tags,
-        &client,
-        state.in_flight(),
-        concurrency,
-        &build_dispatch,
-        cache,
-        &venv,
-        logger,
-        installer_metadata,
-        dry_run,
-        printer,
-        preview,
-    )
-    .await?;
+    installation_plan
+        .execute(
+            resolution,
+            modifications,
+            build_options,
+            link_mode,
+            compile_bytecode.then_some(uv_install_operations::BytecodeCompilation::All),
+            &hasher,
+            tags,
+            &client,
+            state.in_flight(),
+            concurrency,
+            &build_dispatch,
+            cache,
+            &venv,
+            logger,
+            installer_metadata,
+            dry_run,
+            printer,
+            preview,
+        )
+        .await?;
 
     // Notify the user of any resolution diagnostics.
     uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
