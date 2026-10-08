@@ -554,6 +554,12 @@ async fn perform_install(
         (satisfied, unsatisfied)
     };
 
+    // Overlapping requests can select the same directory; finalize and publish it only once.
+    let satisfied = satisfied
+        .into_iter()
+        .unique_by(|installation| installation.key())
+        .collect::<Vec<_>>();
+
     // For all satisfied installs, bytecode compile them now before any future
     // early return.
     if let Some(ref sender) = bytecode_compilation_sender {
@@ -1385,6 +1391,7 @@ async fn finalize_installation(
     let span = Span::current();
     let installation = tokio::spawn(
         async move {
+            debug!("Finalizing Python installation {}", installation.key());
             installation.ensure_externally_managed().await?;
             installation.ensure_sysconfig_patched().await?;
             installation.ensure_canonical_executables().await?;
