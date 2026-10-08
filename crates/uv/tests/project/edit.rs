@@ -8846,6 +8846,18 @@ fn check_project_write_failure(hard_link: bool) -> Result<()> {
         requires-python = ">=3.12"
         dependencies = []
     "#})?;
+    if !hard_link {
+        // Restoration cannot repair an in-place write when the original exceeds the same limit.
+        let contents = format!(
+            "{}\n# {}\n",
+            context.read("pyproject.toml"),
+            "x".repeat(70000)
+        );
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(&contents)?;
+    }
     let original = context.read("pyproject.toml");
     if hard_link {
         fs_err::hard_link(

@@ -306,6 +306,10 @@ impl FileSnapshot {
                 self.path.user_display()
             )));
         }
+        if !file.metadata()?.is_file() {
+            // Devices do not retain a file version that can be restored.
+            return file.write_all(contents);
+        }
         let written_contents = Vec::with_capacity(contents.len());
         file.set_len(0)?;
         let written = self.written.insert(FileContents {
@@ -447,6 +451,24 @@ mod tests {
             }
         }
         Ok(paths)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn tracked_special_file_writes_do_not_truncate() -> Result<()> {
+        for commit in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("uv.lock");
+            fs_err::os::unix::fs::symlink("/dev/null", &path)?;
+            let state = EditState::new([path.clone()])?;
+            state.write_file(&path, b"discarded lock contents")?;
+            state.write_file(&path, b"more discarded lock contents")?;
+            state.finish(commit);
+            assert_eq!(fs_err::read_link(&path)?, Path::new("/dev/null"));
+            assert!(fs_err::read(&path)?.is_empty());
+            assert!(recovery_files(directory.path())?.is_empty());
+        }
+        Ok(())
     }
 
     #[test]

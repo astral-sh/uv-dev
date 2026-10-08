@@ -8,7 +8,7 @@ use std::os::macos::fs::MetadataExt as _;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::OpenOptionsExt;
 
 #[cfg(not(unix))]
 use same_file::Handle;
@@ -58,13 +58,7 @@ impl FilePublication {
         let parent = target.parent().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "file has no parent directory")
         })?;
-        let mut builder = tempfile::Builder::new();
-        builder.prefix(".uv-publish-");
-        #[cfg(unix)]
-        {
-            builder.permissions(std::fs::Permissions::from_mode(0o666));
-        }
-        let temporary = match builder.tempfile_in(verbatim_path(parent)) {
+        let temporary = match create_staging_file(parent, original.is_some()) {
             Ok(temporary) => temporary,
             // Writing an existing file does not require write access to its directory.
             Err(err) => {
@@ -77,7 +71,13 @@ impl FilePublication {
                         staging: None,
                     });
                 }
-                return Err(err);
+                return Err(io::Error::new(
+                    err.kind(),
+                    StagingError {
+                        path: path.to_owned(),
+                        source: err,
+                    },
+                ));
             }
         };
         let (file, temporary) = temporary.into_parts();
@@ -153,10 +153,40 @@ impl FilePublication {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("failed to write to file `{}`", path.display())]
+struct StagingError {
+    path: PathBuf,
+    #[source]
+    source: io::Error,
+}
+
+fn create_staging_file(parent: &Path, replacing: bool) -> io::Result<tempfile::NamedTempFile> {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "report the destination, not the temporary path"
+    )]
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        // Replacements start private: tightening permissions later cannot revoke an open descriptor.
+        options.mode(if replacing { 0o600 } else { 0o666 });
+    }
+    #[cfg(not(unix))]
+    let _ = replacing;
+    // Keep the I/O cause free of the random staging path; callers report the destination instead.
+    tempfile::Builder::new()
+        .prefix(".uv-publish-")
+        .make_in(verbatim_path(parent), |path| options.open(path))
+}
+
 /// Write complete bytes, staging compatible files before publication.
 pub fn write_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     let mut publication = FilePublication::new(path)?;
-    publication.writer().set_len(0)?;
+    if publication.writer().metadata()?.is_file() {
+        publication.writer().set_len(0)?;
+    }
     publication.writer().write_all(contents)?;
     publication.publish()?;
     Ok(())
@@ -324,13 +354,58 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::path::Path;
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     use std::process::Command;
 
     #[cfg(target_os = "linux")]
     use rustix::fs::{IFlags, ioctl_getflags, ioctl_setflags};
 
     use super::{FilePublication, write_file};
+
+    #[test]
+    #[cfg(unix)]
+    fn replacement_staging_starts_private() -> io::Result<()> {
+        const CHILD: &str = "UV_TEST_STAGING_CREATION_MODE";
+        if std::env::var_os(CHILD).is_none() {
+            let output = Command::new("sh")
+                .args(["-c", r#"umask 022; exec "$@""#, "sh"])
+                .arg(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "file_publication::tests::replacement_staging_starts_private",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()?;
+            assert!(output.status.success(), "{output:?}");
+            return Ok(());
+        }
+        let directory = tempfile::tempdir()?;
+        let replacement = super::create_staging_file(directory.path(), true)?;
+        assert_eq!(
+            replacement.as_file().metadata()?.permissions().mode() & 0o777,
+            0o600
+        );
+        let new_file = super::create_staging_file(directory.path(), false)?;
+        assert_eq!(
+            new_file.as_file().metadata()?.permissions().mode() & 0o777,
+            0o644
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn special_file_writes_do_not_truncate() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        fs_err::os::unix::fs::symlink("/dev/null", &path)?;
+        write_file(&path, b"lock contents")?;
+        assert_eq!(fs_err::read_link(&path)?, Path::new("/dev/null"));
+        assert!(fs_err::read(&path)?.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn new_file_is_invisible_until_publication() -> io::Result<()> {
@@ -555,15 +630,12 @@ mod tests {
             let path = directory.path().join("pyproject.toml");
             fs_err::write(&path, "original")?;
             let file = fs_err::OpenOptions::new().write(true).open(&path)?;
-            let original = match ioctl_getflags(&file) {
-                Ok(flags) => flags,
-                Err(_) => {
-                    // Filesystems without flag queries must use the conservative fallback too.
-                    assert!(!FilePublication::new(&path)?.is_staged());
-                    write_file(&path, b"replacement")?;
-                    assert_eq!(fs_err::read(&path)?, b"replacement");
-                    return Ok(());
-                }
+            let Ok(original) = ioctl_getflags(&file) else {
+                // Filesystems without flag queries must use the conservative fallback too.
+                assert!(!FilePublication::new(&path)?.is_staged());
+                write_file(&path, b"replacement")?;
+                assert_eq!(fs_err::read(&path)?, b"replacement");
+                return Ok(());
             };
             ioctl_setflags(&file, original | flag)?;
             assert!(!FilePublication::new(&path)?.is_staged());
