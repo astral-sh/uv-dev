@@ -1193,7 +1193,7 @@ fn tool_upgrade_with() {
     Modified python-dotenv environment
      - pytz==2018.5
      + pytz==2024.1
-    Installed 1 executable: pybabel
+    Installed 1 executable: dotenv
 
     hint: `python-dotenv` is pinned to `0.10.2.post2` (installed with an exact version pin); reinstall with `uv tool install python-dotenv@latest` to upgrade to a new version.
     ");
