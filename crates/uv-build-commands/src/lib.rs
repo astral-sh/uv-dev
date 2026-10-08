@@ -84,6 +84,8 @@ pub enum Error {
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
     #[error(transparent)]
+    BuildPermit(#[from] tokio::sync::AcquireError),
+    #[error(transparent)]
     BuildBackend(#[from] uv_build_backend::Error),
     #[error(transparent)]
     BuildDispatch(AnyErrorBuild),
@@ -1119,17 +1121,19 @@ async fn build_sdist(
             let output_dir_ = output_dir.to_path_buf();
             let sources_enabled = sources.is_none();
             let tar_backend = build_dispatch.tar_backend();
-            let filename = tokio::task::spawn_blocking(move || {
-                uv_build_backend::build_source_dist(
-                    &source_tree,
-                    &output_dir_,
-                    uv_version::version(),
-                    sources_enabled,
-                    tar_backend,
-                )
-            })
-            .await??
-            .to_string();
+            let filename = build_dispatch
+                .spawn_native_build(move || {
+                    uv_build_backend::build_source_dist(
+                        &source_tree,
+                        &output_dir_,
+                        uv_version::version(),
+                        sources_enabled,
+                        tar_backend,
+                    )
+                })
+                .await?
+                .await??
+                .to_string();
 
             BuildMessage::Build {
                 normalized_filename: DistFilename::SourceDistFilename(
@@ -1235,16 +1239,18 @@ async fn build_wheel(
             let source_tree = source_tree.to_path_buf();
             let output_dir_ = output_dir.to_path_buf();
             let sources_enabled = sources.is_none();
-            let filename = tokio::task::spawn_blocking(move || {
-                uv_build_backend::build_wheel(
-                    &source_tree,
-                    &output_dir_,
-                    None,
-                    uv_version::version(),
-                    sources_enabled,
-                )
-            })
-            .await??;
+            let filename = build_dispatch
+                .spawn_native_build(move || {
+                    uv_build_backend::build_wheel(
+                        &source_tree,
+                        &output_dir_,
+                        None,
+                        uv_version::version(),
+                        sources_enabled,
+                    )
+                })
+                .await?
+                .await??;
 
             let raw_filename = filename.to_string();
             BuildMessage::Build {
