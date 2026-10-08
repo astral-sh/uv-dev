@@ -14,16 +14,16 @@ mod macos {
     use std::env;
     use std::hint::black_box;
     use std::process::Command;
+    use std::sync::Arc;
 
     use criterion::{BatchSize, Criterion, measurement::WallTime};
     use tempfile::TempDir;
 
     use uv_client::BaseClientBuilder;
+    use uv_distribution_filename::SourceDistExtension;
     use uv_preview::Preview;
-    use uv_python_managed::ManagedPythonInstallation;
-    use uv_python_managed::downloads::{
-        DownloadResult, ManagedPythonDownload, ManagedPythonDownloadList,
-    };
+    use uv_python_managed::downloads::{ManagedPythonDownload, ManagedPythonDownloadList};
+    use uv_python_managed::{ManagedPythonInstallation, ManagedPythonInstallations};
     use uv_python_types::PythonDownloadMirrors;
 
     const DYLIB: &str = "lib/libpython3.13.dylib";
@@ -36,6 +36,12 @@ mod macos {
     impl<'a> DylibFixture<'a> {
         fn download(download: &'a ManagedPythonDownload) -> Self {
             let directory = tempfile::tempdir().expect("Failed to create fixture directory");
+            let cache = tempfile::tempdir().expect("Failed to create archive cache");
+            let installations =
+                ManagedPythonInstallations::from_settings(Some(directory.path().to_path_buf()))
+                    .expect("Failed to configure fixture installations")
+                    .init()
+                    .expect("Failed to initialize fixture installations");
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -47,22 +53,57 @@ mod macos {
                 .build()
                 .expect("Failed to create download client");
 
-            // Download and verify the archive without running installation fixups:
-            // the input must retain its original install name and code signature.
-            let result = runtime
-                .block_on(download.fetch_with_retry(
-                    &client,
-                    &retry_policy,
-                    directory.path(),
-                    directory.path(),
-                    false,
-                    PythonDownloadMirrors::default(),
-                    None,
-                ))
-                .expect("Failed to download Python dylib fixture");
-            let path = match result {
-                DownloadResult::AlreadyAvailable(path) | DownloadResult::Fetched(path) => path,
-            };
+            temp_env::with_var("UV_PYTHON_CACHE_DIR", Some(cache.path()), || {
+                runtime.block_on(async {
+                    let lock = Arc::new(
+                        installations
+                            .lock()
+                            .await
+                            .expect("Failed to lock fixture installations"),
+                    );
+                    download
+                        .fetch_with_retry(
+                            &client,
+                            &retry_policy,
+                            installations.root(),
+                            &lock,
+                            &installations.scratch(),
+                            false,
+                            PythonDownloadMirrors::default(),
+                            None,
+                        )
+                        .await
+                        .expect("Failed to download Python dylib fixture");
+                });
+            });
+
+            // Published installations are finalized. Extract the verified cached archive again
+            // so the timed input retains its original install name and code signature.
+            let mut archives =
+                fs_err::read_dir(cache.path()).expect("Failed to read archive cache");
+            let archive = archives
+                .next()
+                .expect("Missing cached Python archive")
+                .expect("Failed to read cached Python archive")
+                .path();
+            assert!(
+                archives.next().is_none(),
+                "Unexpected extra cached archives"
+            );
+            let extension =
+                SourceDistExtension::from_path(&archive).expect("Unknown Python archive format");
+            let extracted = runtime.block_on(async {
+                let reader = fs_err::tokio::File::open(archive)
+                    .await
+                    .expect("Failed to open cached Python archive");
+                let extracted = tempfile::tempdir().expect("Failed to create extraction directory");
+                uv_extract::stream::archive(tokio::io::BufReader::new(reader), extension, extracted)
+                    .await
+                    .expect("Failed to extract pristine Python dylib")
+                    .0
+            });
+            let path = uv_extract::strip_component(extracted.path())
+                .expect("Unexpected Python archive layout");
 
             Self {
                 download,
@@ -106,7 +147,7 @@ mod macos {
         // Check the operation before timing it so a skipped edit cannot appear fast.
         let (directory, installation) = fixture.prepare();
         installation
-            .ensure_dylib_patched()
+            .ensure_dylib_patched_at(installation.path())
             .expect("Failed to patch dylib");
         let dylib = installation.path().join(DYLIB);
         let output = Command::new("/usr/bin/otool")
@@ -125,8 +166,9 @@ mod macos {
                 benchmark.iter_batched_ref(
                     || fixture.prepare(),
                     |(_, installation)| {
-                        black_box(installation)
-                            .ensure_dylib_patched()
+                        let installation = black_box(installation);
+                        installation
+                            .ensure_dylib_patched_at(installation.path())
                             .expect("Failed to patch dylib");
                     },
                     BatchSize::PerIteration,

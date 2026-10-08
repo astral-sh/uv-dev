@@ -1,5 +1,6 @@
 //! Publish a prepared installation without discarding its predecessor on failure.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ use tempfile::TempDir;
 use tracing::warn;
 
 use uv_fs::{LockedFile, Simplified};
+use uv_python_types::PythonInstallationKey;
 
 const MARKER: &str = ".uv-replacement";
 
@@ -270,6 +272,44 @@ fn publish_inner(
 }
 
 /// Recover under the same installation-directory lock used by all download callers.
+pub(crate) async fn recover_all(
+    installations: PathBuf,
+    scratch: PathBuf,
+    installation_lock: LockedFile,
+) -> io::Result<LockedFile> {
+    tokio::task::spawn_blocking(move || {
+        let entries = match fs_err::read_dir(&scratch) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(installation_lock),
+            Err(err) => return Err(err),
+        };
+        let mut keys = BTreeSet::new();
+        for entry in entries {
+            let entry = entry?;
+            let filename = entry.file_name();
+            let Some(key) = filename
+                .to_str()
+                .and_then(|filename| filename.strip_prefix(".replacement-"))
+                .and_then(|filename| filename.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            // Journal names are installation keys, never arbitrary relative destination paths.
+            let key = key
+                .parse::<PythonInstallationKey>()
+                .map_err(io::Error::other)?;
+            keys.insert(key.to_string());
+        }
+        for key in keys {
+            Recovery::new(&installations.join(key), &scratch)?.recover()?;
+        }
+        Ok(installation_lock)
+    })
+    .await
+    .map_err(io::Error::other)?
+}
+
+/// Recover a requested key under the existing installation-directory lock.
 pub(crate) async fn recover(
     destination: PathBuf,
     scratch: PathBuf,

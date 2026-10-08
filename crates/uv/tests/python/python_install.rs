@@ -306,13 +306,61 @@ fn python_install_recovers_interrupted_replacement() -> anyhow::Result<()> {
         .env(EnvVars::UV_PYTHON_CACHE_DIR, ""), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed Python 3.13.1 in [TIME]
-     + cpython-3.13.1-[PLATFORM]
+    cpython-3.13.1-[PLATFORM] is already installed
     ");
     assert_eq!(
         fs_err::read_to_string(installation.join("replacement-sentinel"))?,
         "previous installation\n"
     );
+    assert!(!previous.exists());
+    assert!(!journal.exists());
+    uv_snapshot!(context.filters(), Command::new(context.bin_dir.join(format!(
+        "python3.13{}", std::env::consts::EXE_SUFFIX,
+    )))
+        .args(["-I", "-c", "import sys; print(sys.version.split()[0])"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.13.1
+    ");
+    Ok(())
+}
+
+/// Unpinned reinstall must discover installations hidden by interrupted replacement.
+#[test]
+fn python_reinstall_recovers_before_selecting_installations() -> anyhow::Result<()> {
+    let (context, key) = installed_python_for_replacement()?;
+    context
+        .python_install()
+        .arg("cpython-3.12.7")
+        .env(
+            EnvVars::UV_PYTHON_CACHE_DIR,
+            context.temp_dir.join("replacement-archives"),
+        )
+        .assert()
+        .success();
+    let installation = context.temp_dir.join("managed").join(&key);
+    let scratch = context.temp_dir.join("managed/.temp");
+    let previous = scratch.join(format!(".replacement-{key}"));
+    let journal = scratch.join(format!(".replacement-{key}.json"));
+    fs_err::write(
+        &journal,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "marker": "interrupted-unpinned-fixture", "committed": false,
+        }))?,
+    )?;
+    fs_err::rename(&installation, &previous)?;
+    assert!(!installation.exists());
+
+    uv_snapshot!(context.filters(), context.python_install().args(["--reinstall", "--offline"])
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, context.temp_dir.join("replacement-archives")), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 2 versions in [TIME]
+     ~ cpython-3.12.7-[PLATFORM] (python3.12)
+     ~ cpython-3.13.1-[PLATFORM] (python3.13)
+    ");
+    assert!(installation.is_dir());
+    assert!(!installation.join("replacement-sentinel").exists());
     assert!(!previous.exists());
     assert!(!journal.exists());
     uv_snapshot!(context.filters(), Command::new(context.bin_dir.join(format!(

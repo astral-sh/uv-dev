@@ -112,12 +112,15 @@ impl ManagedPythonInstallations {
     /// Grab a file lock for the managed Python distribution directory to prevent concurrent access
     /// across processes.
     pub async fn lock(&self) -> Result<LockedFile, Error> {
-        Ok(LockedFile::acquire(
+        let lock = LockedFile::acquire(
             self.root.join(".lock"),
             LockedFileMode::Exclusive,
             self.root.user_display(),
         )
-        .await?)
+        .await?;
+        // Restore hidden predecessors before callers enumerate installations or derive requests.
+        // The recovery worker owns admission until its filesystem work finishes.
+        Ok(crate::publication::recover_all(self.root.clone(), self.scratch(), lock).await?)
     }
 
     /// Prefer, in order:
@@ -649,7 +652,7 @@ impl ManagedPythonInstallation {
     /// link to the correct location for the Python library.
     ///
     /// See <https://github.com/astral-sh/uv/issues/10598> for more information.
-    fn ensure_dylib_patched_at(&self, install_root: &Path) -> Result<(), macos_dylib::Error> {
+    pub fn ensure_dylib_patched_at(&self, install_root: &Path) -> Result<(), macos_dylib::Error> {
         if cfg!(target_os = "macos") {
             if self.key().os().is_like_darwin() {
                 if self.implementation() == ImplementationName::CPython {
