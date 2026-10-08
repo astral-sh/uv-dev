@@ -1061,6 +1061,78 @@ async fn login_text_store() {
 }
 
 #[test]
+fn auth_text_store_signed_service_urls() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let service =
+        "https://example.com/service?sig=synthetic-signature&X-Amz-Credential=synthetic-credential";
+
+    uv_snapshot!(context.auth_login()
+        .arg(service)
+        .arg("--username").arg("user")
+        .arg("--password").arg("test-password")
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Stored credentials for user@https://example.com/service?sig=****&X-Amz-Credential=****
+    ");
+
+    let stored: toml::Value = toml::from_str(&fs_err::read_to_string(
+        context.temp_dir.child("credentials.toml"),
+    )?)?;
+    assert_eq!(stored["credential"][0]["service"].as_str(), Some(service));
+
+    uv_snapshot!(context.auth_token()
+        .arg(service).arg("--username").arg("user")
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    test-password
+    ");
+
+    uv_snapshot!(context.auth_logout()
+        .arg(service).arg("--username").arg("user")
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed credentials for user@https://example.com/service?sig=****&X-Amz-Credential=****
+    ");
+
+    uv_snapshot!(context.auth_token()
+        .arg(service).arg("--username").arg("user")
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch credentials for `user@https://example.com/service?sig=****&X-Amz-Credential=****`
+    ");
+
+    uv_snapshot!(context.auth_login()
+        .arg(service).arg("--token").arg("test-token")
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Stored credentials for https://example.com/service?sig=****&X-Amz-Credential=****
+    ");
+
+    uv_snapshot!(context.auth_logout()
+        .arg(service)
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed credentials for https://example.com/service?sig=****&X-Amz-Credential=****
+    ");
+
+    uv_snapshot!(context.auth_token()
+        .arg(service)
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch credentials for `https://example.com/service?sig=****&X-Amz-Credential=****`
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn login_text_store_empty_file() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
     context.temp_dir.child("credentials.toml").write_str("")?;
