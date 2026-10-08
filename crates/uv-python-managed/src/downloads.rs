@@ -51,6 +51,8 @@ use uv_python_types::{
     PythonDownloadMirrors, PythonInstallationKey, PythonVariant, PythonVersion,
 };
 
+use crate::ManagedPythonInstallation;
+
 #[derive(Error, DebugNoInline)]
 pub enum Error {
     #[error(transparent)]
@@ -268,7 +270,9 @@ struct JsonArch {
 
 #[derive(Debug, Clone)]
 pub enum DownloadResult {
+    /// An installation that already existed and has not been finalized by this download.
     AlreadyAvailable(PathBuf),
+    /// A downloaded installation whose contents were finalized before publication.
     Fetched(PathBuf),
 }
 
@@ -689,7 +693,14 @@ impl ManagedPythonDownload {
             }
         }
 
-        // Remove the target if it already exists.
+        // Discovery does not acquire the installation lock. Complete the required files while the
+        // installation is still private, using its final destination for embedded paths.
+        let installation =
+            ManagedPythonInstallation::new(extracted.clone(), self).map_err(io::Error::other)?;
+        installation.finalize_at(&path).map_err(io::Error::other)?;
+
+        // Keep an existing installation available if staging fails. Replacement of an existing
+        // directory still requires removing it before the final rename.
         if path.is_dir() {
             debug!("Removing existing directory: {}", path.user_display());
             fs_err::tokio::remove_dir_all(&path).await?;
