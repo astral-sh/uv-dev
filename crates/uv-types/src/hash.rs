@@ -1,6 +1,5 @@
 use std::fmt::Display;
 use std::path::Path;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
@@ -12,7 +11,9 @@ use uv_distribution_types::{
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
-use uv_pypi_types::{HashAlgorithm, HashDigest, HashDigests, HashError, ResolverMarkerEnvironment};
+use uv_pypi_types::{
+    HashAlgorithm, HashDigest, HashDigestInput, HashDigests, HashError, ResolverMarkerEnvironment,
+};
 use uv_redacted::DisplaySafeUrl;
 
 /// Hash collection and verification policies for a resolution.
@@ -296,8 +297,8 @@ impl HashStrategy {
     /// environment independent expression evaluation. (Which in turn devolves
     /// to "only evaluate marker expressions that reference an extra name.")
     pub fn from_requirements<'a>(
-        requirements: impl Iterator<Item = (&'a UnresolvedRequirement, &'a [String])>,
-        constraints: impl Iterator<Item = (&'a Requirement, &'a [String])>,
+        requirements: impl Iterator<Item = (&'a UnresolvedRequirement, &'a [HashDigestInput])>,
+        constraints: impl Iterator<Item = (&'a Requirement, &'a [HashDigestInput])>,
         marker_env: Option<&ResolverMarkerEnvironment>,
         mode: HashCheckingMode,
     ) -> Result<Self, HashStrategyError> {
@@ -326,7 +327,7 @@ impl HashStrategy {
             // the URL fragment.
             let mut digests = digests
                 .iter()
-                .map(|digest| HashDigest::from_str(digest))
+                .map(HashDigestInput::parse)
                 .collect::<Result<Vec<_>, _>>()?;
             if let Some(fragment_hashes) = requirement.hashes()? {
                 let fragment_hashes = HashDigests::from(fragment_hashes);
@@ -378,7 +379,7 @@ impl HashStrategy {
             // the URL fragment.
             let mut digests = digests
                 .iter()
-                .map(|digest| HashDigest::from_str(digest))
+                .map(HashDigestInput::parse)
                 .collect::<Result<Vec<_>, _>>()?;
             if let Some(fragment_hashes) = requirement.hashes()? {
                 let fragment_hashes = HashDigests::from(fragment_hashes);
@@ -718,11 +719,11 @@ mod tests {
         RequirementScope, RequirementSource, UnresolvedRequirement, VersionId,
     };
     use uv_normalize::PackageName;
-    use uv_pep440::Version;
-    use uv_pypi_types::HashDigest;
+    use uv_pep440::{Version, VersionSpecifiers};
+    use uv_pypi_types::{HashDigest, HashDigestInput};
     use uv_redacted::DisplaySafeUrl;
 
-    use super::{HashStrategy, HashVerification};
+    use super::{HashStrategy, HashStrategyError, HashVerification};
 
     fn requirement(url: &str) -> Requirement {
         Requirement {
@@ -741,6 +742,61 @@ mod tests {
             scope: RequirementScope::Global,
             origin: None,
         }
+    }
+
+    #[test]
+    fn declared_hashes_are_validated_after_requirement_selection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let active = Requirement {
+            source: RequirementSource::Registry {
+                specifier: "==1.0".parse()?,
+                index: None,
+                conflict: None,
+            },
+            ..requirement("https://example.com/anyio-1.0.tar.gz")
+        };
+        let inactive = Requirement {
+            marker: "python_version == '0' and python_version != '0'".parse()?,
+            ..active.clone()
+        };
+        let unpinned = Requirement {
+            source: RequirementSource::Registry {
+                specifier: VersionSpecifiers::empty(),
+                index: None,
+                conflict: None,
+            },
+            ..active.clone()
+        };
+        let hashes = [HashDigestInput::from("not-a-hash")];
+        for requirement in [&inactive, &unpinned] {
+            let unresolved = UnresolvedRequirement::Named(requirement.clone());
+            HashStrategy::from_requirements(
+                std::iter::once((&unresolved, hashes.as_slice())),
+                std::iter::once((requirement, hashes.as_slice())),
+                None,
+                HashCheckingMode::Verify,
+            )?;
+        }
+        let unresolved = UnresolvedRequirement::Named(active.clone());
+        assert!(matches!(
+            HashStrategy::from_requirements(
+                std::iter::once((&unresolved, hashes.as_slice())),
+                std::iter::empty(),
+                None,
+                HashCheckingMode::Verify,
+            ),
+            Err(HashStrategyError::Hash(_))
+        ));
+        assert!(matches!(
+            HashStrategy::from_requirements(
+                std::iter::empty(),
+                std::iter::once((&active, hashes.as_slice())),
+                None,
+                HashCheckingMode::Verify,
+            ),
+            Err(HashStrategyError::Hash(_))
+        ));
+        Ok(())
     }
 
     #[test]

@@ -56,7 +56,7 @@ use uv_distribution_types::{
 };
 use uv_fs::normalize_path;
 use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, expand_env_vars};
-use uv_pypi_types::VerbatimParsedUrl;
+use uv_pypi_types::{HashDigestInput, VerbatimParsedUrl};
 #[cfg(feature = "http")]
 use uv_redacted::DisplaySafeUrl;
 
@@ -112,7 +112,7 @@ pub struct RequirementEntry {
     /// The actual PEP 508 requirement.
     pub requirement: RequirementsTxtRequirement,
     /// Hashes of the downloadable packages.
-    pub hashes: Vec<String>,
+    pub hashes: Vec<HashDigestInput>,
 }
 
 // We place the impl here instead of next to `UnresolvedRequirementSpecification` because
@@ -946,7 +946,7 @@ fn parse_requirement_and_hashes(
     source: Option<&Path>,
     working_dir: &Path,
     editable: bool,
-) -> Result<(RequirementsTxtRequirement, Vec<String>), RequirementsTxtParserError> {
+) -> Result<(RequirementsTxtRequirement, Vec<HashDigestInput>), RequirementsTxtParserError> {
     // PEP 508 requirement
     let start = s.cursor();
     // Termination: s.eat() eventually becomes None
@@ -1025,7 +1025,10 @@ fn parse_requirement_and_hashes(
 }
 
 /// Parse `--hash=... --hash ...` after a requirement
-fn parse_hashes(content: &str, s: &mut Scanner) -> Result<Vec<String>, RequirementsTxtParserError> {
+fn parse_hashes(
+    content: &str,
+    s: &mut Scanner,
+) -> Result<Vec<HashDigestInput>, RequirementsTxtParserError> {
     let mut hashes = Vec::new();
     if !s.eat_if("--hash") {
         let (line, column) = calculate_row_column(content, s.cursor());
@@ -1039,14 +1042,14 @@ fn parse_hashes(content: &str, s: &mut Scanner) -> Result<Vec<String>, Requireme
         });
     }
     let hash = parse_value("--hash", content, s, |c: char| !c.is_whitespace())?;
-    hashes.push(hash.to_string());
+    hashes.push(HashDigestInput::from(hash));
     loop {
         eat_wrappable_whitespace(s);
         if !s.eat_if("--hash") {
             break;
         }
         let hash = parse_value("--hash", content, s, |c: char| !c.is_whitespace())?;
-        hashes.push(hash.to_string());
+        hashes.push(HashDigestInput::from(hash));
     }
     Ok(hashes)
 }
