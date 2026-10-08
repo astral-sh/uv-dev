@@ -19,6 +19,7 @@ use uv_python_types::{
 };
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
 
+use crate::environment::{PipMutation, check_externally_managed};
 use crate::reporters::report_target_environment;
 use uv_command_support::Printer;
 use uv_command_support::{ExitStatus, elapsed};
@@ -76,25 +77,7 @@ pub async fn pip_uninstall(
         environment
     };
 
-    // If the environment is externally managed, abort.
-    if let Some(externally_managed) = environment.interpreter().is_externally_managed() {
-        if break_system_packages {
-            debug!("Ignoring externally managed environment due to `--break-system-packages`");
-        } else {
-            return if let Some(error) = externally_managed.into_error() {
-                Err(anyhow::anyhow!(
-                    "The interpreter at `{}` is externally managed, and indicates the following:\n\n{}\n\nConsider creating a virtual environment with `uv venv`.",
-                    environment.root().user_display().cyan(),
-                    textwrap::indent(&error, "  ").green(),
-                ))
-            } else {
-                Err(anyhow::anyhow!(
-                    "The interpreter at `{}` is externally managed. Instead, create a virtual environment with `uv venv`.",
-                    environment.root().user_display().cyan()
-                ))
-            };
-        }
-    }
+    check_externally_managed(&environment, break_system_packages, PipMutation::Uninstall)?;
 
     let _lock = environment
         .lock()

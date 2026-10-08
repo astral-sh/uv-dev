@@ -3,7 +3,6 @@ use std::fmt::Write;
 
 use anyhow::Result;
 use itertools::Itertools;
-use owo_colors::OwoColorize;
 use tracing::{debug, warn};
 
 use uv_cache::Cache;
@@ -45,6 +44,7 @@ use uv_warnings::warn_user;
 use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
+use crate::environment::{PipMutation, check_externally_managed};
 use crate::install_report::write_install_report;
 use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::reporters::report_target_environment;
@@ -229,25 +229,7 @@ pub async fn pip_sync(
         environment
     };
 
-    // If the environment is externally managed, abort.
-    if let Some(externally_managed) = environment.interpreter().is_externally_managed() {
-        if break_system_packages {
-            debug!("Ignoring externally managed environment due to `--break-system-packages`");
-        } else {
-            return if let Some(error) = externally_managed.into_error() {
-                Err(anyhow::anyhow!(
-                    "The interpreter at `{}` is externally managed, and indicates the following:\n\n{}\n\nConsider creating a virtual environment with `uv venv`.",
-                    environment.root().user_display().cyan(),
-                    textwrap::indent(&error, "  ").green(),
-                ))
-            } else {
-                Err(anyhow::anyhow!(
-                    "The interpreter at `{}` is externally managed. Instead, create a virtual environment with `uv venv`.",
-                    environment.root().user_display().cyan()
-                ))
-            };
-        }
-    }
+    check_externally_managed(&environment, break_system_packages, PipMutation::Sync)?;
 
     let _lock = environment
         .lock()
