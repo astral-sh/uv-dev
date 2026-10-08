@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 use std::os::macos::fs::MetadataExt as _;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg(not(unix))]
 use same_file::Handle;
 use tempfile::TempPath;
 
@@ -39,19 +40,17 @@ impl FilePublication {
     /// truncating it. A missing destination is staged with ordinary file-creation permissions.
     pub fn new(path: &Path) -> io::Result<Self> {
         let original = match fs_err::OpenOptions::new().write(true).open(path) {
-            Ok(file) => Some(file),
+            Ok(file) if can_replace(&file) => Some(file),
+            Ok(file) => {
+                return Ok(Self {
+                    path: path.to_owned(),
+                    writer: file,
+                    staging: None,
+                });
+            }
             Err(err) if err.kind() == io::ErrorKind::NotFound => None,
             Err(err) => return Err(err),
         };
-        if let Some(file) = original.as_ref()
-            && !can_replace(file)
-        {
-            return Ok(Self {
-                path: path.to_owned(),
-                writer: file.try_clone()?,
-                staging: None,
-            });
-        }
         let target = destination(path)?;
         if let Some(file) = original.as_ref() {
             same_identity(file, &target)?;
@@ -83,15 +82,19 @@ impl FilePublication {
         };
         let (file, temporary) = temporary.into_parts();
         let writer = fs_err::File::from_parts(file, path);
-        if let Some(original) = original.as_ref()
-            && !prepare_permissions(original, &writer)?
-        {
-            return Ok(Self {
-                path: path.to_owned(),
-                writer: original.try_clone()?,
-                staging: None,
-            });
-        }
+        let original = match original {
+            Some(original) => {
+                if !prepare_permissions(&original, &writer) {
+                    return Ok(Self {
+                        path: path.to_owned(),
+                        writer: original,
+                        staging: None,
+                    });
+                }
+                Some(original)
+            }
+            None => None,
+        };
         Ok(Self {
             path: path.to_owned(),
             writer,
@@ -126,20 +129,20 @@ impl FilePublication {
     /// The identity check detects replaced paths but is not a filesystem compare-and-swap.
     pub fn publish(self) -> io::Result<fs_err::File> {
         if let Some(staging) = self.staging {
+            if destination(&self.path)? != staging.target {
+                return Err(io::Error::other("file target changed before publication"));
+            }
             if let Some(original) = &staging.original {
                 same_identity(original, &self.path)?;
                 same_identity(original, &staging.target)?;
                 // A newly added ACL or hard link must not be discarded by inode replacement.
-                if !can_replace(original) || !prepare_permissions(original, &self.writer)? {
+                if !can_replace(original) || !prepare_permissions(original, &self.writer) {
                     return Err(io::Error::other(
-                        "file access metadata changed before publication",
+                        "file access metadata no longer permits replacement",
                     ));
                 }
                 staging.temporary.persist(verbatim_path(&staging.target))
             } else {
-                if destination(&self.path)? != staging.target {
-                    return Err(io::Error::other("file target changed before publication"));
-                }
                 staging
                     .temporary
                     .persist_noclobber(verbatim_path(&staging.target))
@@ -168,7 +171,16 @@ pub async fn write_file_async(path: PathBuf, contents: Vec<u8>) -> io::Result<()
 }
 
 fn same_identity(file: &fs_err::File, path: &Path) -> io::Result<()> {
-    if Handle::from_file(file.file().try_clone()?)? != Handle::from_path(path)? {
+    #[cfg(unix)]
+    let same = {
+        // Keep the descriptor open to prevent inode reuse, without requiring read access to bytes.
+        let opened = file.metadata()?;
+        let current = fs_err::metadata(path)?;
+        opened.dev() == current.dev() && opened.ino() == current.ino()
+    };
+    #[cfg(not(unix))]
+    let same = Handle::from_file(file.file().try_clone()?)? == Handle::from_path(path)?;
+    if !same {
         return Err(io::Error::other("file was replaced before publication"));
     }
     Ok(())
@@ -177,7 +189,7 @@ fn same_identity(file: &fs_err::File, path: &Path) -> io::Result<()> {
 /// Resolve the final link too, including dangling links whose target can be created.
 fn destination(path: &Path) -> io::Result<PathBuf> {
     let mut target = path.to_owned();
-    for _ in 0..40 {
+    for _ in 0..=40 {
         match fs_err::symlink_metadata(&target) {
             Ok(metadata) if metadata.is_symlink() => {
                 let link = fs_err::read_link(&target)?;
@@ -219,22 +231,25 @@ fn can_replace(_file: &fs_err::File) -> bool {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn prepare_permissions(original: &fs_err::File, staged: &fs_err::File) -> io::Result<bool> {
-    let original_metadata = original.metadata()?;
-    let staged_metadata = staged.metadata()?;
+fn prepare_permissions(original: &fs_err::File, staged: &fs_err::File) -> bool {
+    let (Ok(original_metadata), Ok(staged_metadata)) = (original.metadata(), staged.metadata())
+    else {
+        return false;
+    };
     if original_metadata.uid() != staged_metadata.uid()
         || original_metadata.gid() != staged_metadata.gid()
         || !plain_access_metadata(staged)
     {
-        return Ok(false);
+        return false;
     }
-    staged.set_permissions(original_metadata.permissions())?;
-    Ok(true)
+    staged
+        .set_permissions(original_metadata.permissions())
+        .is_ok()
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn prepare_permissions(_original: &fs_err::File, _staged: &fs_err::File) -> io::Result<bool> {
-    Ok(false)
+fn prepare_permissions(_original: &fs_err::File, _staged: &fs_err::File) -> bool {
+    false
 }
 
 #[cfg(target_os = "linux")]
@@ -450,6 +465,23 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn a_retargeted_path_keeps_its_symbolic_link() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("pyproject.toml");
+        let moved = directory.path().join("moved.toml");
+        fs_err::write(&path, "original")?;
+        let mut publication = FilePublication::new(&path)?;
+        publication.writer().write_all(b"replacement")?;
+        fs_err::rename(&path, &moved)?;
+        fs_err::os::unix::fs::symlink("moved.toml", &path)?;
+        assert!(publication.publish().is_err());
+        assert_eq!(fs_err::read_link(&path)?, Path::new("moved.toml"));
+        assert_eq!(fs_err::read(&moved)?, b"original");
+        Ok(())
+    }
+
+    #[test]
     fn read_only_file_requires_write_authorization() -> io::Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("pyproject.toml");
@@ -464,6 +496,24 @@ mod tests {
         // Privileged users can legitimately open a mode-read-only file; compare authorization.
         assert_eq!(publication.is_ok(), ordinary.is_ok());
         assert_eq!(fs_err::read(&path)?, b"original");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn writing_does_not_require_read_authorization() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("pyproject.toml");
+        fs_err::write(&path, "original")?;
+        let permissions = fs_err::metadata(&path)?.permissions();
+        fs_err::set_permissions(&path, std::fs::Permissions::from_mode(0o200))?;
+        let opened = fs_err::OpenOptions::new().write(true).open(&path)?;
+        let identity = super::same_identity(&opened, &path);
+        let result = write_file(&path, b"replacement");
+        fs_err::set_permissions(&path, permissions)?;
+        identity?;
+        result?;
+        assert_eq!(fs_err::read(&path)?, b"replacement");
         Ok(())
     }
 

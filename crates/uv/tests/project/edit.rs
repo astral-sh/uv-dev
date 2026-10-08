@@ -8823,6 +8823,18 @@ fn rollback_preserves_external_project_edits() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn rollback_restores_partial_project_write() -> Result<()> {
+    check_project_write_failure(true)
+}
+
+/// A failed staged write must leave the original file intact without needing restoration.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn failed_staged_project_write_preserves_original() -> Result<()> {
+    check_project_write_failure(false)
+}
+
+#[cfg(unix)]
+fn check_project_write_failure(hard_link: bool) -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -8835,11 +8847,12 @@ fn rollback_restores_partial_project_write() -> Result<()> {
         dependencies = []
     "#})?;
     let original = context.read("pyproject.toml");
-    // Hard-link aliases require the in-place fallback, including partial-write recovery.
-    fs_err::hard_link(
-        context.temp_dir.child("pyproject.toml"),
-        context.temp_dir.child("alias.toml"),
-    )?;
+    if hard_link {
+        fs_err::hard_link(
+            context.temp_dir.child("pyproject.toml"),
+            context.temp_dir.child("alias.toml"),
+        )?;
+    }
     uv_snapshot!(context.filters(), context.python_command()
         .arg("-c")
         .arg(indoc! {r"
@@ -8863,7 +8876,17 @@ fn rollback_restores_partial_project_write() -> Result<()> {
     error: failed to write to file `[TEMP_DIR]/pyproject.toml`: File too large (os error 27)
     ");
     assert_eq!(context.read("pyproject.toml"), original);
-    assert_eq!(context.read("alias.toml"), original);
+    if hard_link {
+        assert_eq!(context.read("alias.toml"), original);
+    }
+    for entry in fs_err::read_dir(context.temp_dir.path())? {
+        assert!(
+            !entry?
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".uv-publish-")
+        );
+    }
     Ok(())
 }
 
