@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use reqwest_retry::policies::ExponentialBackoff;
 use tracing::{debug, info};
 use uv_fs::Simplified;
@@ -323,7 +325,7 @@ impl PythonInstallation {
         let installations = ManagedPythonInstallations::from_settings(None)?.init()?;
         let installations_dir = installations.root();
         let scratch_dir = installations.scratch();
-        let _lock = installations.lock().await?;
+        let installation_lock = Arc::new(installations.lock().await?);
 
         info!("Fetching requested Python...");
         let result = download
@@ -331,6 +333,7 @@ impl PythonInstallation {
                 client,
                 retry_policy,
                 installations_dir,
+                &installation_lock,
                 &scratch_dir,
                 false,
                 mirrors,

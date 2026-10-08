@@ -12,6 +12,7 @@ pub use managed::{
 pub mod downloads;
 pub mod macos_dylib;
 mod managed;
+mod publication;
 mod sysconfig;
 #[cfg(windows)]
 pub mod windows_registry;

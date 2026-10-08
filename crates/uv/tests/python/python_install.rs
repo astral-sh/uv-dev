@@ -15,7 +15,9 @@ use tracing::debug;
 use uv_test::{LATEST_PYTHON_3_12, uv_snapshot};
 
 use uv_fs::Simplified;
+use uv_python_managed::downloads::ManagedPythonDownloadList;
 use uv_python_managed::platform_key_from_env;
+use uv_python_types::PythonDownloadRequest;
 use uv_static::EnvVars;
 use walkdir::WalkDir;
 
@@ -217,6 +219,111 @@ fn python_reinstall() {
     Installed Python 3.11.[LATEST] in [TIME]
      + cpython-3.11.[LATEST]-[PLATFORM] (python3.11)
     ");
+}
+
+fn installed_python_for_replacement() -> anyhow::Result<(uv_test::TestContext, String)> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_managed_python_dirs()
+        .with_filtered_python_keys()
+        .with_filtered_exe_suffix()
+        .with_empty_python_install_mirror();
+    let request = "cpython-3.13.1"
+        .parse::<PythonDownloadRequest>()?
+        .fill_platform()?;
+    let downloads = ManagedPythonDownloadList::new_only_embedded()?;
+    let key = downloads.find(&request)?.key().to_string();
+    context
+        .python_install()
+        .arg(&key)
+        .env(
+            EnvVars::UV_PYTHON_CACHE_DIR,
+            context.temp_dir.join("replacement-archives"),
+        )
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("managed")
+        .child(&key)
+        .child("replacement-sentinel")
+        .write_str("previous installation\n")?;
+    Ok((context, key))
+}
+
+/// Publication failure must not destroy the real interpreter or its existing executable link.
+#[test]
+#[cfg(unix)]
+fn python_reinstall_publication_failure_keeps_previous_python() -> anyhow::Result<()> {
+    let (context, key) = installed_python_for_replacement()?;
+    let installation = context.temp_dir.child("managed").child(&key);
+    let build = fs_err::read(installation.join("BUILD"))?;
+    // Staging under the existing writable .temp directory can finish, but renaming an entry in
+    // the managed root fails. Truncating cleanup would remove the predecessor's contents first.
+    let readonly = uv_test::ReadOnlyDirectoryGuard::new(context.temp_dir.join("managed"))?;
+    uv_snapshot!(context.filters(), context.python_install()
+        .arg(&key).args(["--reinstall", "--offline"])
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, context.temp_dir.join("replacement-archives")), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to create Python minor version link directory
+      cause: failed to symlink file from [TEMP_DIR]/managed/[TMP] to [TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]: Permission denied (os error 13)
+    ");
+    drop(readonly);
+    assert_eq!(
+        fs_err::read_to_string(installation.join("replacement-sentinel"))?,
+        "previous installation\n"
+    );
+    assert_eq!(fs_err::read(installation.join("BUILD"))?, build);
+    uv_snapshot!(context.filters(), Command::new(context.bin_dir.join("python3.13"))
+        .args(["-I", "-c", "import sys; print(sys.version.split()[0])"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.13.1
+    ");
+    Ok(())
+}
+
+/// A restart can restore the predecessor without downloading or extracting another archive.
+#[test]
+fn python_install_recovers_interrupted_replacement() -> anyhow::Result<()> {
+    let (context, key) = installed_python_for_replacement()?;
+    let installation = context.temp_dir.join("managed").join(&key);
+    let scratch = context.temp_dir.join("managed/.temp");
+    let previous = scratch.join(format!(".replacement-{key}"));
+    let journal = scratch.join(format!(".replacement-{key}.json"));
+    fs_err::write(
+        &journal,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "marker": "interrupted-fixture",
+            "committed": false,
+        }))?,
+    )?;
+    fs_err::rename(&installation, &previous)?;
+    assert!(!installation.exists());
+
+    uv_snapshot!(context.filters(), context.python_install().arg(&key).arg("--offline")
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, ""), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.13.1 in [TIME]
+     + cpython-3.13.1-[PLATFORM]
+    ");
+    assert_eq!(
+        fs_err::read_to_string(installation.join("replacement-sentinel"))?,
+        "previous installation\n"
+    );
+    assert!(!previous.exists());
+    assert!(!journal.exists());
+    uv_snapshot!(context.filters(), Command::new(context.bin_dir.join(format!(
+        "python3.13{}", std::env::consts::EXE_SUFFIX,
+    )))
+        .args(["-I", "-c", "import sys; print(sys.version.split()[0])"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.13.1
+    ");
+    Ok(())
 }
 
 #[test]
