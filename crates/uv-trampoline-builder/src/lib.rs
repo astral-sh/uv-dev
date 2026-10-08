@@ -504,13 +504,16 @@ mod test {
             })?
             .simplified()
             .to_path_buf();
+        // The `-c` argument must stay on one line to support Windows batch shims.
         let output = python_command(&candidate)
             .args(["-I", "-S", "-c"])
-            .arg(r#"import platform, struct, sys
-assert sys.version_info.major == 3, "Trampoline tests require Python 3"
-identity = "{} {} ({}, {}-bit)".format(sys.implementation.name, sys.version, platform.machine(), struct.calcsize("P") * 8)
-sys.stdout.buffer.write((sys.executable + "\n" + identity).encode("utf-8"))
-"#)
+            .arg(concat!(
+                "import platform, struct, sys; ",
+                "assert sys.version_info.major == 3, 'Trampoline tests require Python 3'; ",
+                "identity = '{} {} ({}, {}-bit)'.format(",
+                "sys.implementation.name, sys.version, platform.machine(), struct.calcsize('P') * 8); ",
+                "sys.stdout.buffer.write((sys.executable + '\\n' + identity).encode('utf-8'))",
+            ))
             .output()
             .with_context(|| format!("Could not query {}", candidate.display()))?;
         ensure!(
