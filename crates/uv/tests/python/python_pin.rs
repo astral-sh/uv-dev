@@ -854,6 +854,31 @@ fn python_pin_rm() {
 }
 
 #[test]
+fn python_pin_rm_skips_workspace_discovery() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [tool.uv.workspace]
+        members = ["missing"]
+        "#,
+    )?;
+    let version_file = context.temp_dir.child(PYTHON_VERSION_FILENAME);
+    version_file.write_str("3.12\n")?;
+
+    uv_snapshot!(context.filters(), context.python_pin()
+        .arg("--no-config")
+        .arg("--rm")
+        .env(EnvVars::RUST_LOG, "uv_python_commands::pin=debug,uv_workspace=trace"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Removed Python version file at `.python-version`
+    ");
+    assert!(!version_file.exists());
+
+    Ok(())
+}
+
+#[test]
 fn python_pin_rm_versions() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
     let global = context.user_config_dir.child("uv");
