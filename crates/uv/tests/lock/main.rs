@@ -1,5 +1,8 @@
 //! Integration tests for `uv lock`.
 
+#[cfg(feature = "test-python")]
+mod python_requirements;
+
 #[cfg(all(
     feature = "test-python",
     feature = "test-pypi",

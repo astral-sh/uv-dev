@@ -12,6 +12,7 @@ use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{DependencyMetadata, IndexLocations, Requirement, RequiresPython};
 use uv_lock::{GroupMetadata, Lock, SatisfiesResult};
 use uv_normalize::{DefaultGroups, GroupName, PackageName};
+use uv_pep440::release_specifiers_to_ranges;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{Conflicts, SupportedEnvironments};
 use uv_python_interpreter::Interpreter;
@@ -204,15 +205,18 @@ impl ValidatedLock {
             return Ok(Self::Versions(lock));
         }
 
-        // If the Requires-Python bound has changed, we have to perform a clean resolution, since
-        // the set of `resolution-markers` may no longer cover the entire supported Python range.
-        if lock.requires_python().range() != requires_python.range() {
+        // Interior exclusions are part of the Python requirement even when its outer bounds
+        // stay the same. Compare the full accepted set without invalidating equivalent spellings.
+        if !python_requirements_equivalent(lock.requires_python(), requires_python) {
             debug!(
                 "Resolving despite existing lockfile due to change in Python requirement: `{}` vs. `{}`",
                 lock.requires_python(),
                 requires_python,
             );
-            return if lock.fork_markers().is_empty() {
+            // Existing forks can guide resolution when the Python bounds remain unchanged.
+            return if lock.fork_markers().is_empty()
+                || lock.requires_python().range() == requires_python.range()
+            {
                 Ok(Self::Preferable(lock))
             } else {
                 Ok(Self::Versions(lock))
@@ -535,4 +539,13 @@ impl ValidatedLock {
             Self::Versions(lock) => lock,
         }
     }
+}
+
+/// Compare all accepted release versions, including interior holes and wildcard precision.
+pub(crate) fn python_requirements_equivalent(
+    left: &RequiresPython,
+    right: &RequiresPython,
+) -> bool {
+    release_specifiers_to_ranges(left.specifiers().clone())
+        == release_specifiers_to_ranges(right.specifiers().clone())
 }
