@@ -47,13 +47,24 @@ pub mod which;
 /// Both entries must be on the same filesystem.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn exchange_paths(first: impl AsRef<Path>, second: impl AsRef<Path>) -> io::Result<()> {
-    Ok(renameat_with(
+    renameat_with(
         RUSTIX_CWD,
         first.as_ref(),
         RUSTIX_CWD,
         second.as_ref(),
         RenameFlags::EXCHANGE,
-    )?)
+    )
+    .map_err(exchange_error)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn exchange_error(error: rustix::io::Errno) -> io::Error {
+    if error == rustix::io::Errno::NOTSUP {
+        // macOS ENOTSUP maps to ErrorKind::Other, but callers can use ordinary renames instead.
+        io::Error::new(io::ErrorKind::Unsupported, error)
+    } else {
+        error.into()
+    }
 }
 
 /// Return the number of hardlinks to a file.
@@ -1057,6 +1068,19 @@ mod tests {
     use std::assert_matches;
 
     use super::*;
+
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn unsupported_exchange_errno_is_recognized() {
+        assert_eq!(
+            exchange_error(rustix::io::Errno::NOTSUP).kind(),
+            io::ErrorKind::Unsupported
+        );
+        assert_eq!(
+            exchange_error(rustix::io::Errno::ACCESS).kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
 
     #[cfg(feature = "tokio")]
     #[test]

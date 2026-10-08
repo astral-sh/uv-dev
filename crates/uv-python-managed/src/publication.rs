@@ -182,6 +182,16 @@ fn publish_inner(
     exchange: impl FnOnce(&Path, &Path) -> io::Result<()>,
     mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
 ) -> io::Result<()> {
+    // A retry can arrive after publication and restoration both failed. Recover that attempt
+    // before either a fresh install or a native exchange can publish another replacement.
+    let recovery = Recovery::new(destination, scratch)?;
+    recovery.recover()?;
+    if recovery.journal.try_exists()? {
+        return Err(io::Error::other(format!(
+            "previous Python replacement cleanup must finish at `{}` before reinstalling",
+            recovery.previous.user_display()
+        )));
+    }
     if !destination.is_dir() {
         return rename(staged, destination);
     }
@@ -197,14 +207,6 @@ fn publish_inner(
         Err(err) => return Err(err),
     }
 
-    let recovery = Recovery::new(destination, scratch)?;
-    recovery.recover()?;
-    if recovery.journal.try_exists()? {
-        return Err(io::Error::other(format!(
-            "previous Python replacement cleanup must finish at `{}` before reinstalling",
-            recovery.previous.user_display()
-        )));
-    }
     // The marker is private until the complete installation is published.
     let marker_path = staged.join(MARKER);
     let mut marker_file = fs_err::OpenOptions::new()
@@ -455,6 +457,58 @@ mod tests {
         assert_eq!(fs_err::read_to_string(old.join("interpreter"))?, "old");
         assert!(!recovery.previous.exists());
         assert!(!recovery.journal.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn retry_recovers_failed_restoration_before_publication() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let destination = root.path().join("installed");
+        let staged = root.path().join("first-attempt");
+        installation(&destination, "old")?;
+        installation(&staged, "first")?;
+        let error = publish_inner(
+            &staged,
+            &destination,
+            root.path(),
+            "first",
+            unavailable,
+            |from, to| {
+                if to == destination {
+                    Err(io::Error::new(io::ErrorKind::TimedOut, "rename timed out"))
+                } else {
+                    rename(from, to)
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(!destination.exists());
+        let recovery = Recovery::new(&destination, root.path())?;
+        assert_eq!(
+            fs_err::read_to_string(recovery.previous.join("interpreter"))?,
+            "old"
+        );
+
+        let retry = root.path().join("retry");
+        installation(&retry, "second")?;
+        publish_inner(
+            &retry,
+            &destination,
+            root.path(),
+            "second",
+            unavailable,
+            rename,
+        )?;
+        // A later command can acquire the installation lock without rejecting the new entry.
+        recovery.recover()?;
+        assert_eq!(
+            fs_err::read_to_string(destination.join("interpreter"))?,
+            "second"
+        );
+        assert!(!recovery.previous.exists());
+        assert!(!recovery.journal.exists());
+        assert!(!destination.join(MARKER).exists());
         Ok(())
     }
 
