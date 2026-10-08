@@ -112,7 +112,8 @@ jobs:
       - name: "Run benchmarks"
         uses: CodSpeedHQ/action@373d6868929f444bc08d901fd0eb0ad52a8875ea # v5.2.1
         with:
-          run: uv run --only-dev cargo codspeed run
+          # Measure solver work without tracing inherited from the runner.
+          run: env RUST_LOG=off uv run --only-dev cargo codspeed run
           mode: walltime
           upload-url: ${{ steps.profiles.outputs.upload-url }}
 
@@ -182,7 +183,8 @@ jobs:
       - name: "Run benchmarks"
         uses: CodSpeedHQ/action@373d6868929f444bc08d901fd0eb0ad52a8875ea # v5.2.1
         with:
-          run: uv run --only-dev cargo codspeed run
+          # Measure solver work without tracing inherited from the runner.
+          run: env RUST_LOG=off uv run --only-dev cargo codspeed run
           mode: simulation
           upload-url: ${{ steps.profiles.outputs.upload-url }}
 
