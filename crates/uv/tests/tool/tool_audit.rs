@@ -271,23 +271,14 @@ async fn tool_inspection_skips_damaged_receipts_safely() -> Result<()> {
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     install_tool(&context, "simple-launcher", true);
-    for (name, receipt) in [
-        (
-            "bad-source",
-            "url = \"https://user:receipt-secret@example.com/\" trailing",
-        ),
-        (
-            "bad-schema",
-            "[tool]\nrequirements = \"https://user:receipt-secret@example.com/\"",
-        ),
-    ] {
-        context
-            .temp_dir
-            .child("tools")
-            .child(name)
-            .child("uv-receipt.toml")
-            .write_str(receipt)?;
-    }
+    context
+        .temp_dir
+        .child("tools/bad-source/uv-receipt.toml")
+        .write_str("url = \"https://user:receipt-secret@example.com/\" trailing")?;
+    context
+        .temp_dir
+        .child("tools/bad-schema/uv-receipt.toml")
+        .write_str("[tool]\nrequirements = \"https://user:receipt-secret@example.com/\"")?;
     context
         .temp_dir
         .child("tools/missing-receipt")
@@ -315,11 +306,7 @@ async fn tool_inspection_skips_damaged_receipts_safely() -> Result<()> {
 
     hint: Run `uv tool uninstall missing-receipt` to remove the tool.
     ");
-    for quiet in ["--quiet", "-qq"] {
-        let output = context.tool_list().arg(quiet).output()?;
-        assert!(output.status.success());
-        assert!(output.stderr.is_empty());
-    }
+    uv_snapshot!(context.filters(), context.tool_list().arg("--quiet"), @"exit_code: 0 (success)");
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
@@ -347,18 +334,12 @@ async fn tool_inspection_skips_damaged_receipts_safely() -> Result<()> {
     Auditing `simple-launcher`
     Found no known vulnerabilities and no adverse project statuses in 1 package
     ");
-    for quiet in ["--quiet", "-qq"] {
-        let output = context
-            .tool_audit()
-            .arg("--all")
-            .arg("--service-url")
-            .arg(server.uri())
-            .arg(quiet)
-            .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-            .output()?;
-        assert!(output.status.success());
-        assert!(output.stderr.is_empty());
-    }
+    uv_snapshot!(context.filters(), context.tool_audit()
+        .arg("--all")
+        .arg("--service-url")
+        .arg(server.uri())
+        .arg("--quiet")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks"), @"exit_code: 0 (success)");
     Ok(())
 }
 
