@@ -49,8 +49,8 @@ use uv_workspace::{ProjectEnvironmentSelection, Workspace, WorkspaceCache};
 
 use crate::install_target::{InstallTarget, PackageSelection};
 use uv_command_support::{Printer, conjunction};
-use uv_install_operations::Changelog;
 use uv_install_operations::loggers::InstallLogger;
+use uv_install_operations::{Changelog, InstallerMetadata};
 use uv_python_discovery::CompatibleProjectPython;
 use uv_python_discovery::EnvironmentIncompatibilityError;
 use uv_python_discovery::EnvironmentKind;
@@ -1607,7 +1607,7 @@ pub async fn sync_environment(
     client_builder: &BaseClientBuilder<'_>,
     state: &PlatformState,
     logger: Box<dyn InstallLogger>,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: &Concurrency,
     cache: &Cache,
     printer: Printer,
@@ -1756,7 +1756,7 @@ pub async fn update_environment(
     state: &SharedState,
     resolve: Box<dyn ResolveLogger>,
     install: Box<dyn InstallLogger>,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: &Concurrency,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,

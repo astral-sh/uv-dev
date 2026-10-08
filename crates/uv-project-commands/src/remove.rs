@@ -21,6 +21,7 @@ use uv_environment_operations::{
 };
 use uv_fs::Simplified;
 use uv_install_operations::loggers::DefaultInstallLogger;
+use uv_install_wheel::InstallerMetadata;
 use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
@@ -58,7 +59,7 @@ pub async fn remove(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,

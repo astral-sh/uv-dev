@@ -56,6 +56,7 @@ use crate::error::ToolError;
 use crate::requirements::resolve_names;
 use crate::{Target, ToolRequest};
 use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
+use uv_install_operations::InstallerMetadata;
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations as operations;
@@ -127,7 +128,6 @@ fn find_verbose_flag(args: &[std::ffi::OsString]) -> Option<&str> {
 }
 
 /// Run a command.
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn run(
     command: Option<Vec<OsString>>,
     from: Option<String>,
@@ -148,7 +148,7 @@ pub async fn run(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     cache: Cache,
     workspace_cache: WorkspaceCache,
@@ -760,7 +760,7 @@ async fn get_or_create_environment(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: &Concurrency,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,

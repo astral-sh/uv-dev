@@ -40,6 +40,7 @@ use uv_environment_operations::{
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
+use uv_install_wheel::InstallerMetadata;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
@@ -114,7 +115,7 @@ pub async fn run(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     cache: Cache,
     workspace_cache: &WorkspaceCache,

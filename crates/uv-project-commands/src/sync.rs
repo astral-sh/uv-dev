@@ -29,6 +29,7 @@ use uv_fs::{PortablePathBuf, Simplified};
 use uv_install_operations::Changelog;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_install_operations::report::{PackageChangesReport, SchemaReport};
+use uv_install_wheel::InstallerMetadata;
 use uv_lock::{Installable, Lock, PythonReport};
 use uv_lock_operations::{
     DiscoveredProject, FrozenWorkspace, LockError, LockMode, LockOperation, LockResult, LockTarget,
@@ -73,7 +74,7 @@ pub async fn sync(
     settings: ResolverInstallerSettings,
     client_builder: BaseClientBuilder<'_>,
     script: Option<Pep723Script>,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,

@@ -35,6 +35,7 @@ use uv_errors::HintOrdering;
 use uv_fs::Simplified;
 use uv_git::store_credentials;
 use uv_install_operations::loggers::DefaultInstallLogger;
+use uv_install_wheel::InstallerMetadata;
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, ExtraName, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
@@ -131,7 +132,7 @@ pub async fn add(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
@@ -1099,7 +1100,7 @@ async fn lock_and_sync(
     constraints: Vec<NameRequirementSpecification>,
     settings: &ResolverInstallerSettings,
     client_builder: &BaseClientBuilder<'_>,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: &Concurrency,
     cache: &Cache,
     printer: Printer,

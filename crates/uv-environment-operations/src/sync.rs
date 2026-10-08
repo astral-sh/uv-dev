@@ -12,7 +12,7 @@ use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{Dist, Resolution, ResolvedDist, SourceDist};
 use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::InstallLogger;
-use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
+use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan, InstallerMetadata};
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_lock::Installable;
 use uv_pep508::{MarkerTree, VersionOrUrl};
@@ -47,7 +47,7 @@ pub async fn sync_from_lock(
     client_builder: &BaseClientBuilder<'_>,
     state: &PlatformState,
     logger: Box<dyn InstallLogger>,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: &Concurrency,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,

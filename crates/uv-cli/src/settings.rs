@@ -31,7 +31,7 @@ use uv_distribution_types::{
     IndexLocations, IndexUrl, MinimumLibcVersion, NameRequirementSpecification,
     PackageConfigSettings, Requirement,
 };
-use uv_install_wheel::LinkMode;
+use uv_install_wheel::{InstallerMetadata, LinkMode};
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
@@ -74,7 +74,6 @@ use crate::{
         resolver_installer_options, resolver_options, upgrade_options,
     },
 };
-
 /// The default publish URL.
 const PYPI_PUBLISH_URL: &str = "https://upload.pypi.org/legacy/";
 
@@ -93,7 +92,7 @@ pub struct GlobalSettings {
     pub python_arch: Option<PythonArchitecture>,
     pub python_downloads: PythonDownloads,
     pub no_progress: bool,
-    pub installer_metadata: bool,
+    pub installer_metadata: InstallerMetadata,
 }
 
 impl GlobalSettings {
@@ -158,12 +157,14 @@ impl GlobalSettings {
             no_progress: resolve_flag(args.no_progress, "no-progress", environment.no_progress)
                 .is_enabled()
                 || std::env::var_os(EnvVars::RUST_LOG).is_some(),
-            installer_metadata: !resolve_flag(
-                args.no_installer_metadata,
-                "no-installer-metadata",
-                environment.no_installer_metadata,
-            )
-            .is_enabled(),
+            installer_metadata: InstallerMetadata::from_args(
+                !resolve_flag(
+                    args.no_installer_metadata,
+                    "no-installer-metadata",
+                    environment.no_installer_metadata,
+                )
+                .is_enabled(),
+            ),
         })
     }
 }

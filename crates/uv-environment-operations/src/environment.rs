@@ -7,6 +7,7 @@ use crate::{
 use uv_command_support::Printer;
 use uv_configuration::{Concurrency, Constraints, HashCheckingMode, Modifications, TargetTriple};
 use uv_dispatch::PlatformState;
+use uv_install_operations::InstallerMetadata;
 use uv_install_operations::loggers::InstallLogger;
 use uv_resolve_operations::loggers::ResolveLogger;
 use uv_settings::ResolverInstallerSettings;
@@ -68,7 +69,7 @@ impl CachedEnvironment {
         state: &PlatformState,
         resolve: Box<dyn ResolveLogger>,
         install: Box<dyn InstallLogger>,
-        installer_metadata: bool,
+        installer_metadata: InstallerMetadata,
         concurrency: &Concurrency,
         cache: &Cache,
         workspace_cache: &WorkspaceCache,
@@ -135,7 +136,7 @@ impl CachedEnvironment {
         client_builder: &BaseClientBuilder<'_>,
         state: &PlatformState,
         install: Box<dyn InstallLogger>,
-        installer_metadata: bool,
+        installer_metadata: InstallerMetadata,
         concurrency: &Concurrency,
         cache: &Cache,
         printer: Printer,
@@ -182,7 +183,7 @@ impl CachedEnvironment {
         client_builder: &BaseClientBuilder<'_>,
         state: &PlatformState,
         install: Box<dyn InstallLogger>,
-        installer_metadata: bool,
+        installer_metadata: InstallerMetadata,
         concurrency: &Concurrency,
         cache: &Cache,
         printer: Printer,

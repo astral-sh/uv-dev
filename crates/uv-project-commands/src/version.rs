@@ -22,6 +22,7 @@ use uv_environment_operations::{
 };
 use uv_fs::Simplified;
 use uv_install_operations::loggers::DefaultInstallLogger;
+use uv_install_wheel::InstallerMetadata;
 use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, PackageName};
 use uv_pep440::{BumpCommand, PrereleaseKind, Version};
@@ -93,7 +94,7 @@ pub async fn project_version(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
@@ -509,7 +510,7 @@ async fn lock_and_sync(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    installer_metadata: bool,
+    installer_metadata: InstallerMetadata,
     concurrency: &Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
