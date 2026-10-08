@@ -5,11 +5,13 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::{fmt, io, iter};
 
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use thiserror::Error;
+use tokio::sync::OnceCell;
 use tracing::{debug, instrument};
 
 use uv_auth::CredentialsCache;
@@ -80,7 +82,7 @@ pub enum Error {
     #[error(transparent)]
     Extract(#[from] uv_extract::Error),
     #[error(transparent)]
-    Operations(#[from] operations::Error),
+    Operations(#[from] Arc<operations::Error>),
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
     #[error(transparent)]
@@ -125,6 +127,12 @@ pub enum Error {
         output_dir: PathBuf,
         source_path: PathBuf,
     },
+}
+
+impl From<operations::Error> for Error {
+    fn from(error: operations::Error) -> Self {
+        Self::Operations(Arc::new(error))
+    }
 }
 
 impl From<PythonSelectionError> for Error {
@@ -445,6 +453,8 @@ pub async fn build_frontend(
         }
     }
 
+    let shared_build_constraints = CommandLineBuildConstraints::new(&build_constraints);
+
     let results: Vec<_> = futures::future::join_all(packages.into_iter().map(|source| {
         let future = build_package(
             source.clone(),
@@ -467,7 +477,7 @@ pub async fn build_frontend(
             build_logs,
             gitignore,
             force_pep517,
-            &build_constraints,
+            &shared_build_constraints,
             &build_constraints_from_workspace,
             build_isolation,
             extra_build_dependencies,
@@ -518,6 +528,38 @@ pub async fn build_frontend(
     }
 }
 
+/// Share command-line constraint parsing across concurrent workspace-member builds.
+struct CommandLineBuildConstraints<'a> {
+    sources: &'a [RequirementsSource],
+    parsed: OnceCell<Result<Vec<NameRequirementSpecification>, Arc<operations::Error>>>,
+}
+
+impl<'a> CommandLineBuildConstraints<'a> {
+    fn new(sources: &'a [RequirementsSource]) -> Self {
+        Self {
+            sources,
+            parsed: OnceCell::new(),
+        }
+    }
+
+    /// Share the parsed input or typed failure while keeping per-package error reporting.
+    async fn read(
+        &self,
+        client_builder: &BaseClientBuilder<'_>,
+    ) -> Result<&[NameRequirementSpecification], Arc<operations::Error>> {
+        self.parsed
+            .get_or_init(|| async {
+                operations::read_constraints(self.sources, client_builder)
+                    .await
+                    .map_err(Arc::new)
+            })
+            .await
+            .as_ref()
+            .map(Vec::as_slice)
+            .map_err(Arc::clone)
+    }
+}
+
 #[expect(clippy::fn_params_excessive_bools)]
 async fn build_package(
     source: AnnotatedSource<'_>,
@@ -540,7 +582,7 @@ async fn build_package(
     build_logs: bool,
     gitignore: bool,
     force_pep517: bool,
-    build_constraints: &[RequirementsSource],
+    build_constraints: &CommandLineBuildConstraints<'_>,
     build_constraints_from_workspace: &[NameRequirementSpecification],
     build_isolation: &BuildIsolation,
     extra_build_dependencies: &ExtraBuildDependencies,
@@ -603,8 +645,7 @@ async fn build_package(
     .into_interpreter();
 
     // Read build constraints.
-    let command_line_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+    let command_line_constraints = build_constraints.read(&client_builder).await?;
     let build_constraints = Constraints::from_specifications(
         command_line_constraints
             .iter()
