@@ -1184,10 +1184,7 @@ async fn audit_ignore_first_matching_rule() {
         .arg("GHSA-xxxx-yyyy-zzzz")
         .arg("--service-url")
         .arg(server.uri()), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     warning: Ignored vulnerability `PYSEC-2023-0042` does not match any vulnerability in the project

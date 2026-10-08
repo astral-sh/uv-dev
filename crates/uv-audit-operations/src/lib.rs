@@ -165,8 +165,8 @@ fn matching_ignore(
     vulnerability: &Vulnerability,
     indices: &FxHashMap<&VulnerabilityID, usize>,
 ) -> Option<usize> {
-    std::iter::once(&vulnerability.id)
-        .chain(vulnerability.aliases.iter())
+    vulnerability
+        .ids()
         .filter_map(|id| indices.get(id).copied())
         .min()
 }

@@ -131,7 +131,7 @@ impl Vulnerability {
     }
 
     /// Return an iterator over all identifiers for this vulnerability, including the primary ID and all aliases.
-    fn ids(&self) -> impl Iterator<Item = &VulnerabilityID> {
+    pub fn ids(&self) -> impl Iterator<Item = &VulnerabilityID> {
         std::iter::once(&self.id).chain(self.aliases.iter())
     }
 
