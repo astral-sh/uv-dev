@@ -4646,15 +4646,14 @@ fn add_standard_library_multiple_dependencies_error() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context.add().arg("typing").arg("pickle"), @"
-    success: false
-    exit_code: 1
-    ----- stdout -----
-
+    exit_code: 1 (failure)
     ----- stderr -----
-      × No solution found when resolving dependencies:
-      ╰─▶ Because pickle was not found in the package registry and your project depends on pickle, we can conclude that your project's requirements are unsatisfiable.
+    error: Failed to add dependencies
+      cause: No solution found when resolving dependencies
+      cause: Because pickle was not found in the package registry and your project depends on pickle, we can conclude that your project's requirements are unsatisfiable.
 
     hint: The module `pickle` is included in the Python standard library and usually should not be added as a dependency
+
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     ");
 
