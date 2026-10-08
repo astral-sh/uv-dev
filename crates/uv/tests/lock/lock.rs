@@ -31212,6 +31212,99 @@ fn project_python_exclusions_invalidate_lock() -> Result<()> {
     Ok(())
 }
 
+/// Interior Python exclusions leave compatible dependency forks and their selected versions intact.
+#[cfg(feature = "test-universal")]
+#[test]
+fn project_python_exclusions_retain_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/preferences-dependent-forking.toml");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let write_project = |requires_python: &str| {
+        pyproject.write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = "{requires_python}"
+            dependencies = ["cleaver", "foo", "bar"]
+        "#})
+    };
+    write_project(">=3.12")?;
+    let mut command = context.lock();
+    command
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url());
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    let original = Lock::from_toml(&context.read("uv.lock"))?;
+    assert_eq!(original.fork_markers().len(), 2);
+
+    write_project(">=3.12,!=3.13.0")?;
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    let updated = Lock::from_toml(&context.read("uv.lock"))?;
+    assert!(
+        !updated
+            .requires_python()
+            .contains(&Version::new([3, 13, 0]))
+    );
+
+    let summary = |lock: &Lock| {
+        let markers = lock
+            .fork_markers()
+            .iter()
+            .map(|marker| marker.combined().try_to_string())
+            .collect::<Vec<_>>();
+        let packages = lock
+            .packages()
+            .iter()
+            .map(|package| (package.name(), package.version()))
+            .collect::<Vec<_>>();
+        json!({
+            "markers": markers,
+            "packages": packages,
+        })
+    };
+    assert_eq!(summary(&original), summary(&updated));
+    insta::assert_json_snapshot!(summary(&updated), @r#"
+    {
+      "markers": [
+        "python_full_version >= '3.12' and sys_platform == 'linux'",
+        "python_full_version >= '3.12' and sys_platform != 'linux'"
+      ],
+      "packages": [
+        [
+          "bar",
+          "1.0.0"
+        ],
+        [
+          "bar",
+          "2.0.0"
+        ],
+        [
+          "cleaver",
+          "1.0.0"
+        ],
+        [
+          "foo",
+          "1.0.0"
+        ],
+        [
+          "project",
+          "0.1.0"
+        ]
+      ]
+    }
+    "#);
+    Ok(())
+}
+
 /// Script locks use the same complete Python requirement comparison as project locks.
 #[cfg(feature = "test-universal")]
 #[test]
