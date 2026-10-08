@@ -1,5 +1,9 @@
 //! Edit project and script metadata while preserving TOML formatting.
 
+mod batch;
+
+pub use batch::{DependencyEdit, DependencyEditBatch};
+
 use std::path::Path;
 use std::str::FromStr;
 use std::{fmt, mem};
