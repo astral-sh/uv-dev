@@ -2,3 +2,6 @@
 *.inc linguist-language=Rust
 
 uv.schema.json linguist-generated=true text=auto eol=lf
+
+# Empty final TSV fields require trailing tab delimiters.
+test/integration/package-fixtures/artifacts.tsv whitespace=-blank-at-eol
