@@ -1,5 +1,5 @@
 #[cfg(unix)]
-use std::{env, fs::Permissions, io, os::unix::fs::PermissionsExt};
+use std::{env, fs::Permissions, os::unix::fs::PermissionsExt};
 
 use anyhow::Result;
 #[cfg(unix)]
@@ -7,14 +7,24 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 #[cfg(unix)]
 use indoc::indoc;
+#[cfg(unix)]
+use regex::escape;
 
 #[cfg(unix)]
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 
+#[cfg(unix)]
+const SELECTED_PYTHON: &str = "UV_TEST_RETAINED_SELECTED_PYTHON";
+
 #[test]
 fn venv_uses_retained_default_interpreter() -> Result<()> {
     let mut context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    // The child discovers through the parent's normalized symlink; Python can report its target.
+    #[cfg(unix)]
+    if let Some(executable) = env::var_os(SELECTED_PYTHON) {
+        context = context.with_filter((escape(&executable.to_string_lossy()), "[PYTHON-3.12]"));
+    }
 
     context.reset_venv();
     uv_snapshot!(context.filters(), context.python_command()
@@ -52,19 +62,6 @@ fn venv_does_not_rediscover_selected_interpreter() -> Result<()> {
     }
 
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
-    // Discover the actual installations before the wrapper disables discovery for venv creation.
-    let python_dirs = context
-        .python_versions
-        .iter()
-        .map(|(_, executable)| {
-            fs_err::canonicalize(executable).map(|path| {
-                path.parent()
-                    .expect("Python executable has a parent directory")
-                    .to_path_buf()
-            })
-        })
-        .collect::<io::Result<Vec<_>>>()?;
-    let python_path = env::join_paths(python_dirs)?;
     let empty = context.temp_dir.child("empty");
     empty.create_dir_all()?;
     let wrapper = context.temp_dir.child("uv-without-discovery");
@@ -85,13 +82,14 @@ fn venv_does_not_rediscover_selected_interpreter() -> Result<()> {
             "--nocapture",
         ])
         .env(CHILD, "1")
+        .env(SELECTED_PYTHON, &context.python_versions[0].1)
         .env("UV_TEST_REAL_UV", uv_test::get_bin!())
         .env("UV_TEST_EMPTY_PYTHON_DIR", empty.path())
         .env("CARGO_BIN_EXE_uv", wrapper.path())
         .env_remove("NEXTEST_BIN_EXE_uv")
         .env(EnvVars::CARGO_MANIFEST_DIR, env!("CARGO_MANIFEST_DIR"))
         .env(EnvVars::UV_PYTHON_INSTALL_DIR, empty.path())
-        .env(EnvVars::UV_PYTHON_SEARCH_PATH, python_path)
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, context.python_path())
         .env(EnvVars::PATH, empty.path())
         .assert()
         .success();
