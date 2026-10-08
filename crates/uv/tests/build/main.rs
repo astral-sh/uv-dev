@@ -25,3 +25,5 @@ mod cache_prune;
 mod cache_size;
 
 mod extract;
+
+mod cache_clean_alias;
