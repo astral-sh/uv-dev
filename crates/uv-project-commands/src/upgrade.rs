@@ -4,7 +4,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use itertools::Itertools;
 
 use uv_cache::{Cache, Refresh};
@@ -22,10 +22,13 @@ use uv_environment_operations::{
 use uv_lock::implicit_constraints_marker;
 use uv_lock_operations::{LockMode, LockOperation, LockResult, LockTarget};
 use uv_normalize::PackageName;
-use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
+use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Pep508ErrorSource, Requirement, VerbatimUrl, VersionOrUrl};
 use uv_preview::Preview;
-use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
+use uv_project_edit::{
+    DependencyTarget, ProposeSpecifiersError, PyProjectTomlMut,
+    propose_specifiers as propose_version_specifiers, relax_specifiers,
+};
 use uv_pypi_types::{PyProjectToml, ResolutionMetadata, SupportedEnvironments, VerbatimParsedUrl};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
@@ -957,135 +960,33 @@ fn into_verbatim_requirement(
     })
 }
 
-/// Propose version specifiers that admit every resolved version.
-///
-/// Return `None` if no update is needed. Otherwise, rewrite only blocking specifiers and return
-/// them in `Some`. When multiple versions are resolved, choose bounds that admit all of them, or
-/// return an error if that is impossible.
-///
-/// For example, resolving `foo>=1,<2` to `2.4` produces `>=1, <3`.
+/// Propose upgraded specifiers and attach the selected dependency to failures.
 fn propose_specifiers(
     requirement: &Requirement<VerbatimParsedUrl>,
     resolved_versions: &BTreeSet<Version>,
 ) -> Result<Option<VersionSpecifiers>, ProposeRequirementError> {
-    if resolved_versions.is_empty() {
-        return Ok(None);
-    }
-
     let Some(VersionOrUrl::VersionSpecifier(specifiers)) = &requirement.version_or_url else {
         return Ok(None);
     };
-    if resolved_versions
-        .iter()
-        .all(|version| specifiers.contains(version))
-    {
-        return Ok(None);
-    }
-    let specifiers = specifiers
-        .iter()
-        .cloned()
-        .map(|specifier| rewrite_specifier(specifier, resolved_versions))
-        .collect::<Result<VersionSpecifiers>>()?;
-    if !resolved_versions
-        .iter()
-        .all(|version| specifiers.contains(version))
-    {
-        tracing::debug!(
-            dependency = %requirement.name,
-            resolved_versions = ?resolved_versions,
-            rewritten_specifiers = %specifiers,
-            "Rewritten dependency constraint does not admit every resolved version"
-        );
-        return Err(ProposeRequirementError::Unrepresentable {
-            package: requirement.name.clone(),
-            resolved_versions: resolved_versions.clone(),
-        });
-    }
-    Ok(Some(specifiers))
-}
-
-/// Attempt to rewrite a [`VersionSpecifier`] to admit all resolved versions while preserving its
-/// operator.
-fn rewrite_specifier(
-    specifier: VersionSpecifier,
-    resolved_versions: &BTreeSet<Version>,
-) -> Result<VersionSpecifier> {
-    if resolved_versions
-        .iter()
-        .all(|version| specifier.contains(version))
-    {
-        return Ok(specifier);
-    }
-    let (Some(lowest_resolved_version), Some(highest_resolved_version)) =
-        (resolved_versions.first(), resolved_versions.last())
-    else {
-        return Ok(specifier);
-    };
-
-    Ok(match specifier.operator() {
-        Operator::GreaterThan
-        | Operator::GreaterThanEqual
-        | Operator::NotEqual
-        | Operator::NotEqualStar => specifier,
-        Operator::TildeEqual => VersionSpecifier::from_version(
-            Operator::TildeEqual,
-            compatible_version_at_precision(
-                lowest_resolved_version,
-                specifier.version().release().len(),
-            )?,
-        )?,
-        Operator::Equal => VersionSpecifier::equals_version(lowest_resolved_version.clone()),
-        Operator::EqualStar => VersionSpecifier::equals_star_version(
-            lowest_resolved_version
-                .only_release_at_precision(specifier.version().release().len())
-                .context("Cannot rewrite a version constraint without a release segment")?,
-        ),
-        Operator::ExactEqual => {
-            VersionSpecifier::from_version(Operator::ExactEqual, lowest_resolved_version.clone())?
+    propose_version_specifiers(specifiers, resolved_versions).map_err(|error| match error {
+        ProposeSpecifiersError::Unrepresentable { specifiers } => {
+            tracing::debug!(
+                dependency = %requirement.name,
+                resolved_versions = ?resolved_versions,
+                rewritten_specifiers = %specifiers,
+                "Rewritten dependency constraint does not admit every resolved version"
+            );
+            ProposeRequirementError::Unrepresentable {
+                package: requirement.name.clone(),
+                resolved_versions: resolved_versions.clone(),
+            }
         }
-        Operator::LessThan => VersionSpecifier::less_than_version(increment_version_at_precision(
-            highest_resolved_version,
-            specifier.version().release().len(),
-        )?),
-        Operator::LessThanEqual => VersionSpecifier::from_version(
-            Operator::LessThanEqual,
-            highest_resolved_version.clone().without_local(),
-        )?,
+        error @ (ProposeSpecifiersError::InvalidSpecifier(_)
+        | ProposeSpecifiersError::MissingRelease
+        | ProposeSpecifiersError::ReleaseOverflow { .. }) => {
+            ProposeRequirementError::Rewrite(error.into())
+        }
     })
-}
-
-/// Project a version to the given precision while preserving its compatible-release suffixes.
-fn compatible_version_at_precision(version: &Version, precision: usize) -> Result<Version> {
-    let release = version
-        .release()
-        .iter()
-        .copied()
-        .chain(std::iter::repeat(0))
-        .take(precision)
-        .collect::<Vec<_>>();
-    if release.is_empty() {
-        bail!("Cannot rewrite a version constraint without a release segment");
-    }
-    Ok(version.clone().with_release(release).without_local())
-}
-
-/// Increment the last release segment after projecting a version to the given precision.
-fn increment_version_at_precision(version: &Version, precision: usize) -> Result<Version> {
-    let projected = version
-        .only_release_at_precision(precision)
-        .context("Cannot rewrite a version constraint without a release segment")?;
-    let mut release = projected.release().to_vec();
-    let segment_index = release.len();
-    let Some(last) = release.last_mut() else {
-        bail!("Cannot rewrite a version constraint without a release segment");
-    };
-    let segment = *last;
-    *last = segment.checked_add(1).with_context(|| {
-        format!(
-            "Cannot expand version `{version}` at release segment {segment_index} (`{segment}`) beyond its maximum value"
-        )
-    })?;
-    Ok(projected.with_release(release))
 }
 
 /// Remove upper and exact constraints while retaining lower bounds and exclusions.
@@ -1096,23 +997,7 @@ fn relax_requirement(
         return requirement;
     };
 
-    let specifiers = specifiers
-        .iter()
-        .filter_map(|specifier| match specifier.operator() {
-            Operator::GreaterThan
-            | Operator::GreaterThanEqual
-            | Operator::NotEqual
-            | Operator::NotEqualStar => Some(specifier.clone()),
-            Operator::TildeEqual => Some(VersionSpecifier::greater_than_equal_version(
-                specifier.version().clone(),
-            )),
-            Operator::Equal
-            | Operator::EqualStar
-            | Operator::ExactEqual
-            | Operator::LessThan
-            | Operator::LessThanEqual => None,
-        })
-        .collect::<VersionSpecifiers>();
+    let specifiers = relax_specifiers(specifiers);
 
     requirement.version_or_url = if specifiers.is_empty() {
         None
@@ -1132,117 +1017,13 @@ mod tests {
     use uv_pep508::Requirement;
     use uv_pypi_types::VerbatimParsedUrl;
 
-    use super::{
-        ProposeRequirementError, increment_version_at_precision, propose_specifiers,
-        relax_requirement,
-    };
+    use super::{ProposeRequirementError, propose_specifiers, relax_requirement};
 
     fn resolved_versions(versions: &[&str]) -> BTreeSet<Version> {
         versions
             .iter()
             .map(|version| Version::from_str(version).expect("valid version"))
             .collect()
-    }
-
-    #[test]
-    fn propose_specifiers_preserves_satisfied_constraints() {
-        for requirement in ["requests", "requests>=1.2", "requests!=2.3"] {
-            let requirement =
-                Requirement::<VerbatimParsedUrl>::from_str(requirement).expect("valid requirement");
-
-            let proposed = propose_specifiers(&requirement, &resolved_versions(&["2.4.0"]))
-                .expect("specifiers can be proposed");
-
-            assert!(proposed.is_none());
-        }
-    }
-
-    #[test]
-    fn propose_specifiers_returns_none_without_resolved_versions() {
-        let requirement =
-            Requirement::<VerbatimParsedUrl>::from_str("requests<2").expect("valid requirement");
-
-        let proposed =
-            propose_specifiers(&requirement, &BTreeSet::new()).expect("specifiers can be proposed");
-
-        assert!(proposed.is_none());
-    }
-
-    #[test]
-    fn propose_specifiers_expands_exclusive_upper_bounds_at_existing_precision() {
-        for (requirement, version, expected) in [
-            ("requests>=1.2,<2", "2.4.0", ">=1.2, <3"),
-            ("requests>=1.2,<1.3", "1.4.2", ">=1.2, <1.5"),
-        ] {
-            let requirement =
-                Requirement::<VerbatimParsedUrl>::from_str(requirement).expect("valid requirement");
-
-            let proposed = propose_specifiers(&requirement, &resolved_versions(&[version]))
-                .expect("specifiers can be proposed")
-                .expect("specifiers need an update");
-
-            assert_eq!(proposed.to_string(), expected);
-        }
-    }
-
-    #[test]
-    fn propose_specifiers_only_rewrites_blocking_specifiers() {
-        let requirement = Requirement::<VerbatimParsedUrl>::from_str("requests>=1,<2,<4")
-            .expect("valid requirement");
-
-        let proposed = propose_specifiers(&requirement, &resolved_versions(&["2.4.0"]))
-            .expect("specifiers can be proposed")
-            .expect("specifiers need an update");
-
-        assert_eq!(proposed.to_string(), ">=1, <3, <4");
-    }
-
-    #[test]
-    fn propose_specifiers_preserves_operator_style() {
-        for (requirement, version, expected) in [
-            ("requests==1.2.3", "2.4.5", "==2.4.5"),
-            ("requests===1.2.3", "2.4.5", "===2.4.5"),
-            ("requests==1.2.*", "2.4.5", "==2.4.*"),
-            ("requests~=1.2", "2.4.5", "~=2.4"),
-            ("requests~=1.2.3", "2.4.5", "~=2.4.5"),
-            ("requests<=1.2.3", "2.4.5", "<=2.4.5"),
-        ] {
-            let requirement =
-                Requirement::<VerbatimParsedUrl>::from_str(requirement).expect("valid requirement");
-
-            let proposed = propose_specifiers(&requirement, &resolved_versions(&[version]))
-                .expect("specifiers can be proposed")
-                .expect("specifiers need an update");
-
-            assert_eq!(proposed.to_string(), expected);
-        }
-    }
-
-    #[test]
-    fn propose_specifiers_preserves_compatible_release_suffixes() {
-        let requirement =
-            Requirement::<VerbatimParsedUrl>::from_str("requests~=1.2").expect("valid requirement");
-
-        let proposed = propose_specifiers(
-            &requirement,
-            &resolved_versions(&["1!2.4rc1.post2.dev3+local"]),
-        )
-        .expect("specifiers can be proposed")
-        .expect("specifiers need an update");
-
-        assert_eq!(proposed.to_string(), "~=1!2.4rc1.post2.dev3");
-    }
-
-    #[test]
-    fn propose_specifiers_strips_local_version_from_inclusive_upper_bound() {
-        let requirement = Requirement::<VerbatimParsedUrl>::from_str("requests<=1.2.3")
-            .expect("valid requirement");
-
-        let proposed = propose_specifiers(&requirement, &resolved_versions(&["2.4.5+local"]))
-            .expect("specifiers can be proposed")
-            .expect("specifiers need an update");
-
-        assert_eq!(proposed.to_string(), "<=2.4.5");
     }
 
     #[test]
@@ -1268,44 +1049,6 @@ mod tests {
     }
 
     #[test]
-    fn propose_specifiers_preserves_lower_bounds_and_exclusions() {
-        let requirement = Requirement::<VerbatimParsedUrl>::from_str(
-            "Requests_Plus[security,tests]>=1.2,!=2.3,<2 ; python_version >= '3.12'",
-        )
-        .expect("valid requirement");
-
-        let proposed = propose_specifiers(&requirement, &resolved_versions(&["2.4.0"]))
-            .expect("specifiers can be proposed")
-            .expect("specifiers need an update");
-
-        assert_eq!(proposed.to_string(), ">=1.2, !=2.3, <3");
-    }
-
-    #[test]
-    fn propose_specifiers_expands_upper_bound_for_multiple_versions() {
-        let requirement =
-            Requirement::<VerbatimParsedUrl>::from_str("requests<2").expect("valid requirement");
-
-        let proposed = propose_specifiers(&requirement, &resolved_versions(&["1.5.0", "2.4.0"]))
-            .expect("upper bound can admit both versions")
-            .expect("specifiers need an update");
-
-        assert_eq!(proposed.to_string(), "<3");
-    }
-
-    #[test]
-    fn propose_specifiers_uses_lowest_compatible_version_for_multiple_versions() {
-        let requirement =
-            Requirement::<VerbatimParsedUrl>::from_str("requests~=1.2").expect("valid requirement");
-
-        let proposed = propose_specifiers(&requirement, &resolved_versions(&["2.4", "2.5"]))
-            .expect("compatible release can admit both versions")
-            .expect("specifiers need an update");
-
-        assert_eq!(proposed.to_string(), "~=2.4");
-    }
-
-    #[test]
     fn propose_specifiers_rejects_unrepresentable_multiple_versions() {
         let requirement =
             Requirement::<VerbatimParsedUrl>::from_str("requests==1.*").expect("valid requirement");
@@ -1324,19 +1067,6 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "Dependency `requests` resolved to `1.5.0`, `2.4.0` which cannot be represented by the upgraded requirement; this is not supported yet"
-        );
-    }
-
-    #[test]
-    fn increment_version_at_precision_reports_upper_bound_overflow() {
-        let version = Version::new([1, 2, u64::MAX]);
-
-        let error = increment_version_at_precision(&version, 3)
-            .expect_err("maximum release segment cannot be incremented");
-
-        assert_eq!(
-            error.to_string(),
-            "Cannot expand version `1.2.18446744073709551615` at release segment 3 (`18446744073709551615`) beyond its maximum value"
         );
     }
 
