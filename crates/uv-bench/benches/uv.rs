@@ -556,8 +556,8 @@ mod resolver {
     use uv_pypi_types::{Conflicts, ResolverMarkerEnvironment};
     use uv_python_interpreter::Interpreter;
     use uv_resolver::{
-        ExcludeNewer, FlatIndex, InMemoryIndex, Manifest, OptionsBuilder, PythonRequirement,
-        Resolver, ResolverEnvironment, ResolverOutput,
+        ExcludeNewer, FlatIndex, InMemoryIndex, Manifest, Options, PythonRequirement, Resolver,
+        ResolverEnvironment, ResolverOutput,
     };
     use uv_types::{
         BuildIsolation, EmptyInstalledPackages, HashStrategy, SourceTreeEditablePolicy,
@@ -627,9 +627,10 @@ mod resolver {
         let index = InMemoryIndex::default();
         let index_locations = IndexLocations::default();
         let installed_packages = EmptyInstalledPackages;
-        let options = OptionsBuilder::new()
-            .exclude_newer(exclude_newer.clone())
-            .build();
+        let options = Options {
+            exclude_newer: exclude_newer.clone(),
+            ..Options::default()
+        };
         let sources = NoSources::default();
         let dependency_metadata = DependencyMetadata::default();
         let conflicts = Conflicts::empty();

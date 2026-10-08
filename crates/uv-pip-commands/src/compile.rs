@@ -45,8 +45,7 @@ use uv_requirements::{
 };
 use uv_resolver::{
     AnnotationStyle, DependencyMode, DisplayResolutionGraph, ExcludeNewer, FlatIndex, ForkStrategy,
-    InMemoryIndex, OptionsBuilder, Prerelease, PythonRequirement, ResolutionMode,
-    ResolverEnvironment,
+    InMemoryIndex, Options, Prerelease, PythonRequirement, ResolutionMode, ResolverEnvironment,
 };
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
@@ -553,22 +552,23 @@ pub async fn pip_compile(
         );
     }
 
-    let options = OptionsBuilder::new()
-        .resolution_mode(resolution_mode)
-        .prerelease(prerelease)
-        .fork_strategy(fork_strategy)
-        .dependency_mode(dependency_mode)
-        .exclude_newer(exclude_newer.clone())
-        .index_strategy(index_strategy)
-        .torch_backend(torch_backend)
-        .build_options(build_options.clone())
-        .artifact_environments(artifact_environments)
-        .minimum_libc_version(if universal {
+    let options = Options {
+        resolution_mode,
+        prerelease,
+        fork_strategy,
+        dependency_mode,
+        exclude_newer: exclude_newer.clone(),
+        index_strategy,
+        torch_backend,
+        build_options: build_options.clone(),
+        artifact_environments,
+        minimum_libc_version: if universal {
             minimum_libc_version
         } else {
             None
-        })
-        .build();
+        },
+        ..Options::default()
+    };
 
     // Resolve the requirements.
     let mut resolution = match uv_resolve_operations::resolve(

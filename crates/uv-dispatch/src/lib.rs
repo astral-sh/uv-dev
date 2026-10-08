@@ -35,8 +35,8 @@ use uv_pypi_types::Conflicts;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::LookaheadResolver;
 use uv_resolver::{
-    ExcludeNewer, FlatIndex, Flexibility, InMemoryIndex, Manifest, OptionsBuilder,
-    PythonRequirement, Resolver, ResolverEnvironment,
+    ExcludeNewer, FlatIndex, Flexibility, InMemoryIndex, Manifest, Options, PythonRequirement,
+    Resolver, ResolverEnvironment,
 };
 use uv_types::{
     AnyErrorBuild, BuildArena, BuildContext, BuildIsolation, BuildStack, EmptyInstalledPackages,
@@ -377,12 +377,13 @@ impl BuildContext for BuildDispatch<'_> {
 
         let resolver = Resolver::new(
             manifest,
-            OptionsBuilder::new()
-                .exclude_newer(self.exclude_newer.clone())
-                .index_strategy(self.index_strategy)
-                .build_options(self.build_options.clone())
-                .flexibility(Flexibility::Fixed)
-                .build(),
+            Options {
+                exclude_newer: self.exclude_newer.clone(),
+                index_strategy: self.index_strategy,
+                build_options: self.build_options.clone(),
+                flexibility: Flexibility::Fixed,
+                ..Options::default()
+            },
             &python_requirement,
             resolver_env,
             self.interpreter.markers(),
