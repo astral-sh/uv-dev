@@ -7451,7 +7451,9 @@ impl Package {
 
     /// Returns `true` if the package contains the validation-only package metadata.
     fn has_metadata(&self) -> bool {
-        self.metadata != PackageMetadata::default()
+        !self.metadata.requires_dist.is_empty()
+            || !self.metadata.provides_extra.is_empty()
+            || !self.metadata.dependency_groups.is_empty()
     }
 
     /// Returns the extras the package provides, if any.
