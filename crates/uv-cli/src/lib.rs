@@ -6594,8 +6594,16 @@ pub struct GenerateShellCompletionArgs {
     pub version: bool,
 }
 
-#[derive(Args)]
+/// Index declarations kept in their command-line and environment layers.
+#[derive(Clone, Default)]
 pub struct IndexArgs {
+    cli: IndexOptionsArgs,
+    environment: IndexOptionsArgs,
+}
+
+#[derive(Args, Clone, Default)]
+#[group(id = "IndexArgs")]
+struct IndexOptionsArgs {
     /// The indexes to use when resolving dependencies, in addition to the default index.
     ///
     /// Accepts either a repository compliant with PEP 503 (the simple repository API), or a local

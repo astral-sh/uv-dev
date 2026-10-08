@@ -239,6 +239,14 @@ impl Options {
                 }
             }
         }
+        normalize_indexes(
+            &mut self.top_level.index,
+            &mut self.top_level.index_url,
+            &mut self.top_level.extra_index_url,
+        );
+        if let Some(pip) = &mut self.pip {
+            normalize_indexes(&mut pip.index, &mut pip.index_url, &mut pip.extra_index_url);
+        }
         self
     }
 
@@ -512,6 +520,25 @@ impl TryFrom<GlobalOptionsWire> for GlobalOptions {
     }
 }
 
+/// Normalize spellings within one source before index lists from distinct sources are combined.
+fn normalize_indexes(
+    indexes: &mut Option<Vec<Index>>,
+    index_url: &mut Option<PipIndex>,
+    extra_index_urls: &mut Option<Vec<PipExtraIndex>>,
+) {
+    if index_url.is_some() || extra_index_urls.is_some() {
+        let indexes = indexes.get_or_insert_with(Vec::new);
+        indexes.extend(
+            extra_index_urls
+                .take()
+                .into_iter()
+                .flatten()
+                .map(Index::from),
+        );
+        indexes.extend(index_url.take().map(Index::from));
+    }
+}
+
 /// Resolve registry indexes and find-links relative to the given root directory.
 fn rebase_indexes(
     root_dir: &Path,
@@ -580,7 +607,7 @@ pub struct InstallerOptions {
 }
 
 /// Settings shared by all operations that use package indexes.
-#[derive(Debug, Clone, Default, CombineOptions)]
+#[derive(Debug, Clone, Default)]
 pub struct IndexOptions {
     pub index: Option<Vec<Index>>,
     pub index_url: Option<PipIndex>,
@@ -590,6 +617,17 @@ pub struct IndexOptions {
 }
 
 impl IndexOptions {
+    /// Convert legacy URL declarations into indexes without changing their within-layer order.
+    #[must_use]
+    pub fn normalize(mut self) -> Self {
+        normalize_indexes(
+            &mut self.index,
+            &mut self.index_url,
+            &mut self.extra_index_url,
+        );
+        self
+    }
+
     /// Resolve the [`IndexOptions`] relative to the given root directory.
     pub fn relative_to(mut self, root_dir: &Path) -> Result<Self, IndexUrlError> {
         rebase_indexes(

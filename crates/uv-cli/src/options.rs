@@ -3,6 +3,8 @@ use std::error::Error;
 use std::fmt;
 
 use anyhow::bail;
+use clap::parser::ValueSource;
+use clap::{ArgMatches, Args, Command, FromArgMatches, Id};
 
 use uv_cache::Refresh;
 use uv_configuration::{
@@ -17,9 +19,9 @@ use uv_warnings::owo_colors::OwoColorize;
 
 use crate::{
     BuildIsolationArgs, BuildOptionsArgs, CompileBytecodeArgs, ExcludeNewerArgs, FetchArgs,
-    IndexArgs, InstallerArgs, Maybe, PackageBuildIsolationArgs, PackageExcludeNewerArgs,
-    RefreshArgs, RegistryClientArgs, ReinstallArgs, ResolverArgs, ResolverInstallerArgs,
-    SourcesArgs, UpgradeArgs, VersionSelectionArgs,
+    IndexArgs, IndexOptionsArgs, InstallerArgs, Maybe, PackageBuildIsolationArgs,
+    PackageExcludeNewerArgs, RefreshArgs, RegistryClientArgs, ReinstallArgs, ResolverArgs,
+    ResolverInstallerArgs, SourcesArgs, UpgradeArgs, VersionSelectionArgs,
 };
 
 /// An error caused by an invalid combination of command-line arguments.
@@ -528,7 +530,119 @@ impl IntoPipOptions for FetchArgs {
     }
 }
 
+impl Args for IndexArgs {
+    fn group_id() -> Option<Id> {
+        IndexOptionsArgs::group_id()
+    }
+
+    fn augment_args(command: Command) -> Command {
+        IndexOptionsArgs::augment_args(command)
+    }
+
+    fn augment_args_for_update(command: Command) -> Command {
+        IndexOptionsArgs::augment_args_for_update(command)
+    }
+}
+
+impl FromArgMatches for IndexArgs {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
+        let mut args = Self {
+            cli: IndexOptionsArgs::from_arg_matches(matches)?,
+            environment: IndexOptionsArgs::default(),
+        };
+        args.partition_environment(matches);
+        Ok(args)
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
+        self.cli.update_from_arg_matches(matches)?;
+        self.partition_environment(matches);
+        Ok(())
+    }
+}
+
 impl IndexArgs {
+    fn partition_environment(&mut self, matches: &ArgMatches) {
+        fn partition<T>(
+            matches: &ArgMatches,
+            name: &str,
+            cli: &mut Option<T>,
+            environment: &mut Option<T>,
+        ) {
+            if matches.value_source(name) == Some(ValueSource::EnvVariable) {
+                *environment = cli.take();
+            } else if matches.value_source(name) == Some(ValueSource::CommandLine) {
+                *environment = None;
+            }
+        }
+        partition(
+            matches,
+            "index",
+            &mut self.cli.index,
+            &mut self.environment.index,
+        );
+        partition(
+            matches,
+            "default_index",
+            &mut self.cli.default_index,
+            &mut self.environment.default_index,
+        );
+        partition(
+            matches,
+            "index_url",
+            &mut self.cli.index_url,
+            &mut self.environment.index_url,
+        );
+        partition(
+            matches,
+            "extra_index_url",
+            &mut self.cli.extra_index_url,
+            &mut self.environment.extra_index_url,
+        );
+    }
+
+    pub(crate) fn has_index_url(&self) -> bool {
+        self.cli
+            .index_url
+            .as_ref()
+            .or(self.environment.index_url.as_ref())
+            .is_some_and(Maybe::is_some)
+    }
+
+    pub(crate) fn has_extra_index_url(&self) -> bool {
+        self.cli
+            .extra_index_url
+            .as_ref()
+            .or(self.environment.extra_index_url.as_ref())
+            .is_some_and(|indexes| indexes.iter().any(Maybe::is_some))
+    }
+
+    /// Resolve the modern declarations used for index persistence, excluding legacy URL flags.
+    pub(crate) fn modern_indexes(
+        &self,
+        configured_indexes: &[Index],
+    ) -> anyhow::Result<Vec<Index>> {
+        let mut args = self.clone();
+        args.cli.index_url = None;
+        args.cli.extra_index_url = None;
+        args.environment.index_url = None;
+        args.environment.extra_index_url = None;
+        Ok(args
+            .resolve(configured_indexes)?
+            .relative_to(&env::current_dir()?)?
+            .index
+            .unwrap_or_default())
+    }
+
+    fn resolve(self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
+        Ok(self
+            .cli
+            .resolve(configured_indexes)?
+            .combine(self.environment.resolve(configured_indexes)?))
+    }
+}
+
+impl IndexOptionsArgs {
     /// Resolve the index arguments shared by pip, resolver, and installer settings.
     fn resolve(self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
         let Self {
