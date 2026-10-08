@@ -1507,10 +1507,10 @@ impl From<CachedFile> for File {
     }
 }
 
-/// A compact representation of a single, canonical hash digest.
+/// A compact representation of canonical hash digests.
 ///
-/// Single validated digests use the packed variants; empty and multiple-hash collections remain
-/// in [`Self::Other`]. The larger digests are boxed to keep the common archived layout small.
+/// Common singleton digests are inline. Multiple digests retain their order and algorithm while
+/// boxing each fixed-size payload so shorter digests do not reserve space for the largest one.
 #[derive(rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
 enum CachedHashDigests {
@@ -1519,7 +1519,8 @@ enum CachedHashDigests {
     Blake2b([u8; 32]),
     Sha384(Box<[u8; 48]>),
     Sha512(Box<[u8; 64]>),
-    Other(HashDigests),
+    Empty,
+    Multiple(Box<[PackedHashDigest]>),
 }
 
 impl Debug for CachedHashDigests {
@@ -1530,7 +1531,12 @@ impl Debug for CachedHashDigests {
             Self::Blake2b(digest) => ("Blake2b", digest.as_slice()),
             Self::Sha384(digest) => ("Sha384", digest.as_slice()),
             Self::Sha512(digest) => ("Sha512", digest.as_slice()),
-            Self::Other(hashes) => return f.debug_tuple("Other").field(hashes).finish(),
+            Self::Empty | Self::Multiple(_) => {
+                return f
+                    .debug_tuple("Other")
+                    .field(&HashDigests::from(self))
+                    .finish();
+            }
         };
         f.debug_tuple(name).field(&hex::encode(digest)).finish()
     }
@@ -1539,7 +1545,11 @@ impl Debug for CachedHashDigests {
 impl From<HashDigests> for CachedHashDigests {
     fn from(hashes: HashDigests) -> Self {
         let [hash] = hashes.as_slice() else {
-            return Self::Other(hashes);
+            return if hashes.is_empty() {
+                Self::Empty
+            } else {
+                Self::Multiple(hashes.into_iter().map(PackedHashDigest::from).collect())
+            };
         };
         match hash {
             HashDigest::Md5(digest) => Self::Md5(digest.decode()),
@@ -1554,7 +1564,12 @@ impl From<HashDigests> for CachedHashDigests {
 impl From<CachedHashDigests> for HashDigests {
     fn from(hashes: CachedHashDigests) -> Self {
         match hashes {
-            CachedHashDigests::Other(hashes) => hashes,
+            CachedHashDigests::Empty => Self::empty(),
+            CachedHashDigests::Multiple(hashes) => hashes
+                .into_vec()
+                .into_iter()
+                .map(|hash| HashDigest::from(&hash))
+                .collect(),
             hashes => Self::from(&hashes),
         }
     }
@@ -1578,8 +1593,80 @@ impl From<&CachedHashDigests> for HashDigests {
             CachedHashDigests::Sha512(digest) => {
                 Self::from(HashDigest::Sha512(Digest::from_bytes(**digest)))
             }
-            CachedHashDigests::Other(hashes) => hashes.clone(),
+            CachedHashDigests::Empty => Self::empty(),
+            CachedHashDigests::Multiple(hashes) => hashes.iter().map(HashDigest::from).collect(),
         }
+    }
+}
+
+/// A fixed-size binary payload for one entry in a multiple-hash cache record.
+#[derive(rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
+#[rkyv(derive(Debug))]
+enum PackedHashDigest {
+    Md5(Box<PackedDigestBytes<16>>),
+    Sha256(Box<PackedDigestBytes<32>>),
+    Blake2b(Box<PackedDigestBytes<32>>),
+    Sha384(Box<PackedDigestBytes<48>>),
+    Sha512(Box<PackedDigestBytes<64>>),
+}
+
+impl From<HashDigest> for PackedHashDigest {
+    fn from(hash: HashDigest) -> Self {
+        match hash {
+            HashDigest::Md5(digest) => Self::Md5(Box::new(PackedDigestBytes(digest.decode()))),
+            HashDigest::Sha256(digest) => {
+                Self::Sha256(Box::new(PackedDigestBytes(digest.decode())))
+            }
+            HashDigest::Blake2b256(digest) => {
+                Self::Blake2b(Box::new(PackedDigestBytes(digest.decode())))
+            }
+            HashDigest::Sha384(digest) => {
+                Self::Sha384(Box::new(PackedDigestBytes(digest.decode())))
+            }
+            HashDigest::Sha512(digest) => {
+                Self::Sha512(Box::new(PackedDigestBytes(digest.decode())))
+            }
+        }
+    }
+}
+
+impl From<&PackedHashDigest> for HashDigest {
+    fn from(hash: &PackedHashDigest) -> Self {
+        match hash {
+            PackedHashDigest::Md5(digest) => Self::Md5(Digest::from_bytes(digest.0)),
+            PackedHashDigest::Sha256(digest) => Self::Sha256(Digest::from_bytes(digest.0)),
+            PackedHashDigest::Blake2b(digest) => Self::Blake2b256(Digest::from_bytes(digest.0)),
+            PackedHashDigest::Sha384(digest) => Self::Sha384(Digest::from_bytes(digest.0)),
+            PackedHashDigest::Sha512(digest) => Self::Sha512(Digest::from_bytes(digest.0)),
+        }
+    }
+}
+
+/// Fixed-size binary digests need no relocation or per-byte conversion when archived.
+struct PackedDigestBytes<const BYTES: usize>([u8; BYTES]);
+
+impl<const BYTES: usize> rkyv::Archive for PackedDigestBytes<BYTES> {
+    type Archived = [u8; BYTES];
+    type Resolver = ();
+
+    fn resolve(&self, (): (), out: rkyv::Place<Self::Archived>) {
+        out.write(self.0);
+    }
+}
+
+impl<const BYTES: usize, S: rkyv::rancor::Fallible + ?Sized> rkyv::Serialize<S>
+    for PackedDigestBytes<BYTES>
+{
+    fn serialize(&self, _serializer: &mut S) -> Result<(), S::Error> {
+        Ok(())
+    }
+}
+
+impl<const BYTES: usize, D: rkyv::rancor::Fallible + ?Sized>
+    rkyv::Deserialize<PackedDigestBytes<BYTES>, D> for [u8; BYTES]
+{
+    fn deserialize(&self, _deserializer: &mut D) -> Result<PackedDigestBytes<BYTES>, D::Error> {
+        Ok(PackedDigestBytes(*self))
     }
 }
 
@@ -2121,6 +2208,123 @@ mod tests {
             "Requests should succeed for relative URL"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn cached_hash_collections_round_trip() -> Result<(), Error> {
+        let algorithms = [
+            ("md5", 16),
+            ("sha256", 32),
+            ("blake2b", 32),
+            ("sha384", 48),
+            ("sha512", 64),
+        ];
+        let hashes = algorithms
+            .into_iter()
+            .map(|(algorithm, bytes)| {
+                HashDigest::from_str(&format!("{algorithm}:{}", "Ab".repeat(bytes)))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for mask in 0..1 << hashes.len() {
+            for reverse in [false, true] {
+                for duplicate in [false, true] {
+                    let mut values: Vec<_> = hashes
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| mask & (1 << index) != 0)
+                        .map(|(_, hash)| hash.clone())
+                        .collect();
+                    if reverse {
+                        values.reverse();
+                    }
+                    if duplicate && let Some(first) = values.first().cloned() {
+                        values.push(first);
+                    }
+                    let expected = HashDigests::from(values);
+                    let packed = super::CachedHashDigests::from(expected.clone());
+                    assert_eq!(HashDigests::from(&packed), expected);
+                    let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&packed)?;
+                    let restored =
+                        rkyv::from_bytes::<super::CachedHashDigests, rkyv::rancor::Error>(&bytes)?;
+                    assert_eq!(HashDigests::from(restored), expected);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn multiple_file_and_metadata_hashes_round_trip() -> Result<(), Error> {
+        let response = format!(
+            r#"{{"files":[{{
+            "filename":"example-1.0-py3-none-any.whl",
+            "url":"../../files/example-1.0-py3-none-any.whl",
+            "hashes":{{"md5":"{}","sha256":"{}"}},
+            "core-metadata":{{"sha384":"{}","sha512":"{}"}}
+        }}]}}"#,
+            "ab".repeat(16),
+            "cd".repeat(32),
+            "ef".repeat(48),
+            "12".repeat(64)
+        );
+        let package_name = PackageName::from_str("example")?;
+        let base = DisplaySafeUrl::parse("https://example.com/simple/example/")?;
+        let data: PypiSimpleDetail = serde_json::from_str(&response)?;
+        let metadata = SimpleDetailMetadata::from_pypi_files(
+            data.files,
+            &package_name,
+            data.project_status,
+            &base,
+        );
+        let archive = super::OwnedArchive::from_unarchived(&metadata)?;
+        let restored = super::OwnedArchive::deserialize(&archive);
+        let file = restored
+            .versions
+            .into_iter()
+            .flat_map(|datum| datum.files.all(&package_name))
+            .next()
+            .expect("file")
+            .1;
+        assert_eq!(
+            file.hashes,
+            HashDigests::from(vec![
+                HashDigest::from_str(&format!("sha256:{}", "cd".repeat(32)))?,
+                HashDigest::from_str(&format!("md5:{}", "ab".repeat(16)))?,
+            ])
+        );
+        assert_eq!(
+            file.dist_info_metadata,
+            Some(HashDigests::from(vec![
+                HashDigest::from_str(&format!("sha512:{}", "12".repeat(64)))?,
+                HashDigest::from_str(&format!("sha384:{}", "ef".repeat(48)))?,
+            ]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn packed_hash_cache_rejects_malformed_archives() -> Result<(), Error> {
+        let hashes = HashDigests::from(vec![
+            HashDigest::from_str(&format!("md5:{}", "ab".repeat(16)))?,
+            HashDigest::from_str(&format!("sha256:{}", "cd".repeat(32)))?,
+        ]);
+        let mut bytes =
+            rkyv::to_bytes::<rkyv::rancor::Error>(&super::CachedHashDigests::from(hashes))?;
+        assert!(
+            rkyv::from_bytes::<super::CachedHashDigests, rkyv::rancor::Error>(
+                &bytes[..bytes.len() - 1]
+            )
+            .is_err()
+        );
+        // Keep the root aligned while excluding the first digest payload from the archive.
+        assert!(
+            rkyv::from_bytes::<super::CachedHashDigests, rkyv::rancor::Error>(&bytes[16..])
+                .is_err()
+        );
+        let root = bytes.len() - size_of::<super::ArchivedCachedHashDigests>();
+        bytes[root] = u8::MAX;
+        assert!(rkyv::from_bytes::<super::CachedHashDigests, rkyv::rancor::Error>(&bytes).is_err());
         Ok(())
     }
 
