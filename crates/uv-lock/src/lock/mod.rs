@@ -4129,6 +4129,7 @@ impl Lock {
             );
             let complete =
                 builder.add_requirements(&mut generated, expected, context, activated_extras)?;
+            merge_dependency_extras(&mut generated);
             generated.sort();
             if !missing_metadata {
                 continue;
