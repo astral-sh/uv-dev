@@ -594,18 +594,23 @@ async fn fetch_and_find_matching_version(
             url: manifest_url.to_string(),
             source: reqwest_middleware::Error::Reqwest(err),
         })?;
+        let mut search_start = buffer.len();
         buffer.extend_from_slice(&chunk);
 
         // Process complete lines
-        while let Some(newline_pos) = buffer.iter().position(|&b| b == b'\n') {
-            let line = &buffer[..newline_pos];
+        let mut consumed = 0;
+        while let Some(newline_pos) = buffer[search_start..].iter().position(|&b| b == b'\n') {
+            let newline_pos = search_start + newline_pos;
+            let line = &buffer[consumed..newline_pos];
             let result = parse_and_check(line)?;
-            buffer.drain(..=newline_pos);
+            consumed = newline_pos + 1;
+            search_start = consumed;
 
             if let Some(resolved) = result {
                 return Ok(resolved);
             }
         }
+        buffer.drain(..consumed);
     }
 
     // Process any remaining data in buffer (in case there's no trailing newline)
@@ -949,6 +954,37 @@ mod tests {
 
     fn manifest_response(body: &str) -> ResponseTemplate {
         ResponseTemplate::new(200).set_body_raw(body.to_owned(), "application/x-ndjson")
+    }
+
+    fn spawn_chunked_manifest_server(chunks: Vec<Vec<u8>>) -> DisplaySafeUrl {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let _ = std::io::Read::read(&mut stream, &mut request);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\n\r\n",
+                )
+                .unwrap();
+
+            let chunk_count = chunks.len();
+            for (index, chunk) in chunks.into_iter().enumerate() {
+                write!(stream, "{:X}\r\n", chunk.len()).unwrap();
+                stream.write_all(&chunk).unwrap();
+                stream.write_all(b"\r\n").unwrap();
+
+                if index + 1 < chunk_count {
+                    stream.flush().unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+            stream.write_all(b"0\r\n\r\n").unwrap();
+        });
+
+        DisplaySafeUrl::parse(&format!("http://{addr}/uv.ndjson")).unwrap()
     }
 
     fn not_found_response() -> ResponseTemplate {
@@ -1321,6 +1357,47 @@ mod tests {
         assert_matches!(err, Error::NoMatchingVersion { .. });
         assert_eq!(mirror_server.received_requests().await.unwrap().len(), 1);
         assert_eq!(canonical_server.received_requests().await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_manifest_processes_lines_across_chunks() {
+        let platform = Platform::from_env().unwrap();
+        let platform_name = platform.as_cargo_dist_triple();
+
+        let mut body = "\r\n".repeat(1024);
+        body.push_str(&uv_manifest_line("1.2.1", "unsupported-platform").replace('\n', "\r\n"));
+        body.push_str(&uv_manifest_line("1.2.2", "unsupported-platform"));
+        body.push_str(uv_manifest_line("1.2.3", &platform_name).trim_end_matches('\n'));
+
+        let split = 1024 * 2 + 17;
+        let url = spawn_chunked_manifest_server(vec![
+            body.as_bytes()[..split].to_vec(),
+            body.as_bytes()[split..].to_vec(),
+        ]);
+
+        let resolved = resolve_version_from_manifest_urls(&[url], None)
+            .await
+            .expect("manifest lines split across chunks should be processed");
+
+        assert_eq!(resolved.version, Version::new([1, 2, 3]));
+    }
+
+    #[tokio::test]
+    async fn test_manifest_returns_before_later_malformed_line() {
+        let platform = Platform::from_env().unwrap();
+        let platform_name = platform.as_cargo_dist_triple();
+        let body = format!(
+            "{}{not_json}\n",
+            uv_manifest_line("1.2.3", &platform_name),
+            not_json = "{not json}",
+        );
+        let url = spawn_chunked_manifest_server(vec![body.into_bytes()]);
+
+        let resolved = resolve_version_from_manifest_urls(&[url], None)
+            .await
+            .expect("matching manifest line should return before later malformed data");
+
+        assert_eq!(resolved.version, Version::new([1, 2, 3]));
     }
 
     /// Verify that `should_try_next_url` returns `true` even for streaming errors
