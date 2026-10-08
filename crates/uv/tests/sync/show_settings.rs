@@ -5586,67 +5586,64 @@ fn system_certs_aliases_follow_configuration_layers() -> anyhow::Result<()> {
     +warning: The `native-tls` setting is deprecated and will be removed in a future release. Use `system-certs` instead.
     ...
     ");
-    let expected = [disabled, enabled, disabled_alias, enabled_alias];
-    for (system_value, user_value, project_value, enabled, deprecated) in [
-        ("system-certs = true", "native-tls = false", "", false, true),
-        ("system-certs = false", "native-tls = true", "", true, true),
+    for (system_value, user_value, project_value, expected) in [
         (
-            "native-tls = true",
-            "system-certs = false",
+            "system-certs = true",
+            "native-tls = false",
             "",
-            false,
-            false,
+            &disabled_alias,
         ),
-        ("native-tls = false", "system-certs = true", "", true, false),
+        (
+            "system-certs = false",
+            "native-tls = true",
+            "",
+            &enabled_alias,
+        ),
+        ("native-tls = true", "system-certs = false", "", &disabled),
+        ("native-tls = false", "system-certs = true", "", &enabled),
         (
             "system-certs = false",
             "system-certs = true",
             "native-tls = false",
-            false,
-            true,
+            &disabled_alias,
         ),
         (
             "system-certs = true",
             "system-certs = false",
             "native-tls = true",
-            true,
-            true,
+            &enabled_alias,
         ),
         (
             "system-certs = true",
             "native-tls = true",
             "system-certs = false",
-            false,
-            false,
+            &disabled,
         ),
         (
             "system-certs = false",
             "native-tls = false",
             "system-certs = true",
-            true,
-            false,
+            &enabled,
         ),
         (
             "native-tls = true",
             "native-tls = true",
             "system-certs = false\nnative-tls = true",
-            false,
-            false,
+            &disabled,
         ),
         (
             "native-tls = false",
             "native-tls = false",
             "system-certs = true\nnative-tls = false",
-            true,
-            false,
+            &enabled,
         ),
     ] {
         system.write_str(system_value)?;
         user.write_str(user_value)?;
         project.write_str(project_value)?;
         assert_eq!(
-            expected[usize::from(enabled) + 2 * usize::from(deprecated)],
-            capture_uv_snapshot!(context.filters(), command()),
+            expected,
+            &capture_uv_snapshot!(context.filters(), command()),
             "system={system_value}; user={user_value}; project={project_value}"
         );
     }
