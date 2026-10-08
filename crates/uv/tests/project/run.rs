@@ -5073,17 +5073,19 @@ fn run_with_malformed_env() -> Result<()> {
     })?;
 
     context.temp_dir.child(".env").write_str(indoc! { "
-        THE_^EMPIRE_VARIABLE=darth_vader
+        THE_EMPIRE_VARIABLE=palpatine
+        THE_^EMPIRE_VARIABLE=synthetic-secret
+        THE_EMPIRE_VARIABLE=darth_vader
        "
     })?;
 
     uv_snapshot!(context.filters(), context.run().arg("--env-file").arg(".env").arg("test.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    None
+    palpatine
 
     ----- stderr -----
-    warning: Failed to parse environment file `.env` at position 4: THE_^EMPIRE_VARIABLE=darth_vader
+    warning: Failed to parse environment file `.env` at position 4
     ");
 
     Ok(())
