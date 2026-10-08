@@ -111,7 +111,8 @@ impl std::str::FromStr for Netrc {
                 _ => {
                     return Err(ParsingError {
                         lineno: lexer.lineno,
-                        message: format!("bad toplevel token '{tt}'"),
+                        // An unexpected token can be part of an unquoted password.
+                        message: "bad toplevel token".to_owned(),
                     });
                 }
             };
@@ -151,7 +152,8 @@ impl std::str::FromStr for Netrc {
                     _ => {
                         return Err(ParsingError {
                             lineno: lexer.lineno,
-                            message: format!("bad follower token '{tt}'"),
+                            // An unexpected token can be part of an unquoted password.
+                            message: "bad follower token".to_owned(),
                         });
                     }
                 }
@@ -270,23 +272,31 @@ mod tests {
         let data = vec![
             (
                 "invalid host.domain.com",
-                "parsing error: bad toplevel token 'invalid' (line 1)",
+                "parsing error: bad toplevel token (line 1)",
             ),
             (
                 "machine host.domain.com invalid",
-                "parsing error: bad follower token 'invalid' (line 1)",
+                "parsing error: bad follower token (line 1)",
+            ),
+            (
+                "synthetic-token",
+                "parsing error: bad toplevel token (line 1)",
+            ),
+            (
+                "machine host.domain.com login user password first synthetic-secret",
+                "parsing error: bad follower token (line 1)",
             ),
             (
                 "machine host.domain.com login log password pass account acct invalid",
-                "parsing error: bad follower token 'invalid' (line 1)",
+                "parsing error: bad follower token (line 1)",
             ),
             (
                 "default host.domain.com invalid",
-                "parsing error: bad follower token 'host.domain.com' (line 1)",
+                "parsing error: bad follower token (line 1)",
             ),
             (
                 "default host.domain.com login log password pass account acct invalid",
-                "parsing error: bad follower token 'host.domain.com' (line 1)",
+                "parsing error: bad follower token (line 1)",
             ),
         ];
 
@@ -294,6 +304,17 @@ mod tests {
             let nrc = Netrc::from_str(item);
             assert_eq!(nrc.unwrap_err().to_string(), msg);
         }
+    }
+
+    #[test]
+    fn test_parse_error_debug_omits_tokens() {
+        let error =
+            Netrc::from_str("machine host.domain.com login user password first synthetic-secret")
+                .unwrap_err();
+        assert_eq!(
+            format!("{error:?}"),
+            r#"ParsingError { lineno: 1, message: "bad follower token" }"#
+        );
     }
 
     fn test_token_x(data: &str, token: &str, value: &str) {
@@ -642,7 +663,7 @@ mod tests {
         let err = nrc.unwrap_err();
         assert_eq!(
             err.to_string(),
-            "parsing error: bad toplevel token 'bad_token' (line 5)"
+            "parsing error: bad toplevel token (line 5)"
         );
     }
     #[test]
@@ -651,7 +672,7 @@ mod tests {
         let err = nrc.unwrap_err();
         assert_eq!(
             err.to_string(),
-            "parsing error: bad toplevel token 'bad_token' (line 3)"
+            "parsing error: bad toplevel token (line 3)"
         );
     }
 }
