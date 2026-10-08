@@ -1,4 +1,4 @@
-# Build uv on all platforms.
+# Build uv and uv-build on all platforms.
 #
 # Generates both wheels (for PyPI) and archived binaries (for GitHub releases).
 # Creates `build-wheels-*`, `build-sdist-*`, and `build-github-archives-*` artifacts.
@@ -38,8 +38,12 @@ permissions:
 
 jobs:
   sdist:
-    name: sdist
+    name: ${{ matrix.package }} / sdist
     runs-on: depot-ubuntu-24.04-4
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [uv, uv-build]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,11 +56,13 @@ jobs:
 
       # uv
       - name: "Prep README.md"
+        if: matrix.package == 'uv'
         run: python scripts/transform_readme.py --target pypi
       - name: "Check Cargo.lock"
         # `maturin sdist` resolves the workspace without --locked.
         run: cargo metadata --locked --format-version 1 > /dev/null
       - name: "Build sdist"
+        if: matrix.package == 'uv'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -64,11 +70,13 @@ jobs:
           command: sdist
           args: --out dist
       - name: "Fix Cargo.lock in sdist"
+        if: matrix.package == 'uv'
         run: |
           # Ensure maturin did not update the workspace Cargo.lock.
           git diff --exit-code -- Cargo.lock
           python scripts/repair-sdist-cargo-lock.py dist/${PACKAGE_NAME}-*.tar.gz
       - name: "Test sdist"
+        if: matrix.package == 'uv'
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
         with:
           image: python:3.11-bookworm@sha256:35d3a4a3d5e42e02ab916d44513a050689f12c0533d45598d229672503fe77ca
@@ -84,6 +92,7 @@ jobs:
             python -m ${MODULE_NAME} --help
             uvx --help
       - name: "Upload sdist"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-sdist-uv
@@ -91,6 +100,7 @@ jobs:
 
       # uv-build
       - name: "Build sdist uv-build"
+        if: matrix.package == 'uv-build'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -98,11 +108,13 @@ jobs:
           command: sdist
           args: --out crates/uv-build/dist -m crates/uv-build/Cargo.toml
       - name: "Fix Cargo.lock in sdist uv-build"
+        if: matrix.package == 'uv-build'
         run: |
           # Ensure maturin did not update the workspace Cargo.lock.
           git diff --exit-code -- Cargo.lock
           python scripts/repair-sdist-cargo-lock.py crates/uv-build/dist/${PACKAGE_NAME}_build-*.tar.gz
       - name: "Test sdist uv-build"
+        if: matrix.package == 'uv-build'
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
         with:
           image: python:3.11-bookworm@sha256:35d3a4a3d5e42e02ab916d44513a050689f12c0533d45598d229672503fe77ca
@@ -115,14 +127,19 @@ jobs:
             ${MODULE_NAME}-build --help
             python -m ${MODULE_NAME}_build --help
       - name: "Upload sdist uv-build"
+        if: matrix.package == 'uv-build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-sdist-uv_build
           path: crates/uv-build/dist
 
   macos-x86_64:
-    name: x86_64-apple-darwin
+    name: ${{ matrix.package }} / x86_64-apple-darwin
     runs-on: namespace-profile-macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [uv, uv-build]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -134,6 +151,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
       - name: "Prep README.md"
+        if: matrix.package == 'uv'
         run: python scripts/transform_readme.py --target pypi
       - name: "Install cargo extensions"
         shell: bash
@@ -141,6 +159,7 @@ jobs:
 
       # uv
       - name: "Build wheels - x86_64"
+        if: matrix.package == 'uv'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -153,11 +172,13 @@ jobs:
           # ICF reduces the macOS x86_64 uv binary size by ~2%.
           RUSTFLAGS: "-C linker=rust-lld -C linker-flavor=ld64.lld -C link-arg=--icf=safe"
       - name: "Upload wheels"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv-x86_64-apple-darwin
           path: dist
       - name: "Archive binary"
+        if: matrix.package == 'uv'
         run: |
           TARGET=x86_64-apple-darwin
           ARCHIVE_NAME=uv-$TARGET
@@ -169,6 +190,7 @@ jobs:
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
       - name: "Upload binary"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-github-archives-x86_64-apple-darwin
@@ -178,6 +200,7 @@ jobs:
 
       # uv-build
       - name: "Build wheels uv-build - x86_64"
+        if: matrix.package == 'uv-build'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -190,14 +213,19 @@ jobs:
           # ICF reduces the macOS x86_64 uv-build binary size by ~0.7%.
           RUSTFLAGS: "-C linker=rust-lld -C linker-flavor=ld64.lld -C link-arg=--icf=safe"
       - name: "Upload wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv_build-x86_64-apple-darwin
           path: crates/uv-build/dist
 
   macos-aarch64:
-    name: aarch64-apple-darwin
+    name: ${{ matrix.package }} / aarch64-apple-darwin
     runs-on: namespace-profile-macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [uv, uv-build]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -209,14 +237,17 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: arm64
       - name: "Prep README.md"
+        if: matrix.package == 'uv'
         run: python scripts/transform_readme.py --target pypi
       - name: "Install cargo extensions"
         shell: bash
         run: scripts/install-cargo-extensions.sh
 
       - name: "Install LLVM profiling tools"
+        if: matrix.package == 'uv'
         run: rustup component add llvm-tools-preview
       - name: "Train PGO uv"
+        if: matrix.package == 'uv'
         run: |
           python scripts/build_uv_pgo.py \
             --target aarch64-apple-darwin \
@@ -230,6 +261,7 @@ jobs:
 
       # uv
       - name: "Build wheels - aarch64"
+        if: matrix.package == 'uv'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -245,17 +277,20 @@ jobs:
           CFLAGS: "-fno-profile-generate -fno-profile-use"
           CXXFLAGS: "-fno-profile-generate -fno-profile-use"
       - name: "Test wheel - aarch64"
+        if: matrix.package == 'uv'
         run: |
           pip install ${PACKAGE_NAME} --no-index --find-links dist/ --force-reinstall
           ${MODULE_NAME} --help
           python -m ${MODULE_NAME} --help
           uvx --help
       - name: "Upload wheels"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv-aarch64-apple-darwin
           path: dist
       - name: "Archive binary"
+        if: matrix.package == 'uv'
         run: |
           TARGET=aarch64-apple-darwin
           ARCHIVE_NAME=uv-$TARGET
@@ -267,6 +302,7 @@ jobs:
           tar czvf $ARCHIVE_FILE $ARCHIVE_NAME
           shasum -a 256 $ARCHIVE_FILE > $ARCHIVE_FILE.sha256
       - name: "Upload binary"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-github-archives-aarch64-apple-darwin
@@ -276,6 +312,7 @@ jobs:
 
       # uv-build
       - name: "Build wheels uv-build - aarch64"
+        if: matrix.package == 'uv-build'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -288,21 +325,25 @@ jobs:
           # ICF reduces the macOS aarch64 uv-build binary size by ~0.7%.
           RUSTFLAGS: "-C linker=rust-lld -C linker-flavor=ld64.lld -C link-arg=--icf=safe"
       - name: "Test wheel - aarch64"
+        if: matrix.package == 'uv-build'
         run: |
           pip install ${PACKAGE_NAME}_build --no-index --find-links crates/uv-build/dist --force-reinstall
           ${MODULE_NAME}-build --help
           python -m ${MODULE_NAME}_build --help
       - name: "Upload wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv_build-aarch64-apple-darwin
           path: crates/uv-build/dist
 
   windows:
-    name: ${{ matrix.platform.target }}
+    name: ${{ matrix.package }} / ${{ matrix.platform.target }}
     runs-on: namespace-profile-windows-2022-x86-64-16x32
     strategy:
+      fail-fast: false
       matrix:
+        package: [uv, uv-build]
         platform:
           - target: x86_64-pc-windows-msvc
             arch: x64
@@ -321,6 +362,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: ${{ matrix.platform.arch }}
       - name: "Prep README.md"
+        if: matrix.package == 'uv'
         run: python scripts/transform_readme.py --target pypi
       - name: "Install cargo extensions"
         shell: bash
@@ -329,7 +371,7 @@ jobs:
         # NASM is required for x86/x86-64 Windows targets by aws-lc-sys.
         # On aarch64-pc-windows-msvc, it uses clang-cl instead.
         # See: https://aws.github.io/aws-lc-rs/requirements/windows.html#build-requirements
-        if: contains(matrix.platform.target, 'x86') || contains(matrix.platform.target, 'i686')
+        if: matrix.package == 'uv' && (contains(matrix.platform.target, 'x86') || contains(matrix.platform.target, 'i686'))
         run: |
           # Namespace runners do not include winget.
           $version = '3.02'
@@ -345,10 +387,10 @@ jobs:
           }
           echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: "Install LLVM profiling tools"
-        if: ${{ matrix.platform.target == 'x86_64-pc-windows-msvc' }}
+        if: matrix.package == 'uv' && matrix.platform.target == 'x86_64-pc-windows-msvc'
         run: rustup component add llvm-tools-preview
       - name: "Train PGO uv"
-        if: ${{ matrix.platform.target == 'x86_64-pc-windows-msvc' }}
+        if: matrix.package == 'uv' && matrix.platform.target == 'x86_64-pc-windows-msvc'
         shell: bash
         run: |
           export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-feature=+crt-static"
@@ -362,6 +404,7 @@ jobs:
           AWS_LC_SYS_PREBUILT_NASM: "0"
       # uv
       - name: "Build wheels"
+        if: matrix.package == 'uv'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -375,7 +418,7 @@ jobs:
           # Target-specific flags preserve the static CRT configured in .cargo/config.toml.
           CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: ${{ matrix.platform.target == 'x86_64-pc-windows-msvc' && format('-Cprofile-use={0}/target/uv-pgo/uv.profdata', github.workspace) || '' }}
       - name: "Verify static Windows runtime"
-        if: ${{ matrix.platform.target == 'x86_64-pc-windows-msvc' }}
+        if: matrix.package == 'uv' && matrix.platform.target == 'x86_64-pc-windows-msvc'
         shell: bash
         run: |
           LLVM_READOBJ="$(rustc --print sysroot)/lib/rustlib/${{ matrix.platform.target }}/bin/llvm-readobj.exe"
@@ -391,7 +434,7 @@ jobs:
           done
       - name: "Test wheel"
         # We test aarch64 on a native runner in a separate job.
-        if: matrix.platform.target != 'aarch64-pc-windows-msvc'
+        if: matrix.package == 'uv' && matrix.platform.target != 'aarch64-pc-windows-msvc'
         shell: bash
         run: |
           pip install ${PACKAGE_NAME} --no-index --find-links dist/ --force-reinstall
@@ -400,11 +443,13 @@ jobs:
           uvx --help
           uvw --help
       - name: "Upload wheels"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv-${{ matrix.platform.target }}
           path: dist
       - name: "Archive binary"
+        if: matrix.package == 'uv'
         shell: bash
         run: |
           ARCHIVE_FILE=uv-${PLATFORM_TARGET}.zip
@@ -415,6 +460,7 @@ jobs:
         env:
           PLATFORM_TARGET: ${{ matrix.platform.target }}
       - name: "Upload binary"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-github-archives-${{ matrix.platform.target }}
@@ -424,6 +470,7 @@ jobs:
 
       # uv-build
       - name: "Build wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -434,13 +481,14 @@ jobs:
           CARGO: ${{ github.workspace }}/scripts/cargo.cmd
       - name: "Test wheel uv-build"
         # We test aarch64 on a native runner in a separate job.
-        if: matrix.platform.target != 'aarch64-pc-windows-msvc'
+        if: matrix.package == 'uv-build' && matrix.platform.target != 'aarch64-pc-windows-msvc'
         shell: bash
         run: |
           pip install ${PACKAGE_NAME}_build --no-index --find-links crates/uv-build/dist --force-reinstall
           ${MODULE_NAME}-build --help
           python -m ${MODULE_NAME}_build --help
       - name: "Upload wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv_build-${{ matrix.platform.target }}
@@ -477,10 +525,13 @@ jobs:
           python -m ${MODULE_NAME}_build --help
 
   linux:
-    name: ${{ matrix.target }}
+    name: ${{ matrix.package }} / ${{ matrix.target }}
     runs-on: depot-ubuntu-latest-4
     strategy:
+      fail-fast: false
       matrix:
+        package: [uv, uv-build]
+        target: [i686-unknown-linux-gnu, x86_64-unknown-linux-gnu]
         include:
           - { target: "i686-unknown-linux-gnu", cc: "gcc -m32" }
           - { target: "x86_64-unknown-linux-gnu", cc: "gcc" }
@@ -495,10 +546,12 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
       - name: "Prep README.md"
+        if: matrix.package == 'uv'
         run: python scripts/transform_readme.py --target pypi
 
       # uv
       - name: "Build wheels"
+        if: matrix.package == 'uv'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -547,18 +600,20 @@ jobs:
           CC: ${{ matrix.cc }}
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       - name: "Test wheel"
-        if: ${{ startsWith(matrix.target, 'x86_64') }}
+        if: matrix.package == 'uv' && startsWith(matrix.target, 'x86_64')
         run: |
           pip install ${PACKAGE_NAME} --no-index --find-links dist/ --force-reinstall
           ${MODULE_NAME} --help
           python -m ${MODULE_NAME} --help
           uvx --help
       - name: "Upload wheels"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv-${{ matrix.target }}
           path: dist
       - name: "Archive binary"
+        if: matrix.package == 'uv'
         shell: bash
         run: |
           ARCHIVE_NAME=uv-$TARGET
@@ -572,6 +627,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
       - name: "Upload binary"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-github-archives-${{ matrix.target }}
@@ -581,6 +637,7 @@ jobs:
 
       # uv-build
       - name: "Build wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -594,23 +651,26 @@ jobs:
         env:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       - name: "Test wheel uv-build"
-        if: ${{ startsWith(matrix.target, 'x86_64') }}
+        if: matrix.package == 'uv-build' && startsWith(matrix.target, 'x86_64')
         run: |
           pip install ${PACKAGE_NAME}_build --no-index --find-links crates/uv-build/dist --force-reinstall
           ${MODULE_NAME}-build --help
           python -m ${MODULE_NAME}_build --help
       - name: "Upload wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv_build-${{ matrix.target }}
           path: crates/uv-build/dist
 
   linux-arm:
-    name: ${{ matrix.platform.target }}
+    name: ${{ matrix.package }} / ${{ matrix.platform.target }}
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: ${{ matrix.platform.pgo && 60 || 30 }}
     strategy:
+      fail-fast: false
       matrix:
+        package: [uv, uv-build]
         platform:
           # PGO requires a native runner; the 32-bit ARM targets are cross-compiled.
           - target: aarch64-unknown-linux-gnu
@@ -653,10 +713,12 @@ jobs:
           cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
+        if: matrix.package == 'uv'
         run: python scripts/transform_readme.py --target pypi
 
       # uv
       - name: "Build wheels"
+        if: matrix.package == 'uv'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -685,6 +747,7 @@ jobs:
         env:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       - name: "Test wheel"
+        if: matrix.package == 'uv'
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
         with:
           image: ${{ matrix.platform.test_image }}
@@ -700,11 +763,13 @@ jobs:
             # python -m ${MODULE_NAME} --help
             uvx --help
       - name: "Upload wheels"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv-${{ matrix.platform.target }}
           path: dist
       - name: "Archive binary"
+        if: matrix.package == 'uv'
         shell: bash
         run: |
           ARCHIVE_NAME=uv-$TARGET
@@ -718,6 +783,7 @@ jobs:
         env:
           TARGET: ${{ matrix.platform.target }}
       - name: "Upload binary"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-github-archives-${{ matrix.platform.target }}
@@ -727,6 +793,7 @@ jobs:
 
       # uv-build
       - name: "Build wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -740,6 +807,7 @@ jobs:
         env:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       - name: "Test wheel uv-build"
+        if: matrix.package == 'uv-build'
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
         with:
           image: ${{ matrix.platform.test_image }}
@@ -754,6 +822,7 @@ jobs:
             # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
             # python -m ${MODULE_NAME}_build --help
       - name: "Upload wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv_build-${{ matrix.platform.target }}
@@ -761,11 +830,13 @@ jobs:
 
   # Like `linux-arm`.
   linux-s390x:
-    name: ${{ matrix.platform.target }}
+    name: ${{ matrix.package }} / ${{ matrix.platform.target }}
     timeout-minutes: 30
     runs-on: depot-ubuntu-latest-4
     strategy:
+      fail-fast: false
       matrix:
+        package: [uv, uv-build]
         platform:
           - target: s390x-unknown-linux-gnu
             arch: s390x
@@ -780,10 +851,12 @@ jobs:
           cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
+        if: matrix.package == 'uv'
         run: python scripts/transform_readme.py --target pypi
 
       # uv
       - name: "Build wheels"
+        if: matrix.package == 'uv'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -802,6 +875,7 @@ jobs:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
 
       - name: "Test wheel"
+        if: matrix.package == 'uv'
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
         with:
           image: s390x/ubuntu:20.04@sha256:221f5f8e28d896556d0e55605cd6936450e6231544e9d83d687beae2d0e71afd
@@ -817,11 +891,13 @@ jobs:
             # python -m ${MODULE_NAME} --help
             uvx --help
       - name: "Upload wheels"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv-${{ matrix.platform.target }}
           path: dist
       - name: "Archive binary"
+        if: matrix.package == 'uv'
         shell: bash
         run: |
           ARCHIVE_NAME=uv-$TARGET
@@ -835,6 +911,7 @@ jobs:
         env:
           TARGET: ${{ matrix.platform.target }}
       - name: "Upload binary"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-github-archives-${{ matrix.platform.target }}
@@ -844,6 +921,7 @@ jobs:
 
       # uv-build
       - name: "Build wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -857,6 +935,7 @@ jobs:
         env:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       - name: "Test wheel uv-build"
+        if: matrix.package == 'uv-build'
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
         with:
           image: s390x/ubuntu:20.04@sha256:221f5f8e28d896556d0e55605cd6936450e6231544e9d83d687beae2d0e71afd
@@ -871,6 +950,7 @@ jobs:
             # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
             # python -m ${MODULE_NAME}-build --help
       - name: "Upload wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv_build-${{ matrix.platform.target }}
@@ -878,10 +958,12 @@ jobs:
 
   # Like `linux-arm`, but install the `gcc-powerpc64-linux-gnu` package.
   linux-powerpc:
-    name: ${{ matrix.platform.target }}
+    name: ${{ matrix.package }} / ${{ matrix.platform.target }}
     runs-on: depot-ubuntu-24.04-4
     strategy:
+      fail-fast: false
       matrix:
+        package: [uv, uv-build]
         platform:
           - target: powerpc64le-unknown-linux-gnu
             arch: ppc64le
@@ -901,10 +983,12 @@ jobs:
           cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
+        if: matrix.package == 'uv'
         run: python scripts/transform_readme.py --target pypi
 
       # uv
       - name: "Build wheels"
+        if: matrix.package == 'uv'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -940,11 +1024,13 @@ jobs:
       #       # python -m ${MODULE_NAME} --helppython -m ${MODULE_NAME} --help
       #       uvx --help
       - name: "Upload wheels"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv-${{ matrix.platform.target }}
           path: dist
       - name: "Archive binary"
+        if: matrix.package == 'uv'
         shell: bash
         run: |
           ARCHIVE_NAME=uv-$TARGET
@@ -958,6 +1044,7 @@ jobs:
         env:
           TARGET: ${{ matrix.platform.target }}
       - name: "Upload binary"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-github-archives-${{ matrix.platform.target }}
@@ -967,6 +1054,7 @@ jobs:
 
       # uv-build
       - name: "Build wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -987,6 +1075,7 @@ jobs:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       # TODO(charlie): Re-enable testing for PPC wheels.
       - name: "Upload wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv_build-${{ matrix.platform.target }}
@@ -994,11 +1083,13 @@ jobs:
 
   # Like `linux-arm`.
   linux-riscv64:
-    name: ${{ matrix.platform.target }}
+    name: ${{ matrix.package }} / ${{ matrix.platform.target }}
     timeout-minutes: 30
     runs-on: depot-ubuntu-latest-4
     strategy:
+      fail-fast: false
       matrix:
+        package: [uv, uv-build]
         platform:
           - target: riscv64gc-unknown-linux-gnu
             arch: riscv64
@@ -1013,10 +1104,12 @@ jobs:
           cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
+        if: matrix.package == 'uv'
         run: python scripts/transform_readme.py --target pypi
 
       # uv
       - name: "Build wheels"
+        if: matrix.package == 'uv'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -1030,6 +1123,7 @@ jobs:
         env:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       - name: "Test wheel"
+        if: matrix.package == 'uv'
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
         with:
           image: riscv64/ubuntu:20.04@sha256:610bedb0c5d9aeae4b45e9064e820c4e0b0f6c1d2843116b0a1ae754890951ac
@@ -1045,11 +1139,13 @@ jobs:
             # python -m ${MODULE_NAME} --help
             uvx --help
       - name: "Upload wheels"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv-${{ matrix.platform.target }}
           path: dist
       - name: "Archive binary"
+        if: matrix.package == 'uv'
         shell: bash
         run: |
           ARCHIVE_NAME=uv-$TARGET
@@ -1063,6 +1159,7 @@ jobs:
         env:
           TARGET: ${{ matrix.platform.target }}
       - name: "Upload binary"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-github-archives-${{ matrix.platform.target }}
@@ -1072,6 +1169,7 @@ jobs:
 
       # uv-build
       - name: "Build wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -1085,6 +1183,7 @@ jobs:
         env:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       - name: "Test wheel uv-build"
+        if: matrix.package == 'uv-build'
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
         with:
           image: riscv64/ubuntu:20.04@sha256:610bedb0c5d9aeae4b45e9064e820c4e0b0f6c1d2843116b0a1ae754890951ac
@@ -1099,16 +1198,19 @@ jobs:
             # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
             # python -m ${MODULE_NAME}-build --help
       - name: "Upload wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv_build-${{ matrix.platform.target }}
           path: crates/uv-build/dist
 
   musllinux:
-    name: ${{ matrix.target }}
+    name: ${{ matrix.package }} / ${{ matrix.target }}
     runs-on: depot-ubuntu-24.04-4
     strategy:
+      fail-fast: false
       matrix:
+        package: [uv, uv-build]
         target:
           - x86_64-unknown-linux-musl
           - i686-unknown-linux-musl
@@ -1123,10 +1225,12 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
       - name: "Prep README.md"
+        if: matrix.package == 'uv'
         run: python scripts/transform_readme.py --target pypi
 
       # uv
       - name: "Build wheels"
+        if: matrix.package == 'uv'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -1141,7 +1245,7 @@ jobs:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       - name: "Test wheel"
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: matrix.package == 'uv' && matrix.target == 'x86_64-unknown-linux-musl'
         with:
           image: alpine:3.12@sha256:c75ac27b49326926b803b9ed43bf088bc220d22556de1bc5f72d742c91398f69
           artifacts: dist
@@ -1155,11 +1259,13 @@ jobs:
             # .venv/bin/python -m ${MODULE_NAME} --help
             .venv/bin/uvx --help
       - name: "Upload wheels"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv-${{ matrix.target }}
           path: dist
       - name: "Archive binary"
+        if: matrix.package == 'uv'
         shell: bash
         run: |
           ARCHIVE_NAME=uv-$TARGET
@@ -1173,6 +1279,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
       - name: "Upload binary"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-github-archives-${{ matrix.target }}
@@ -1182,6 +1289,7 @@ jobs:
 
       # uv-build
       - name: "Build wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -1196,7 +1304,7 @@ jobs:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       - name: "Test wheel uv-build"
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: matrix.package == 'uv-build' && matrix.target == 'x86_64-unknown-linux-musl'
         with:
           image: alpine:3.12@sha256:c75ac27b49326926b803b9ed43bf088bc220d22556de1bc5f72d742c91398f69
           artifacts: crates/uv-build/dist
@@ -1209,18 +1317,20 @@ jobs:
             # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
             # .venv/bin/python -m ${MODULE_NAME}_build --help
       - name: "Upload wheels uv-build"
+        if: matrix.package == 'uv-build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv_build-${{ matrix.target }}
           path: crates/uv-build/dist
 
   musllinux-cross:
-    name: ${{ matrix.platform.target }}
+    name: ${{ matrix.package }} / ${{ matrix.platform.target }}
     runs-on: depot-ubuntu-24.04-8
     env:
       CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-C target-feature=+crt-static"
     strategy:
       matrix:
+        package: [uv, uv-build]
         platform:
           - target: aarch64-unknown-linux-musl
             arch: aarch64
@@ -1247,10 +1357,12 @@ jobs:
           cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
+        if: matrix.package == 'uv'
         run: python scripts/transform_readme.py --target pypi
 
       # uv
       - name: "Build wheels"
+        if: matrix.package == 'uv'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -1266,6 +1378,7 @@ jobs:
         env:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       - name: "Test wheel"
+        if: matrix.package == 'uv'
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
         with:
           image: ${{ matrix.platform.test_image }}
@@ -1281,7 +1394,7 @@ jobs:
             .venv/bin/uvx --help
       - name: "Test wheel (manylinux)"
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
-        if: matrix.platform.arch == 'aarch64'
+        if: matrix.package == 'uv' && matrix.platform.arch == 'aarch64'
         with:
           image: arm64v8/ubuntu:20.04@sha256:0908a765aeb02fe4e564b543eaed1d77839b7a08de94041e24328b2cb62ac553
           platform: linux/arm64
@@ -1296,11 +1409,13 @@ jobs:
             # python -m ${MODULE_NAME} --help
             uvx --help
       - name: "Upload wheels"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv-${{ matrix.platform.target }}
           path: dist
       - name: "Archive binary"
+        if: matrix.package == 'uv'
         shell: bash
         run: |
           ARCHIVE_NAME=uv-$TARGET
@@ -1315,6 +1430,7 @@ jobs:
           TARGET: ${{ matrix.platform.target }}
           PROFILE: ${{ matrix.platform.arch == 'ppc64le' && 'release-no-lto' || 'release' }}
       - name: "Upload binary"
+        if: matrix.package == 'uv'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-github-archives-${{ matrix.platform.target }}
@@ -1324,6 +1440,7 @@ jobs:
 
       # uv-build
       - name: "Build wheels"
+        if: matrix.package == 'uv-build'
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           sccache: false
@@ -1338,6 +1455,7 @@ jobs:
         env:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
       - name: "Test wheel"
+        if: matrix.package == 'uv-build'
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
         with:
           image: ${{ matrix.platform.test_image }}
@@ -1352,7 +1470,7 @@ jobs:
             # .venv/bin/python -m ${MODULE_NAME}_build --help
       - name: "Test wheel (manylinux)"
         uses: astral-sh/github-actions/release-smoke-test@76d2758fc5c4394ada46510f46605deb7cec477e
-        if: matrix.platform.arch == 'aarch64'
+        if: matrix.package == 'uv-build' && matrix.platform.arch == 'aarch64'
         with:
           image: arm64v8/ubuntu:20.04@sha256:0908a765aeb02fe4e564b543eaed1d77839b7a08de94041e24328b2cb62ac553
           platform: linux/arm64
@@ -1366,6 +1484,7 @@ jobs:
             # TODO(konsti): Enable this test on all platforms, currently `find_uv_bin` is failing to discover uv here.
             # python -m ${MODULE_NAME}_build --help
       - name: "Upload wheels"
+        if: matrix.package == 'uv-build'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-wheels-uv_build-${{ matrix.platform.target }}
