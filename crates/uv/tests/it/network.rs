@@ -69,11 +69,7 @@ async fn resolution_reuses_verified_cached_wheel_metadata() -> Result<()> {
                         let mut hasher =
                             uv_extract::hash::Hasher::from(uv_pypi_types::HashAlgorithm::Md5);
                         hasher.update(archive);
-                        uv_pypi_types::HashDigest::from(hasher)
-                            .to_string()
-                            .strip_prefix("md5:")
-                            .unwrap()
-                            .to_owned()
+                        uv_pypi_types::HashDigest::from(hasher).digest().to_owned()
                     };
                     hashes.insert(algorithm.to_owned(), json!(digest));
                 }
@@ -173,11 +169,11 @@ async fn resolution_reuses_verified_cached_wheel_metadata() -> Result<()> {
             if expected_reuse { 1 } else { 2 }
         );
         let before = artifact_requests.load(Ordering::SeqCst);
-        generation.store(1, Ordering::SeqCst);
-        assert_eq!(run(false).await?, first);
+        assert_eq!(run(true).await?, first);
         assert!(artifact_requests.load(Ordering::SeqCst) > before);
         let before = artifact_requests.load(Ordering::SeqCst);
-        assert_eq!(run(true).await?, first);
+        generation.store(1, Ordering::SeqCst);
+        assert_eq!(run(false).await?, first);
         assert!(artifact_requests.load(Ordering::SeqCst) > before);
     }
     Ok(())

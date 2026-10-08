@@ -656,7 +656,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             return Ok(Metadata::from_dependency_metadata(metadata).into());
         }
 
-        if let Some(metadata) = self.cached_registry_wheel_metadata(dist, hash_policy) {
+        if let Some(metadata) = self
+            .cached_registry_wheel_metadata(dist, hash_policy)
+            .await?
+        {
             return Ok(ArchiveMetadata::from_metadata23(metadata));
         }
 
@@ -699,16 +702,20 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
     }
 
     /// Read metadata from a fully downloaded wheel identified by the current index hashes.
-    fn cached_registry_wheel_metadata(
+    async fn cached_registry_wheel_metadata(
         &self,
         dist: &BuiltDist,
         hashes: ArchiveHashPolicy<'_>,
-    ) -> Option<ResolutionMetadata> {
+    ) -> Result<Option<ResolutionMetadata>, Error> {
         let BuiltDist::Registry(wheels) = dist else {
-            return None;
+            return Ok(None);
         };
         let wheel = wheels.best_wheel();
-        if !matches!(wheel.file.url.to_url().ok()?.scheme(), "http" | "https")
+        if !wheel
+            .file
+            .url
+            .to_url()
+            .is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
             || !wheel
                 .file
                 .hashes
@@ -720,43 +727,49 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 .artifact_cache_control_for(&wheel.index)
                 .is_some()
         {
-            return None;
+            return Ok(None);
         }
 
-        let cache = self.build_context.cache();
-        let pointer_entry = cache.entry(
-            CacheBucket::Wheels,
-            WheelCache::Index(&wheel.index).wheel_dir(wheel.name().as_ref()),
-            format!("{}.http", wheel.filename.cache_key()),
-        );
-        if !cache
-            .freshness(&pointer_entry, Some(wheel.name()), None)
-            .ok()?
-            .is_fresh()
-        {
-            return None;
-        }
-        let archive = HttpArchivePointer::read_from(&pointer_entry)
-            .ok()??
-            .into_archive();
-        // Matching digests from a complete download identify the current index artifact even
-        // when its HTTP response has expired. Partial ZIP metadata alone cannot establish this.
-        if archive.filename != wheel.filename
-            || !archive.exists(cache)
-            || !archive.satisfies(ArchiveHashPolicy::All(wheel.file.hashes.as_slice()))
-            || !archive.satisfies(hashes)
-            || (wheel.size_is_authoritative
-                && wheel
-                    .file
-                    .size
-                    .is_some_and(|size| archive.size != Some(size)))
-        {
-            return None;
-        }
-        let metadata =
-            uv_metadata::read_flat_wheel_metadata(&wheel.filename, cache.archive(&archive.id))
-                .ok()?;
-        (metadata.name == *dist.name()).then_some(metadata)
+        let cache = self.build_context.cache().clone();
+        let wheel = wheel.clone();
+        let cached = tokio::task::spawn_blocking(move || {
+            let pointer_entry = cache.entry(
+                CacheBucket::Wheels,
+                WheelCache::Index(&wheel.index).wheel_dir(wheel.name().as_ref()),
+                format!("{}.http", wheel.filename.cache_key()),
+            );
+            if !cache
+                .freshness(&pointer_entry, Some(wheel.name()), None)
+                .ok()?
+                .is_fresh()
+            {
+                return None;
+            }
+            let archive = HttpArchivePointer::read_from(&pointer_entry)
+                .ok()??
+                .into_archive();
+            // Matching digests from a complete download identify the current index artifact even
+            // when its HTTP response has expired. Partial ZIP metadata alone cannot establish this.
+            if archive.filename != wheel.filename
+                || !archive.exists(&cache)
+                || !archive.satisfies(ArchiveHashPolicy::All(wheel.file.hashes.as_slice()))
+                || (wheel.size_is_authoritative
+                    && wheel
+                        .file
+                        .size
+                        .is_some_and(|size| archive.size != Some(size)))
+            {
+                return None;
+            }
+            let metadata =
+                uv_metadata::read_flat_wheel_metadata(&wheel.filename, cache.archive(&archive.id))
+                    .ok()?;
+            Some((metadata, archive))
+        })
+        .await?;
+        Ok(cached.and_then(|(metadata, archive)| {
+            (archive.satisfies(hashes) && metadata.name == *dist.name()).then_some(metadata)
+        }))
     }
 
     /// Build the wheel metadata for a source distribution, or fetch it from the cache if possible.
