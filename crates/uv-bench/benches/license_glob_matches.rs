@@ -117,6 +117,35 @@ fn license_glob_matches(criterion: &mut Criterion<WallTime>) {
         group.bench_function(format!("overlap/combined/{count}"), |benchmark| {
             benchmark.iter(|| combined_matches(black_box(&combined), count, black_box(&files)));
         });
+
+        // Broad patterns remain in each combined match while one missing pattern prevents
+        // early completion of the file walk.
+        let mut globs = (0..count)
+            .map(|_| {
+                PortableGlobParser::Pep639
+                    .parse("licenses/LICENSE-*")
+                    .expect("benchmark glob should be valid")
+            })
+            .collect::<Vec<_>>();
+        globs.push(
+            PortableGlobParser::Pep639
+                .parse("licenses/missing")
+                .expect("benchmark glob should be valid"),
+        );
+        let glob_count = globs.len();
+        let individual = individual_matchers(&globs);
+        let combined = GlobDirFilter::from_globs(globs).expect("benchmark glob set should build");
+        assert_eq!(
+            repeated_scan(&individual, &files),
+            combined_matches(&combined, glob_count, &files),
+        );
+        group.bench_function(format!("mixed-overlap/repeated/{count}"), |benchmark| {
+            benchmark.iter(|| repeated_scan(black_box(&individual), black_box(&files)));
+        });
+        group.bench_function(format!("mixed-overlap/combined/{count}"), |benchmark| {
+            benchmark
+                .iter(|| combined_matches(black_box(&combined), glob_count, black_box(&files)));
+        });
     }
     group.finish();
 }
