@@ -17,7 +17,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_python_managed::downloads;
 use uv_python_types::PythonInstallationKey;
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 
 use crate::printer::Printer;
@@ -376,7 +376,7 @@ impl ProgressReporter {
         self.on_request_start(Direction::Hash, name, size)
     }
 
-    fn on_checkout_start(&self, url: &DisplaySafeUrl, rev: &str) -> usize {
+    fn on_checkout_start(&self, url: &SafeUrl, rev: &str) -> usize {
         let ProgressMode::Multi {
             multi_progress,
             state,
@@ -406,7 +406,7 @@ impl ProgressReporter {
         id
     }
 
-    fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+    fn on_checkout_complete(&self, url: &SafeUrl, rev: &str, id: usize) {
         let ProgressMode::Multi {
             state,
             multi_progress,
@@ -496,11 +496,11 @@ impl uv_installer::PrepareReporter for PrepareReporter {
         self.reporter.on_download_complete(id);
     }
 
-    fn on_checkout_start(&self, url: &DisplaySafeUrl, rev: &str) -> usize {
+    fn on_checkout_start(&self, url: &SafeUrl, rev: &str) -> usize {
         self.reporter.on_checkout_start(url, rev)
     }
 
-    fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+    fn on_checkout_complete(&self, url: &SafeUrl, rev: &str, id: usize) {
         self.reporter.on_checkout_complete(url, rev, id);
     }
 }
@@ -560,11 +560,11 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
         self.reporter.on_build_complete(&source.color_display(), id);
     }
 
-    fn on_checkout_start(&self, url: &DisplaySafeUrl, rev: &str) -> usize {
+    fn on_checkout_start(&self, url: &SafeUrl, rev: &str) -> usize {
         self.reporter.on_checkout_start(url, rev)
     }
 
-    fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+    fn on_checkout_complete(&self, url: &SafeUrl, rev: &str, id: usize) {
         self.reporter.on_checkout_complete(url, rev, id);
     }
 
@@ -602,11 +602,11 @@ impl uv_distribution::Reporter for ResolverReporter {
         self.reporter.on_download_complete(id);
     }
 
-    fn on_checkout_start(&self, url: &DisplaySafeUrl, rev: &str) -> usize {
+    fn on_checkout_start(&self, url: &SafeUrl, rev: &str) -> usize {
         self.reporter.on_checkout_start(url, rev)
     }
 
-    fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
+    fn on_checkout_complete(&self, url: &SafeUrl, rev: &str, id: usize) {
         self.reporter.on_checkout_complete(url, rev, id);
     }
 }

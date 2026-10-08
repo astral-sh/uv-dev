@@ -55,7 +55,7 @@ impl<'lock> LockTarget<'lock> {
     pub fn requirements(self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
         match self {
             Self::Workspace(workspace) => workspace.requirements(),
-            Self::Script(script) => script.metadata.dependencies.clone().unwrap_or_default(),
+            Self::Script(script) => script.metadata.dependencies.clone(),
         }
     }
 
@@ -398,10 +398,10 @@ impl<'lock> LockTarget<'lock> {
         }
     }
 
-    /// Write the lockfile to disk.
+    /// Atomically write the lockfile so readers cannot observe a partial lock.
     pub async fn commit(self, lock: &Lock) -> Result<(), ProjectError> {
         let encoded = lock.to_toml()?;
-        fs_err::tokio::write(self.lock_path(), encoded).await?;
+        uv_fs::write_atomic_preserve(self.lock_path(), encoded).await?;
         Ok(())
     }
 

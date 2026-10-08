@@ -449,7 +449,7 @@ pub async fn check(
             script,
             lock: result.lock(),
         };
-        match uv_sync_command::sync::do_sync(
+        match uv_project::sync::do_sync(
             target,
             &venv,
             &extras,
@@ -641,7 +641,7 @@ pub async fn check(
                     &base_interpreter,
                     &settings.resolver.build_options,
                 )?;
-                uv_sync_command::sync::store_credentials_from_target(target, &client_builder)?;
+                uv_project::sync::store_credentials_from_target(target, &client_builder)?;
                 let ty_state = state.fork();
                 let environment = match CachedEnvironment::from_locked_resolution(
                     &resolution,
@@ -676,7 +676,7 @@ pub async fn check(
             debug!("Skipping environment synchronization due to `--no-sync`");
         } else {
             let sync_state = state.fork();
-            match uv_sync_command::sync::do_sync(
+            match uv_project::sync::do_sync(
                 target,
                 &venv,
                 &extras,

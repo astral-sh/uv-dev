@@ -71,7 +71,7 @@ pub fn pip_check(
 
     if diagnostics.is_empty() {
         writeln!(
-            printer.stderr(),
+            printer.stderr_important(),
             "{}",
             "All installed packages are compatible".to_string().dimmed()
         )?;
@@ -94,7 +94,11 @@ pub fn pip_check(
         )?;
 
         for diagnostic in &diagnostics {
-            writeln!(printer.stderr(), "{}", diagnostic.message().bold())?;
+            writeln!(
+                printer.stderr_important(),
+                "{}",
+                diagnostic.message().bold()
+            )?;
         }
 
         Ok(ExitStatus::Failure)

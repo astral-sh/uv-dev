@@ -398,7 +398,7 @@ impl<'lock> InstallTarget<'lock> {
     }
 
     /// Return an iterator over the [`Index`] definitions in the target.
-    pub fn indexes(self) -> impl Iterator<Item = &'lock Index> {
+    pub(crate) fn indexes(self) -> impl Iterator<Item = &'lock Index> {
         match self {
             Self::Project { workspace, .. }
             | Self::Projects { workspace, .. }
@@ -432,7 +432,7 @@ impl<'lock> InstallTarget<'lock> {
     }
 
     /// Return an iterator over all [`Sources`] defined by the target.
-    pub fn sources(&self) -> impl Iterator<Item = &Source> {
+    pub(crate) fn sources(&self) -> impl Iterator<Item = &Source> {
         match self {
             Self::Project { workspace, .. }
             | Self::Projects { workspace, .. }
@@ -460,7 +460,7 @@ impl<'lock> InstallTarget<'lock> {
     }
 
     /// Return an iterator over all requirements defined by the target.
-    pub fn requirements(
+    pub(crate) fn requirements(
         &self,
     ) -> impl Iterator<Item = Cow<'lock, uv_pep508::Requirement<VerbatimParsedUrl>>> {
         match self {
@@ -542,18 +542,13 @@ impl<'lock> InstallTarget<'lock> {
                 )
             }
             Self::Script { script, .. } => Either::Right(Either::Left(
-                script
-                    .metadata
-                    .dependencies
-                    .iter()
-                    .flatten()
-                    .map(Cow::Borrowed),
+                script.metadata.dependencies.iter().map(Cow::Borrowed),
             )),
             Self::Lockfile { .. } => Either::Right(Either::Right(std::iter::empty())),
         }
     }
 
-    pub fn build_constraints(&self) -> Constraints {
+    pub(crate) fn build_constraints(&self) -> Constraints {
         self.lock().build_constraints(self.install_path())
     }
 
