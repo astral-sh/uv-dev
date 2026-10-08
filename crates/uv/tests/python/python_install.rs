@@ -2416,14 +2416,9 @@ fn python_install_patch_dylib_warning() -> anyhow::Result<()> {
         .with_filter((r"(?m)^DEBUG .*\n", ""));
     let tools = context.temp_dir.child("tools");
     tools.create_dir_all()?;
-    let command = || {
-        let mut command = context.python_install();
-        command
-            .args(["3.13.1", "--no-bin"])
-            .env(EnvVars::PATH, tools.path());
-        command
-    };
-    uv_snapshot!(context.filters(), command(), @"
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.13.1", "--no-bin"])
+        .env(EnvVars::PATH, tools.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: Failed to patch the install name of the dynamic library for `[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13`. This may cause issues when building Python native extensions.
@@ -2433,7 +2428,9 @@ fn python_install_patch_dylib_warning() -> anyhow::Result<()> {
     Installed Python 3.13.1 in [TIME]
      + cpython-3.13.1-[PLATFORM]
     ");
-    uv_snapshot!(context.filters(), command().arg("--verbose"), @"
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.13.1", "--no-bin"])
+        .env(EnvVars::PATH, tools.path()).arg("--verbose"), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: Failed to patch the install name of the dynamic library for `[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13`. This may cause issues when building Python native extensions.
@@ -2446,7 +2443,9 @@ fn python_install_patch_dylib_warning() -> anyhow::Result<()> {
     let tool = tools.child("install_name_tool");
     tool.write_str("#!/bin/sh\nprintf 'cannot update dylib: fixture failure\\n' >&2\nexit 17\n")?;
     fs_err::set_permissions(&tool, Permissions::from_mode(0o755))?;
-    uv_snapshot!(context.filters(), command(), @"
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.13.1", "--no-bin"])
+        .env(EnvVars::PATH, tools.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: Failed to patch the install name of the dynamic library for `[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13`. This may cause issues when building Python native extensions.
@@ -2456,9 +2455,9 @@ fn python_install_patch_dylib_warning() -> anyhow::Result<()> {
              cannot update dylib: fixture failure
     Python 3.13.1 is already installed
     ");
-    uv_snapshot!(context.filters(), command().arg("--quiet"), @"
-    exit_code: 0 (success)
-    ");
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.13.1", "--no-bin"])
+        .env(EnvVars::PATH, tools.path()).arg("--quiet"), @"exit_code: 0 (success)");
 
     // Automatic downloads use the same nonfatal warning before querying the interpreter.
     fs_err::remove_dir_all(context.temp_dir.child("managed"))?;
@@ -2480,7 +2479,12 @@ fn python_install_patch_dylib_warning() -> anyhow::Result<()> {
     tool.write_str(&format!(
         "#!/bin/sh\nprintf '%s' '{long_stderr}' >&2\nexit 17\n"
     ))?;
-    let output = command().assert().success();
+    let output = context
+        .python_install()
+        .args(["3.13.1", "--no-bin"])
+        .env(EnvVars::PATH, tools.path())
+        .assert()
+        .success();
     let stderr = String::from_utf8_lossy(&output.get_output().stderr);
     assert!(stderr.contains("[output truncated]"));
     assert_eq!(stderr.matches('é').count(), 4096);
