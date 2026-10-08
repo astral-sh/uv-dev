@@ -554,6 +554,17 @@ impl FromArgMatches for IndexArgs {
         })
     }
 
+    fn from_arg_matches_mut(matches: &mut ArgMatches) -> Result<Self, clap::Error> {
+        let explicit_index = matches.value_source("index") == Some(ValueSource::CommandLine);
+        let explicit_default_index =
+            matches.value_source("default_index") == Some(ValueSource::CommandLine);
+        Ok(Self {
+            options: IndexOptionsArgs::from_arg_matches_mut(matches)?,
+            explicit_index,
+            explicit_default_index,
+        })
+    }
+
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
         if let Some(source) = matches.value_source("index") {
             self.explicit_index = source == ValueSource::CommandLine;
@@ -562,6 +573,15 @@ impl FromArgMatches for IndexArgs {
             self.explicit_default_index = source == ValueSource::CommandLine;
         }
         self.options.update_from_arg_matches(matches)
+    }
+    fn update_from_arg_matches_mut(&mut self, matches: &mut ArgMatches) -> Result<(), clap::Error> {
+        if let Some(source) = matches.value_source("index") {
+            self.explicit_index = source == ValueSource::CommandLine;
+        }
+        if let Some(source) = matches.value_source("default_index") {
+            self.explicit_default_index = source == ValueSource::CommandLine;
+        }
+        self.options.update_from_arg_matches_mut(matches)
     }
 }
 
