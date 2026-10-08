@@ -39,7 +39,9 @@ use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, ExtraName, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
-use uv_project_edit::{ArrayEdit, DependencyTarget, PyProjectTomlMut};
+use uv_project_edit::{
+    ArrayEdit, DependencyTarget, PyProjectTomlMut, SourceError, source_from_requirement,
+};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -59,7 +61,7 @@ use uv_settings::{
 use uv_static::is_known_standard_library_package;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user_once;
-use uv_workspace::pyproject::{DependencyType, Source, SourceError, Sources, ToolUvSources};
+use uv_workspace::pyproject::{DependencyType, Source, Sources, ToolUvSources};
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::ProjectError;
@@ -1340,7 +1342,7 @@ fn resolve_requirement(
     root: &Path,
     existing_sources: Option<&BTreeMap<PackageName, Sources>>,
 ) -> Result<(uv_pep508::Requirement, Option<Source>), anyhow::Error> {
-    let result = Source::from_requirement(
+    let result = source_from_requirement(
         &requirement.name,
         requirement.source.clone(),
         workspace,

@@ -20,6 +20,7 @@ uv-cache-key = { workspace = true }
 uv-configuration = { workspace = true }
 uv-distribution-types = { workspace = true }
 uv-fs = { workspace = true }
+uv-git-types = { workspace = true }
 uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }

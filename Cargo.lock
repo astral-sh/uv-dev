@@ -7442,6 +7442,7 @@ dependencies = [
  "uv-configuration",
  "uv-distribution-types",
  "uv-fs",
+ "uv-git-types",
  "uv-normalize",
  "uv-pep440",
  "uv-pep508",
