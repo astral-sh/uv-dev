@@ -14862,18 +14862,15 @@ async fn tool_uv_sources_signed_url() -> Result<()> {
         server.uri()
     );
     let pyproject = context.temp_dir.child("pyproject.toml");
-    let write_project = |name: &str| {
-        pyproject.write_str(&formatdoc! {r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            dependencies = ["{name}"]
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = ["ok"]
 
-            [tool.uv.sources]
-            {name} = {{ url = "{url}" }}
-        "#})
-    };
-    write_project("ok")?;
+        [tool.uv.sources]
+        ok = {{ url = "{url}" }}
+    "#})?;
     let compiled = uv_snapshot!(context.filters(), context.pip_compile()
         .arg("pyproject.toml")
         .arg("--no-index")
@@ -14899,7 +14896,15 @@ async fn tool_uv_sources_signed_url() -> Result<()> {
         .success();
 
     // The same source is redacted when it is included in an error instead of requirement output.
-    write_project("wrong")?;
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = ["wrong"]
+
+        [tool.uv.sources]
+        wrong = {{ url = "{url}" }}
+    "#})?;
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("pyproject.toml")
         .arg("--no-index"), @"
