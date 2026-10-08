@@ -305,11 +305,12 @@ fn tool_run_warn_executable_not_in_from() {
         .with_tool_dirs();
 
     let context = context
-        .with_filter(("\\+ uvloop(.+)\n ", ""))
+        .with_filter((r"(?m)^ \+ (?:uvloop|colorama)==[^\n]+\n", ""))
         // Strip off the `fastapi` command output.
         .with_filter(("(?s)fastapi` instead.*", "fastapi` instead."));
 
-    uv_snapshot!(context.filters(), context.tool_run()
+    // This graph swaps Unix uvloop for Windows colorama; keep the actual total while hiding both rows.
+    uv_snapshot!(context.filters(), windows_filters=false, context.tool_run()
         .arg("--from")
         .arg("fastapi")
         .arg("fastapi"), @"

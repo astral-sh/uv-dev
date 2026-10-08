@@ -1582,10 +1582,11 @@ fn tool_install_suggest_other_packages_with_executable() {
     let context = uv_test::test_context!("3.12")
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_exe_suffix()
-        .with_filter(("\\+ uvloop(.+)\n ", ""))
+        .with_filter((r"(?m)^ \+ (?:uvloop|colorama)==[^\n]+\n", ""))
         .with_tool_dirs();
 
-    uv_snapshot!(context.filters(), context.tool_install()
+    // This graph swaps Unix uvloop for Windows colorama; keep the actual total while hiding both rows.
+    uv_snapshot!(context.filters(), windows_filters=false, context.tool_install()
         .arg("fastapi==0.111.0"), @"
     exit_code: 2 (failure)
     ----- stdout -----
