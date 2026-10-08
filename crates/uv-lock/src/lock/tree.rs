@@ -86,8 +86,6 @@ pub struct TreeOptions {
     pub depth: usize,
     pub dedupe: TreeDedupe,
     pub direction: TreeDirection,
-    pub show_version_specifiers: bool,
-    pub show_sizes: bool,
 }
 
 #[derive(Debug)]
@@ -100,6 +98,8 @@ pub struct TreeDisplay<'env> {
     latest: &'env PackageMap<Version>,
     /// Options controlling how the dependency tree is displayed.
     options: TreeOptions,
+    /// Whether to display distribution sizes.
+    show_sizes: bool,
     /// Whether production dependencies are included in the tree.
     prod: bool,
     /// The dependency groups included in the tree.
@@ -117,6 +117,7 @@ impl<'env> TreeDisplay<'env> {
         markers: Option<&'env ResolverMarkerEnvironment>,
         latest: &'env PackageMap<Version>,
         options: TreeOptions,
+        show_sizes: bool,
         prune: &[PackageName],
         packages: &[PackageName],
         groups: &DependencyGroupsWithDefaults,
@@ -554,6 +555,7 @@ impl<'env> TreeDisplay<'env> {
             roots,
             latest,
             options,
+            show_sizes,
             prod: groups.prod(),
             groups: groups.clone(),
             lock,
@@ -622,7 +624,7 @@ impl<'env> TreeDisplay<'env> {
 
             // Append compressed wheel size, if available in the lockfile.
             // Keep it simple: use the first wheel entry that includes a size.
-            if self.options.show_sizes {
+            if self.show_sizes {
                 if let Some(size_bytes) = package.wheels.iter().find_map(|wheel| wheel.size) {
                     let bytes = human_readable_bytes(size_bytes);
                     line.push(' ');

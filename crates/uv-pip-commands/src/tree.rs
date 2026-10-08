@@ -40,6 +40,7 @@ pub async fn pip_tree(
     prune: &[PackageName],
     package: &[PackageName],
     tree: TreeOptions,
+    show_version_specifiers: bool,
     outdated: bool,
     prerelease: Prerelease,
     index_locations: IndexLocations,
@@ -151,10 +152,17 @@ pub async fn pip_tree(
     };
 
     // Render the tree.
-    let rendered_tree =
-        DisplayDependencyGraph::new(prune, package, tree, &markers, &packages, &latest)
-            .render()
-            .join("\n");
+    let rendered_tree = DisplayDependencyGraph::new(
+        prune,
+        package,
+        tree,
+        show_version_specifiers,
+        &markers,
+        &packages,
+        &latest,
+    )
+    .render()
+    .join("\n");
 
     if !rendered_tree.is_empty() {
         writeln!(printer.stdout(), "{rendered_tree}")?;
@@ -199,6 +207,8 @@ struct DisplayDependencyGraph<'env> {
     latest: &'env FxHashMap<&'env PackageName, Version>,
     /// Options controlling how the dependency tree is displayed.
     options: TreeOptions,
+    /// Whether to display dependency version constraints.
+    show_version_specifiers: bool,
 }
 
 impl<'env> DisplayDependencyGraph<'env> {
@@ -207,6 +217,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         prune: &[PackageName],
         package: &[PackageName],
         options: TreeOptions,
+        show_version_specifiers: bool,
         markers: &ResolverMarkerEnvironment,
         packages: &'env FxHashMap<&PackageName, Vec<&ResolutionMetadata>>,
         latest: &'env FxHashMap<&PackageName, Version>,
@@ -337,6 +348,7 @@ impl<'env> DisplayDependencyGraph<'env> {
             roots,
             latest,
             options,
+            show_version_specifiers,
         }
     }
 
@@ -357,7 +369,7 @@ impl<'env> DisplayDependencyGraph<'env> {
         let mut line = format!("{} v{}", package_name, metadata.version);
 
         // If the current package is not top-level (i.e., it has a parent), include the specifiers.
-        if self.options.show_version_specifiers && !cursor.is_root() {
+        if self.show_version_specifiers && !cursor.is_root() {
             line.push(' ');
 
             let requirement = self.aggregate_requirement(cursor);
