@@ -3,7 +3,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 #[cfg(feature = "tokio")]
-use std::{convert::Into, env, path::Path, sync::LazyLock, time::Instant};
+use std::{convert::Into, env, path::Path, sync::LazyLock};
 
 use thiserror::Error;
 #[cfg(feature = "tokio")]
@@ -194,46 +194,34 @@ impl LockedFile {
             file.path().user_display(),
         );
         let path = file.path().to_path_buf();
-        let deadline = Instant::now() + *LOCK_TIMEOUT;
-        let mut file = file;
-        loop {
-            if Instant::now() >= deadline {
-                return Err(LockedFileError::Timeout {
-                    timeout: *LOCK_TIMEOUT,
-                    resource: resource.to_string(),
-                    path: path.clone(),
-                });
+        let file = tokio::time::timeout(*LOCK_TIMEOUT, async {
+            let mut file = file;
+            loop {
+                let try_lock = tokio::task::spawn_blocking(move || (mode.try_lock(&file), file));
+                file = match try_lock.await? {
+                    (Ok(()), file) => return Ok::<_, LockedFileError>(file),
+                    (Err(error), file) => {
+                        if is_known_already_locked_error(&error) {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            file
+                        } else {
+                            // Not an fs_err method, we need to build our own path context.
+                            return Err(LockedFileError::Lock {
+                                resource: resource.to_string(),
+                                path: path.clone(),
+                                source: error.into(),
+                            });
+                        }
+                    }
+                };
             }
-
-            let try_lock = tokio::task::spawn_blocking(move || (mode.try_lock(&file), file));
-            file = match try_lock.await? {
-                (Ok(()), acquired_file) => {
-                    file = acquired_file;
-                    break;
-                }
-                (Err(std::fs::TryLockError::WouldBlock), file) => {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    // Continue polling until timeout.
-                    file
-                }
-                (Err(std::fs::TryLockError::Error(source)), file)
-                    if cfg!(windows) && source.raw_os_error() == Some(33) =>
-                {
-                    // Windows can report lock contention as `ERROR_LOCK_VIOLATION` instead of
-                    // `WouldBlock`; keep polling in that case too.
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    file
-                }
-                (Err(std::fs::TryLockError::Error(source)), _file) => {
-                    // Not an fs_err method, we need to build our own path context.
-                    return Err(LockedFileError::Lock {
-                        resource: resource.to_string(),
-                        path: path.clone(),
-                        source,
-                    });
-                }
-            };
-        }
+        })
+        .await
+        .map_err(|_| LockedFileError::Timeout {
+            timeout: *LOCK_TIMEOUT,
+            resource: resource.to_string(),
+            path,
+        })??;
 
         trace!("Acquired {mode} lock for `{resource}`");
         Ok(Self(file))
