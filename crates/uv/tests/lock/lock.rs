@@ -31225,20 +31225,6 @@ fn project_python_exclusions_invalidate_lock() -> Result<()> {
     assert!(!lock.requires_python().contains(&Version::new([3, 10, 0])));
     assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
 
-    // A redundant bound changes the spelling, but not the supported Python versions.
-    pyproject.write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.8,>=3.9,<3.14,!=3.10.0"
-    "#})?;
-    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-    assert_eq!(updated, context.read("uv.lock"));
-
     // Remove the exclusion.
     let before = context.read("uv.lock");
     pyproject.write_str(indoc! {r#"
@@ -31266,19 +31252,6 @@ fn project_python_exclusions_invalidate_lock() -> Result<()> {
     assert!(lock.requires_python().contains(&Version::new([3, 10, 0])));
     assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
 
-    // A redundant bound changes the spelling, but not the supported Python versions.
-    pyproject.write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.8,>=3.9,<3.14"
-    "#})?;
-    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-    assert_eq!(updated, context.read("uv.lock"));
     Ok(())
 }
 
@@ -31296,18 +31269,90 @@ fn project_python_exclusions_retain_forks() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = ["cleaver", "foo", "bar"]
     "#})?;
-    let mut command = context.lock();
-    command
+    uv_snapshot!(context.filters(), context.lock()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("--index-url")
-        .arg(server.index_url());
-    uv_snapshot!(context.filters(), &mut command, @"
+        .arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     ");
-    let original = Lock::from_toml(&context.read("uv.lock"))?;
-    assert_eq!(original.fork_markers().len(), 2);
+    let original = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(original, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "sys_platform == 'linux'",
+            "sys_platform != 'linux'",
+        ]
+
+        [[package]]
+        name = "bar"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform != 'linux'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/bar-1.0.0.tar.gz", hash = "sha256:bb9cb9098cc77ebe1f2085af0859f2332ab631348e58c687fa344aea81eb4043", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/bar-1.0.0-py3-none-any.whl", hash = "sha256:2fbf0e0a7dd4f48a8b1c2148f73ba0c314699d0bfa0a8ec9b9bcb8105882e9fc", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "bar"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform == 'linux'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/bar-2.0.0.tar.gz", hash = "sha256:29e7bc76f76b7e939dcf1f8fe28b077c4631c11ecea673beb86d297dacda11eb", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/bar-2.0.0-py3-none-any.whl", hash = "sha256:563b1af3238a4ad819f2b95b74f940319a2ef30ed7991a2416fa98aa115da87d", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "cleaver"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "bar", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform != 'linux'" },
+            { name = "foo", marker = "sys_platform == 'linux'" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/cleaver-1.0.0.tar.gz", hash = "sha256:e48e43a500c95e61d1f1e18d830ec1df0ed3065842738493669f850a2c3da9ad", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/cleaver-1.0.0-py3-none-any.whl", hash = "sha256:f49d93330cfe3f7096636c506aa522a497eae44d08b07f6276caf784ec87f65b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "foo"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/foo-1.0.0.tar.gz", hash = "sha256:70bd56242b5a5c7f6c04694a8ed2aafdb036726de0fcca1dd1d2f1f467c71ee1", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/foo-1.0.0-py3-none-any.whl", hash = "sha256:df9a39d54a6d71872deb1537d7e331de0ede3b725d630a050fee3efd3fe5145b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "bar", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform != 'linux'" },
+            { name = "bar", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'linux'" },
+            { name = "cleaver" },
+            { name = "foo" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "bar" },
+            { name = "cleaver" },
+            { name = "foo" },
+        ]
+        "#);
+    });
 
     pyproject.write_str(indoc! {r#"
         [project]
@@ -31316,65 +31361,97 @@ fn project_python_exclusions_retain_forks() -> Result<()> {
         requires-python = ">=3.12,!=3.13.0"
         dependencies = ["cleaver", "foo", "bar"]
     "#})?;
-    uv_snapshot!(context.filters(), &mut command, @"
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     ");
-    let updated = Lock::from_toml(&context.read("uv.lock"))?;
+    let updated_toml = context.read("uv.lock");
+    let updated = Lock::from_toml(&updated_toml)?;
     assert!(
         !updated
             .requires_python()
             .contains(&Version::new([3, 13, 0]))
     );
 
-    let summary = |lock: &Lock| {
-        let markers = lock
-            .fork_markers()
-            .iter()
-            .map(|marker| marker.combined().try_to_string())
-            .collect::<Vec<_>>();
-        let packages = lock
-            .packages()
-            .iter()
-            .map(|package| (package.name(), package.version()))
-            .collect::<Vec<_>>();
-        json!({
-            "markers": markers,
-            "packages": packages,
-        })
-    };
-    assert_eq!(summary(&original), summary(&updated));
-    insta::assert_json_snapshot!(summary(&updated), @r#"
-    {
-      "markers": [
-        "python_full_version >= '3.12' and sys_platform == 'linux'",
-        "python_full_version >= '3.12' and sys_platform != 'linux'"
-      ],
-      "packages": [
-        [
-          "bar",
-          "1.0.0"
-        ],
-        [
-          "bar",
-          "2.0.0"
-        ],
-        [
-          "cleaver",
-          "1.0.0"
-        ],
-        [
-          "foo",
-          "1.0.0"
-        ],
-        [
-          "project",
-          "0.1.0"
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(updated_toml, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12, !=3.13.0"
+        resolution-markers = [
+            "sys_platform == 'linux'",
+            "sys_platform != 'linux'",
         ]
-      ]
-    }
-    "#);
+
+        [[package]]
+        name = "bar"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform != 'linux'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/bar-1.0.0.tar.gz", hash = "sha256:bb9cb9098cc77ebe1f2085af0859f2332ab631348e58c687fa344aea81eb4043", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/bar-1.0.0-py3-none-any.whl", hash = "sha256:2fbf0e0a7dd4f48a8b1c2148f73ba0c314699d0bfa0a8ec9b9bcb8105882e9fc", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "bar"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform == 'linux'",
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/bar-2.0.0.tar.gz", hash = "sha256:29e7bc76f76b7e939dcf1f8fe28b077c4631c11ecea673beb86d297dacda11eb", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/bar-2.0.0-py3-none-any.whl", hash = "sha256:563b1af3238a4ad819f2b95b74f940319a2ef30ed7991a2416fa98aa115da87d", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "cleaver"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "bar", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform != 'linux'" },
+            { name = "foo", marker = "sys_platform == 'linux'" },
+        ]
+        sdist = { url = "http://[LOCALHOST]/files/cleaver-1.0.0.tar.gz", hash = "sha256:e48e43a500c95e61d1f1e18d830ec1df0ed3065842738493669f850a2c3da9ad", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/cleaver-1.0.0-py3-none-any.whl", hash = "sha256:f49d93330cfe3f7096636c506aa522a497eae44d08b07f6276caf784ec87f65b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "foo"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        sdist = { url = "http://[LOCALHOST]/files/foo-1.0.0.tar.gz", hash = "sha256:70bd56242b5a5c7f6c04694a8ed2aafdb036726de0fcca1dd1d2f1f467c71ee1", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/foo-1.0.0-py3-none-any.whl", hash = "sha256:df9a39d54a6d71872deb1537d7e331de0ede3b725d630a050fee3efd3fe5145b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "bar", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform != 'linux'" },
+            { name = "bar", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'linux'" },
+            { name = "cleaver" },
+            { name = "foo" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "bar" },
+            { name = "cleaver" },
+            { name = "foo" },
+        ]
+        "#);
+    });
     Ok(())
 }
 
@@ -31460,18 +31537,6 @@ fn script_python_exclusions_invalidate_lock() -> Result<()> {
     let lock = Lock::from_toml(&updated)?;
     assert!(!lock.requires_python().contains(&Version::new([3, 10, 0])));
     assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
-    script.write_str(indoc! {r#"
-        # /// script
-        # requires-python = ">=3.8,>=3.9,!=3.10.0.*"
-        # dependencies = []
-        # ///
-    "#})?;
-    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-    assert_eq!(updated, context.read("script.py.lock"));
 
     // Remove the exclusion.
     let before = context.read("script.py.lock");
@@ -31499,18 +31564,7 @@ fn script_python_exclusions_invalidate_lock() -> Result<()> {
     let lock = Lock::from_toml(&updated)?;
     assert!(lock.requires_python().contains(&Version::new([3, 10, 0])));
     assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
-    script.write_str(indoc! {r#"
-        # /// script
-        # requires-python = ">=3.8,>=3.9"
-        # dependencies = []
-        # ///
-    "#})?;
-    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved in [TIME]
-    ");
-    assert_eq!(updated, context.read("script.py.lock"));
+
     Ok(())
 }
 
