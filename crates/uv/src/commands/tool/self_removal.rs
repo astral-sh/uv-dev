@@ -43,6 +43,7 @@ mod tests {
             io::stdin().read_exact(&mut [0])?;
             // Use ordinary subprocess success when libtest invokes this fixture directly through
             // its panic-abort entry point.
+            #[expect(clippy::exit)]
             std::process::exit(0);
         }
 
