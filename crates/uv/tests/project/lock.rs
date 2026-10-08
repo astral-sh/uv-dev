@@ -455,18 +455,10 @@ async fn default_group_changes_still_validate_resolution_inputs() -> Result<()> 
         .expect(5)
         .mount(server.mock_server())
         .await;
-    let resolve = || {
-        let mut command = context.lock();
-        command
-            .arg("--index-url")
-            .arg(server.index_url())
-            .arg("--no-cache")
-            .env(EnvVars::UV_HTTP_RETRIES, "0");
-        command
-    };
 
     pyproject.write_str(&changed_defaults.replace("dev = [\"a\"]", "dev = [\"a>=2\"]"))?;
-    uv_snapshot!(context.filters(), resolve(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .arg("--no-cache").env(EnvVars::UV_HTTP_RETRIES, "0"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to fetch: http://[LOCALHOST]/simple/a/
@@ -478,7 +470,8 @@ async fn default_group_changes_still_validate_resolution_inputs() -> Result<()> 
         "requires-python = \">=3.12\"",
         "requires-python = \">=3.12,!=3.13.0\"",
     ))?;
-    uv_snapshot!(context.filters(), resolve(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .arg("--no-cache").env(EnvVars::UV_HTTP_RETRIES, "0"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to fetch: http://[LOCALHOST]/simple/a/
@@ -487,7 +480,8 @@ async fn default_group_changes_still_validate_resolution_inputs() -> Result<()> 
     assert_eq!(original, context.read("uv.lock"));
 
     pyproject.write_str(&format!("{changed_defaults}\n[tool.uv.dependency-groups]\ndev = {{ requires-python = \">=3.12,!=3.13.0\" }}\n"))?;
-    uv_snapshot!(context.filters(), resolve(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .arg("--no-cache").env(EnvVars::UV_HTTP_RETRIES, "0"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to fetch: http://[LOCALHOST]/simple/a/
@@ -496,14 +490,16 @@ async fn default_group_changes_still_validate_resolution_inputs() -> Result<()> 
     assert_eq!(original, context.read("uv.lock"));
 
     pyproject.write_str(&changed_defaults)?;
-    uv_snapshot!(context.filters(), resolve().arg("--refresh"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .arg("--no-cache").env(EnvVars::UV_HTTP_RETRIES, "0").arg("--refresh"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to fetch: http://[LOCALHOST]/simple/a/
       cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/simple/a/)
     ");
     assert_eq!(original, context.read("uv.lock"));
-    uv_snapshot!(context.filters(), resolve().arg("--upgrade"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .arg("--no-cache").env(EnvVars::UV_HTTP_RETRIES, "0").arg("--upgrade"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to fetch: http://[LOCALHOST]/simple/a/
