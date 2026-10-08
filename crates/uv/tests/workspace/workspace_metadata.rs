@@ -1,5 +1,5 @@
 use std::path::Path;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-python"))]
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
@@ -10,9 +10,9 @@ use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use url::Url;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-python"))]
 use wiremock::matchers::{method, path};
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-python"))]
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
@@ -797,7 +797,7 @@ fn workspace_metadata_script_sync_launcher_override() -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-python"))]
 #[tokio::test]
 async fn workspace_metadata_script_reuses_resolution_interpreter() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
@@ -870,11 +870,103 @@ async fn workspace_metadata_script_reuses_resolution_interpreter() -> Result<()>
 
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(metadata["environment"]["python"]["version"], @r#"
-        "3.12.[X]"
-        "#);
+        insta::assert_json_snapshot!(metadata["environment"]["python"]["version"], @r#""3.12.[X]""#);
     });
 
+    Ok(())
+}
+
+/// Replacing an existing script environment during resolution must not change the selected Python.
+#[cfg(all(unix, feature = "test-python"))]
+#[tokio::test]
+async fn workspace_metadata_script_replaces_changed_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let [(_, _), (_, replacement_python)] = context.python_versions.as_slice() else {
+        return Err(anyhow::anyhow!("expected Python 3.12 and 3.11"));
+    };
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # dependencies = []
+        # ///
+        "#})?;
+    let initial = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--python")
+        .arg("3.12")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&initial.get_output().stdout)?;
+    let environment = Path::new(
+        metadata["environment"]["root"]
+            .as_str()
+            .context("expected an environment root")?,
+    )
+    .to_path_buf();
+    let replacement = context.temp_dir.join("replacement-environment");
+    context
+        .venv()
+        .arg(&replacement)
+        .arg("--python")
+        .arg(replacement_python)
+        .assert()
+        .success();
+
+    let wheel = context
+        .temp_dir
+        .child("changing_python-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "changing-python",
+        "changing_python-0.1.0",
+        &[("changing_python.py", "")],
+    )?;
+    let wheel_bytes = fs_err::read(wheel.path())?;
+    let server = MockServer::start().await;
+    let replaced = Arc::new(OnceLock::new());
+    let replace_once = Arc::clone(&replaced);
+    Mock::given(method("GET"))
+        .and(path("/changing_python-0.1.0-py3-none-any.whl"))
+        .respond_with(move |_: &wiremock::Request| {
+            let result = replace_once.get_or_init(|| {
+                fs_err::remove_dir_all(&environment)
+                    .and_then(|()| fs_err::rename(&replacement, &environment))
+                    .map_err(|error| error.to_string())
+            });
+            if let Err(error) = result {
+                return ResponseTemplate::new(500).set_body_string(error.clone());
+            }
+            ResponseTemplate::new(200).set_body_bytes(wheel_bytes.clone())
+        })
+        .mount(&server)
+        .await;
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["changing-python @ {server}/changing_python-0.1.0-py3-none-any.whl"]
+        # ///
+        "#,
+        server = server.uri(),
+    })?;
+
+    let result = context
+        .workspace_metadata()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--sync")
+        .arg("--python")
+        .arg("3.12")
+        .assert()
+        .success();
+    assert!(replaced.get().is_some_and(Result::is_ok));
+    let metadata: serde_json::Value = serde_json::from_slice(&result.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["environment"]["python"]["version"], @r#""3.12.[X]""#);
+    });
     Ok(())
 }
 

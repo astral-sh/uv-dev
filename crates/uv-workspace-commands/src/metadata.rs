@@ -10,6 +10,7 @@ use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, Modifications,
 };
 use uv_dispatch::UniversalState;
+use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
@@ -135,10 +136,13 @@ pub async fn metadata(
                             }
                             ScriptInterpreter::Environment(environment) => {
                                 let interpreter = environment.into_interpreter();
-                                script_interpreter_request = Some(RequestedInterpreter::new(
-                                    interpreter.clone(),
-                                    PythonRequest::File(interpreter.sys_executable().to_path_buf()),
-                                ));
+                                let base_interpreter =
+                                    CachedEnvironment::base_interpreter(&interpreter, cache)?;
+                                let request = PythonRequest::File(
+                                    base_interpreter.sys_executable().to_path_buf(),
+                                );
+                                script_interpreter_request =
+                                    Some(RequestedInterpreter::new(base_interpreter, request));
                                 interpreter
                             }
                         };
