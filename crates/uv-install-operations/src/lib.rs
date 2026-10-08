@@ -736,7 +736,7 @@ async fn execute_plan(
 
         let layout = venv.interpreter().layout();
         for dist_info in &uninstalls {
-            match uv_installer::uninstall(dist_info, &layout).await {
+            match uv_installer::uninstall(dist_info, &layout, venv.destination_lock()).await {
                 Ok(summary) => {
                     debug!(
                         "Uninstalled {} ({} file{}, {} director{})",

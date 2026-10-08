@@ -8,7 +8,7 @@ use uv_cache::Cache;
 use uv_distribution_types::CachedDist;
 use uv_install_wheel::{Layout, LinkMode};
 use uv_preview::Preview;
-use uv_python_interpreter::PythonEnvironment;
+use uv_python_interpreter::{EnvironmentLock, PythonEnvironment};
 use uv_threads::initialize_rayon_once;
 
 /// A failure while installing wheels into a Python environment.
@@ -30,6 +30,7 @@ pub enum InstallError {
 
 pub struct Installer<'a> {
     venv: &'a PythonEnvironment,
+    destination_lock: Option<Arc<EnvironmentLock>>,
     link_mode: LinkMode,
     cache: Option<&'a Cache>,
     reporter: Option<Arc<dyn Reporter>>,
@@ -46,6 +47,7 @@ impl<'a> Installer<'a> {
     pub fn new(venv: &'a PythonEnvironment, preview: Preview) -> Self {
         Self {
             venv,
+            destination_lock: venv.destination_lock(),
             link_mode: LinkMode::default(),
             cache: None,
             reporter: None,
@@ -102,6 +104,7 @@ impl<'a> Installer<'a> {
     pub async fn install(self, wheels: Vec<CachedDist>) -> Result<Vec<CachedDist>, InstallError> {
         let Self {
             venv,
+            destination_lock,
             cache,
             link_mode,
             reporter,
@@ -123,6 +126,7 @@ impl<'a> Installer<'a> {
         // Initialize the threadpool with the user settings.
         initialize_rayon_once();
         rayon::spawn(move || {
+            let _destination_lock = destination_lock;
             let result = install(
                 wheels,
                 &layout,
@@ -230,13 +234,23 @@ pub trait Reporter: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use uv_cache::Cache;
-    use uv_preview::Preview;
-    use uv_python_discovery::find_environment;
-    use uv_python_interpreter::PythonEnvironment;
-    use uv_python_types::{EnvironmentPreference, PythonPreference, PythonRequest};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
 
-    use super::Installer;
+    use anyhow::Result;
+    use tokio::sync::oneshot;
+    use uv_cache::Cache;
+    use uv_cache_info::CacheInfo;
+    use uv_cache_key::cache_digest;
+    use uv_distribution_types::{CachedDist, CachedRegistryDist};
+    use uv_fs::{LockedFile, LockedFileMode};
+    use uv_preview::Preview;
+    use uv_pypi_types::HashDigests;
+    use uv_python_discovery::find_environment;
+    use uv_python_interpreter::{EnvironmentLock, PythonEnvironment};
+    use uv_python_types::{EnvironmentPreference, PythonPreference, PythonRequest, Target};
+
+    use super::{Installer, Reporter};
 
     fn environment() -> PythonEnvironment {
         let _preview = uv_preview::test::with_features(&[]);
@@ -277,5 +291,94 @@ mod tests {
         let installer = Installer::new(&environment, Preview::default()).with_installer_name(None);
 
         assert_eq!(installer.name, None);
+    }
+
+    struct InstallationGate {
+        started: Mutex<Option<oneshot::Sender<()>>>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl Reporter for InstallationGate {
+        fn on_install_progress(&self, _wheel: &CachedDist) {
+            if let Some(started) = self.started.lock().expect("gate mutex").take() {
+                let _ = started.send(());
+            }
+            let _ = self.release.lock().expect("gate mutex").recv();
+        }
+
+        fn on_install_complete(&self) {}
+    }
+
+    #[tokio::test]
+    async fn cancelled_installer_retains_destination_and_temporary_cache() -> Result<()> {
+        let cache = Cache::temp()?.init().await?;
+        let root = cache.root().join("environment");
+        let wheel = cache.root().join("wheel");
+        let dist_info = wheel.join("example-1.0.0.dist-info");
+        fs_err::create_dir_all(&dist_info)?;
+        fs_err::write(wheel.join("example.py"), "value = 1")?;
+        fs_err::write(
+            dist_info.join("METADATA"),
+            "Metadata-Version: 2.1\nName: example\nVersion: 1.0.0\n",
+        )?;
+        fs_err::write(
+            dist_info.join("WHEEL"),
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )?;
+        fs_err::write(
+            dist_info.join("RECORD"),
+            "example.py,,\nexample-1.0.0.dist-info/METADATA,,\nexample-1.0.0.dist-info/WHEEL,,\nexample-1.0.0.dist-info/RECORD,,\n",
+        )?;
+
+        let guard = EnvironmentLock::acquire(&[root.clone()], &cache).await?;
+        let environment = environment()
+            .with_target(Target::from(root.clone()))?
+            .with_destination_lock(&guard);
+        let key = fs_err::canonicalize(&root)?;
+        let lock_path =
+            std::env::temp_dir().join(format!("uv-environment-{}.lock", cache_digest(&key)));
+        let (started, ready) = oneshot::channel();
+        let (release, receiver) = mpsc::channel();
+        let reporter = Arc::new(InstallationGate {
+            started: Mutex::new(Some(started)),
+            release: Mutex::new(receiver),
+        });
+        let distribution = CachedDist::Registry(CachedRegistryDist {
+            filename: "example-1.0.0-py3-none-any.whl".parse()?,
+            path: wheel.into_boxed_path(),
+            hashes: HashDigests::empty(),
+            cache_info: CacheInfo::default(),
+            build_info: None,
+        });
+        let task = tokio::spawn(async move {
+            Installer::new(&environment, Preview::default())
+                .with_reporter(reporter)
+                .install(vec![distribution])
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(30), ready).await??;
+        task.abort();
+        assert!(task.await.expect_err("caller was cancelled").is_cancelled());
+        drop(cache);
+        drop(guard);
+
+        assert!(root.join("example.py").is_file());
+        assert!(
+            LockedFile::acquire_no_wait(&lock_path, LockedFileMode::Exclusive, root.display())
+                .is_none()
+        );
+
+        release.send(())?;
+        let admitted = tokio::time::timeout(
+            Duration::from_secs(30),
+            LockedFile::acquire(&lock_path, LockedFileMode::Exclusive, root.display()),
+        )
+        .await??;
+        assert!(
+            !root.exists(),
+            "worker cache lease is released before destination admission"
+        );
+        drop(admitted);
+        Ok(())
     }
 }

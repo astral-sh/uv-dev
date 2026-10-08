@@ -1,6 +1,7 @@
 //! Query Python interpreters and inspect their environments.
 
 mod environment;
+mod environment_lock;
 mod interpreter;
 mod pointer_size;
 mod virtualenv;
@@ -9,6 +10,7 @@ pub use environment::{
     EnvironmentNotFound, Error as PythonEnvironmentError, InvalidEnvironment,
     InvalidEnvironmentKind, PythonEnvironment,
 };
+pub use environment_lock::EnvironmentLock;
 pub use interpreter::{
     BrokenLink, Error as InterpreterError, ExternallyManaged, Interpreter, InterpreterInfoError,
     StatusCodeError, UnexpectedResponseError, canonicalize_executable,

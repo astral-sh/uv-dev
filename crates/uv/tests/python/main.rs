@@ -22,3 +22,6 @@ mod python_upgrade;
 
 #[cfg(feature = "test-python")]
 mod venv;
+
+#[cfg(feature = "test-python")]
+mod environment_lock;

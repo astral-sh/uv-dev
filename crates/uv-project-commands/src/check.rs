@@ -360,8 +360,8 @@ pub async fn check(
     let mut locked_ty_path = None;
     let venv = if let Some(script) = &script {
         let extras = extras.with_defaults(DefaultExtras::default());
-        let venv = if let Some(venv) = isolated_venv {
-            venv
+        let (venv, _destination_lock) = if let Some(venv) = isolated_venv {
+            (venv, None)
         } else {
             ScriptEnvironment::get_or_init(
                 script.into(),
@@ -379,7 +379,7 @@ pub async fn check(
                 printer,
             )
             .await?
-            .into_environment()?
+            .into_parts()?
         };
 
         let state = UniversalState::default();
@@ -496,8 +496,8 @@ pub async fn check(
             Vec::new(),
         );
 
-        let venv = if let Some(venv) = isolated_venv {
-            venv
+        let (venv, _destination_lock) = if let Some(venv) = isolated_venv {
+            (venv, None)
         } else {
             ProjectEnvironment::get_or_init(
                 ProjectEnvironmentTarget::from(project.workspace()),
@@ -518,7 +518,7 @@ pub async fn check(
                 printer,
             )
             .await?
-            .into_environment()?
+            .into_parts()?
         };
 
         // `--no-sync` intentionally permits an incompatible project environment, but locking must

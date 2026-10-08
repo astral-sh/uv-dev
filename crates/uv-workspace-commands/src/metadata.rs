@@ -230,7 +230,7 @@ pub async fn metadata(
                     printer,
                 )
                 .await?
-                .into_environment()?
+                .into_parts()?
             }
             MetadataSource::Manifest(LockTarget::Script(script)) => ScriptEnvironment::get_or_init(
                 (*script).into(),
@@ -248,7 +248,7 @@ pub async fn metadata(
                 printer,
             )
             .await?
-            .into_environment()?,
+            .into_parts()?,
             MetadataSource::Lockfile(workspace) => ProjectEnvironment::get_or_init(
                 ProjectEnvironmentTarget::Lockfile {
                     root: workspace.root(),
@@ -271,7 +271,7 @@ pub async fn metadata(
                 printer,
             )
             .await?
-            .into_environment()?,
+            .into_parts()?,
         })
     } else {
         match &source {
@@ -285,9 +285,10 @@ pub async fn metadata(
                 ProjectInterpreter::discover_existing(workspace.root(), active, cache)?
             }
         }
+        .map(|environment| (environment, None))
     };
 
-    if let Some(environment) = environment {
+    if let Some((environment, _destination_lock)) = environment {
         let _lock = environment
             .lock()
             .await

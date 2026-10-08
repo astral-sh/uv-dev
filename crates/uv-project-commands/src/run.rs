@@ -210,7 +210,7 @@ pub async fn run(
             debug!("Found existing lockfile for script");
 
             // Discover the interpreter for the script.
-            let environment = ScriptEnvironment::get_or_init(
+            let (environment, _destination_lock) = ScriptEnvironment::get_or_init(
                 (&script).into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
@@ -226,7 +226,7 @@ pub async fn run(
                 printer,
             )
             .await?
-            .into_environment()?;
+            .into_parts()?;
 
             let _lock = environment
                 .lock()
@@ -401,7 +401,7 @@ pub async fn run(
                 )
                 .await?
                 .into_inner();
-                let environment = ScriptEnvironment::get_or_init(
+                let (environment, _destination_lock) = ScriptEnvironment::get_or_init(
                     (&script).into(),
                     python.as_deref().map(PythonRequest::parse),
                     &client_builder,
@@ -417,7 +417,7 @@ pub async fn run(
                     printer,
                 )
                 .await?
-                .into_environment()?;
+                .into_parts()?;
 
                 let _lock = environment
                     .lock()
@@ -647,7 +647,7 @@ pub async fn run(
             let groups = groups.with_defaults(default_groups);
             let extras = extras.with_defaults(default_extras);
 
-            let venv = if isolated {
+            let (venv, _destination_lock) = if isolated {
                 debug!("Creating isolated virtual environment");
 
                 // If we're isolating the environment, use an ephemeral virtual environment as the
@@ -678,7 +678,7 @@ pub async fn run(
 
                 // Create a virtual environment
                 temp_dir = cache.venv_dir()?;
-                uv_virtualenv::create_venv(
+                let environment = uv_virtualenv::create_venv(
                     temp_dir.path(),
                     interpreter.into_interpreter(),
                     uv_virtualenv::Prompt::None,
@@ -689,7 +689,8 @@ pub async fn run(
                     false,
                     uv_virtualenv::Seed::Disabled,
                     false,
-                )?
+                )?;
+                (environment, None)
             } else {
                 // If we're not isolating the environment, reuse the base environment for the
                 // project.
@@ -712,7 +713,7 @@ pub async fn run(
                     printer,
                 )
                 .await?
-                .into_environment()?
+                .into_parts()?
             };
 
             if no_sync {

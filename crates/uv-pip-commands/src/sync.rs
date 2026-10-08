@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::sync::Arc;
 
 use anyhow::Result;
 use itertools::Itertools;
@@ -28,7 +29,7 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::Conflicts;
 use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::find_environment;
-use uv_python_interpreter::PythonEnvironment;
+use uv_python_interpreter::{EnvironmentLock, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonDownloads, PythonPreference,
     PythonRequest, PythonVersion, Target,
@@ -177,40 +178,75 @@ pub async fn pip_sync(
         }
     }
 
-    // Detect the current Python interpreter.
-    let environment = if target.is_some() || prefix.is_some() {
-        let python_request = python.as_deref().map(PythonRequest::parse);
-        let reporter = PythonDownloadReporter::single(printer);
+    // Re-discover after destination admission: replacement may change the selected interpreter.
+    let mut destination_lock: Option<Arc<EnvironmentLock>> = None;
+    let mut admitted = false;
+    let (environment, installation) = loop {
+        let (environment, installation) = if target.is_some() || prefix.is_some() {
+            let python_request = python.as_deref().map(PythonRequest::parse);
+            let reporter = PythonDownloadReporter::single(printer);
 
-        let installation = PythonInstallation::find_or_download(
-            python_request.as_ref(),
-            EnvironmentPreference::from_system_flag(system, false),
-            python_preference.with_system_flag(system),
-            python_arch,
-            python_downloads,
-            &client_builder,
-            &cache,
-            Some(&reporter),
-            install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url.as_deref(),
-        )
-        .await?;
-        report_interpreter(&installation, true, printer)?;
-        PythonEnvironment::from_interpreter(installation.into_interpreter())
-    } else {
-        let environment = find_environment(
-            &python
-                .as_deref()
-                .map(PythonRequest::parse)
-                .unwrap_or_default(),
-            EnvironmentPreference::from_system_flag(system, true),
-            PythonPreference::default().with_system_flag(system),
-            python_arch,
-            &cache,
-        )?;
-        report_target_environment(&environment, &cache, printer)?;
-        environment
+            let installation = PythonInstallation::find_or_download(
+                python_request.as_ref(),
+                EnvironmentPreference::from_system_flag(system, false),
+                python_preference.with_system_flag(system),
+                python_arch,
+                python_downloads,
+                &client_builder,
+                &cache,
+                Some(&reporter),
+                install_mirrors.mirrors(),
+                install_mirrors.python_downloads_json_url.as_deref(),
+            )
+            .await?;
+            (
+                PythonEnvironment::from_interpreter(installation.interpreter().clone()),
+                Some(installation),
+            )
+        } else {
+            let environment = find_environment(
+                &python
+                    .as_deref()
+                    .map(PythonRequest::parse)
+                    .unwrap_or_default(),
+                EnvironmentPreference::from_system_flag(system, true),
+                PythonPreference::default().with_system_flag(system),
+                python_arch,
+                &cache,
+            )?;
+            (environment, None)
+        };
+
+        let destination = target
+            .as_ref()
+            .map(Target::root)
+            .or_else(|| prefix.as_ref().map(Prefix::root))
+            .unwrap_or_else(|| environment.root())
+            .to_path_buf();
+        let paths = [destination];
+        let needs_admission = match destination_lock.as_ref() {
+            Some(lock) => !lock.matches(&paths)?,
+            None => !admitted,
+        };
+        if needs_admission {
+            drop(destination_lock.take());
+            destination_lock = EnvironmentLock::acquire(&paths, &cache)
+                .await
+                .inspect_err(|err| warn!("Failed to acquire environment lock: {err}"))
+                .ok();
+            admitted = true;
+            if destination_lock.is_some() {
+                continue;
+            }
+        }
+        break (environment, installation);
     };
+
+    if let Some(installation) = installation {
+        report_interpreter(&installation, true, printer)?;
+    } else {
+        report_target_environment(&environment, &cache, printer)?;
+    }
 
     // Apply any `--target` or `--prefix` directories.
     let environment = if let Some(target) = target {
@@ -225,6 +261,13 @@ pub async fn pip_sync(
             prefix.root().user_display()
         );
         environment.with_prefix(prefix)?
+    } else {
+        environment
+    };
+
+    let environment = if let Some(lock) = destination_lock.as_mut() {
+        lock.finish_creation()?;
+        environment.with_destination_lock(lock)
     } else {
         environment
     };

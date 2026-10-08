@@ -42,7 +42,7 @@ use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceEr
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironmentTarget, centralized_environment_root,
     centralized_environments_enabled, is_centralized_environment_reference,
-    lock_project_environment, update_project_environment_link,
+    lock_environment_destination, lock_project_environment, update_project_environment_link,
 };
 use uv_install_operations::Changelog;
 use uv_install_operations::loggers::{DefaultInstallLogger, InstallLogger};
@@ -240,6 +240,14 @@ pub(crate) async fn venv(
         None
     };
 
+    let reference = centralized_workspace
+        .map(|workspace| workspace.install_path().join(".venv"))
+        .unwrap_or_else(|| path.clone());
+    let mut destination_lock = lock_environment_destination(&reference, &path, cache)
+        .await
+        .inspect_err(|err| warn!("Failed to acquire environment lock: {err}"))
+        .ok();
+
     let on_existing = match on_existing {
         OnExisting::Prompt | OnExisting::Remove(_) if centralized_workspace.is_some() => {
             // Centralized environments are managed by uv, so replace them without prompting.
@@ -276,6 +284,12 @@ pub(crate) async fn venv(
         upgradeable,
     )
     .map_err(VenvError::Creation)?;
+    let venv = if let Some(lock) = destination_lock.as_mut() {
+        lock.finish_creation()?;
+        venv.with_destination_lock(lock)
+    } else {
+        venv
+    };
     venv.cache_virtualenv(system_site_packages, cache)?;
 
     // Install seed packages.

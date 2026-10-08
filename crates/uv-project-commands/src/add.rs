@@ -194,6 +194,7 @@ pub async fn add(
     // Default groups we need the actual project for, interpreter discovery will use this!
     let defaulted_groups;
 
+    let mut _destination_lock = None;
     let (mut target, python_target) = if let Some(script) = script {
         // If we found a PEP 723 script and the user provided a project-only setting, warn.
         if package.is_some() {
@@ -344,7 +345,7 @@ pub async fn add(
             )
         } else {
             // Discover or create the virtual environment.
-            let environment = ProjectEnvironment::get_or_init(
+            let (environment, destination_lock) = ProjectEnvironment::get_or_init(
                 ProjectEnvironmentTarget::from(project.workspace()),
                 None,
                 &defaulted_groups,
@@ -363,7 +364,8 @@ pub async fn add(
                 printer,
             )
             .await?
-            .into_environment()?;
+            .into_parts()?;
+            _destination_lock = destination_lock;
 
             (
                 EditTarget::Project(project),

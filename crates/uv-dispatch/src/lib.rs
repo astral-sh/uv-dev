@@ -510,7 +510,7 @@ impl BuildContext for BuildDispatch<'_> {
         if !reinstalls.is_empty() {
             let layout = venv.interpreter().layout();
             for dist_info in &reinstalls {
-                let summary = uv_installer::uninstall(dist_info, &layout)
+                let summary = uv_installer::uninstall(dist_info, &layout, venv.destination_lock())
                     .await
                     .map_err(BuildDispatchError::UninstallBuildDependencies)?;
                 debug!(

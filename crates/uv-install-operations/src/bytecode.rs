@@ -38,6 +38,7 @@ pub(super) async fn compile_bytecode(
             venv.python_executable(),
             concurrency,
             cache.root(),
+            venv.destination_lock(),
         )
         .await
         .map_err(|source| Error::CompileTree {
@@ -58,9 +59,15 @@ pub(super) async fn compile_bytecode_files(
     printer: Printer,
 ) -> Result<(), Error> {
     let start = std::time::Instant::now();
-    let files = compile_files(files, venv.python_executable(), concurrency, cache.root())
-        .await
-        .map_err(Error::CompileFiles)?;
+    let files = compile_files(
+        files,
+        venv.python_executable(),
+        concurrency,
+        cache.root(),
+        venv.destination_lock(),
+    )
+    .await
+    .map_err(Error::CompileFiles)?;
     if files == 0 {
         return Ok(());
     }
