@@ -139,7 +139,7 @@ pub async fn find_script(
     cache: &Cache,
     printer: Printer,
 ) -> Result<ExitStatus> {
-    let interpreter = match ScriptInterpreter::discover(
+    let interpreter = ScriptInterpreter::discover(
         script,
         None,
         client_builder,
@@ -155,10 +155,7 @@ pub async fn find_script(
     )
     .await
     .map_err(UvError::user)?
-    {
-        ScriptInterpreter::Interpreter(selection) => selection.into_interpreter(),
-        ScriptInterpreter::Environment(environment) => environment.into_interpreter(),
-    };
+    .into_interpreter();
 
     if show_version {
         writeln!(printer.stdout(), "{}", interpreter.python_version())?;
