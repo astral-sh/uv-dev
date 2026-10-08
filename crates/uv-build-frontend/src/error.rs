@@ -1,4 +1,5 @@
 use std::env;
+use std::error::Error as StdError;
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::path::PathBuf;
@@ -8,7 +9,7 @@ use crate::PythonRunnerOutput;
 use owo_colors::OwoColorize;
 use regex::regex;
 use thiserror::Error;
-use uv_configuration::BuildOutput;
+use uv_configuration::{BuildKind, BuildOutput};
 use uv_distribution_types::IsBuildBackendError;
 use uv_errors::{Hinted, Hints};
 use uv_fs::Simplified;
@@ -290,12 +291,84 @@ impl Display for MissingHeaderCause {
     }
 }
 
+/// A failure to read or parse a successful build-requirements hook response.
 #[derive(Debug, Error)]
+pub enum BuildRequirementsError {
+    #[error("Failed to read build requirements")]
+    Read {
+        backend: String,
+        build_kind: BuildKind,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("Failed to parse build requirements")]
+    Parse {
+        backend: String,
+        build_kind: BuildKind,
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum BuildBackendMessage {
+    Command(String),
+    Requirements(Box<BuildRequirementsError>),
+}
+
+impl From<String> for BuildBackendMessage {
+    fn from(message: String) -> Self {
+        Self::Command(message)
+    }
+}
+
+impl Display for BuildBackendMessage {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Command(message) => formatter.write_str(message),
+            Self::Requirements(error) => {
+                let (BuildRequirementsError::Read {
+                    backend,
+                    build_kind,
+                    ..
+                }
+                | BuildRequirementsError::Parse {
+                    backend,
+                    build_kind,
+                    ..
+                }) = error.as_ref();
+                write!(
+                    formatter,
+                    "Call to `{backend}.get_requires_for_build_{build_kind}` failed"
+                )
+            }
+        }
+    }
+}
+
+impl BuildBackendMessage {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Command(_) => None,
+            Self::Requirements(error) => Some(error.as_ref()),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct BuildBackendError {
-    message: String,
+    message: BuildBackendMessage,
     exit_code: ExitStatus,
     stdout: Vec<String>,
     stderr: Vec<String>,
+}
+
+impl StdError for BuildBackendError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.message.source()
+    }
 }
 
 impl Display for BuildBackendError {
@@ -322,13 +395,19 @@ impl Display for BuildBackendError {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub struct MissingHeaderError {
-    message: String,
+    message: BuildBackendMessage,
     exit_code: ExitStatus,
     stdout: Vec<String>,
     stderr: Vec<String>,
     cause: MissingHeaderCause,
+}
+
+impl StdError for MissingHeaderError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.message.source()
+    }
 }
 
 impl Display for MissingHeaderError {
@@ -350,13 +429,14 @@ impl Display for MissingHeaderError {
 impl Error {
     /// Construct an [`Error`] from the output of a failed command.
     pub(crate) fn from_command_output(
-        message: String,
+        message: impl Into<BuildBackendMessage>,
         output: &PythonRunnerOutput,
         level: BuildOutput,
         name: Option<&PackageName>,
         version: Option<&Version>,
         version_id: Option<&str>,
     ) -> Self {
+        let message = message.into();
         // e.g. `pygraphviz/graphviz_wrap.c:3020:10: fatal error: graphviz/cgraph.h: No such file or directory`
         let missing_header_re_gcc = regex!(
             r".*\.(?:c|c..|h|h..):\d+:\d+: fatal error: (.*\.(?:h|h..)): No such file or directory"
@@ -465,13 +545,17 @@ impl Error {
 #[cfg(test)]
 mod test {
     use std::assert_matches;
+    use std::error::Error as StdError;
+    use std::io;
 
-    use crate::{Error, PythonRunnerOutput};
+    use super::{BuildBackendMessage, BuildRequirementsError};
+    use crate::{Error, PythonRunnerOutput, read_build_requirements};
     use indoc::indoc;
     use std::process::ExitStatus;
     use std::str::FromStr;
-    use uv_configuration::BuildOutput;
-    use uv_errors::{ErrorWithHints, Hinted};
+    use uv_configuration::{BuildKind, BuildOutput};
+    use uv_distribution_types::IsBuildBackendError;
+    use uv_errors::{ErrorOptions, ErrorWithHints, Hinted, write_error_chain_with_options};
     use uv_normalize::PackageName;
     use uv_pep440::Version;
 
@@ -483,6 +567,133 @@ mod test {
             .replace("exit status: ", "exit code: ");
         let formatted = ErrorWithHints::new(formatted, err.hints()).to_string();
         anstream::adapter::strip_str(&formatted).to_string()
+    }
+
+    #[test]
+    fn missing_build_requirements_response_keeps_io_source() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("requires.json");
+        let error = read_build_requirements(&path, "backend", BuildKind::Wheel)
+            .expect_err("a missing response must fail");
+        assert_matches!(
+            &error,
+            BuildRequirementsError::Read { path: failed_path, backend, build_kind: BuildKind::Wheel, .. }
+                if failed_path == &path && backend == "backend"
+        );
+        assert_eq!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<io::Error>())
+                .expect("I/O source should be retained")
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_build_requirements_response_keeps_json_source() -> Result<(), Box<dyn StdError>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("requires.json");
+        fs_err::write(&path, "{}")?;
+        let output = PythonRunnerOutput {
+            status: ExitStatus::default(),
+            stdout: vec!["backend output".to_string()],
+            stderr: vec!["backend detail".to_string()],
+        };
+        let mut diagnostics = Vec::new();
+        for level in [BuildOutput::Debug, BuildOutput::Quiet, BuildOutput::Stderr] {
+            let response = read_build_requirements(&path, "backend", BuildKind::Wheel)
+                .expect_err("an object is not a requirements list");
+            assert_matches!(
+                &response,
+                BuildRequirementsError::Parse { path: failed_path, .. } if failed_path == &path
+            );
+            let error = Error::from_command_output(
+                BuildBackendMessage::Requirements(Box::new(response)),
+                &output,
+                level,
+                None,
+                None,
+                None,
+            );
+            assert!(error.is_user_failure());
+            assert!(error.is_build_backend_error());
+            let source =
+                std::iter::successors(Some(&error as &dyn StdError), |&error| error.source())
+                    .find_map(|source| source.downcast_ref::<serde_json::Error>())
+                    .expect("JSON source should survive backend context");
+            assert_eq!(source.classify(), serde_json::error::Category::Data);
+            let mut rendered = String::new();
+            write_error_chain_with_options(
+                &error,
+                &error.hints(),
+                ErrorOptions::default().with_stream(&mut rendered),
+            )?;
+            let rendered = anstream::adapter::strip_str(&rendered)
+                .to_string()
+                .replace("exit status: ", "exit code: ");
+            diagnostics.push(format!("{level:?}:\n{rendered}"));
+        }
+        insta::assert_snapshot!(diagnostics.join("\n"), @r"
+        Debug:
+        error: The build backend returned an error
+          cause: Call to `backend.get_requires_for_build_wheel` failed (exit code: 0)
+
+                 [stdout]
+                 backend output
+
+                 [stderr]
+                 backend detail
+          cause: Failed to parse build requirements
+          cause: invalid type: map, expected a sequence at line 1 column 0
+
+        hint: Build failures usually indicate a problem with the package or the build environment
+
+        Quiet:
+        error: The build backend returned an error
+          cause: Call to `backend.get_requires_for_build_wheel` failed (exit code: 0)
+          cause: Failed to parse build requirements
+          cause: invalid type: map, expected a sequence at line 1 column 0
+
+        hint: Build failures usually indicate a problem with the package or the build environment
+
+        Stderr:
+        error: The build backend returned an error
+          cause: Call to `backend.get_requires_for_build_wheel` failed (exit code: 0)
+          cause: Failed to parse build requirements
+          cause: invalid type: map, expected a sequence at line 1 column 0
+
+        hint: Build failures usually indicate a problem with the package or the build environment
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn build_requirements_response_keeps_source_with_build_hint() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("requires.json");
+        let response = read_build_requirements(&path, "backend", BuildKind::Wheel)
+            .expect_err("a missing response must fail");
+        let output = PythonRunnerOutput {
+            status: ExitStatus::default(),
+            stdout: Vec::new(),
+            stderr: vec!["error: invalid command 'bdist_wheel'".to_string()],
+        };
+        let error = Error::from_command_output(
+            BuildBackendMessage::Requirements(Box::new(response)),
+            &output,
+            BuildOutput::Quiet,
+            None,
+            None,
+            None,
+        );
+        assert_matches!(&error, Error::MissingHeader(_));
+        let source = std::iter::successors(Some(&error as &dyn StdError), |&error| error.source())
+            .find_map(|source| source.downcast_ref::<io::Error>())
+            .expect("I/O source should survive build-hint context");
+        assert_eq!(source.kind(), io::ErrorKind::NotFound);
+        Ok(())
     }
 
     #[test]
