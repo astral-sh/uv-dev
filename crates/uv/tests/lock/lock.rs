@@ -13367,6 +13367,7 @@ async fn lock_index_hash_algorithm_missing() -> Result<()> {
         .and(path(format!("/{wheel_filename}")))
         .respond_with(ResponseTemplate::new(500))
         .expect(0)
+        .with_priority(1)
         .mount(server.mock_server())
         .await;
 
