@@ -3,10 +3,13 @@
 import importlib.util
 import ssl
 import sys
+import threading
 import unittest
 import urllib.error
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
+from urllib.request import ProxyHandler, build_opener
 
 SPEC = importlib.util.spec_from_file_location(
     "publish_crates", Path(__file__).with_name("publish-crates.py")
@@ -80,6 +83,46 @@ class CratePreflight(unittest.TestCase):
         self.assertTrue(
             all(args.kwargs == {"timeout": 15} for args in self.opener.call_args_list)
         )
+
+    def test_direct_connection_reset_is_retried(self):
+        self.opener.side_effect = [ConnectionResetError("connection reset"), response()]
+        self.assertTrue(self.exists())
+        self.sleep.assert_called_once_with(1)
+        self.assertEqual(self.opener.call_count, 2)
+
+    def test_server_disconnect_before_headers_is_retried(self):
+        requests = []
+
+        class DisconnectOnce(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append(self.path)
+                if len(requests) == 1:
+                    self.close_connection = True
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *arguments):
+                pass
+
+        # Exercise urllib's real HTTP stack without inheriting proxy settings.
+        self.opener.side_effect = build_opener(ProxyHandler({})).open
+        with HTTPServer(("127.0.0.1", 0), DisconnectOnce) as server:
+            thread = threading.Thread(
+                target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+            )
+            thread.start()
+            try:
+                api_url = f"http://127.0.0.1:{server.server_port}"
+                self.assertTrue(PUBLISHER.crate_version_exists(CRATE, api_url))
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive())
+        self.assertEqual(requests, ["/crates/uv/0.12.23"] * 2)
+        self.assertEqual(self.opener.call_count, 2)
+        self.sleep.assert_called_once_with(1)
 
     def test_permanent_http_errors_fail_without_retry(self):
         for status in (400, 401, 403, 501):

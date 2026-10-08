@@ -122,7 +122,7 @@ def crate_version_exists(crate: Crate, api_url: str) -> bool:
                 ) from exc
             retry_after = retry_after_seconds(exc.headers.get("Retry-After"))
             error = exc
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             certificate_error = isinstance(exc, urllib.error.URLError) and isinstance(
                 exc.reason, ssl.SSLCertVerificationError
             )
