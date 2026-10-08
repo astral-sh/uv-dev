@@ -28,6 +28,14 @@ struct Recovery {
     journal: PathBuf,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("failed to decode Python replacement journal `{}`", journal.user_display())]
+struct JournalDecodeError {
+    journal: PathBuf,
+    #[source]
+    source: serde_json::Error,
+}
+
 impl Recovery {
     fn new(destination: &Path, scratch: &Path) -> io::Result<Self> {
         let key = destination
@@ -47,6 +55,17 @@ impl Recovery {
     fn save(&self, journal: &Journal) -> io::Result<()> {
         let contents = serde_json::to_vec(journal).map_err(io::Error::other)?;
         uv_fs::write_atomic_sync(&self.journal, contents)
+    }
+
+    fn discard_failed_journal(&self) {
+        if let Err(err) = fs_err::remove_file(&self.journal) {
+            // The original operation determines retry eligibility. Recovery can discard this
+            // journal later, since its predecessor was never moved or has been restored.
+            warn!(
+                "Python replacement journal cleanup is pending at `{}`: {err}",
+                self.journal.user_display()
+            );
+        }
     }
 
     fn finish(&self, journal: &Journal) -> io::Result<()> {
@@ -79,7 +98,15 @@ impl Recovery {
 
     fn recover(&self) -> io::Result<()> {
         let journal: Journal = match fs_err::read(&self.journal) {
-            Ok(contents) => serde_json::from_slice(&contents).map_err(io::Error::other)?,
+            Ok(contents) => serde_json::from_slice(&contents).map_err(|source| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    JournalDecodeError {
+                        journal: self.journal.clone(),
+                        source,
+                    },
+                )
+            })?,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
                 return match fs_err::symlink_metadata(&self.previous) {
                     Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -93,7 +120,14 @@ impl Recovery {
             Err(err) => return Err(err),
         };
         if journal.version != 1 {
-            return Err(io::Error::other("unsupported Python replacement journal"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unsupported Python replacement journal version {} at `{}`",
+                    journal.version,
+                    self.journal.user_display()
+                ),
+            ));
         }
         if journal.committed {
             if let Err(err) = self.finish(&journal) {
@@ -223,7 +257,7 @@ fn publish_inner(
     recovery.save(&journal)?;
     if let Err(err) = rename(destination, &recovery.previous) {
         // The existing installation was never moved.
-        fs_err::remove_file(&recovery.journal)?;
+        recovery.discard_failed_journal();
         return Err(err);
     }
     if let Err(publication) = rename(staged, destination) {
@@ -252,7 +286,7 @@ fn publish_inner(
                 ),
             ));
         }
-        fs_err::remove_file(&recovery.journal)?;
+        recovery.discard_failed_journal();
         return Err(publication);
     }
     let journal = Journal {
@@ -393,6 +427,95 @@ mod tests {
     fn installation(path: &Path, contents: &str) -> io::Result<()> {
         fs_err::create_dir_all(path)?;
         fs_err::write(path.join("interpreter"), contents)
+    }
+
+    #[test]
+    fn failed_predecessor_move_retains_error_when_cleanup_fails() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let destination = root.path().join("installed");
+        let staged = root.path().join("staged");
+        installation(&destination, "old")?;
+        installation(&staged, "new")?;
+        let recovery = Recovery::new(&destination, root.path())?;
+        let saved = root.path().join("saved-journal");
+        let error = publish_inner(
+            &staged,
+            &destination,
+            root.path(),
+            "transaction",
+            unavailable,
+            |_, _| {
+                // Obstruct journal removal with a real filesystem error, retaining its bytes.
+                fs_err::rename(&recovery.journal, &saved)?;
+                fs_err::create_dir(&recovery.journal)?;
+                fs_err::write(recovery.journal.join("sentinel"), "keep")?;
+                Err(io::Error::new(io::ErrorKind::TimedOut, "rename timed out"))
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(error.to_string(), "rename timed out");
+        assert_eq!(
+            fs_err::read_to_string(destination.join("interpreter"))?,
+            "old"
+        );
+        assert_eq!(
+            fs_err::read_to_string(recovery.journal.join("sentinel"))?,
+            "keep"
+        );
+        fs_err::remove_dir_all(&recovery.journal)?;
+        fs_err::rename(saved, &recovery.journal)?;
+        recovery.recover()?;
+        assert!(!recovery.journal.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn failed_publication_retains_error_when_restored_journal_cleanup_fails() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let destination = root.path().join("installed");
+        let staged = root.path().join("staged");
+        installation(&destination, "old")?;
+        installation(&staged, "new")?;
+        let recovery = Recovery::new(&destination, root.path())?;
+        let saved = root.path().join("saved-journal");
+        let error = publish_inner(
+            &staged,
+            &destination,
+            root.path(),
+            "transaction",
+            unavailable,
+            |from, to| {
+                if from == staged {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "rename timed out"));
+                }
+                rename(from, to)?;
+                if to == destination {
+                    // Restoration succeeds, while the remaining journal cannot be removed.
+                    fs_err::rename(&recovery.journal, &saved)?;
+                    fs_err::create_dir(&recovery.journal)?;
+                    fs_err::write(recovery.journal.join("sentinel"), "keep")?;
+                }
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(error.to_string(), "rename timed out");
+        assert_eq!(
+            fs_err::read_to_string(destination.join("interpreter"))?,
+            "old"
+        );
+        assert!(!recovery.previous.exists());
+        assert_eq!(
+            fs_err::read_to_string(recovery.journal.join("sentinel"))?,
+            "keep"
+        );
+        fs_err::remove_dir_all(&recovery.journal)?;
+        fs_err::rename(saved, &recovery.journal)?;
+        recovery.recover()?;
+        assert!(!recovery.journal.exists());
+        Ok(())
     }
 
     #[test]
