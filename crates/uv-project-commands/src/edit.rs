@@ -450,6 +450,49 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn created_file_setup_failure_is_cleaned() -> Result<()> {
+        const CHILD: &str = "UV_TEST_PROJECT_EDIT_DESCRIPTOR_LIMIT";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "edit::tests::created_file_setup_failure_is_cleaned",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()?;
+            assert!(output.status.success(), "{output:?}");
+            return Ok(());
+        }
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let state = EditState::new([path.clone()])?;
+        // This limit belongs to the isolated child, never the test runner's other tests.
+        uv_unix::set_open_file_limit(64)?;
+        let mut descriptors = Vec::new();
+        while let Ok(file) = fs_err::File::open("/dev/null") {
+            descriptors.push(file);
+        }
+        // Creation can take the final descriptor, but duplicating it for identity tracking fails.
+        drop(descriptors.pop());
+        let result = state.write_file(&path, b"lock contents");
+        state.finish(false);
+        let exists = path.try_exists()?;
+        drop(descriptors);
+        let Err(error) = result else {
+            bail!("descriptor exhaustion did not fail handle setup");
+        };
+        assert_eq!(error.raw_os_error(), Some(24)); // EMFILE on Unix.
+        assert!(
+            !exists,
+            "setup failure left the newly created lockfile behind"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn opened_replacement_is_rejected_before_truncation() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("pyproject.toml");
