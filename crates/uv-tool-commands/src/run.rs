@@ -39,7 +39,7 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_shell::WindowsRunnable;
 use uv_static::EnvVars;
@@ -840,7 +840,13 @@ async fn get_or_create_environment(
         operations::read_constraints(
             build_constraints,
             client_builder,
-            LoweringContext::new(cache, workspace_cache, client_builder.credentials_cache()),
+            LoweringContext::new(
+                &settings.resolver.sources,
+                &settings.resolver.index_locations,
+                cache,
+                workspace_cache,
+                client_builder.credentials_cache(),
+            ),
         )
         .await?,
     );
@@ -1033,7 +1039,13 @@ async fn get_or_create_environment(
         &[],
         None,
         client_builder,
-        LoweringContext::new(cache, workspace_cache, client_builder.credentials_cache()),
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
     )
     .await?;
     let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());

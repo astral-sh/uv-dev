@@ -41,7 +41,8 @@ use uv_python_types::{
     PythonVersion, VersionRequest,
 };
 use uv_requirements::{
-    GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
+    GroupsSpecification, LoweringContext, RequirementsSource, RequirementsSpecification,
+    is_pylock_toml,
 };
 use uv_resolver::{
     AnnotationStyle, DependencyMode, DisplayResolutionGraph, ExcludeNewer, FlatIndex, ForkStrategy,
@@ -206,8 +207,13 @@ pub async fn pip_compile(
     }
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
-    let lowering_context =
-        LoweringContext::new(&cache, &workspace_cache, client_builder.credentials_cache());
+    let lowering_context = LoweringContext::new(
+        &sources,
+        &index_locations,
+        &cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Read all requirements from the provided sources.
     let RequirementsSpecification {

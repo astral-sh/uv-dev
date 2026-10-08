@@ -33,7 +33,9 @@ use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonDownloads, PythonPreference,
     PythonRequest, PythonVersion, Target,
 };
-use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{
+    GroupsSpecification, LoweringContext, RequirementsSource, RequirementsSpecification,
+};
 use uv_resolver::{
     DependencyMode, ExcludeNewer, FlatIndex, OptionsBuilder, Prerelease, PythonRequirement,
     ResolutionMode, ResolverEnvironment,
@@ -109,8 +111,13 @@ pub async fn pip_sync(
     preview: Preview,
 ) -> Result<ExitStatus> {
     let client_builder = client_builder.clone().keyring(keyring_provider);
-    let lowering_context =
-        LoweringContext::new(&cache, &workspace_cache, client_builder.credentials_cache());
+    let lowering_context = LoweringContext::new(
+        &sources,
+        &index_locations,
+        &cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Initialize a few defaults.
     let overrides = &[];

@@ -35,7 +35,9 @@ use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonDownloads, PythonPreference,
     PythonRequest, PythonVersion, Target,
 };
-use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{
+    GroupsSpecification, LoweringContext, RequirementsSource, RequirementsSpecification,
+};
 use uv_resolver::{
     DependencyMode, ExcludeNewer, FlatIndex, OptionsBuilder, Prerelease, PythonRequirement,
     ResolutionMode, ResolverEnvironment,
@@ -144,8 +146,13 @@ pub async fn pip_install(
     let start = std::time::Instant::now();
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
-    let lowering_context =
-        LoweringContext::new(&cache, &workspace_cache, client_builder.credentials_cache());
+    let lowering_context = LoweringContext::new(
+        &sources,
+        &index_locations,
+        &cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Read all requirements from the provided sources.
     let RequirementsSpecification {

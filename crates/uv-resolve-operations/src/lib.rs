@@ -26,8 +26,9 @@ use uv_pep508::{MarkerEnvironment, RequirementOrigin};
 use uv_platform_tags::Tags;
 use uv_pypi_types::Conflicts;
 use uv_requirements::{
-    GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
-    RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
+    GroupsSpecification, LookaheadResolver, LoweringContext, NamedRequirementsResolver,
+    RequirementsSource, RequirementsSpecification, SourceTree, SourceTreeResolution,
+    SourceTreeResolver,
 };
 use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,

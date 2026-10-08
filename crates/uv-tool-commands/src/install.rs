@@ -31,7 +31,7 @@ use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_tool::{InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
@@ -120,6 +120,8 @@ pub async fn install(
                     &source,
                     &client_builder,
                     LoweringContext::new(
+                        &settings.resolver.sources,
+                        &settings.resolver.index_locations,
                         &cache,
                         workspace_cache,
                         client_builder.credentials_cache(),
@@ -168,7 +170,13 @@ pub async fn install(
     let receipt_build_constraints = operations::read_constraints(
         build_constraints,
         &client_builder,
-        LoweringContext::new(&cache, workspace_cache, client_builder.credentials_cache()),
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            &cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
     )
     .await?;
     let build_constraints =
@@ -392,7 +400,13 @@ pub async fn install(
         excludes,
         None,
         &client_builder,
-        LoweringContext::new(&cache, workspace_cache, client_builder.credentials_cache()),
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            &cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
     )
     .await?;
 

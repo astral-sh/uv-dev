@@ -386,8 +386,13 @@ pub async fn add(
         .clone()
         .keyring(settings.resolver.keyring_provider);
     let workspace_cache = WorkspaceCache::default();
-    let lowering_context =
-        LoweringContext::new(cache, &workspace_cache, client_builder.credentials_cache());
+    let lowering_context = LoweringContext::new(
+        &settings.resolver.sources,
+        &settings.resolver.index_locations,
+        cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Read the requirements.
     let RequirementsSpecification {

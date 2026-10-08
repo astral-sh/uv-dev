@@ -59,7 +59,7 @@ use uv_python_types::{
 };
 use uv_redacted::SafeUrl;
 use uv_requirements::{
-    RequirementsSource, RequirementsSpecification, script_extra_build_requires,
+    LoweringContext, RequirementsSource, RequirementsSpecification, script_extra_build_requires,
     script_specification,
 };
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
@@ -916,7 +916,13 @@ pub async fn run(
         let spec = RequirementsSpecification::from_simple_sources(
             &requirements,
             &client_builder,
-            LoweringContext::new(&cache, workspace_cache, client_builder.credentials_cache()),
+            LoweringContext::new(
+                &settings.resolver.sources,
+                &settings.resolver.index_locations,
+                &cache,
+                workspace_cache,
+                client_builder.credentials_cache(),
+            ),
         )
         .await?;
 
