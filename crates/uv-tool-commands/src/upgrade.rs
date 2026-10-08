@@ -627,7 +627,7 @@ async fn upgrade_tool(
             printer,
         )?;
     } else if tool_locks {
-        let metadata = ToolLock::prepare_metadata(
+        ToolLock::write_metadata(
             installed_tools,
             name,
             existing_tool_receipt
@@ -635,7 +635,6 @@ async fn upgrade_tool(
                 .with_options(ToolOptions::from(options)),
             tool_lock.as_ref(),
         )?;
-        installed_tools.commit_tool_metadata(name, &metadata)?;
     }
 
     let constraint = match &outcome {

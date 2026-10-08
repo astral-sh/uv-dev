@@ -16,7 +16,7 @@ const RECEIPT: &str = "uv-receipt.toml";
 const LOCK: &str = "uv.lock";
 
 /// Serialized tool metadata, ready to publish without further serialization.
-pub struct ToolMetadata {
+pub(super) struct ToolMetadata {
     receipt: String,
     lock: Option<String>,
 }

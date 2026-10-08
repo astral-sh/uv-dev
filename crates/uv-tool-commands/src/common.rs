@@ -385,15 +385,15 @@ impl ToolLock {
         }
     }
 
-    /// Serialize a tool receipt and its optional lock before publishing either file.
-    pub(super) fn prepare_metadata(
+    /// Serialize the optional lock and publish it with the tool receipt.
+    pub(super) fn write_metadata(
         installed_tools: &InstalledTools,
         name: &PackageName,
         tool: Tool,
         lock: Option<&Self>,
-    ) -> anyhow::Result<uv_tool::ToolMetadata> {
+    ) -> anyhow::Result<()> {
         let lock = lock.map(|lock| lock.lock.to_toml()).transpose()?;
-        Ok(installed_tools.prepare_tool_metadata(name, tool, lock)?)
+        Ok(installed_tools.write_tool_metadata(name, tool, lock)?)
     }
 
     /// Validate the lock against the current resolution inputs.
@@ -946,8 +946,7 @@ pub(super) fn finalize_tool_install(
         installed_entrypoints,
         options.clone(),
     );
-    let metadata = ToolLock::prepare_metadata(installed_tools, name, tool, lock)?;
-    installed_tools.commit_tool_metadata(name, &metadata)?;
+    ToolLock::write_metadata(installed_tools, name, tool, lock)?;
 
     warn_out_of_path(&executable_directory);
 
