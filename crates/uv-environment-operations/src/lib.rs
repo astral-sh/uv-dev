@@ -29,7 +29,7 @@ use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_python_discovery::ConfigDiscovery;
-use uv_python_discovery::PythonInstallation;
+use uv_python_discovery::{PythonInstallation, report_interpreter};
 use uv_python_interpreter::{
     BrokenLink, EnvironmentLock, Interpreter, InvalidEnvironmentKind, PythonEnvironment,
 };
@@ -631,6 +631,39 @@ impl ProjectInterpreter {
         cache: &Cache,
         printer: Printer,
     ) -> Result<Self, EnvironmentError> {
+        let (selected, installation) = Self::discover_unreported(
+            target,
+            project_python,
+            client_builder,
+            python_preference,
+            python_arch,
+            python_downloads,
+            install_mirrors,
+            policy,
+            active,
+            cache,
+            printer,
+        )
+        .await?;
+        if let Some(installation) = installation {
+            report_interpreter(&installation, false, printer)?;
+        }
+        Ok(selected)
+    }
+
+    async fn discover_unreported(
+        target: ProjectEnvironmentTarget<'_>,
+        project_python: ProjectPythonRequest,
+        client_builder: &BaseClientBuilder<'_>,
+        python_preference: PythonPreference,
+        python_arch: Option<PythonArchitecture>,
+        python_downloads: PythonDownloads,
+        install_mirrors: &PythonInstallMirrors,
+        policy: ProjectEnvironmentPolicy,
+        active: ActiveEnvironment,
+        cache: &Cache,
+        printer: Printer,
+    ) -> Result<(Self, Option<PythonInstallation>), EnvironmentError> {
         let python_request = project_python.python_request.as_ref();
         let requires_python = project_python.requires_python();
 
@@ -666,7 +699,7 @@ impl ProjectInterpreter {
                     centralized,
                     cache,
                 )? {
-                    return Ok(Self::Environment(environment));
+                    return Ok((Self::Environment(environment), None));
                 }
             }
         } else {
@@ -689,7 +722,7 @@ impl ProjectInterpreter {
                     cache,
                 )?
             {
-                return Ok(Self::Environment(environment));
+                return Ok((Self::Environment(environment), None));
             }
         }
 
@@ -723,34 +756,18 @@ impl ProjectInterpreter {
                 centralized,
                 cache,
             )? {
-                return Ok(Self::Environment(environment));
+                return Ok((Self::Environment(environment), None));
             }
         }
 
-        let managed = python.source().is_managed();
-        let implementation = python.implementation();
-        let interpreter = python.into_interpreter();
-
-        if managed {
-            writeln!(
-                printer.stderr(),
-                "Using {} {}{}",
-                implementation.pretty(),
-                interpreter.python_version().cyan(),
-                interpreter.variant().display_suffix().cyan(),
-            )?;
-        } else {
-            writeln!(
-                printer.stderr(),
-                "Using {} {}{} interpreter at: {}",
-                implementation.pretty(),
-                interpreter.python_version(),
-                interpreter.variant().display_suffix(),
-                interpreter.sys_executable().user_display().cyan()
-            )?;
-        }
-
-        Ok(Self::Interpreter(project_python.validate(interpreter)?))
+        let interpreter = match project_python.validate(python.interpreter().clone()) {
+            Ok(interpreter) => interpreter,
+            Err(error) => {
+                report_interpreter(&python, false, printer)?;
+                return Err(error.into());
+            }
+        };
+        Ok((Self::Interpreter(interpreter), Some(python)))
     }
 
     /// Convert the [`ProjectInterpreter`] into an [`Interpreter`].
@@ -854,7 +871,7 @@ fn with_destination_lock(
 
 enum SelectedEnvironment {
     Existing(PythonEnvironment),
-    Create(Interpreter),
+    Create(Box<Interpreter>),
 }
 
 /// The Python environment for a project.
@@ -959,7 +976,7 @@ impl ProjectEnvironment {
             .inspect_err(|err| warn!("Failed to acquire environment lock: {err}"))
             .ok();
         loop {
-            let selected = match ProjectInterpreter::discover(
+            let (selected, installation) = ProjectInterpreter::discover_unreported(
                 target,
                 project_python.clone(),
                 client_builder,
@@ -976,13 +993,13 @@ impl ProjectEnvironment {
                 cache,
                 printer,
             )
-            .await?
-            {
+            .await?;
+            let selected = match selected {
                 ProjectInterpreter::Environment(environment) => {
                     SelectedEnvironment::Existing(environment)
                 }
                 ProjectInterpreter::Interpreter(interpreter) => {
-                    SelectedEnvironment::Create(interpreter.into_interpreter())
+                    SelectedEnvironment::Create(Box::new(interpreter.into_interpreter()))
                 }
             };
             let destination = match &selected {
@@ -1002,6 +1019,9 @@ impl ProjectEnvironment {
                     .ok();
                 continue;
             }
+            if let Some(installation) = installation {
+                report_interpreter(&installation, false, printer)?;
+            }
             return match selected {
                 // Use the environment accepted by the compatibility policy.
                 SelectedEnvironment::Existing(environment) => {
@@ -1017,6 +1037,7 @@ impl ProjectEnvironment {
 
                 // Otherwise, create a virtual environment with the discovered interpreter.
                 SelectedEnvironment::Create(interpreter) => {
+                    let interpreter = *interpreter;
                     let root = destination;
                     let centralized_environment_reference =
                         !centralized && is_centralized_environment_reference(&root, cache);
@@ -1295,7 +1316,7 @@ impl ScriptEnvironment {
                     SelectedEnvironment::Existing(environment)
                 }
                 ScriptInterpreter::Interpreter(interpreter) => {
-                    SelectedEnvironment::Create(interpreter)
+                    SelectedEnvironment::Create(Box::new(interpreter))
                 }
             };
             let destination = match &selected {
@@ -1324,6 +1345,7 @@ impl ScriptEnvironment {
 
                 // Otherwise, create a virtual environment with the discovered interpreter.
                 SelectedEnvironment::Create(interpreter) => {
+                    let interpreter = *interpreter;
                     let root = destination;
 
                     // Determine a prompt for the environment, in order of preference:

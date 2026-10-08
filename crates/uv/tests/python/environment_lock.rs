@@ -87,7 +87,7 @@ async fn explicit_venv_replacement_waits_through_parent_alias() -> Result<()> {
     fs_err::write(&marker, "owned")?;
     let alias = context.root.child("alias");
     fs_err::os::unix::fs::symlink(context.temp_dir.path(), alias.path())?;
-    let guard = EnvironmentLock::acquire(&[destination.clone()], &cache).await?;
+    let guard = EnvironmentLock::acquire(std::slice::from_ref(&destination), &cache).await?;
 
     let mut command = context.venv();
     command
@@ -130,7 +130,7 @@ async fn separate_workspaces_wait_for_shared_environment_destination() -> Result
     context.venv().arg(&destination).assert().success();
     let destination = fs_err::canonicalize(&destination)?;
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
-    let guard = EnvironmentLock::acquire(&[destination.clone()], &cache).await?;
+    let guard = EnvironmentLock::acquire(std::slice::from_ref(&destination), &cache).await?;
 
     let mut command = context.sync();
     command
@@ -200,7 +200,7 @@ async fn queued_sync_reclaims_changed_centralized_reference() -> Result<()> {
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
     let original_guard =
         EnvironmentLock::acquire(&[reference.clone(), original.clone()], &cache).await?;
-    let updated_guard = EnvironmentLock::acquire(&[updated.clone()], &cache).await?;
+    let updated_guard = EnvironmentLock::acquire(std::slice::from_ref(&updated), &cache).await?;
     let mut command = context.sync();
     command.args([
         "--preview-features",
@@ -244,7 +244,7 @@ async fn queued_pip_install_rediscovers_retargeted_environment() -> Result<()> {
     let reference = context.temp_dir.join("selected");
     fs_err::os::unix::fs::symlink(&original, &reference)?;
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
-    let guard = EnvironmentLock::acquire(&[original.clone()], &cache).await?;
+    let guard = EnvironmentLock::acquire(std::slice::from_ref(&original), &cache).await?;
 
     let (filename, bytes) = generate_wheel(
         &"example".parse()?,
@@ -324,5 +324,115 @@ async fn run_releases_destination_before_user_program() -> Result<()> {
     connection.write_all(b"x").await?;
     run.finish().await?;
     drop(guard);
+    Ok(())
+}
+
+#[tokio::test]
+async fn venv_replacement_waits_for_running_project_install() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
+    let (filename, wheel) = generate_wheel(
+        &"project".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context.temp_dir.child(&filename).write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context
+        .temp_dir
+        .child("backend.py")
+        .write_str(&formatdoc! {r#"
+        import shutil
+        import socket
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        WHEEL = Path(__file__).with_name("{filename}")
+        DIST_INFO = "project-0.1.0.dist-info"
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = Path(metadata_directory) / DIST_INFO
+            dist_info.mkdir()
+            with ZipFile(WHEEL) as wheel:
+                (dist_info / "METADATA").write_bytes(wheel.read(f"{{DIST_INFO}}/METADATA"))
+            return dist_info.name
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            with socket.create_connection(("127.0.0.1", {port}), timeout=30) as connection:
+                connection.sendall(b"ready")
+                assert connection.recv(1) == b"x"
+            shutil.copyfile(WHEEL, Path(wheel_directory) / WHEEL.name)
+            return WHEEL.name
+    "#})?;
+
+    let mut command = context.sync();
+    command.args(["--offline", "--no-editable"]);
+    let sync = QueuedCommand::spawn(command)?;
+    let (mut connection, _) =
+        tokio::time::timeout(Duration::from_secs(30), listener.accept()).await??;
+    let mut ready = [0; 5];
+    tokio::time::timeout(Duration::from_secs(30), connection.read_exact(&mut ready)).await??;
+    assert_eq!(&ready, b"ready");
+
+    let destination = fs_err::canonicalize(context.venv.path())?;
+    let mut command = context.venv();
+    command.arg(&destination).args(["--clear", "--no-project"]);
+    let mut replacement = QueuedCommand::spawn(command)?;
+    replacement.wait_for_destination(&destination).await?;
+    assert!(replacement.child.try_wait()?.is_none());
+
+    connection.write_all(b"x").await?;
+    sync.finish().await?;
+    replacement.finish().await?;
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
+    let environment = PythonEnvironment::from_root(&destination, &cache)?;
+    assert!(
+        !environment
+            .site_packages()
+            .any(|path| path.join("project").is_dir())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn active_script_waits_for_environment_destination() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.venv().assert().success();
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+        print("ready")
+    "#})?;
+    let destination = fs_err::canonicalize(context.venv.path())?;
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
+    let guard = EnvironmentLock::acquire(std::slice::from_ref(&destination), &cache).await?;
+    let mut command = context.run();
+    command.args(["--active", "--offline"]).arg(script.path());
+    let mut run = QueuedCommand::spawn(command)?;
+    run.wait_for_destination(&destination).await?;
+    assert!(run.child.try_wait()?.is_none());
+    drop(guard);
+    run.finish().await?;
     Ok(())
 }

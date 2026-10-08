@@ -184,7 +184,7 @@ mod tests {
         }
         let first = parent.path().join("NewEnv");
         let second = parent.path().join("newenv");
-        let mut owner = EnvironmentLock::acquire(&[first.clone()], &cache).await?;
+        let mut owner = EnvironmentLock::acquire(std::slice::from_ref(&first), &cache).await?;
         let paths = [second.clone()];
         let waiter = EnvironmentLock::acquire(&paths, &cache);
         tokio::pin!(waiter);
@@ -217,7 +217,7 @@ mod tests {
             return Ok(());
         }
         let first = parent.path().join("NewParent").join("NewEnv");
-        let mut owner = EnvironmentLock::acquire(&[first.clone()], &cache).await?;
+        let mut owner = EnvironmentLock::acquire(std::slice::from_ref(&first), &cache).await?;
         fs_err::create_dir(parent.path().join("NewParent"))?;
 
         let second = parent.path().join("newparent").join("newenv");
@@ -249,7 +249,7 @@ mod tests {
         let parent = tempfile::tempdir()?;
         let first = parent.path().join("first");
         let second = parent.path().join("second");
-        let mut owner = EnvironmentLock::acquire(&[first.clone()], &cache).await?;
+        let mut owner = EnvironmentLock::acquire(std::slice::from_ref(&first), &cache).await?;
         fs_err::create_dir(&first)?;
         owner.finish_creation()?;
         let sibling = tokio::time::timeout(

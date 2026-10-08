@@ -101,7 +101,7 @@ fn spawn_workers(
     receiver: &Receiver<PathBuf>,
     worker_count: usize,
     timeout: Option<Duration>,
-    destination_lock: Option<Arc<EnvironmentLock>>,
+    destination_lock: Option<&Arc<EnvironmentLock>>,
 ) -> Vec<WorkerHandle> {
     debug!("Starting {} bytecode compilation workers", worker_count);
     let mut worker_handles = Vec::with_capacity(worker_count);
@@ -116,7 +116,7 @@ fn spawn_workers(
             timeout,
         );
 
-        let destination_lock = destination_lock.clone();
+        let destination_lock = destination_lock.cloned();
 
         // Spawn each worker on a dedicated thread.
         std::thread::Builder::new()
@@ -205,7 +205,7 @@ pub async fn compile_tree(
         &receiver,
         worker_count,
         timeout,
-        destination_lock,
+        destination_lock.as_ref(),
     );
     // Make sure the channel gets closed when all workers exit.
     drop(receiver);
@@ -289,7 +289,7 @@ pub async fn compile_files(
         &receiver,
         worker_count,
         timeout,
-        destination_lock,
+        destination_lock.as_ref(),
     );
     drop(receiver);
 

@@ -330,7 +330,7 @@ mod tests {
             "example.py,,\nexample-1.0.0.dist-info/METADATA,,\nexample-1.0.0.dist-info/WHEEL,,\nexample-1.0.0.dist-info/RECORD,,\n",
         )?;
 
-        let guard = EnvironmentLock::acquire(&[root.clone()], &cache).await?;
+        let guard = EnvironmentLock::acquire(std::slice::from_ref(&root), &cache).await?;
         let environment = environment()
             .with_target(Target::from(root.clone()))?
             .with_destination_lock(&guard);
