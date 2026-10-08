@@ -306,12 +306,12 @@ fn replace_with_junction(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn replace_with_symlink_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
-    // Best-effort removal of any existing entry. The destination may be a
-    // directory, file, or symlink, so try the directory removal first and
-    // fall back to file removal if that fails.
-    match fs_err::remove_dir_all(dst) {
+    // Directory links and empty directories can be replaced, but a nonempty real directory
+    // contains files that do not belong to the link. Files use the file-removal fallback.
+    match fs_err::remove_dir(dst) {
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => return Err(err),
         Err(_) => match fs_err::remove_file(dst) {
             Ok(()) => {}
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -403,6 +403,23 @@ mod windows_tests {
     use std::os::windows::ffi::OsStrExt;
 
     use super::*;
+
+    #[test]
+    fn directory_symlink_replacement_preserves_nonempty_directory() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let source = root.path().join("source");
+        let destination = root.path().join("destination");
+        fs_err::create_dir(&source)?;
+        fs_err::create_dir(&destination)?;
+        let sentinel = destination.join("sentinel");
+        fs_err::write(&sentinel, "unrelated contents")?;
+
+        assert!(replace_with_symlink_dir(&source, &destination).is_err());
+
+        assert_eq!(fs_err::read_to_string(sentinel)?, "unrelated contents");
+        assert!(!fs_err::symlink_metadata(destination)?.is_symlink());
+        Ok(())
+    }
 
     #[test]
     fn fs_err_read_link_reads_created_directory_link() -> std::io::Result<()> {
