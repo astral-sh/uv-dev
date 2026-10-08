@@ -386,9 +386,11 @@ impl Certificates {
             let dir_certs =
                 Self::from(result).filter_invalid(&CertificateSource::SslCertDir(dir.clone()));
             if !dir_certs.0.is_empty() {
-                certs.merge(dir_certs);
+                certs.0.extend(dir_certs.0);
             }
         }
+
+        certs.dedup();
 
         if certs.0.is_empty() {
             // Unlike `SSL_CERT_FILE`, it's plausible for this to be intentionally set to an
@@ -592,6 +594,19 @@ mod tests {
                 assert_eq!(certs.iter().count(), 0);
             },
         );
+    }
+
+    #[test]
+    fn test_from_ssl_cert_dir_multiple_directories_deduplicates() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let cert_pem = generate_cert_pem();
+        fs_err::write(first.path().join("cert.pem"), &cert_pem).unwrap();
+        fs_err::write(second.path().join("cert.pem"), cert_pem).unwrap();
+        let cert_dirs = std::env::join_paths([first.path(), second.path()]).unwrap();
+
+        let certs = Certificates::from_ssl_cert_dir(cert_dirs.as_os_str()).unwrap();
+        assert_eq!(certs.iter().count(), 1);
     }
 
     #[test]
