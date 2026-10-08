@@ -392,7 +392,7 @@ pub fn from_lock<'lock>(
                     Source::Registry(_) | Source::Git(_, _) | Source::Direct(_, _) => {
                         // Workspace packages should always be local dependencies
                         return Err(LockErrorKind::NonLocalWorkspaceMember {
-                            id: node.package.id.clone(),
+                            id: node.package.id.as_ref().clone(),
                         }
                         .into());
                     }
