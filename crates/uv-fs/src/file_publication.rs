@@ -773,6 +773,7 @@ mod tests {
         {
             Ok(output) => output,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                #[expect(clippy::print_stderr)]
                 eprintln!("skipping file-mount regression: unshare is unavailable");
                 return Ok(());
             }
@@ -783,6 +784,7 @@ mod tests {
             && stderr.starts_with("unshare:")
             && (stderr.contains("Operation not permitted") || stderr.contains("Permission denied"))
         {
+            #[expect(clippy::print_stderr)]
             eprintln!("skipping file-mount regression: private user namespaces are unavailable");
             return Ok(());
         }
