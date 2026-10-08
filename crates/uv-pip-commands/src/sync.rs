@@ -16,7 +16,7 @@ use uv_configuration::{
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, Name, Origin,
+    ConfigSettings, DependencyMetadata, ExtraBuildVariables, IndexLocations, Name,
     PackageConfigSettings, Resolution,
 };
 use uv_fs::Simplified;
@@ -45,6 +45,7 @@ use uv_warnings::warn_user;
 use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
+use crate::indexes::combine_requirements_indexes;
 use crate::install_report::write_install_report;
 use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::reporters::report_target_environment;
@@ -294,19 +295,11 @@ pub async fn pip_sync(
         HashStrategy::default()
     };
 
-    // Incorporate any index locations from the provided sources.
-    let index_locations = index_locations.combine(
-        extra_index_urls
-            .into_iter()
-            .map(Index::from_extra_index_url)
-            .chain(index_url.map(Index::from_index_url))
-            .map(|index| index.with_origin(Origin::RequirementsTxt))
-            .collect(),
-        find_links
-            .into_iter()
-            .map(Index::from_find_links)
-            .map(|index| index.with_origin(Origin::RequirementsTxt))
-            .collect(),
+    let index_locations = combine_requirements_indexes(
+        index_locations,
+        index_url,
+        extra_index_urls,
+        find_links,
         no_index,
     );
 
