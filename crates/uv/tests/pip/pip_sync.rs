@@ -1,9 +1,13 @@
 use std::env::consts::EXE_SUFFIX;
+use std::path::Path;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
+use filetime::FileTime;
 use fs_err as fs;
 use indoc::{formatdoc, indoc};
 use predicates::Predicate;
@@ -11,6 +15,7 @@ use url::Url;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use uv_cache_info::Timestamp;
 use uv_fs::{Simplified, copy_dir_all};
 use uv_static::EnvVars;
 use uv_test::find_links::FindLinksServer;
@@ -1278,6 +1283,28 @@ fn check_sync() -> Result<()> {
     Ok(())
 }
 
+/// Record a source timestamp change before expecting local-wheel cache invalidation.
+fn advance_wheel_timestamp(path: &Path, mtime: FileTime) -> Result<()> {
+    let before = Timestamp::from_path(path)?;
+    let start = Instant::now();
+    loop {
+        filetime::set_file_mtime(path, mtime)?;
+        let metadata = fs::metadata(path)?;
+        assert_eq!(FileTime::from_last_modification_time(&metadata), mtime);
+        if Timestamp::from_metadata(&metadata) != before {
+            return Ok(());
+        }
+        // Unix cache identity uses `ctime`, which cannot be assigned like `mtime`. Repeat the fixture
+        // update only while the filesystem has not recorded a distinct timestamp.
+        ensure!(
+            start.elapsed() < Duration::from_secs(5),
+            "The filesystem did not record a changed timestamp for wheel fixture `{}`",
+            path.display(),
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Resolve a local wheel.
 #[test]
 fn install_local_wheel() -> Result<()> {
@@ -1289,6 +1316,7 @@ fn install_local_wheel() -> Result<()> {
         "https://files.pythonhosted.org/packages/97/75/10a9ebee3fd790d20926a90a2547f0bf78f371b2f13aa822c759680ca7b9/tomli-2.0.1-py3-none-any.whl",
         &archive,
     );
+    filetime::set_file_mtime(&archive, FileTime::from_unix_time(1_700_000_000, 0))?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -1331,9 +1359,8 @@ fn install_local_wheel() -> Result<()> {
     // Create a new virtual environment.
     context.reset_venv();
 
-    // "Modify" the wheel.
-    // The `filetime` crate works on Windows unlike the std.
-    filetime::set_file_mtime(&archive, filetime::FileTime::now()).unwrap();
+    // "Modify" the wheel, verifying the cache identity changed before expecting invalidation.
+    advance_wheel_timestamp(archive.path(), FileTime::from_unix_time(1_700_000_010, 0))?;
 
     // Reinstall. The wheel should be "downloaded" again.
     uv_snapshot!(context.filters(), context.pip_sync()
@@ -1351,8 +1378,8 @@ fn install_local_wheel() -> Result<()> {
 
     context.assert_command("import tomli").success();
 
-    // "Modify" the wheel.
-    filetime::set_file_mtime(&archive, filetime::FileTime::now()).unwrap();
+    // "Modify" the wheel again, using a distinct mtime on platforms that cache by mtime.
+    advance_wheel_timestamp(archive.path(), FileTime::from_unix_time(1_700_000_020, 0))?;
 
     // Reinstall into the same virtual environment. The wheel should be reinstalled.
     uv_snapshot!(context.filters(), context.pip_sync()
