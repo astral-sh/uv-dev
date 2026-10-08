@@ -1401,6 +1401,11 @@ fn can_skip_ephemeral(
     }
 }
 
+#[cfg(unix)]
+type StdinScript = Vec<u8>;
+#[cfg(not(unix))]
+type StdinScript = String;
+
 #[derive(Debug)]
 pub enum RunCommand {
     /// Execute `python`.
@@ -1418,9 +1423,9 @@ pub enum RunCommand {
     /// Execute a Python [zipapp](https://docs.python.org/3/library/zipapp.html).
     PythonZipapp(PathBuf, Vec<OsString>),
     /// Execute a `python` script provided via `stdin`.
-    PythonStdin(Vec<u8>, Vec<OsString>),
+    PythonStdin(StdinScript, Vec<OsString>),
     /// Execute a `pythonw` script provided via `stdin`.
-    PythonGuiStdin(Vec<u8>, Vec<OsString>),
+    PythonGuiStdin(StdinScript, Vec<OsString>),
     /// Execute a Python script downloaded from a remote URL.
     PythonRemote(tempfile::NamedTempFile, Vec<OsString>),
     /// Execute an external command.
@@ -1513,6 +1518,9 @@ impl ParsedRunCommand {
         if target.eq_ignore_ascii_case("-") {
             let mut buf = Vec::with_capacity(1024);
             std::io::stdin().read_to_end(&mut buf)?;
+            #[cfg(not(unix))]
+            let buf = String::from_utf8(buf)
+                .context("Failed to decode Python script from stdin as UTF-8")?;
 
             return if module {
                 Err(anyhow!("Cannot run a Python module from stdin"))
@@ -1663,7 +1671,8 @@ impl RunCommand {
                 }
             }
             Self::PythonStdin(contents, _) | Self::PythonGuiStdin(contents, _) => {
-                Pep723Metadata::parse(contents).map(|metadata| metadata.map(Pep723Item::Stdin))
+                Pep723Metadata::parse(contents.as_ref())
+                    .map(|metadata| metadata.map(Pep723Item::Stdin))
             }
             Self::Python(_)
             | Self::PythonPackage(..)
@@ -1778,7 +1787,7 @@ impl RunCommand {
                         process.arg(OsString::from_vec(script.clone()));
                     },
                     _ => {
-                        process.arg(String::from_utf8_lossy(script).as_ref());
+                        process.arg(script);
                     },
                 }
                 process.args(args);
@@ -1807,7 +1816,7 @@ impl RunCommand {
                         process.arg(OsString::from_vec(script.clone()));
                     },
                     _ => {
-                        process.arg(String::from_utf8_lossy(script).as_ref());
+                        process.arg(script);
                     },
                 }
                 process.args(args);

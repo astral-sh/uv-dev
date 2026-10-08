@@ -3578,15 +3578,13 @@ fn run_stdin() -> Result<()> {
 fn run_stdin_invalid_utf8_windows() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let script = context.temp_dir.child("script");
-    fs_err::write(script.path(), b"print('Hello, world!') # \xff\n")?;
+    fs_err::write(script.path(), b"print('invalid \xff')\n")?;
 
     uv_snapshot!(context.filters(), context.run().arg("-").stdin(std::fs::File::open(script)?), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-    Hello, world!
-
+    exit_code: 2 (failure)
     ----- stderr -----
+    error: Failed to decode Python script from stdin as UTF-8
+      cause: invalid utf-8 sequence of 1 bytes from index 15
     ");
 
     Ok(())
