@@ -8098,7 +8098,7 @@ impl Source {
             }
             Self::Direct(url, _) => {
                 matches!(
-                    DistExtension::from_path(url.as_ref()).ok(),
+                    DistExtension::from_path(url.base_str()).ok(),
                     Some(DistExtension::Wheel)
                 )
             }
@@ -10677,6 +10677,22 @@ mod tests {
             (
                 r#"url = "https://example.invalid/parent-1.0-py3-none-any.whl""#,
                 false,
+            ),
+            (
+                r#"url = "https://example.invalid/parent-1.0-py3-none-any.whl?download=1""#,
+                false,
+            ),
+            (
+                r#"url = "https://example.invalid/parent-1.0.tar.gz?cache=artifact.whl""#,
+                true,
+            ),
+            (
+                r#"url = "https://example.invalid/parent-1.0-py3-none-any.whl?cache=artifact.tar.gz#sha256=abc""#,
+                false,
+            ),
+            (
+                r#"url = "https://example.invalid/parent-1.0.tar.gz#artifact.whl""#,
+                true,
             ),
             (r#"path = "parent-1.0.tar.gz""#, true),
             (r#"path = "parent-1.0-py3-none-any.whl""#, false),
