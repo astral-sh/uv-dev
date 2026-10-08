@@ -25,7 +25,10 @@ use uv_auth::{
     AuthMiddleware, Credentials, CredentialsCache, CredentialsFromUrlError, Indexes, RealmRef,
 };
 use uv_configuration::ProxyUrlKind;
-use uv_configuration::{Concurrency, KeyringProviderType, ProxyUrl, TrustedHost};
+use uv_configuration::{
+    Concurrency, DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT, DEFAULT_RETRIES,
+    KeyringProviderType, ProxyUrl, TrustedHost,
+};
 use uv_distribution_types::IndexCredentialsError;
 use uv_git::GitHttpSettings;
 use uv_pep508::MarkerEnvironment;
@@ -43,26 +46,10 @@ use crate::middleware::{AzureStorageMiddleware, OfflineMiddleware};
 use crate::tls::{Certificates, read_identity};
 use crate::{Connectivity, MetadataRangeRequest, RetriableError, RetryState, UvRetryableStrategy};
 
-pub const DEFAULT_RETRIES: u32 = 3;
-
 /// Maximum number of redirects to follow before giving up.
 ///
 /// This is the default used by [`reqwest`].
 pub const DEFAULT_MAX_REDIRECTS: u32 = 10;
-
-/// The maximum time between two reads.
-pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// The maximum time to connect to a server.
-///
-/// This value is set lower to fail relatively quickly when the index is unreachable or down.
-pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Total duration an upload may take.
-///
-/// reqwest does not support something like a read timeout for uploads, so we have to set a (large)
-/// timeout on the entire upload.
-pub const DEFAULT_READ_TIMEOUT_UPLOAD: Duration = Duration::from_mins(15);
 
 #[derive(Debug, Error)]
 pub enum ClientBuildError {
