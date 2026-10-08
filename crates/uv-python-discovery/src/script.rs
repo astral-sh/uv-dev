@@ -11,7 +11,7 @@ use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
 use uv_client::BaseClientBuilder;
 use uv_command_support::Printer;
-use uv_configuration::{ActiveEnvironment, InitPythonPin};
+use uv_configuration::ActiveEnvironment;
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
 use uv_pep440::Version;
@@ -29,12 +29,19 @@ use crate::PythonDownloadReporter;
 use crate::PythonRequestSource;
 use crate::PythonSelectionError;
 
+/// Whether interpreter selection honors an existing Python version file.
+#[derive(Debug, Clone, Copy)]
+pub enum PythonPinDiscovery {
+    Respect,
+    Ignore,
+}
+
 /// Determine the [`RequiresPython`] requirement for a new PEP 723 script.
 pub async fn init_script_python_requirement(
     python: Option<&str>,
     install_mirrors: &PythonInstallMirrors,
     directory: &Path,
-    pin_python: InitPythonPin,
+    pin_discovery: PythonPinDiscovery,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
@@ -46,8 +53,8 @@ pub async fn init_script_python_requirement(
     let python_request = if let Some(request) = python {
         // (1) Explicit request from user
         Some(PythonRequest::parse(request))
-    } else if let (InitPythonPin::Pin, Some(request)) = (
-        pin_python,
+    } else if let (PythonPinDiscovery::Respect, Some(request)) = (
+        pin_discovery,
         PythonVersionFile::discover(
             directory,
             &VersionFileDiscoveryOptions::default().with_config_discovery(config_discovery),

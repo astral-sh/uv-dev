@@ -30,7 +30,7 @@ use uv_python_discovery::PythonInstallation;
 use uv_python_discovery::PythonVersionFile;
 use uv_python_discovery::VersionFileDiscoveryOptions;
 use uv_python_discovery::find_requires_python;
-use uv_python_discovery::init_script_python_requirement;
+use uv_python_discovery::{PythonPinDiscovery, init_script_python_requirement};
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
@@ -151,6 +151,7 @@ pub async fn init(
                 }
             };
 
+            let readme = readme.for_mode(bare);
             Box::pin(init_project(
                 &path,
                 &name,
@@ -176,11 +177,14 @@ pub async fn init(
             .await?;
 
             // Create the `README.md` if it does not already exist.
-            if matches!(readme, InitReadme::Include) && matches!(bare, InitMode::Full) {
-                let readme = path.join("README.md");
-                if !readme.exists() {
-                    fs_err::write(readme, String::new())?;
+            match readme {
+                InitReadme::Include => {
+                    let readme = path.join("README.md");
+                    if !readme.exists() {
+                        fs_err::write(readme, String::new())?;
+                    }
                 }
+                InitReadme::Omit => {}
             }
 
             match explicit_path {
@@ -263,7 +267,10 @@ async fn init_script(
         python.as_deref(),
         &install_mirrors,
         script_path.parent().unwrap_or(&CWD),
-        pin_python,
+        match pin_python {
+            InitPythonPin::Pin => PythonPinDiscovery::Respect,
+            InitPythonPin::DoNotPin => PythonPinDiscovery::Ignore,
+        },
         python_preference,
         python_arch,
         python_downloads,
@@ -755,13 +762,8 @@ fn init_project_kind(
     let author = get_author_info(path, author_from);
 
     // Create the `pyproject.toml`
-    let mut pyproject = pyproject_project(
-        name,
-        requires_python,
-        author.as_ref(),
-        description,
-        readme.for_mode(bare),
-    );
+    let mut pyproject =
+        pyproject_project(name, requires_python, author.as_ref(), description, readme);
 
     match project_kind {
         // Create only the most barebones `pyproject.toml`, no build system

@@ -8,9 +8,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, InitPythonPin,
-};
+use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun};
 use uv_dispatch::UniversalState;
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
@@ -27,7 +25,7 @@ use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::ScriptInterpreter;
-use uv_python_discovery::init_script_python_requirement;
+use uv_python_discovery::{PythonPinDiscovery, init_script_python_requirement};
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -67,7 +65,7 @@ pub async fn lock(
                 python.as_deref(),
                 &install_mirrors,
                 project_dir,
-                InitPythonPin::Pin,
+                PythonPinDiscovery::Respect,
                 python_preference,
                 python_arch,
                 python_downloads,

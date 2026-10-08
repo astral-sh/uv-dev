@@ -17,7 +17,7 @@ use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, AddBoundsKind, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
     DevMode, DryRun, EditableMode, ExtrasSpecification, ExtrasSpecificationWithDefaults,
-    GitLfsSetting, InitPythonPin, InstallOptions, Modifications, NoSources,
+    GitLfsSetting, InstallOptions, Modifications, NoSources,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, UniversalState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
@@ -44,7 +44,7 @@ use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::ScriptInterpreter;
-use uv_python_discovery::init_script_python_requirement;
+use uv_python_discovery::{PythonPinDiscovery, init_script_python_requirement};
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_redacted::DisplaySafeUrl;
@@ -226,7 +226,7 @@ pub async fn add(
                     python.as_deref(),
                     &install_mirrors,
                     project_dir,
-                    InitPythonPin::Pin,
+                    PythonPinDiscovery::Respect,
                     python_preference,
                     python_arch,
                     python_downloads,
