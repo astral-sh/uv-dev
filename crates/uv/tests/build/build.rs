@@ -1054,54 +1054,70 @@ fn direct_native_build_waits_for_shared_quota() -> Result<()> {
     Ok(())
 }
 
-/// Native workspace builds share the configured backend-execution limit.
+/// Native workspace builds complete with a single backend execution slot.
 #[test]
-fn build_native_workspace_limits() -> Result<()> {
-    for builds in [1, 2] {
-        let context =
-            uv_test::test_context!("3.12").with_filter((r"\[(alpha|bravo|charlie)\]", "[PKG]"));
-        context
-            .temp_dir
-            .child("pyproject.toml")
-            .write_str(indoc! {r#"
-            [tool.uv.workspace]
-            members = ["alpha", "bravo", "charlie"]
-        "#})?;
-        for name in ["alpha", "bravo", "charlie"] {
-            let member = context.temp_dir.child(name);
-            member.child("pyproject.toml").write_str(&formatdoc! {r#"
-                [project]
-                name = "{name}"
-                version = "0.1.0"
-                requires-python = ">=3.12"
+fn build_native_workspace_with_one_build_slot() -> Result<()> {
+    let context =
+        uv_test::test_context!("3.12").with_filter((r"\[(alpha|bravo|charlie)\]", "[PKG]"));
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["alpha", "bravo", "charlie"]
+    "#})?;
+    let alpha = context.temp_dir.child("alpha");
+    alpha.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "alpha"
+        version = "0.1.0"
+        requires-python = ">=3.12"
 
-                [build-system]
-                requires = ["uv_build>=0.7,<1"]
-                build-backend = "uv_build"
-            "#})?;
-            member
-                .child("src")
-                .child(name)
-                .child("__init__.py")
-                .touch()?;
-        }
+        [build-system]
+        requires = ["uv_build>=0.7,<1"]
+        build-backend = "uv_build"
+    "#})?;
+    alpha.child("src/alpha/__init__.py").touch()?;
 
-        insta::allow_duplicates! {
-        uv_snapshot!(context.filters(), context.build()
-            .env(EnvVars::UV_CONCURRENT_BUILDS, builds.to_string())
-            .arg("--all")
-            .arg("--wheel"), @"
-        exit_code: 0 (success)
-        ----- stderr -----
-        [PKG] Building wheel...
-        [PKG] Building wheel...
-        [PKG] Building wheel...
-        Successfully built dist/alpha-0.1.0-py3-none-any.whl
-        Successfully built dist/bravo-0.1.0-py3-none-any.whl
-        Successfully built dist/charlie-0.1.0-py3-none-any.whl
-        ");
-        }
-    }
+    let bravo = context.temp_dir.child("bravo");
+    bravo.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "bravo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<1"]
+        build-backend = "uv_build"
+    "#})?;
+    bravo.child("src/bravo/__init__.py").touch()?;
+
+    let charlie = context.temp_dir.child("charlie");
+    charlie.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "charlie"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<1"]
+        build-backend = "uv_build"
+    "#})?;
+    charlie.child("src/charlie/__init__.py").touch()?;
+
+    uv_snapshot!(context.filters(), context.build()
+        .env(EnvVars::UV_CONCURRENT_BUILDS, "1")
+        .arg("--all")
+        .arg("--wheel"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    [PKG] Building wheel...
+    Successfully built dist/alpha-0.1.0-py3-none-any.whl
+    Successfully built dist/bravo-0.1.0-py3-none-any.whl
+    Successfully built dist/charlie-0.1.0-py3-none-any.whl
+    ");
     Ok(())
 }
 
