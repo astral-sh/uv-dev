@@ -14188,6 +14188,146 @@ fn pep_751_install_directory() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn pep_751_noop_skips_build_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("foo/pyproject.toml");
+    let project = indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        dependencies = ["missing"]
+
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#};
+    pyproject.write_str(project)?;
+    context.temp_dir.child("foo/src/foo/__init__.py").touch()?;
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "foo"
+        version = "1.0.0"
+        directory = { path = "foo" }
+    "#})?;
+    context
+        .pip_install()
+        .arg("--preview")
+        .arg("--no-index")
+        .arg("-r")
+        .arg("pylock.toml")
+        .assert()
+        .success();
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/links"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(4)
+        .mount(&server)
+        .await;
+    let links = format!("{}/links", server.uri());
+    let command = |sync| {
+        let mut command = if sync {
+            context.pip_sync()
+        } else {
+            let mut command = context.pip_install();
+            command.arg("-r").arg("pylock.toml");
+            command
+        };
+        if sync {
+            command.arg("pylock.toml");
+        }
+        command
+            .arg("--preview")
+            .arg("--find-links")
+            .arg(&links)
+            .env(EnvVars::UV_HTTP_RETRIES, "0");
+        command
+    };
+    for sync in [false, true] {
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), command(sync).arg("--strict"), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Checked 1 package in [TIME]
+            warning: The package `foo` requires `missing`, but it's not installed
+            ");
+            uv_snapshot!(context.filters(), command(sync).arg("--dry-run").arg("--compile-bytecode"), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Checked 1 package in [TIME]
+            Would make no changes
+            ");
+            uv_snapshot!(context.filters(), command(sync).arg("--check").arg("--output-format").arg("json"), @r#"
+            exit_code: 0 (success)
+            ----- stdout -----
+            {
+              "schema": {
+                "version": "preview"
+              },
+              "changes": [],
+              "dry_run": true
+            }
+
+            ----- stderr -----
+            Checked 1 package in [TIME]
+            Would make no changes
+            "#);
+        }
+    }
+    assert!(
+        server
+            .received_requests()
+            .await
+            .is_some_and(|requests| requests.is_empty())
+    );
+    let bytecode = context
+        .site_packages()
+        .join("foo/__pycache__/__init__.cpython-312.pyc");
+    assert!(!bytecode.exists());
+    context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .arg("--compile-bytecode")
+        .assert()
+        .success();
+    assert!(bytecode.exists());
+    for sync in [false, true] {
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), command(sync).arg("--reinstall"), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Failed to read `--find-links` URL: http://[LOCALHOST]/links
+              cause: Failed to fetch: http://[LOCALHOST]/links
+              cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/links)
+            ");
+        }
+    }
+
+    pyproject.write_str(&project.replace(
+        "version = \"1.0.0\"",
+        "version = \"1.0.0\"\ndescription = \"updated\"",
+    ))?;
+    for sync in [false, true] {
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), command(sync), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Failed to read `--find-links` URL: http://[LOCALHOST]/links
+              cause: Failed to fetch: http://[LOCALHOST]/links
+              cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/links)
+            ");
+        }
+    }
+    server.verify().await;
+    Ok(())
+}
+
 #[test]
 fn pep_751_install_require_hashes_directory() -> Result<()> {
     let context = uv_test::test_context!("3.12");
