@@ -8,6 +8,7 @@ pub mod lock_target;
 pub mod lockfile;
 pub mod malware;
 pub mod python;
+pub mod sync;
 pub mod toolchain;
 
 use std::collections::BTreeMap;
@@ -27,7 +28,7 @@ use uv_cache_key::{cache_digest, cache_name};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
-    ExtrasSpecification, GitLfsSetting, HashCheckingMode, Reinstall, TargetTriple, Upgrade,
+    ExtrasSpecification, GitLfsSetting, Reinstall, TargetTriple, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
@@ -1503,8 +1504,11 @@ pub async fn lock_project_environment(
     target: ProjectEnvironmentTarget<'_>,
 ) -> Result<LockedFile, LockedFileError> {
     let install_path = target.install_path();
+    // The workspace exists even when its environment does not. Resolve aliases before choosing
+    // the lock so two paths to the same workspace cannot initialize it concurrently.
+    let workspace_path = install_path.simple_canonicalize()?;
     LockedFile::acquire(
-        std::env::temp_dir().join(format!("uv-{}.lock", cache_digest(&install_path))),
+        std::env::temp_dir().join(format!("uv-{}.lock", cache_digest(&workspace_path))),
         LockedFileMode::Exclusive,
         install_path.simplified_display(),
     )
@@ -2175,6 +2179,7 @@ pub async fn resolve_names(
         keyring_provider,
         link_mode,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         prerelease: _,
@@ -2232,7 +2237,7 @@ pub async fn resolve_names(
     let build_hasher = HashStrategy::from_constraints(
         build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        *build_hash_checking,
     )?;
     let flat_index = FlatIndex::load(&client, cache, index_locations)
         .await
@@ -2365,6 +2370,7 @@ pub async fn resolve_environment(
         config_setting,
         config_settings_package,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         exclude_newer,
@@ -2477,7 +2483,7 @@ pub async fn resolve_environment(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        *build_hash_checking,
     )?;
 
     // When resolving from an interpreter, we assume an empty environment, so reinstalls aren't
@@ -2503,7 +2509,19 @@ pub async fn resolve_environment(
 
             preferences
         }
-        Some(PreferenceLocation::Entries(entries)) => entries,
+        Some(PreferenceLocation::Entries(entries)) => {
+            // Drop preferences for any packages that are included in the upgrade strategy.
+            if upgrade.is_all() {
+                vec![]
+            } else if let Some(packages) = upgrade.packages() {
+                entries
+                    .into_iter()
+                    .filter(|preference| !packages.contains(preference.name()))
+                    .collect()
+            } else {
+                entries
+            }
+        }
         None => vec![],
     };
 
@@ -2603,6 +2621,7 @@ pub async fn sync_environment(
         config_setting,
         config_settings_package,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         exclude_newer,
@@ -2641,7 +2660,7 @@ pub async fn sync_environment(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        build_hash_checking,
     )?;
     // TODO(charlie): These are all default values. We should consider whether we want to make them
     // optional on the downstream APIs.
@@ -2769,6 +2788,7 @@ pub async fn update_environment(
                 keyring_provider,
                 link_mode,
                 build_isolation,
+                build_hash_checking,
                 extra_build_dependencies: _,
                 extra_build_variables,
                 prerelease,
@@ -2899,7 +2919,7 @@ pub async fn update_environment(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        *build_hash_checking,
     )?;
     // TODO(charlie): These are all default values. We should consider whether we want to make them
     // optional on the downstream APIs.

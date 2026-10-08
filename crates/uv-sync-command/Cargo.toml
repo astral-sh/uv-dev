@@ -22,24 +22,18 @@ uv-cli-types = { workspace = true }
 uv-client = { workspace = true }
 uv-configuration = { workspace = true }
 uv-dispatch = { workspace = true }
-uv-distribution = { workspace = true }
 uv-distribution-types = { workspace = true }
 uv-fs = { workspace = true }
-uv-git = { workspace = true }
-uv-installer = { workspace = true }
 uv-lock = { workspace = true }
 uv-lock-command = { workspace = true }
 uv-normalize = { workspace = true }
 uv-operations = { workspace = true }
-uv-pep508 = { workspace = true }
 uv-preview = { workspace = true }
 uv-project = { workspace = true }
-uv-pypi-types = { workspace = true }
 uv-python-discovery = { workspace = true }
 uv-python-interpreter = { workspace = true }
 uv-python-types = { workspace = true }
 uv-requirements = { workspace = true }
-uv-resolver = { workspace = true }
 uv-scripts = { workspace = true }
 uv-settings = { workspace = true }
 uv-types = { workspace = true }
@@ -47,7 +41,6 @@ uv-warnings = { workspace = true }
 uv-workspace = { workspace = true }
 
 anyhow = { workspace = true }
-itertools = { workspace = true }
 owo-colors = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }

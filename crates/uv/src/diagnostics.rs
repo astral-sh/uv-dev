@@ -1,7 +1,6 @@
 use uv_add_command::add::AddDependencyError;
 use uv_cli_output::printer::Printer;
 use uv_errors::{Hinted, Hints};
-use uv_operations::error::ExtrasWithoutSourceError;
 use uv_pip_command::install::ExternallyManagedError;
 use uv_project::ProjectError;
 use uv_python_command::install::InvalidUpgradeRequestError;
@@ -38,7 +37,6 @@ pub(crate) fn hints_for_error(err: &anyhow::Error) -> Hints<'static> {
         collect_hint::<ToolRunScriptError>(cause, &mut hints);
         collect_hint::<RecursionLimitError>(cause, &mut hints);
         collect_hint::<DependencyNotFoundError>(cause, &mut hints);
-        collect_hint::<ExtrasWithoutSourceError>(cause, &mut hints);
         collect_hint::<ProjectError>(cause, &mut hints);
         collect_hint::<NoExecutablesError>(cause, &mut hints);
         collect_hint::<ExternallyManagedError>(cause, &mut hints);

@@ -4,6 +4,7 @@ use std::str::FromStr;
 
 use anyhow::{Result, anyhow};
 use owo_colors::OwoColorize;
+use serde::Serialize;
 use thiserror::Error;
 
 use tracing::debug;
@@ -46,6 +47,7 @@ use uv_project::{
 };
 
 /// Version information for a project (`uv version`).
+#[derive(Serialize)]
 struct ProjectVersionInfo {
     /// Name of the package.
     package_name: Option<String>,
@@ -149,20 +151,14 @@ pub async fn project_version(
     let is_read_only = value.is_none() && bump.is_empty();
     if let Some(frozen_source) = frozen {
         if is_read_only {
-            return Box::pin(print_frozen_version(
+            return print_frozen_version(
                 project,
                 &name,
                 frozen_source,
-                &settings,
-                client_builder,
-                &concurrency,
-                cache,
-                workspace_cache,
                 short,
                 output_format,
                 printer,
-                preview,
-            ))
+            )
             .await;
         }
     }
@@ -508,42 +504,15 @@ async fn print_frozen_version(
     project: VirtualProject,
     name: &PackageName,
     frozen_source: FrozenSource,
-    settings: &ResolverInstallerSettings,
-    client_builder: BaseClientBuilder<'_>,
-    concurrency: &Concurrency,
-    cache: &Cache,
-    workspace_cache: &WorkspaceCache,
     short: bool,
     output_format: VersionFormat,
     printer: Printer,
-    preview: Preview,
 ) -> Result<ExitStatus> {
     let target = LockTarget::Workspace(project.workspace());
-
-    // Initialize any shared state.
-    let state = UniversalState::default();
-
-    // Lock and sync the environment, if necessary.
-    let lock = match Box::pin(
-        uv_lock_command::lock::LockOperation::new(
-            LockMode::Frozen(frozen_source.into()),
-            &settings.resolver,
-            &client_builder,
-            &state,
-            Box::new(DefaultResolveLogger),
-            concurrency,
-            cache,
-            workspace_cache,
-            printer,
-            preview,
-        )
-        .execute(target),
-    )
-    .await
-    {
-        Ok(result) => result.into_lock(),
-        Err(err) => return Err(UvError::from(err).into()),
-    };
+    let lock = target
+        .read_frozen(frozen_source.into())
+        .await
+        .map_err(UvError::from)?;
 
     // Try to find the package of interest in the lock
     let Some(package) = lock
@@ -706,7 +675,7 @@ async fn lock_and_sync(
 
     let state = state.fork();
 
-    match uv_sync_command::sync::do_sync(
+    match uv_project::sync::do_sync(
         target,
         venv,
         &extras,
@@ -768,13 +737,8 @@ fn print_version(
         }
         VersionFormat::Json => {
             let final_version = new_version.unwrap_or(old_version);
-            let package_name = serde_json::to_string(&final_version.package_name)?;
-            let version = serde_json::to_string(&final_version.version)?;
-            let commit_info = serde_json::to_string(&final_version.commit_info)?;
-            writeln!(
-                printer.stdout_important(),
-                "{{\n  \"package_name\": {package_name},\n  \"version\": {version},\n  \"commit_info\": {commit_info}\n}}"
-            )?;
+            let string = serde_json::to_string_pretty(&final_version)?;
+            writeln!(printer.stdout_important(), "{string}")?;
         }
     }
     Ok(())

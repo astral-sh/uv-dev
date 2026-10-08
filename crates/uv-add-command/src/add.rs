@@ -1291,7 +1291,7 @@ async fn lock_and_sync(
         PackageSelection::from_args(false, &[], project.project_name()),
     );
 
-    uv_sync_command::sync::do_sync(
+    uv_project::sync::do_sync(
         target,
         venv,
         extras,

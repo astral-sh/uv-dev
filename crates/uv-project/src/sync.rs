@@ -1,40 +1,44 @@
+#![expect(
+    clippy::result_large_err,
+    reason = "Cross-crate errors include the discriminant in the size; keep the shared project error representation."
+)]
+
+use anyhow::Result;
 use itertools::Itertools;
 use rustc_hash::FxHashSet;
 use uv_cache::Cache;
+use uv_cli_output::printer::Printer;
+use uv_cli_settings::InstallerSettingsRef;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
-use uv_command_support::Printer;
 use uv_configuration::{
     Concurrency, DependencyGroupsWithDefaults, DryRun, EditableMode,
-    ExtrasSpecificationWithDefaults, HashCheckingMode, InstallOptions, Modifications, TargetTriple,
+    ExtrasSpecificationWithDefaults, HashCheckingMode, InstallOptions, TargetTriple,
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{Dist, Resolution, ResolvedDist, SourceDist};
-use uv_install_operations::editable::apply_editable_mode;
-use uv_install_operations::loggers::InstallLogger;
-use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_lock::Installable;
+use uv_operations::editable::apply_editable_mode;
+use uv_operations::installation::{Changelog, Modifications};
+use uv_operations::loggers::InstallLogger;
+use uv_operations::resolution::{resolution_markers, resolution_tags};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
 use uv_python_interpreter::PythonEnvironment;
-use uv_resolve_operations::{resolution_markers, resolution_tags};
+use uv_requirements::script_extra_build_requires;
 use uv_resolver::FlatIndex;
-use uv_settings::InstallerSettingsRef;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::pyproject::Source;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache};
 
 use crate::install_target::InstallTarget;
 use crate::malware::{MalwareCheckContext, maybe_check_malware};
-use crate::{EnvironmentError, detect_conflicts};
-use uv_requirements::script_extra_build_requires;
+use crate::{ProjectError, detect_conflicts};
 
-/// Install the selected packages from a lockfile into an environment.
-///
-/// Validates interpreter, platform, extras, and groups before planning or applying changes.
-pub async fn sync_from_lock(
+/// Sync a lockfile with an environment.
+pub async fn do_sync(
     target: InstallTarget<'_>,
     venv: &PythonEnvironment,
     extras: &ExtrasSpecificationWithDefaults,
@@ -55,7 +59,7 @@ pub async fn sync_from_lock(
     printer: Printer,
     preview: Preview,
     malware_context: MalwareCheckContext<'_>,
-) -> Result<Changelog, EnvironmentError> {
+) -> Result<Changelog, ProjectError> {
     // Extract the project settings.
     let InstallerSettingsRef {
         index_locations,
@@ -131,6 +135,7 @@ pub async fn sync_from_lock(
             }
         }
         InstallTarget::Script { script, .. } => {
+            // Try to get extra build dependencies from the script metadata
             script_extra_build_requires(
                 (*script).into(),
                 &sources,
@@ -155,7 +160,7 @@ pub async fn sync_from_lock(
         .requires_python()
         .contains(venv.interpreter().python_version())
     {
-        return Err(EnvironmentError::LockedPythonIncompatibility(
+        return Err(ProjectError::LockedPythonIncompatibility(
             venv.interpreter().python_version().clone(),
             target.lock().requires_python().clone(),
         ));
@@ -178,7 +183,7 @@ pub async fn sync_from_lock(
             .iter()
             .any(|env| env.evaluate(&marker_env, &[]))
         {
-            return Err(EnvironmentError::LockedPlatformIncompatibility(
+            return Err(ProjectError::LockedPlatformIncompatibility(
                 // For error reporting, we use the "simplified"
                 // supported environments, because these correspond to
                 // what the end user actually wrote. The non-simplified
@@ -196,8 +201,7 @@ pub async fn sync_from_lock(
     }
 
     // Determine the tags to use for the resolution.
-    let tags = resolution_tags(None, python_platform, venv.interpreter())
-        .map_err(EnvironmentError::from)?;
+    let tags = resolution_tags(None, python_platform, venv.interpreter())?;
 
     // Read the lockfile.
     let resolution = target.to_resolution(
@@ -224,9 +228,10 @@ pub async fn sync_from_lock(
     // Populate credentials from the target.
     store_credentials_from_target(target, &client_builder)?;
 
-    let bytecode_compilation = compile_bytecode.then_some(BytecodeCompilation::All);
+    let bytecode_compilation =
+        compile_bytecode.then_some(uv_operations::installation::BytecodeCompilation::All);
     let site_packages = SitePackages::from_environment(venv)?;
-    let installation_plan = InstallationPlan::build(
+    let installation_plan = uv_operations::installation::InstallationPlan::build(
         &resolution,
         site_packages,
         InstallationStrategy::Strict,
@@ -395,7 +400,7 @@ fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
 pub fn store_credentials_from_target(
     target: InstallTarget<'_>,
     client_builder: &BaseClientBuilder,
-) -> Result<(), EnvironmentError> {
+) -> Result<()> {
     // Iterate over any indexes in the target.
     for index in target.indexes() {
         if let Some(credentials) = index.credentials()? {

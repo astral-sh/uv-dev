@@ -3,7 +3,7 @@ use uv_configuration::ExtrasSpecification;
 use uv_distribution_types::NameRequirementSpecification;
 use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
 
-use crate::error::{Error, ExtrasWithoutSourceError};
+use crate::error::Error;
 
 /// Consolidate the requirements for an installation.
 pub async fn read_requirements(
@@ -21,7 +21,7 @@ pub async fn read_requirements(
         let has_editable = requirements
             .iter()
             .any(|source| matches!(source, RequirementsSource::Editable(_)));
-        return Err(anyhow::Error::new(ExtrasWithoutSourceError { has_editable }).into());
+        return Err(Error::ExtrasWithoutSource { has_editable });
     }
 
     // Read all requirements from the provided sources.

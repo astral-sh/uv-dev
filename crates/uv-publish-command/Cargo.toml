@@ -30,10 +30,12 @@ uv-warnings = { workspace = true }
 
 anyhow = { workspace = true }
 console = { workspace = true }
-insta = { workspace = true }
 owo-colors = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
 
 [features]
 test = ["uv-publish/test"]

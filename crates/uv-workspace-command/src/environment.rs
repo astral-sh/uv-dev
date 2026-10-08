@@ -2,31 +2,33 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
-
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_command_support::Printer;
 use uv_configuration::{
     Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun, ExtrasSpecification,
-    ExtrasSpecificationWithDefaults, InstallOptions, Modifications, Reinstall,
+    ExtrasSpecificationWithDefaults, InstallOptions, Reinstall,
 };
 use uv_dispatch::UniversalState;
 use uv_distribution_types::{Dist, InstalledDist, Name, ResolvedDist};
-use uv_environment_operations::install_target::InstallTarget;
-use uv_environment_operations::malware::MalwareCheckContext;
-use uv_environment_operations::sync_from_lock;
 use uv_fs::PortablePathBuf;
-use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_installer::SitePackages;
 use uv_lock::{Installable, Metadata};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_pypi_types::ModuleName;
 use uv_python_interpreter::PythonEnvironment;
-use uv_resolve_operations::{resolution_markers, resolution_tags};
-use uv_settings::{InstallerSettingsRef, MalwareCheckSettings, ResolverSettings};
+use uv_settings::MalwareCheckSettings;
 use uv_warnings::warn_user;
 use uv_workspace::WorkspaceCache;
+
+use uv_cli_output::printer::Printer;
+use uv_cli_settings::{InstallerSettingsRef, ResolverSettings};
+use uv_operations::installation::Modifications;
+use uv_operations::loggers::DefaultInstallLogger;
+use uv_operations::resolution::{resolution_markers, resolution_tags};
+use uv_project::install_target::InstallTarget;
+use uv_project::malware::MalwareCheckContext;
+use uv_project::sync::do_sync;
 
 /// Installed distributions and their module ownership.
 pub(super) struct CollectedEnvironment {
@@ -82,7 +84,7 @@ pub(super) async fn collect_environment(
             sources: settings.sources.clone(),
         };
 
-        sync_from_lock(
+        do_sync(
             target,
             venv,
             &extras,
