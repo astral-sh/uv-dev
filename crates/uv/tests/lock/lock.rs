@@ -31119,15 +31119,12 @@ fn lock_unsupported_version() -> Result<()> {
 fn project_python_exclusions_invalidate_lock() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let pyproject = context.temp_dir.child("pyproject.toml");
-    let write_project = |requires_python: &str| {
-        pyproject.write_str(&formatdoc! {r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            requires-python = "{requires_python}"
-        "#})
-    };
-    write_project(">=3.9,<3.14")?;
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.9,<3.14"
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -31136,7 +31133,12 @@ fn project_python_exclusions_invalidate_lock() -> Result<()> {
 
     // Exclude all Python 3.10 releases.
     let before = context.read("uv.lock");
-    write_project(">=3.9,<3.14,!=3.10.*")?;
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.9,<3.14,!=3.10.*"
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -31157,7 +31159,12 @@ fn project_python_exclusions_invalidate_lock() -> Result<()> {
     assert!(!lock.requires_python().contains(&Version::new([3, 10, 5])));
 
     // A redundant bound changes the spelling, but not the supported Python versions.
-    write_project(">=3.8,>=3.9,<3.14,!=3.10.*")?;
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.8,>=3.9,<3.14,!=3.10.*"
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -31167,7 +31174,12 @@ fn project_python_exclusions_invalidate_lock() -> Result<()> {
 
     // Allow later Python 3.10 releases while excluding 3.10.0.
     let before = context.read("uv.lock");
-    write_project(">=3.9,<3.14,!=3.10.0")?;
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.9,<3.14,!=3.10.0"
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -31188,7 +31200,12 @@ fn project_python_exclusions_invalidate_lock() -> Result<()> {
     assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
 
     // A redundant bound changes the spelling, but not the supported Python versions.
-    write_project(">=3.8,>=3.9,<3.14,!=3.10.0")?;
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.8,>=3.9,<3.14,!=3.10.0"
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -31198,7 +31215,12 @@ fn project_python_exclusions_invalidate_lock() -> Result<()> {
 
     // Remove the exclusion.
     let before = context.read("uv.lock");
-    write_project(">=3.9,<3.14")?;
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.9,<3.14"
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -31219,7 +31241,12 @@ fn project_python_exclusions_invalidate_lock() -> Result<()> {
     assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
 
     // A redundant bound changes the spelling, but not the supported Python versions.
-    write_project(">=3.8,>=3.9,<3.14")?;
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.8,>=3.9,<3.14"
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -31236,16 +31263,13 @@ fn project_python_exclusions_retain_forks() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("fork/preferences-dependent-forking.toml");
     let pyproject = context.temp_dir.child("pyproject.toml");
-    let write_project = |requires_python: &str| {
-        pyproject.write_str(&formatdoc! {r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            requires-python = "{requires_python}"
-            dependencies = ["cleaver", "foo", "bar"]
-        "#})
-    };
-    write_project(">=3.12")?;
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["cleaver", "foo", "bar"]
+    "#})?;
     let mut command = context.lock();
     command
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
@@ -31259,7 +31283,13 @@ fn project_python_exclusions_retain_forks() -> Result<()> {
     let original = Lock::from_toml(&context.read("uv.lock"))?;
     assert_eq!(original.fork_markers().len(), 2);
 
-    write_project(">=3.12,!=3.13.0")?;
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,!=3.13.0"
+        dependencies = ["cleaver", "foo", "bar"]
+    "#})?;
     uv_snapshot!(context.filters(), &mut command, @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -31328,15 +31358,12 @@ fn project_python_exclusions_retain_forks() -> Result<()> {
 fn script_python_exclusions_invalidate_lock() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let script = context.temp_dir.child("script.py");
-    let write_script = |requires_python: &str| {
-        script.write_str(&formatdoc! {r#"
-            # /// script
-            # requires-python = "{requires_python}"
-            # dependencies = []
-            # ///
-        "#})
-    };
-    write_script(">=3.9")?;
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.9"
+        # dependencies = []
+        # ///
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -31344,7 +31371,12 @@ fn script_python_exclusions_invalidate_lock() -> Result<()> {
     ");
     // Exclude all Python 3.10 releases.
     let before = context.read("script.py.lock");
-    write_script(">=3.9,!=3.10.*")?;
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.9,!=3.10.*"
+        # dependencies = []
+        # ///
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -31363,7 +31395,12 @@ fn script_python_exclusions_invalidate_lock() -> Result<()> {
     let lock = Lock::from_toml(&updated)?;
     assert!(!lock.requires_python().contains(&Version::new([3, 10, 0])));
     assert!(!lock.requires_python().contains(&Version::new([3, 10, 5])));
-    write_script(">=3.8,>=3.9,!=3.10.*")?;
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.8,>=3.9,!=3.10.*"
+        # dependencies = []
+        # ///
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -31373,7 +31410,12 @@ fn script_python_exclusions_invalidate_lock() -> Result<()> {
 
     // Narrow the wildcard exclusion to Python 3.10.0.
     let before = context.read("script.py.lock");
-    write_script(">=3.9,!=3.10.0.*")?;
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.9,!=3.10.0.*"
+        # dependencies = []
+        # ///
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -31392,7 +31434,12 @@ fn script_python_exclusions_invalidate_lock() -> Result<()> {
     let lock = Lock::from_toml(&updated)?;
     assert!(!lock.requires_python().contains(&Version::new([3, 10, 0])));
     assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
-    write_script(">=3.8,>=3.9,!=3.10.0.*")?;
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.8,>=3.9,!=3.10.0.*"
+        # dependencies = []
+        # ///
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -31402,7 +31449,12 @@ fn script_python_exclusions_invalidate_lock() -> Result<()> {
 
     // Remove the exclusion.
     let before = context.read("script.py.lock");
-    write_script(">=3.9")?;
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.9"
+        # dependencies = []
+        # ///
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -31421,7 +31473,12 @@ fn script_python_exclusions_invalidate_lock() -> Result<()> {
     let lock = Lock::from_toml(&updated)?;
     assert!(lock.requires_python().contains(&Version::new([3, 10, 0])));
     assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
-    write_script(">=3.8,>=3.9")?;
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.8,>=3.9"
+        # dependencies = []
+        # ///
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -31449,15 +31506,12 @@ fn workspace_python_exclusion_reaches_frozen_lock() -> Result<()> {
         members = ["member"]
     "#})?;
     let member = context.temp_dir.child("member/pyproject.toml");
-    let write_member = |requires_python: &str| {
-        member.write_str(&formatdoc! {r#"
-            [project]
-            name = "member"
-            version = "0.1.0"
-            requires-python = "{requires_python}"
-        "#})
-    };
-    write_member(">=3.10")?;
+    member.write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.10"
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--python", "3.13"]), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -31465,7 +31519,12 @@ fn workspace_python_exclusion_reaches_frozen_lock() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
     let before = context.read("uv.lock");
-    write_member(">=3.10,!=3.12.*")?;
+    member.write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.10,!=3.12.*"
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--python", "3.13", "--locked"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
