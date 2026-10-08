@@ -33,7 +33,7 @@ use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonDownloads, PythonPreference,
     PythonRequest, PythonVersion, Target,
 };
-use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{GroupsSpecification, RequirementsSource};
 use uv_resolver::{
     DependencyMode, ExcludeNewer, FlatIndex, OptionsBuilder, Prerelease, PythonRequirement,
     ResolutionMode, ResolverEnvironment,
@@ -46,6 +46,7 @@ use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
 use crate::install_report::write_install_report;
+use crate::install_requirements::{InstallRequirements, InstallSource, ResolveRequirements};
 use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::reporters::report_target_environment;
 use uv_command_support::{ExitStatus, Printer, UvError};
@@ -117,17 +118,9 @@ pub async fn pip_sync(
     let dependency_mode = DependencyMode::Direct;
 
     // Read all requirements from the provided sources.
-    let RequirementsSpecification {
-        project,
-        requirements,
-        constraints,
-        overrides,
-        override_dependencies,
+    let InstallRequirements {
+        source,
         excludes,
-        pylock,
-        pylock_groups,
-        source_trees,
-        groups,
         index_url,
         extra_index_urls,
         no_index,
@@ -135,7 +128,6 @@ pub async fn pip_sync(
         find_links,
         no_binary,
         no_build,
-        extras: _,
     } = uv_resolve_operations::read_requirements(
         requirements,
         constraints,
@@ -145,11 +137,12 @@ pub async fn pip_sync(
         Some(groups),
         &client_builder,
     )
-    .await?;
+    .await?
+    .try_into()?;
 
     let hash_checking = HashCheckingMode::from_requirements_txt(hash_checking, require_hashes);
 
-    if pylock.is_some() {
+    if source.is_locked() {
         if !preview.is_enabled(PreviewFeature::Pylock) {
             warn_user!(
                 "The `--pylock` option is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
@@ -165,9 +158,7 @@ pub async fn pip_sync(
 
     // Validate that the requirements are non-empty.
     if !allow_empty_requirements {
-        let num_requirements =
-            requirements.len() + source_trees.len() + usize::from(pylock.is_some());
-        if num_requirements == 0 {
+        if source.is_empty() {
             writeln!(
                 printer.stderr(),
                 "No requirements found (hint: use `--allow-empty-requirements` to clear the environment)"
@@ -280,16 +271,26 @@ pub async fn pip_sync(
 
     // Collect the set of required hashes.
     let hasher = if let Some(hash_checking) = hash_checking {
-        HashStrategy::from_requirements(
-            requirements
-                .iter()
-                .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
-            constraints
-                .iter()
-                .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
-            Some(&marker_env),
-            hash_checking,
-        )?
+        match &source {
+            InstallSource::Resolve(requirements) => HashStrategy::from_requirements(
+                requirements
+                    .requirements
+                    .iter()
+                    .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
+                requirements
+                    .constraints
+                    .iter()
+                    .map(|entry| (&entry.requirement, entry.hashes.as_slice())),
+                Some(&marker_env),
+                hash_checking,
+            )?,
+            InstallSource::Pylock { .. } => HashStrategy::from_requirements(
+                std::iter::empty(),
+                std::iter::empty(),
+                Some(&marker_env),
+                hash_checking,
+            )?,
+        }
     } else {
         HashStrategy::default()
     };
@@ -398,95 +399,109 @@ pub async fn pip_sync(
     // Determine the set of installed packages.
     let site_packages = SitePackages::from_environment(&environment)?;
 
-    let (resolution, hasher) = if let Some(pylock) = pylock {
-        let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
+    let (resolution, hasher) = match source {
+        InstallSource::Pylock {
+            input: pylock,
+            groups: pylock_groups,
+        } => {
+            let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
 
-        // Convert the extras and groups specifications into a concrete form.
-        let extras = extras.with_defaults(DefaultExtras::default());
-        let extras = extras
-            .extra_names(lock.extras.iter())
-            .cloned()
-            .collect::<Vec<_>>();
+            // Convert the extras and groups specifications into a concrete form.
+            let extras = extras.with_defaults(DefaultExtras::default());
+            let extras = extras
+                .extra_names(lock.extras.iter())
+                .cloned()
+                .collect::<Vec<_>>();
 
-        let groups =
-            pylock_groups.with_defaults(DefaultGroups::from_groups(lock.default_groups.clone()));
-        let groups = groups
-            .group_names(lock.dependency_groups.iter())
-            // PEP 751 allows synthetic default groups that aren't publicly selectable.
-            .chain(
-                lock.default_groups
-                    .iter()
-                    .filter(|group| groups.contains_because_default(group)),
-            )
-            .unique()
-            .cloned()
-            .collect::<Vec<_>>();
+            let groups = pylock_groups
+                .with_defaults(DefaultGroups::from_groups(lock.default_groups.clone()));
+            let groups = groups
+                .group_names(lock.dependency_groups.iter())
+                // PEP 751 allows synthetic default groups that aren't publicly selectable.
+                .chain(
+                    lock.default_groups
+                        .iter()
+                        .filter(|group| groups.contains_because_default(group)),
+                )
+                .unique()
+                .cloned()
+                .collect::<Vec<_>>();
 
-        resolve_pylock_toml(
-            lock,
-            &install_path,
-            interpreter,
-            python_version.as_ref(),
-            python_platform.as_ref(),
-            &extras,
-            &groups,
-            &build_options,
-            hash_checking,
-        )?
-    } else {
-        // When resolving, don't take any external preferences into account.
-        let preferences = Vec::default();
-
-        let options = OptionsBuilder::new()
-            .resolution_mode(resolution_mode)
-            .prerelease(prerelease)
-            .dependency_mode(dependency_mode)
-            .exclude_newer(exclude_newer.clone())
-            .index_strategy(index_strategy)
-            .torch_backend(torch_backend)
-            .build_options(build_options.clone())
-            .build();
-
-        let (resolution, hasher) = match uv_resolve_operations::resolve(
+            resolve_pylock_toml(
+                lock,
+                &install_path,
+                interpreter,
+                python_version.as_ref(),
+                python_platform.as_ref(),
+                &extras,
+                &groups,
+                &build_options,
+                hash_checking,
+            )?
+        }
+        InstallSource::Resolve(ResolveRequirements {
+            project,
             requirements,
             constraints,
             overrides,
             override_dependencies,
-            excludes,
             source_trees,
-            project,
-            BTreeMap::default(),
-            extras,
-            &groups,
-            preferences,
-            Some(site_packages.clone()),
-            &hasher,
-            &reinstall,
-            &upgrade,
-            Some(&tags),
-            ResolverEnvironment::specific(marker_env.clone()),
-            python_requirement,
-            interpreter.markers(),
-            Conflicts::empty(),
-            &client,
-            &flat_index,
-            state.index(),
-            &build_dispatch,
-            &concurrency,
-            options,
-            None,
-            Box::new(DefaultResolveLogger),
-            printer,
-        )
-        .await
-        {
-            Ok((resolution, hasher)) => (Resolution::from(resolution), hasher),
-            Err(err) => {
-                return Err(UvError::from(err).into());
-            }
-        };
+            groups,
+        }) => {
+            // When resolving, don't take any external preferences into account.
+            let preferences = Vec::default();
 
-        (resolution, hasher)
+            let options = OptionsBuilder::new()
+                .resolution_mode(resolution_mode)
+                .prerelease(prerelease)
+                .dependency_mode(dependency_mode)
+                .exclude_newer(exclude_newer.clone())
+                .index_strategy(index_strategy)
+                .torch_backend(torch_backend)
+                .build_options(build_options.clone())
+                .build();
+
+            let (resolution, hasher) = match uv_resolve_operations::resolve(
+                requirements,
+                constraints,
+                overrides,
+                override_dependencies,
+                excludes,
+                source_trees,
+                project,
+                BTreeMap::default(),
+                extras,
+                &groups,
+                preferences,
+                Some(site_packages.clone()),
+                &hasher,
+                &reinstall,
+                &upgrade,
+                Some(&tags),
+                ResolverEnvironment::specific(marker_env.clone()),
+                python_requirement,
+                interpreter.markers(),
+                Conflicts::empty(),
+                &client,
+                &flat_index,
+                state.index(),
+                &build_dispatch,
+                &concurrency,
+                options,
+                None,
+                Box::new(DefaultResolveLogger),
+                printer,
+            )
+            .await
+            {
+                Ok((resolution, hasher)) => (Resolution::from(resolution), hasher),
+                Err(err) => {
+                    return Err(UvError::from(err).into());
+                }
+            };
+
+            (resolution, hasher)
+        }
     };
 
     // Constrain any build requirements marked as `match-runtime = true`.

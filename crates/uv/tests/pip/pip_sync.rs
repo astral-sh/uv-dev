@@ -5824,6 +5824,34 @@ fn pep_751() -> Result<()> {
 }
 
 #[test]
+fn pep_751_empty_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .pip_install()
+        .arg("iniconfig==2.0.0")
+        .assert()
+        .success();
+    context.temp_dir.child("pylock.toml").write_str(
+        r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - iniconfig==2.0.0
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn pep_751_default_groups() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
