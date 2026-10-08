@@ -1735,6 +1735,93 @@ fn frozen() -> Result<()> {
 
 #[cfg(feature = "test-universal")]
 #[tokio::test]
+async fn outdated_filters_inactive_extra_context() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/x/"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&formatdoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = {{ virtual = "a" }}
+        dependencies = [{{ name = "p" }}]
+
+        [[package]]
+        name = "b"
+        version = "1.0.0"
+        source = {{ virtual = "b" }}
+        dependencies = [{{ name = "p", extra = ["feature"] }}]
+
+        [[package]]
+        name = "p"
+        version = "1.0.0"
+        source = {{ virtual = "p" }}
+        [package.optional-dependencies]
+        feature = [{{ name = "x" }}]
+
+        [[package]]
+        name = "root"
+        version = "1.0.0"
+        source = {{ virtual = "." }}
+        dependencies = [{{ name = "a" }}, {{ name = "b" }}]
+
+        [[package]]
+        name = "x"
+        version = "1.0.0"
+        source = {{ registry = "{url}/simple" }}
+    "#, url = server.uri()})?;
+    let command = || {
+        let mut command = context.tree();
+        command
+            .args(["--frozen", "--universal", "--outdated"])
+            .env(EnvVars::UV_HTTP_RETRIES, "0");
+        command
+    };
+    uv_snapshot!(context.filters(), command().args(["--package", "a"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a v1.0.0
+    └── p v1.0.0
+    ");
+    assert_json_snapshot!(json_tree_package_names(command().args(["--package", "a"]))?, @r#"
+    [
+      "a",
+      "p"
+    ]
+    "#);
+    uv_snapshot!(context.filters(), command().args(["--package", "b"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/x/
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/simple/x/)
+    ");
+    server.verify().await;
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[tokio::test]
 async fn outdated_filters_graph_and_keeps_index_identity() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
