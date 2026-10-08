@@ -201,7 +201,9 @@ fn tool_audit_unknown_tool() {
 
 #[test]
 fn tool_audit_missing_lockfile() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_missing_file_error();
     install_tool(&context, "simple-launcher", false);
 
     uv_snapshot!(context.filters(), context.tool_audit()
@@ -211,7 +213,7 @@ fn tool_audit_missing_lockfile() {
     exit_code: 0 (success)
     ----- stderr -----
     warning: Skipping tool `simple-launcher` because it does not have a lockfile
-      cause: failed to open file `[TEMP_DIR]/tools/simple-launcher/uv.lock`: No such file or directory (os error 2)
+      cause: failed to open file `[TEMP_DIR]/tools/simple-launcher/uv.lock`: [OS ERROR 2]
 
     hint: Reinstall the tool with `--preview-features tool-install-locks` to audit it.
     No auditable tools installed
@@ -560,7 +562,9 @@ async fn tool_audit_multiple_tools() {
 
 #[tokio::test]
 async fn tool_audit_mixed_lockfiles() {
-    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let context = uv_test::test_context!("3.13")
+        .with_tool_dirs()
+        .with_filtered_missing_file_error();
     install_tool(&context, "simple-launcher", true);
     install_tool(&context, "basic-app", false);
 
@@ -576,7 +580,7 @@ async fn tool_audit_mixed_lockfiles() {
     exit_code: 0 (success)
     ----- stderr -----
     warning: Skipping tool `basic-app` because it does not have a lockfile
-      cause: failed to open file `[TEMP_DIR]/tools/basic-app/uv.lock`: No such file or directory (os error 2)
+      cause: failed to open file `[TEMP_DIR]/tools/basic-app/uv.lock`: [OS ERROR 2]
 
     hint: Reinstall the tool with `--preview-features tool-install-locks` to audit it.
     Auditing `simple-launcher`
@@ -896,7 +900,9 @@ async fn tool_audit_sarif() {
 
 #[test]
 fn tool_audit_sarif_no_auditable_tools() {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_missing_file_error();
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
@@ -930,7 +936,10 @@ fn tool_audit_sarif_no_auditable_tools() {
     }
 
     ----- stderr -----
-    warning: Skipping tool `simple-launcher` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it
+    warning: Skipping tool `simple-launcher` because it does not have a lockfile
+      cause: failed to open file `[TEMP_DIR]/tools/simple-launcher/uv.lock`: [OS ERROR 2]
+
+    hint: Reinstall the tool with `--preview-features tool-install-locks` to audit it.
     "#);
 }
 
