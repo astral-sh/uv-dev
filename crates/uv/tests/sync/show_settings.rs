@@ -5535,3 +5535,120 @@ fn no_cache_env_override() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn system_certs_aliases_follow_configuration_layers() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let user_dir = context.temp_dir.child("user");
+    let system_dir = context.temp_dir.child("system");
+    let user = user_dir.child("uv/uv.toml");
+    let system = system_dir.child("uv/uv.toml");
+    let project = context.temp_dir.child("uv.toml");
+    user.write_str("")?;
+    system.write_str("")?;
+    project.write_str("")?;
+    let command = || {
+        let mut command = add_shared_args(context.version());
+        command
+            .arg("--show-settings")
+            .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+            .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+            .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+            .env_remove(EnvVars::UV_SYSTEM_CERTS)
+            .env_remove(EnvVars::UV_NATIVE_TLS);
+        command
+    };
+    let disabled = capture_uv_snapshot!(context.filters(), command());
+    let enabled = capture_uv_snapshot!(context.filters(), command().arg("--system-certs"));
+    project.write_str("native-tls = false\n")?;
+    let disabled_alias = diff_uv_snapshot!(context.filters(), &disabled, command(), @"
+    ...
+             malware_check_url: None,
+         },
+     }
+    +
+    +----- stderr -----
+    +warning: The `native-tls` setting is deprecated and will be removed in a future release. Use `system-certs` instead.
+    ...
+    ");
+    project.write_str("native-tls = true\n")?;
+    let enabled_alias = diff_uv_snapshot!(context.filters(), &enabled, command(), @"
+    ...
+             malware_check_url: None,
+         },
+     }
+    +
+    +----- stderr -----
+    +warning: The `native-tls` setting is deprecated and will be removed in a future release. Use `system-certs` instead.
+    ...
+    ");
+    let expected = [disabled, enabled, disabled_alias, enabled_alias];
+    for (system_value, user_value, project_value, enabled, deprecated) in [
+        ("system-certs = true", "native-tls = false", "", false, true),
+        ("system-certs = false", "native-tls = true", "", true, true),
+        (
+            "native-tls = true",
+            "system-certs = false",
+            "",
+            false,
+            false,
+        ),
+        ("native-tls = false", "system-certs = true", "", true, false),
+        (
+            "system-certs = false",
+            "system-certs = true",
+            "native-tls = false",
+            false,
+            true,
+        ),
+        (
+            "system-certs = true",
+            "system-certs = false",
+            "native-tls = true",
+            true,
+            true,
+        ),
+        (
+            "system-certs = true",
+            "native-tls = true",
+            "system-certs = false",
+            false,
+            false,
+        ),
+        (
+            "system-certs = false",
+            "native-tls = false",
+            "system-certs = true",
+            true,
+            false,
+        ),
+        (
+            "native-tls = true",
+            "native-tls = true",
+            "system-certs = false\nnative-tls = true",
+            false,
+            false,
+        ),
+        (
+            "native-tls = false",
+            "native-tls = false",
+            "system-certs = true\nnative-tls = false",
+            true,
+            false,
+        ),
+    ] {
+        system.write_str(system_value)?;
+        user.write_str(user_value)?;
+        project.write_str(project_value)?;
+        assert_eq!(
+            expected[usize::from(enabled) + 2 * usize::from(deprecated)],
+            capture_uv_snapshot!(context.filters(), command()),
+            "system={system_value}; user={user_value}; project={project_value}"
+        );
+    }
+    Ok(())
+}
