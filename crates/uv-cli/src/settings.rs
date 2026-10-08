@@ -22,7 +22,7 @@ use uv_configuration::{
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
     KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
-    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
+    PipCompileFormat, Prerelease, ProjectBuildBackend, ProjectDiscovery, ProxyUrl, PythonUpgrade,
     PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
     TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
 };
@@ -697,7 +697,7 @@ pub struct RunSettings {
     pub show_resolution: bool,
     pub all_packages: bool,
     pub package: Option<PackageName>,
-    pub no_project: bool,
+    pub project_discovery: ProjectDiscovery,
     pub active: ActiveEnvironment,
     pub no_sync: bool,
     pub python: Option<String>,
@@ -859,7 +859,7 @@ impl RunSettings {
             show_resolution,
             all_packages,
             package,
-            no_project,
+            project_discovery: ProjectDiscovery::from_args(no_project),
             no_sync: no_sync.is_enabled(),
             active: flag(active, no_active, "active")?.into(),
             python: python.and_then(Maybe::into_option),
@@ -1698,7 +1698,7 @@ pub struct PythonFindSettings {
     pub request: Option<String>,
     pub show_version: bool,
     pub resolve_links: bool,
-    pub no_project: bool,
+    pub project_discovery: ProjectDiscovery,
     pub system: bool,
     pub python_downloads_json_url: Option<String>,
 }
@@ -1744,7 +1744,7 @@ impl PythonFindSettings {
             request,
             show_version,
             resolve_links,
-            no_project,
+            project_discovery: ProjectDiscovery::from_args(no_project),
             system: flag(system, no_system, "system")?.unwrap_or_default(),
             python_downloads_json_url,
         })
@@ -1756,7 +1756,7 @@ impl PythonFindSettings {
 pub struct PythonPinSettings {
     pub request: Option<String>,
     pub resolved: bool,
-    pub no_project: bool,
+    pub project_discovery: ProjectDiscovery,
     pub global: bool,
     pub rm: bool,
     pub install_mirrors: PythonInstallMirrors,
@@ -1793,7 +1793,7 @@ impl PythonPinSettings {
         Ok(Self {
             request,
             resolved: flag(resolved, no_resolved, "resolved")?.unwrap_or(false),
-            no_project,
+            project_discovery: ProjectDiscovery::from_args(no_project),
             global,
             rm,
             install_mirrors,
@@ -2992,7 +2992,7 @@ pub struct FormatSettings {
     pub extra_args: Vec<String>,
     pub version: Option<String>,
     pub exclude_newer: Option<jiff::Timestamp>,
-    pub no_project: bool,
+    pub project_discovery: ProjectDiscovery,
     pub show_version: bool,
 }
 
@@ -3022,7 +3022,7 @@ impl FormatSettings {
             exclude_newer: exclude_newer
                 .and_then(ExcludeNewerOverride::into_value)
                 .map(|value| value.timestamp()),
-            no_project,
+            project_discovery: ProjectDiscovery::from_args(no_project),
             show_version,
         }
     }
@@ -3051,7 +3051,7 @@ pub struct CheckSettings {
     pub ty_version: Option<String>,
     pub show_version: bool,
     pub show_command: bool,
-    pub no_project: bool,
+    pub project_discovery: ProjectDiscovery,
     pub malware_settings: MalwareCheckSettings,
 }
 
@@ -3172,7 +3172,7 @@ impl CheckSettings {
             ty_version,
             show_version,
             show_command,
-            no_project,
+            project_discovery: ProjectDiscovery::from_args(no_project),
             malware_settings,
         })
     }
@@ -4300,7 +4300,7 @@ pub struct VenvSettings {
     pub system_site_packages: bool,
     pub relocatable: bool,
     pub no_relocatable: bool,
-    pub no_project: bool,
+    pub project_discovery: ProjectDiscovery,
     pub refresh: Refresh,
     pub settings: PipSettings,
 }
@@ -4371,7 +4371,7 @@ impl VenvSettings {
             path,
             prompt,
             system_site_packages,
-            no_project,
+            project_discovery: ProjectDiscovery::from_args(no_project),
             relocatable: relocatable.into(),
             no_relocatable: no_relocatable.into(),
             refresh: Refresh::try_from(refresh)?,

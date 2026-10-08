@@ -13,7 +13,7 @@ use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
     ActiveEnvironment, BuildOptions, Concurrency, Constraints, DependencyGroups, DryRun,
-    IndexStrategy, KeyringProviderType, NoBinary, NoBuild, NoSources,
+    IndexStrategy, KeyringProviderType, NoBinary, NoBuild, NoSources, ProjectDiscovery,
 };
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution_types::{
@@ -83,7 +83,7 @@ pub(crate) async fn venv(
     on_existing: OnExisting,
     exclude_newer: ExcludeNewer,
     concurrency: Concurrency,
-    no_project: bool,
+    project_discovery: ProjectDiscovery,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -91,9 +91,7 @@ pub(crate) async fn venv(
     relocatable: bool,
     preview: Preview,
 ) -> Result<ExitStatus> {
-    let project = if no_project {
-        None
-    } else {
+    let project = if project_discovery.enabled() {
         match VirtualProject::discover(
             project_dir,
             &DiscoveryOptions::default(),
@@ -120,6 +118,8 @@ pub(crate) async fn venv(
                 None
             }
         }
+    } else {
+        None
     };
 
     // Only use the project environment path if we're invoked from the root with no explicit path.

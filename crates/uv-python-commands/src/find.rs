@@ -4,7 +4,7 @@ use std::path::Path;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults};
+use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults, ProjectDiscovery};
 use uv_errors::ErrorWithHints;
 use uv_fs::Simplified;
 use uv_python_discovery::ConfigDiscovery;
@@ -23,13 +23,12 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
 
 /// Find a Python interpreter.
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn find(
     project_dir: &Path,
     request: Option<String>,
     show_version: bool,
     resolve_links: bool,
-    no_project: bool,
+    project_discovery: ProjectDiscovery,
     system: bool,
     config_discovery: ConfigDiscovery,
     python_preference: PythonPreference,
@@ -46,9 +45,7 @@ pub async fn find(
         EnvironmentPreference::Any
     };
 
-    let project = if no_project {
-        None
-    } else {
+    let project = if project_discovery.enabled() {
         match VirtualProject::discover(
             project_dir,
             &DiscoveryOptions::default(),
@@ -71,6 +68,8 @@ pub async fn find(
                 None
             }
         }
+    } else {
+        None
     };
 
     // Don't enable the requires-python settings on groups

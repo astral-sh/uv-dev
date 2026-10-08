@@ -10,6 +10,7 @@ use uv_bin_install::{BinVersion, Binary, ResolvedVersion, bin_install, find_matc
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, child::run_to_completion};
+use uv_configuration::ProjectDiscovery;
 use uv_preview::{Preview, PreviewFeature};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
@@ -17,7 +18,6 @@ use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceEr
 use crate::reporters::BinaryDownloadReporter;
 
 /// Run the formatter.
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn format(
     project_dir: &Path,
     ruff_path: Option<PathBuf>,
@@ -32,7 +32,7 @@ pub async fn format(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
-    no_project: bool,
+    project_discovery: ProjectDiscovery,
 ) -> Result<ExitStatus> {
     // Check if the format feature is in preview
     if !preview.is_enabled(PreviewFeature::FormatCommand) {
@@ -42,11 +42,8 @@ pub async fn format(
         );
     }
 
-    // If `no_project` is provided, we use the provided directory
-    // Otherwise, we discover the project and use the project root.
-    let target_dir = if no_project {
-        project_dir.to_owned()
-    } else {
+    // If project discovery is enabled, discover the project and use the project root.
+    let target_dir = if project_discovery.enabled() {
         match VirtualProject::discover(
             project_dir,
             &DiscoveryOptions::default(),
@@ -71,6 +68,8 @@ pub async fn format(
             }
             Err(err) => return Err(err.into()),
         }
+    } else {
+        project_dir.to_owned()
     };
 
     // Determine the version to use and get the path to Ruff.
