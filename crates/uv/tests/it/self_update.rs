@@ -203,7 +203,7 @@ async fn self_update_astral_mirror_success_message() -> Result<()> {
     success: Upgraded uv from v[CURRENT_VERSION] to v9.9.9! https://github.com/astral-sh/uv/releases/tag/9.9.9
     ");
 
-    let download_url = fs_err::read_to_string(context.temp_dir.child("download-url.txt"))?;
+    let download_url = context.read("download-url.txt");
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(download_url, @"http://[LOCALHOST]/github/uv/releases/download/9.9.9");
     });
