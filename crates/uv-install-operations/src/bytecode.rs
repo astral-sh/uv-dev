@@ -7,7 +7,7 @@ use uv_cache::Cache;
 use uv_command_support::{Printer, elapsed};
 use uv_configuration::Concurrency;
 use uv_fs::CWD;
-use uv_installer::{compile_files, compile_tree};
+use uv_installer::{SourceFilesError, compile_files, compile_tree};
 use uv_python_interpreter::PythonEnvironment;
 
 use crate::Error;
@@ -51,7 +51,7 @@ pub(super) async fn compile_bytecode(
 
 /// Compile the given Python source files to bytecode.
 pub(super) async fn compile_bytecode_files(
-    files: impl IntoIterator<Item = anyhow::Result<PathBuf>>,
+    files: impl IntoIterator<Item = Result<PathBuf, SourceFilesError>>,
     venv: &PythonEnvironment,
     concurrency: &Concurrency,
     cache: &Cache,
