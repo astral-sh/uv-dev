@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
 
 use anyhow::{anyhow, format_err};
@@ -22,7 +23,7 @@ use crate::{
         Authentication, AuthenticationError, Credentials, CredentialsFromUrlError, Username,
     },
     index::{AuthPolicy, Indexes},
-    realm::Realm,
+    realm::{Realm, RealmRef},
 };
 use crate::{Index, TextCredentialStore};
 
@@ -457,18 +458,18 @@ impl Middleware for AuthMiddleware {
 
         let username = credentials
             .as_ref()
-            .map(|credentials| credentials.to_username())
-            .unwrap_or(Username::none());
+            .map(|credentials| credentials.as_username())
+            .unwrap_or(Cow::Owned(Username::none()));
         let credentials = if let Some(index) = index {
             self.cache().get_url(&index.url, &username).or_else(|| {
                 self.cache()
-                    .get_realm(Realm::from(retry_request_url), username)
+                    .get_realm(RealmRef::from(retry_request_url), &username)
             })
         } else {
             // Since there is no known index for this URL, check if there are credentials in
             // the realm-level cache.
             self.cache()
-                .get_realm(Realm::from(retry_request_url), username)
+                .get_realm(RealmRef::from(retry_request_url), &username)
         }
         .or(credentials);
 
@@ -611,8 +612,8 @@ impl AuthMiddleware {
                 })
         } else {
             self.cache().get_realm(
-                Realm::from(SafeUrl::ref_cast(request.url())),
-                credentials.to_username(),
+                RealmRef::from(SafeUrl::ref_cast(request.url())),
+                credentials.as_username().as_ref(),
             )
         };
         if let Some(credentials) = maybe_cached_credentials {
@@ -645,8 +646,8 @@ impl AuthMiddleware {
         } else if index.is_some() {
             // If this is a known index, we fall back to checking for the realm.
             if let Some(credentials) = self.cache().get_realm(
-                Realm::from(SafeUrl::ref_cast(request.url())),
-                credentials.to_username(),
+                RealmRef::from(SafeUrl::ref_cast(request.url())),
+                credentials.as_username().as_ref(),
             ) {
                 request = credentials.authenticate(request).await?;
                 Some(credentials)
