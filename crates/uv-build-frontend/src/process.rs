@@ -209,26 +209,44 @@ mod tests {
             .env("UV_TEST_HOOK_ADDRESS", listener.local_addr()?.to_string())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let task = tokio::spawn(run(command, Some(lock), permit, Printer::Quiet));
+        let (cancel, cancellation) = oneshot::channel();
+        let (finished, completion) = oneshot::channel();
+        // A broken cancellation path can block while joining its worker. Keep the watchdog on a
+        // separate runtime so it can release the fixture and report that failure.
+        let thread = std::thread::spawn(move || -> TestResult {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(async move {
+                let task = tokio::spawn(run(command, Some(lock), permit, Printer::Quiet));
+                cancellation.await?;
+                task.abort();
+                assert!(task.await.expect_err("canceled hook caller").is_cancelled());
+                Ok::<(), oneshot::error::RecvError>(())
+            })?;
+            let _ = finished.send(());
+            Ok(())
+        });
         let (mut gate, _) =
             tokio::time::timeout(Duration::from_secs(30), listener.accept()).await??;
         let mut ready = [0; 5];
         tokio::time::timeout(Duration::from_secs(30), gate.read_exact(&mut ready)).await??;
         assert_eq!(&ready, b"ready");
         assert!(LockedFile::acquire_no_wait(&path, LockedFileMode::Exclusive, "source").is_none());
-        task.abort();
-        assert!(task.await.expect_err("canceled hook caller").is_cancelled());
-
-        let admission = tokio::time::timeout(
-            Duration::from_secs(30),
-            LockedFile::acquire(&path, LockedFileMode::Exclusive, "source"),
-        )
-        .await;
-        if admission.is_err() {
+        cancel
+            .send(())
+            .map_err(|()| std::io::Error::other("hook caller already closed"))?;
+        let completed = tokio::time::timeout(Duration::from_secs(30), completion).await;
+        if completed.is_err() {
             // Let an incorrect natural-exit-only implementation finish before failing.
             gate.write_all(b"S").await?;
         }
-        let _next = admission??;
+        tokio::task::spawn_blocking(move || thread.join())
+            .await?
+            .map_err(|_| std::io::Error::other("hook caller panicked"))??;
+        completed??;
+        let _next = LockedFile::acquire_no_wait(&path, LockedFileMode::Exclusive, "source")
+            .expect("cancellation releases source admission before returning");
         let mut byte = [0];
         let closed = tokio::time::timeout(Duration::from_secs(30), gate.read(&mut byte)).await?;
         assert!(
