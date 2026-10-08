@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime};
+use criterion::{
+    BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime,
+};
 use uv_distribution_filename::{DistExtension, SourceDistExtension};
 use uv_distribution_types::{Dist, InstalledDist, InstalledDistKind, InstalledRegistryDist, Name};
 use uv_installer::Plan;
@@ -86,13 +88,14 @@ fn partition_linear(plan: Plan) -> (Plan, Plan) {
         reinstalls,
         extraneous,
     } = plan;
-    let right_remote = remote;
+    let (left_remote, right_remote) = remote.into_iter().partition::<Vec<_>, _>(|_| false);
     let (left_reinstalls, right_reinstalls) = reinstalls
         .into_iter()
         .partition::<Vec<_>, _>(|dist| !right_remote.iter().any(|d| d.name() == dist.name()));
     (
         Plan {
             cached,
+            remote: left_remote,
             reinstalls: left_reinstalls,
             ..Plan::default()
         },
@@ -151,10 +154,18 @@ fn build_reinstall_partition(criterion: &mut Criterion<WallTime>) {
         assert_eq!(summary(&linear), summary(&indexed));
 
         group.bench_function(BenchmarkId::new("linear", &input), |benchmark| {
-            benchmark.iter(|| partition_linear(black_box(plan(&remote, &reinstalls))));
+            benchmark.iter_batched(
+                || plan(&remote, &reinstalls),
+                |plan| partition_linear(black_box(plan)),
+                BatchSize::SmallInput,
+            );
         });
         group.bench_function(BenchmarkId::new("indexed", &input), |benchmark| {
-            benchmark.iter(|| black_box(plan(&remote, &reinstalls)).partition(|_| false));
+            benchmark.iter_batched(
+                || plan(&remote, &reinstalls),
+                |plan| black_box(plan).partition(|_| false),
+                BatchSize::SmallInput,
+            );
         });
     }
     group.finish();
