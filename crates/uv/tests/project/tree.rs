@@ -7,6 +7,11 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::{assert_json_snapshot, assert_snapshot};
 use url::Url;
+#[cfg(feature = "test-universal")]
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 use uv_static::EnvVars;
 #[cfg(feature = "test-universal")]
@@ -1725,6 +1730,139 @@ fn frozen() -> Result<()> {
     "
     );
 
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn outdated_filters_graph_and_keeps_index_identity() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    for (index, latest, requests) in [("one", "2.0.0", 3), ("two", "3.0.0", 2)] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{index}/simple/foo/")))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                format!("<a href=\"/foo-{latest}-py3-none-any.whl\">foo</a>"),
+                "text/html",
+            ))
+            .expect(requests)
+            .mount(&server)
+            .await;
+    }
+    for name in ["hidden", "dev-only"] {
+        Mock::given(method("GET"))
+            .and(path(format!("/one/simple/{name}/")))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+    }
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["dev-only"]
+    "#})?;
+    let url = server.uri();
+    context.temp_dir.child("uv.lock").write_str(&formatdoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        resolution-markers = ["python_full_version < '3.13'", "python_full_version >= '3.13'"]
+
+        [[package]]
+        name = "dev-only"
+        version = "1.0.0"
+        source = {{ registry = "{url}/one/simple" }}
+
+        [[package]]
+        name = "foo"
+        version = "1.0.0"
+        source = {{ registry = "{url}/one/simple" }}
+        resolution-markers = ["python_full_version < '3.13'"]
+
+        [[package]]
+        name = "foo"
+        version = "1.0.0"
+        source = {{ registry = "{url}/two/simple" }}
+        resolution-markers = ["python_full_version >= '3.13'"]
+
+        [[package]]
+        name = "hidden"
+        version = "1.0.0"
+        source = {{ registry = "{url}/one/simple" }}
+
+        [[package]]
+        name = "project"
+        version = "1.0.0"
+        source = {{ virtual = "." }}
+        dependencies = [
+            {{ name = "foo", version = "1.0.0", source = {{ registry = "{url}/one/simple" }}, marker = "python_full_version < '3.13'" }},
+            {{ name = "foo", version = "1.0.0", source = {{ registry = "{url}/two/simple" }}, marker = "python_full_version >= '3.13'" }},
+            {{ name = "hidden" }},
+        ]
+
+        [package.dev-dependencies]
+        dev = [{{ name = "dev-only" }}]
+    "#})?;
+    let command = || {
+        let mut command = context.tree();
+        command
+            .args(["--frozen", "--outdated", "--no-default-groups"])
+            .env(EnvVars::UV_HTTP_RETRIES, "0");
+        command
+    };
+    uv_snapshot!(context.filters(), command().args(["--universal", "--package", "foo"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    foo v1.0.0 (latest: v2.0.0)
+    foo v1.0.0 (latest: v3.0.0)
+    ");
+    uv_snapshot!(context.filters(), command().args(["--python-version", "3.12", "--prune", "hidden"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v1.0.0
+    └── foo v1.0.0 (latest: v2.0.0)
+    ");
+    uv_snapshot!(context.filters(), command().args(["--universal", "--prune", "foo", "--prune", "hidden"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v1.0.0
+    ");
+    let output = command()
+        .args([
+            "--universal",
+            "--package",
+            "foo",
+            "--preview-features",
+            "json-output",
+            "--format",
+            "json",
+        ])
+        .output()?;
+    output.clone().assert().success();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let mut latest = report["resolution"]
+        .as_object()
+        .context("resolution object")?
+        .values()
+        .filter(|node| node["name"] == "foo")
+        .map(|node| node["latest_version"].clone())
+        .collect::<Vec<_>>();
+    latest.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+    assert_json_snapshot!(latest, @r#"
+    [
+      "2.0.0",
+      "3.0.0"
+    ]
+    "#);
+    server.verify().await;
     Ok(())
 }
 
