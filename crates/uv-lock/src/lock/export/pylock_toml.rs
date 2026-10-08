@@ -79,7 +79,7 @@ pub enum PylockTomlErrorKind {
     },
     #[error("Artifact `{url}` has size {actual}, but the lockfile records {expected}")]
     ArtifactSizeMismatch {
-        url: Box<DisplaySafeUrl>,
+        url: Box<SafeUrl>,
         expected: u64,
         actual: u64,
     },
