@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use anyhow::Result;
 use assert_cmd::prelude::OutputAssertExt;
 use assert_fs::prelude::*;
@@ -2866,13 +2864,57 @@ fn init_vcs_none() {
     child.child(".git").assert(predicate::path::missing());
 }
 
+/// Fixture commits have stable metadata while explicitly authored Git settings still apply.
+#[test]
+fn git_fixture_configuration() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_env("GIT_CONFIG_COUNT", "1")
+        .with_env("GIT_CONFIG_KEY_0", "user.email")
+        .with_env("GIT_CONFIG_VALUE_0", "fixture@example.com");
+    let config = context.home_dir.child("fixture.gitconfig");
+    config.write_str("[user]\nname = Fixture\n[credential]\nhelper = fixture-helper\n")?;
+    let context = context.with_env(EnvVars::GIT_CONFIG_GLOBAL, config.as_os_str());
+
+    context.git_command().arg("init").assert().success();
+    context.temp_dir.child("file").write_str("fixture\n")?;
+    context.git_command().args(["add", "."]).assert().success();
+    context
+        .git_command()
+        .args(["commit", "-m", "Fixture"])
+        .assert()
+        .success();
+    context
+        .git_command()
+        .args(["symbolic-ref", "HEAD"])
+        .assert()
+        .success()
+        .stdout("refs/heads/main\n");
+    context
+        .git_command()
+        .args(["show", "-s", "--format=%an%n%ae%n%cn%n%ce%n%at%n%ct"])
+        .assert()
+        .success()
+        .stdout(concat!(
+            "Fixture\nfixture@example.com\nFixture\nfixture@example.com\n",
+            "946684800\n946684800\n",
+        ));
+    context
+        .external_command("git")
+        .args(["config", "--get", "credential.helper"])
+        .assert()
+        .success()
+        .stdout("fixture-helper\n");
+    Ok(())
+}
+
 /// Run `uv init` from within a Git repository. Do not try to reinitialize one.
 #[test]
 #[cfg(feature = "test-git")]
 fn init_inside_git_repo() {
     let context = uv_test::test_context!("3.12");
 
-    Command::new("git")
+    context
+        .git_command()
         .arg("init")
         .current_dir(&context.temp_dir)
         .assert()
@@ -2926,12 +2968,14 @@ fn init_with_author() {
     let context = uv_test::test_context!("3.12");
 
     // Create a Git repository and set the author.
-    Command::new("git")
+    context
+        .git_command()
         .arg("init")
         .current_dir(&context.temp_dir)
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("config")
         .arg("--local")
         .arg("user.name")
@@ -2939,7 +2983,8 @@ fn init_with_author() {
         .current_dir(&context.temp_dir)
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("config")
         .arg("--local")
         .arg("user.email")

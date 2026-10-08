@@ -2816,19 +2816,22 @@ fn install_git_workspace_build_requirement() -> Result<()> {
         .child("packages/project/src/project/__init__.py")
         .write_str(r#"__version__ = "0.1.0""#)?;
 
-    Command::new("git")
+    context
+        .git_command()
         .arg("init")
         .arg(repository.path())
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("add")
         .arg(".")
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("-c")
@@ -2893,18 +2896,21 @@ fn install_git_checkout_marker_symlink() -> Result<()> {
         .write_str(r#"__version__ = "0.1.0""#)?;
     symlink(victim.path(), repository.child(".ok").path())?;
 
-    Command::new("git")
+    context
+        .git_command()
         .arg("init")
         .arg(repository.path())
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .args(["add", "."])
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .args([
@@ -2964,18 +2970,21 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
         .child("src/example/__init__.py")
         .write_str(r#"__version__ = "0.1.0""#)?;
 
-    Command::new("git")
+    context
+        .git_command()
         .arg("init")
         .arg(repository.path())
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .args(["add", "."])
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .args([
@@ -2992,7 +3001,8 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
         .assert()
         .success();
 
-    let trusted_commit = Command::new("git")
+    let trusted_commit = context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .args(["rev-parse", "HEAD"])
@@ -3014,13 +3024,15 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
     repository
         .child("src/example/__init__.py")
         .write_str(r#"__version__ = "9.9.9""#)?;
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .args(["add", "."])
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .args([
@@ -3036,7 +3048,8 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
         .env("GIT_COMMITTER_DATE", "2000-01-02T00:00:00Z")
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("update-ref")
@@ -3044,7 +3057,8 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
         .arg("HEAD")
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .args(["update-ref", "refs/heads/20240222", "HEAD"])
@@ -3137,19 +3151,22 @@ fn install_git_percent_encoded_ref() -> Result<()> {
         build-backend = "hatchling.build"
     "#})?;
 
-    Command::new("git")
+    context
+        .git_command()
         .arg("init")
         .arg(repository.path())
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("add")
         .arg(".")
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("-c")
@@ -3163,7 +3180,8 @@ fn install_git_percent_encoded_ref() -> Result<()> {
         .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("tag")
@@ -13545,7 +13563,8 @@ fn install_git_submodule_relative_url() -> Result<()> {
     helpers_dir.create_dir_all()?;
 
     // Initialize helpers as a git repo
-    Command::new("git")
+    context
+        .git_command()
         .args(["init"])
         .current_dir(helpers_dir.path())
         .output()?;
@@ -13560,7 +13579,8 @@ fn install_git_submodule_relative_url() -> Result<()> {
     let grandchild_dir = temp_dir.child("grandchild");
     grandchild_dir.create_dir_all()?;
 
-    Command::new("git")
+    context
+        .git_command()
         .args(["init"])
         .current_dir(grandchild_dir.path())
         .output()?;
@@ -13569,12 +13589,14 @@ fn install_git_submodule_relative_url() -> Result<()> {
         .child("grandchild.py")
         .write_str("def help():\n    return 'I am a nested helper'")?;
 
-    Command::new("git")
+    context
+        .git_command()
         .args(["add", "."])
         .current_dir(grandchild_dir.path())
         .output()?;
 
-    Command::new("git")
+    context
+        .git_command()
         .args(["commit", "-m", "Initial nested helpers commit"])
         .current_dir(grandchild_dir.path())
         .env("GIT_AUTHOR_NAME", "Test")
@@ -13583,7 +13605,8 @@ fn install_git_submodule_relative_url() -> Result<()> {
         .env("GIT_COMMITTER_EMAIL", "test@example.com")
         .output()?;
 
-    Command::new("git")
+    context
+        .git_command()
         .args(["submodule", "add", "../../grandchild", "nested/grandchild"])
         .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh")
         .current_dir(helpers_dir.path())
@@ -13599,12 +13622,14 @@ fn install_git_submodule_relative_url() -> Result<()> {
         .assert(predicate::path::is_file());
 
     // Add and commit in helpers
-    Command::new("git")
+    context
+        .git_command()
         .args(["add", "."])
         .current_dir(helpers_dir.path())
         .output()?;
 
-    Command::new("git")
+    context
+        .git_command()
         .args(["commit", "-m", "Initial helpers commit"])
         .current_dir(helpers_dir.path())
         .env("GIT_AUTHOR_NAME", "Test")
@@ -13618,7 +13643,8 @@ fn install_git_submodule_relative_url() -> Result<()> {
     mylib_dir.create_dir_all()?;
 
     // Initialize mylib as a git repo
-    Command::new("git")
+    context
+        .git_command()
         .args(["init"])
         .current_dir(mylib_dir.path())
         .output()?;
@@ -13649,7 +13675,8 @@ def main():
     )?;
 
     // Set helper as a submodule
-    Command::new("git")
+    context
+        .git_command()
         .args(["submodule", "add", "../utilities/helpers", "mylib/helpers"])
         .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh")
         .current_dir(mylib_dir.path())
@@ -13664,12 +13691,14 @@ def main():
         .assert(predicate::path::is_file());
 
     // Add and commit in mylib
-    Command::new("git")
+    context
+        .git_command()
         .args(["add", "."])
         .current_dir(mylib_dir.path())
         .output()?;
 
-    Command::new("git")
+    context
+        .git_command()
         .args(["commit", "-m", "Initial mylib commit with submodule"])
         .current_dir(mylib_dir.path())
         .env("GIT_AUTHOR_NAME", "Test")

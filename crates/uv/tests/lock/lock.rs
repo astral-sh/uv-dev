@@ -1,8 +1,4 @@
-#[cfg(feature = "test-universal")]
-use std::collections::BTreeMap;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
-use std::process::Command;
-
 use anyhow::Result;
 #[cfg(feature = "test-universal")]
 use anyhow::anyhow;
@@ -14,6 +10,8 @@ use insta::assert_snapshot;
 use serde_json::json;
 #[cfg(feature = "test-universal")]
 use sha2::{Digest, Sha256};
+#[cfg(feature = "test-universal")]
+use std::collections::BTreeMap;
 use url::Url;
 #[cfg(feature = "test-universal")]
 use walkdir::WalkDir;
@@ -24132,19 +24130,22 @@ fn lock_metadata_free_shared_git_direct_source() -> Result<()> {
         basic-package = { path = "archives/basic_package-0.1.0-py3-none-any.whl" }
         "#})?;
 
-    Command::new("git")
+    context
+        .git_command()
         .arg("init")
         .arg(repository.path())
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("add")
         .arg(".")
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("-c")
