@@ -1,4 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
+use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
@@ -159,6 +162,26 @@ impl<'env> LockOperation<'env> {
 
     /// Perform a [`LockOperation`].
     pub async fn execute(self, target: LockTarget<'_>) -> Result<LockResult, LockError> {
+        self.execute_with_writer(target, |path, contents| {
+            fs_err::tokio::write(path, contents)
+        })
+        .await
+    }
+
+    /// Perform a lock operation with a caller-owned lockfile publication step.
+    ///
+    /// The writer runs only when a writable lock operation produces changed contents. Resolution
+    /// and serialization finish before publication, so callers can coordinate the write with a
+    /// transaction without holding its write guard across resolution.
+    pub async fn execute_with_writer<F, W>(
+        self,
+        target: LockTarget<'_>,
+        write: W,
+    ) -> Result<LockResult, LockError>
+    where
+        F: Future<Output = io::Result<()>>,
+        W: FnOnce(PathBuf, String) -> F,
+    {
         if !matches!(&self.mode, LockMode::Frozen(_)) {
             target.validate_upgrade_groups(&self.settings.upgrade)?;
         }
@@ -270,7 +293,7 @@ impl<'env> LockOperation<'env> {
                 // If the lockfile changed, write it to disk.
                 if !matches!(self.mode, LockMode::DryRun(_)) {
                     if let LockResult::Changed(_, lock) = &result {
-                        target.commit(lock).await?;
+                        write(target.lock_path(), lock.to_toml()?).await?;
                     }
                 }
 
