@@ -2,19 +2,19 @@ use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
+use futures::{Stream, StreamExt};
 use indexmap::IndexSet;
 use itertools::Itertools;
 use owo_colors::OwoColorize;
 use rustc_hash::{FxHashMap, FxHashSet};
-use tracing::{debug, warn};
+use tracing::{Span, debug, warn};
 
 use uv_command_support::Printer;
 use uv_command_support::{ExitStatus, elapsed};
-use uv_fs::Simplified;
+use uv_fs::{LockedFile, Simplified};
 use uv_python_managed::{
     ManagedPythonInstallation, ManagedPythonInstallations, PythonMinorVersionLink,
     python_executable_dir,
@@ -43,10 +43,10 @@ pub async fn uninstall(
 ) -> Result<ExitStatus> {
     let installations = ManagedPythonInstallations::from_settings(install_dir)?.init()?;
 
-    let _lock = installations.lock().await?;
+    let lock = Arc::new(installations.lock().await?);
 
     // Perform the uninstallation.
-    do_uninstall(&installations, targets, all, printer).await?;
+    do_uninstall(&installations, lock.clone(), targets, all, printer).await?;
 
     // Clean up any empty directories.
     if uv_fs::directories(installations.root())?.all(|path| uv_fs::is_temporary(&path)) {
@@ -72,6 +72,7 @@ pub async fn uninstall(
 /// Perform the uninstallation of managed Python installations.
 async fn do_uninstall(
     installations: &ManagedPythonInstallations,
+    lock: Arc<LockedFile>,
     targets: Vec<String>,
     all: bool,
     printer: Printer,
@@ -211,15 +212,7 @@ async fn do_uninstall(
             .insert(executable);
     }
 
-    let mut tasks = FuturesUnordered::new();
-    for installation in &matching_installations {
-        tasks.push(async {
-            (
-                installation.key(),
-                fs_err::tokio::remove_dir_all(installation.path()).await,
-            )
-        });
-    }
+    let mut tasks = removal_tasks(&matching_installations, lock);
 
     let mut uninstalled = IndexSet::<PythonInstallationKey>::default();
     while let Some((key, result)) = tasks.next().await {
@@ -346,4 +339,159 @@ async fn do_uninstall(
     }
 
     Ok(ExitStatus::Success)
+}
+
+/// Limit simultaneous recursive removals and their open filesystem handles.
+const MAX_CONCURRENT_REMOVALS: usize = 16;
+
+fn removal_tasks(
+    installations: &BTreeSet<ManagedPythonInstallation>,
+    lock: Arc<LockedFile>,
+) -> impl Stream<Item = (&PythonInstallationKey, io::Result<()>)> {
+    futures::stream::iter(installations)
+        .map(move |installation| {
+            let path = installation.path().to_path_buf();
+            let lock = lock.clone();
+            let span = Span::current();
+            async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    // A cancelled waiter cannot release the installation lock while deletion runs.
+                    let _lock = lock;
+                    let _entered = span.enter();
+                    fs_err::remove_dir_all(path)
+                })
+                .await;
+                let result = match result {
+                    Ok(result) => result,
+                    Err(error) => Err(io::Error::other(error)),
+                };
+                (installation.key(), result)
+            }
+        })
+        .buffer_unordered(MAX_CONCURRENT_REMOVALS)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::path::Path;
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
+    use futures::{FutureExt, StreamExt};
+    use tokio::runtime::Builder;
+    use tokio::sync::oneshot;
+    use uv_cache::Cache;
+    use uv_fs::{LockedFile, LockedFileMode};
+    use uv_python_managed::downloads::ManagedPythonDownloadList;
+    use uv_python_managed::{ManagedPythonInstallation, ManagedPythonInstallations};
+    use uv_python_types::PythonDownloadRequest;
+
+    use super::{MAX_CONCURRENT_REMOVALS, removal_tasks};
+
+    fn fixture(root: &Path, count: usize) -> anyhow::Result<BTreeSet<ManagedPythonInstallation>> {
+        let downloads = ManagedPythonDownloadList::new_only_embedded()?;
+        let download = downloads.find(&PythonDownloadRequest::default())?;
+        (0..count)
+            .map(|index| {
+                let path = root.join(format!("python-{index}"));
+                fs_err::create_dir_all(path.join("lib"))?;
+                fs_err::write(path.join("lib/module.py"), "value = 1\n")?;
+                Ok(ManagedPythonInstallation::new(path, download)?)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cancelled_removals_are_bounded_and_keep_the_lock() -> anyhow::Result<()> {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()?;
+        let cache = Cache::temp()?;
+        let installations =
+            ManagedPythonInstallations::from_settings(Some(cache.root().join("python")))?.init()?;
+        let matching = fixture(installations.root(), MAX_CONCURRENT_REMOVALS * 4)?;
+        let lock_path = installations.root().join(".lock");
+        runtime.block_on(async {
+            let lock = Arc::new(installations.lock().await?);
+            let (started, start) = oneshot::channel();
+            let (release, finish) = mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                let _ = started.send(());
+                finish.recv()
+            });
+            start.await?;
+            assert!(
+                removal_tasks(&matching, lock)
+                    .collect::<Vec<_>>()
+                    .now_or_never()
+                    .is_none()
+            );
+            assert!(
+                matching
+                    .iter()
+                    .all(|installation| installation.path().is_dir())
+            );
+            assert!(
+                LockedFile::acquire_no_wait(&lock_path, LockedFileMode::Exclusive, "test removals")
+                    .is_none()
+            );
+            tokio::task::yield_now().await;
+            release.send(())?;
+            blocker.await??;
+            let _reacquired = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if let Some(lock) = LockedFile::acquire_no_wait(
+                        &lock_path,
+                        LockedFileMode::Exclusive,
+                        "test removals",
+                    ) {
+                        break lock;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
+            // Only the admitted workers run after cancellation; remaining paths are untouched.
+            assert_eq!(
+                matching
+                    .iter()
+                    .filter(|installation| !installation.path().exists())
+                    .count(),
+                MAX_CONCURRENT_REMOVALS
+            );
+            Ok(())
+        })
+    }
+
+    #[tokio::test]
+    async fn removal_failure_does_not_skip_other_installations() -> anyhow::Result<()> {
+        let cache = Cache::temp()?;
+        let installations =
+            ManagedPythonInstallations::from_settings(Some(cache.root().join("python")))?.init()?;
+        let matching = fixture(installations.root(), MAX_CONCURRENT_REMOVALS * 2)?;
+        let failed = matching
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("missing fixture"))?
+            .path()
+            .to_path_buf();
+        fs_err::remove_dir_all(&failed)?;
+        fs_err::write(&failed, "not a directory")?;
+        let lock = Arc::new(installations.lock().await?);
+        let results = removal_tasks(&matching, lock).collect::<Vec<_>>().await;
+        assert_eq!(results.len(), matching.len());
+        assert_eq!(
+            results.iter().filter(|(_, result)| result.is_err()).count(),
+            1
+        );
+        assert!(failed.is_file());
+        assert!(
+            matching
+                .iter()
+                .filter(|installation| installation.path() != failed)
+                .all(|installation| !installation.path().exists())
+        );
+        Ok(())
+    }
 }
