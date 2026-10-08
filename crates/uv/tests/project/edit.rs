@@ -11284,7 +11284,6 @@ fn add_index_with_existing_relative_path_in_script() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--frozen").arg("--script").arg(script.path()).arg("--index").arg("local=./links"), @"
     exit_code: 0 (success)
-    ----- stderr -----
     ");
 
     let script = fs_err::read_to_string(script.path())?;
