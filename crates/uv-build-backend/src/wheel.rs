@@ -28,8 +28,8 @@ use uv_warnings::warn_user_once;
 
 use crate::metadata::DEFAULT_EXCLUDES;
 use crate::{
-    BuildBackendSettings, DirectoryWriter, Error, FileList, ListWriter, PyProjectToml,
-    error_on_venv, find_roots, write_directory_once, write_file_with_directories,
+    BuildBackendSettings, DirectoryWriter, Error, FileList, GeneratedMetadata, ListWriter,
+    PyProjectToml, error_on_venv, find_roots, write_directory_once, write_file_with_directories,
 };
 
 // Files at or below this size are buffered and written with `write_entry_whole`,
@@ -54,7 +54,8 @@ pub fn build_wheel(
     for warning in pyproject_toml.check_build_system(uv_version, BuildKind::Wheel) {
         warn_user_once!("{warning}");
     }
-    crate::check_metadata_directory(source_tree, metadata_directory, &pyproject_toml)?;
+    let generated_metadata =
+        crate::check_metadata_directory(source_tree, metadata_directory, &pyproject_toml)?;
 
     let filename = WheelFilename::new(
         pyproject_toml.name().clone(),
@@ -84,6 +85,7 @@ pub fn build_wheel(
         uv_version,
         wheel_writer,
         show_warnings,
+        generated_metadata.as_ref(),
     )?;
 
     temp_file
@@ -124,6 +126,7 @@ pub fn list_wheel(
         uv_version,
         writer,
         show_warnings,
+        None,
     )?;
     Ok((filename, files))
 }
@@ -135,6 +138,7 @@ fn write_wheel(
     uv_version: &str,
     mut wheel_writer: impl DirectoryWriter,
     show_warnings: bool,
+    generated_metadata: Option<&GeneratedMetadata>,
 ) -> Result<(), Error> {
     let settings = pyproject_toml
         .settings()
@@ -241,6 +245,7 @@ fn write_wheel(
         filename,
         source_tree,
         uv_version,
+        generated_metadata,
     )?;
     wheel_writer.close(&dist_info_dir)?;
 
@@ -265,7 +270,8 @@ pub fn build_editable(
         .unwrap_or_else(BuildBackendSettings::default);
     let exclude_matcher = build_wheel_exclude_matcher(&settings)?;
 
-    crate::check_metadata_directory(source_tree, metadata_directory, &pyproject_toml)?;
+    let generated_metadata =
+        crate::check_metadata_directory(source_tree, metadata_directory, &pyproject_toml)?;
 
     let filename = WheelFilename::new(
         pyproject_toml.name().clone(),
@@ -319,6 +325,7 @@ pub fn build_editable(
         &filename,
         source_tree,
         uv_version,
+        generated_metadata.as_ref(),
     )?;
     wheel_writer.close(&dist_info_dir)?;
 
@@ -439,6 +446,7 @@ pub fn metadata(
         &filename,
         source_tree,
         uv_version,
+        None,
     )?;
     wheel_writer.close(&dist_info_dir)?;
 
@@ -665,6 +673,7 @@ fn write_dist_info(
     filename: &WheelFilename,
     root: &Path,
     uv_version: &str,
+    generated_metadata: Option<&GeneratedMetadata>,
 ) -> Result<String, Error> {
     let dist_info_dir = format!(
         "{}-{}.dist-info",
@@ -688,7 +697,11 @@ fn write_dist_info(
     }
 
     // Add `entry_points.txt`.
-    if let Some(entrypoint) = pyproject_toml.to_entry_points()? {
+    let entry_points = match generated_metadata {
+        Some(metadata) => metadata.entry_points.as_deref().map(Cow::Borrowed),
+        None => pyproject_toml.to_entry_points()?.map(Cow::Owned),
+    };
+    if let Some(entrypoint) = entry_points {
         writer.write_bytes(
             &format!("{dist_info_dir}/entry_points.txt"),
             entrypoint.as_bytes(),
@@ -696,10 +709,17 @@ fn write_dist_info(
     }
 
     // Add `METADATA` and `METADATA.json`.
-    let metadata = pyproject_toml.to_metadata(root)?;
+    let metadata = match generated_metadata {
+        Some(metadata) => Cow::Borrowed(&metadata.metadata),
+        None => Cow::Owned(pyproject_toml.to_metadata(root)?),
+    };
+    let core_metadata = match generated_metadata {
+        Some(metadata) => Cow::Borrowed(metadata.core_metadata.as_str()),
+        None => Cow::Owned(metadata.core_metadata_format()),
+    };
     writer.write_bytes(
         &format!("{dist_info_dir}/METADATA"),
-        metadata.core_metadata_format().as_bytes(),
+        core_metadata.as_bytes(),
     )?;
     if uv_preview::is_enabled(PreviewFeature::MetadataJson) {
         writer.write_bytes(

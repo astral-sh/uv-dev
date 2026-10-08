@@ -24,7 +24,7 @@ use tracing::debug;
 use uv_fs::{Simplified, normalize_path};
 use uv_globfilter::PortableGlobError;
 use uv_normalize::PackageName;
-use uv_pypi_types::{Identifier, IdentifierParseError};
+use uv_pypi_types::{Identifier, IdentifierParseError, Metadata23};
 
 use crate::metadata::ValidationError;
 use crate::settings::ModuleName;
@@ -194,6 +194,13 @@ impl DirectoryWriter for ListWriter<'_> {
     }
 }
 
+/// Metadata generated and checked against a prepared directory for one build invocation.
+struct GeneratedMetadata {
+    metadata: Metadata23,
+    core_metadata: String,
+    entry_points: Option<String>,
+}
+
 /// PEP 517 requires that the metadata directory from the prepare metadata call is identical to the
 /// build wheel call. This method performs a prudence check that `METADATA` and `entry_points.txt`
 /// match.
@@ -201,9 +208,9 @@ fn check_metadata_directory(
     source_tree: &Path,
     metadata_directory: Option<&Path>,
     pyproject_toml: &PyProjectToml,
-) -> Result<(), Error> {
+) -> Result<Option<GeneratedMetadata>, Error> {
     let Some(metadata_directory) = metadata_directory else {
-        return Ok(());
+        return Ok(None);
     };
 
     debug!(
@@ -212,30 +219,34 @@ fn check_metadata_directory(
     );
 
     // `METADATA` is a mandatory file.
-    let current = pyproject_toml
-        .to_metadata(source_tree)?
-        .core_metadata_format();
+    let metadata = pyproject_toml.to_metadata(source_tree)?;
+    let core_metadata = metadata.core_metadata_format();
     let previous = fs_err::read_to_string(metadata_directory.join("METADATA"))?;
-    if previous != current {
+    if previous != core_metadata {
         return Err(Error::InconsistentSteps("METADATA"));
     }
 
     // `entry_points.txt` is not written if it would be empty.
     let entrypoints_path = metadata_directory.join("entry_points.txt");
-    match pyproject_toml.to_entry_points()? {
+    let entry_points = pyproject_toml.to_entry_points()?;
+    match &entry_points {
         None => {
             if entrypoints_path.is_file() {
                 return Err(Error::InconsistentSteps("entry_points.txt"));
             }
         }
         Some(entrypoints) => {
-            if fs_err::read_to_string(&entrypoints_path)? != entrypoints {
+            if fs_err::read_to_string(&entrypoints_path)? != entrypoints.as_str() {
                 return Err(Error::InconsistentSteps("entry_points.txt"));
             }
         }
     }
 
-    Ok(())
+    Ok(Some(GeneratedMetadata {
+        metadata,
+        core_metadata,
+        entry_points,
+    }))
 }
 
 /// Returns the list of module names without names which would be included twice
@@ -1073,6 +1084,99 @@ mod tests {
         Name: two-step-build
         Version: 1.0.0
         ");
+        fs_err::write(
+            metadata_dir
+                .path()
+                .join(&dist_info_dir)
+                .join("entry_points.txt"),
+            "[console_scripts]\nunexpected = unexpected:main\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            build_wheel(
+                src.path(),
+                output_dir.path(),
+                Some(&metadata_dir.path().join(&dist_info_dir)),
+                "0.5.15",
+                false
+            ),
+            Err(Error::InconsistentSteps("entry_points.txt")),
+        ));
+    }
+
+    #[test]
+    fn prepared_metadata_with_readme_and_entry_points() -> Result<(), Error> {
+        let _preview = uv_preview::test::with_features(&[PreviewFeature::MetadataJson]);
+        for build in [build_wheel, build_editable] {
+            let src = TempDir::new()?;
+            fs_err::write(
+                src.path().join("pyproject.toml"),
+                indoc! {r#"
+                [project]
+                name = "two-step-build"
+                version = "1.0.0"
+                readme = "README.md"
+
+                [project.scripts]
+                demo = "two_step_build:main"
+
+                [build-system]
+                requires = ["uv_build>=0.5.15,<0.6.0"]
+                build-backend = "uv_build"
+            "#},
+            )?;
+            fs_err::write(src.path().join("README.md"), "# Original readme\n")?;
+            fs_err::create_dir_all(src.path().join("src/two_step_build"))?;
+            fs_err::write(src.path().join("src/two_step_build/__init__.py"), "")?;
+            let prepared = TempDir::new()?;
+            let dist_info = metadata(src.path(), prepared.path(), "0.5.15")?;
+            let prepared_info = prepared.path().join(&dist_info);
+            let output = TempDir::new()?;
+            let wheel = build(
+                src.path(),
+                output.path(),
+                Some(&prepared_info),
+                "0.5.15",
+                false,
+            )?;
+            let wheel = output.path().join(wheel.to_string());
+            for filename in ["METADATA", "METADATA.json", "entry_points.txt"] {
+                assert_eq!(
+                    wheel_entry(&wheel, &format!("{dist_info}/{filename}")),
+                    fs_err::read_to_string(prepared_info.join(filename))?,
+                );
+            }
+
+            // A later hook must regenerate metadata when its source has changed.
+            fs_err::write(src.path().join("README.md"), "# Changed readme\n")?;
+            assert!(matches!(
+                build(
+                    src.path(),
+                    output.path(),
+                    Some(&prepared_info),
+                    "0.5.15",
+                    false
+                ),
+                Err(Error::InconsistentSteps("METADATA")),
+            ));
+
+            fs_err::write(src.path().join("README.md"), "# Original readme\n")?;
+            fs_err::write(
+                prepared_info.join("entry_points.txt"),
+                "[console_scripts]\nother = other:main\n",
+            )?;
+            assert!(matches!(
+                build(
+                    src.path(),
+                    output.path(),
+                    Some(&prepared_info),
+                    "0.5.15",
+                    false
+                ),
+                Err(Error::InconsistentSteps("entry_points.txt")),
+            ));
+        }
+        Ok(())
     }
 
     /// Check that non-normalized paths for `module-root` work with the glob inclusions.
