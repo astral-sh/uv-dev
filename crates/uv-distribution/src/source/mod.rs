@@ -29,7 +29,7 @@ use uv_client::{
     RegistryClient, RetryState,
 };
 use uv_configuration::{BuildKind, BuildOutput, NoSources};
-use uv_distribution_filename::{SourceDistExtension, WheelFilename};
+use uv_distribution_filename::{BuiltFilename, DistFilename, SourceDistExtension, WheelFilename};
 use uv_distribution_types::{
     ArchiveHashPolicy, BuildInfo, BuildVariables, BuildableSource, ConfigSettings,
     DirectorySourceUrl, ExtraBuildRequirement, GitDirectorySourceUrl, GitPathSourceUrl, Hashed,
@@ -2957,7 +2957,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .map_err(Error::CacheWrite)?;
 
         // Try a direct build if that isn't disabled and the uv build backend is used.
-        let disk_filename = if let Some(name) = self
+        let built_filename = if let Some(name) = self
             .build_context
             .direct_build(
                 source_root,
@@ -2974,8 +2974,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .await
             .map_err(|err| Error::Build(err.into()))?
         {
-            // In the uv build backend, the normalized filename and the disk filename are the same.
-            name.to_string()
+            match name {
+                DistFilename::WheelFilename(name) => BuiltFilename::from(name),
+                DistFilename::SourceDistFilename(name) => {
+                    BuiltFilename::<WheelFilename>::parse(name.to_string())?
+                }
+            }
         } else {
             // Identify the base Python interpreter to use in the cache key.
             let base_python = if cfg!(unix) {
@@ -3062,7 +3066,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         };
 
         // Read the metadata from the wheel.
-        let filename = WheelFilename::from_str(&disk_filename)?;
+        let (filename, disk_filename) = built_filename.into_parts();
         let metadata = read_wheel_metadata(&filename, &temp_dir.path().join(&disk_filename))?;
 
         // Validate the metadata.
