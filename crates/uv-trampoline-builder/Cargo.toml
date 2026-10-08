@@ -17,18 +17,22 @@ default = ["production"]
 # Expect tests to run against production builds of `uv-trampoline` binaries, rather than debug builds
 production = []
 
+# Enable the development tool for normalizing generated trampoline binaries.
+normalize-pe-timestamps = ["dep:goblin", "goblin/pe32", "goblin/pe64"]
+
 [lints]
 workspace = true
 
 [[bin]]
 name = "normalize-pe-timestamps"
+required-features = ["normalize-pe-timestamps"]
 
 [dependencies]
 uv-fs = { workspace = true }
 
 anyhow = { workspace = true }
 fs-err = { workspace = true }
-goblin = { workspace = true }
+goblin = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -45,6 +49,9 @@ fs-err = { workspace = true }
 rcgen = { workspace = true }
 tempfile = { workspace = true }
 which = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+goblin = { workspace = true, features = ["pe32", "pe64"] }
 
 [lib]
 doctest = false
