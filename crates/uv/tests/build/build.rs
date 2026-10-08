@@ -811,25 +811,34 @@ async fn build_workspace_reads_shared_constraints_once() -> Result<()> {
         [tool.uv.workspace]
         members = ["a", "b"]
     "#})?;
-    for (name, python) in [("a", "3.11"), ("b", "3.12")] {
-        let member = context.temp_dir.child(name);
-        member.child("pyproject.toml").write_str(&formatdoc! {r#"
-            [project]
-            name = "{name}"
-            version = "1.0.0"
-            requires-python = ">=3.11"
+    let a = context.temp_dir.child("a");
+    a.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "1.0.0"
+        requires-python = ">=3.11"
 
-            [build-system]
-            requires = ["uv_build"]
-            build-backend = "uv_build"
-        "#})?;
-        member.child(".python-version").write_str(python)?;
-        member
-            .child("src")
-            .child(name)
-            .child("__init__.py")
-            .touch()?;
-    }
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#})?;
+    a.child(".python-version").write_str("3.11")?;
+    a.child("src/a/__init__.py").touch()?;
+
+    let b = context.temp_dir.child("b");
+    b.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "1.0.0"
+        requires-python = ">=3.11"
+
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#})?;
+    b.child(".python-version").write_str("3.12")?;
+    b.child("src/b/__init__.py").touch()?;
+
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/constraints.txt"))
