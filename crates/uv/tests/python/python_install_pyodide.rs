@@ -91,8 +91,6 @@ async fn catalog(context: &TestContext) -> Result<ChildPath> {
 
 fn install(context: &TestContext, catalog: &ChildPath, path: &Path) -> Command {
     let mut command = context.python_install();
-    command.env_clear();
-    context.add_shared_env(&mut command, false);
     command
         .arg("--no-config")
         .arg("--no-bin")
