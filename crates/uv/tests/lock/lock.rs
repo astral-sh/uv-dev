@@ -48739,16 +48739,9 @@ fn lock_resolution_inputs_prerelease_policy_equivalence() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = ["a"]
     "#})?;
-    let preview_lock = || {
-        let mut command = context.lock();
-        command
-            .arg("--index-url")
-            .arg(server.index_url())
-            .args(["--preview-features", "resolution-inputs"]);
-        command
-    };
 
-    uv_snapshot!(context.filters(), preview_lock(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .args(["--preview-features", "resolution-inputs"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -48785,7 +48778,8 @@ fn lock_resolution_inputs_prerelease_policy_equivalence() -> Result<()> {
     });
 
     // The cold cache makes an unnecessary resolution observable even with a live local index.
-    uv_snapshot!(context.filters(), preview_lock().args([
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .args(["--preview-features", "resolution-inputs"]).args([
         "--locked", "--offline", "--no-cache",
         "--prerelease-package", "unused=allow",
         "--prerelease-package", "a=if-necessary",
@@ -48797,7 +48791,8 @@ fn lock_resolution_inputs_prerelease_policy_equivalence() -> Result<()> {
     assert_eq!(original, context.read("uv.lock"));
 
     // A real resolution also omits unrelated and redundant locked-package policies.
-    uv_snapshot!(context.filters(), preview_lock().args([
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .args(["--preview-features", "resolution-inputs"]).args([
         "--refresh",
         "--prerelease-package", "unused=disallow",
         "--prerelease-package", "a=if-necessary",
@@ -48821,7 +48816,8 @@ fn lock_resolution_inputs_prerelease_policy_equivalence() -> Result<()> {
     ");
     assert_eq!(original, context.read("uv.lock"));
 
-    uv_snapshot!(context.filters(), preview_lock().args([
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .args(["--preview-features", "resolution-inputs"]).args([
         "--locked", "--prerelease-package", "a=allow",
     ]), @"
     exit_code: 1 (failure)
@@ -48833,7 +48829,8 @@ fn lock_resolution_inputs_prerelease_policy_equivalence() -> Result<()> {
     ");
     assert_eq!(original, context.read("uv.lock"));
 
-    uv_snapshot!(context.filters(), preview_lock().args([
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .args(["--preview-features", "resolution-inputs"]).args([
         "--locked", "--prerelease", "allow",
     ]), @"
     exit_code: 1 (failure)
@@ -48896,12 +48893,7 @@ fn lock_resolution_inputs_prerelease_policy_backtracking() -> Result<()> {
         prerelease = "disallow"
         prerelease-package = { a = "disallow", discarded = "disallow", unused = "allow" }
     "#})?;
-    let lock_command = || {
-        let mut command = context.lock();
-        command.arg("--index-url").arg(server.index_url());
-        command
-    };
-    uv_snapshot!(context.filters(), lock_command(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -48941,7 +48933,7 @@ fn lock_resolution_inputs_prerelease_policy_backtracking() -> Result<()> {
         "#);
     });
 
-    uv_snapshot!(context.filters(), lock_command().args([
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).args([
         "--locked", "--offline", "--no-cache",
     ]), @"
     exit_code: 0 (success)
@@ -48950,7 +48942,7 @@ fn lock_resolution_inputs_prerelease_policy_backtracking() -> Result<()> {
     ");
     assert_eq!(original, context.read("uv.lock"));
 
-    uv_snapshot!(context.filters(), lock_command().args([
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).args([
         "--locked", "--prerelease-package", "discarded=allow",
     ]), @"
     exit_code: 1 (failure)
@@ -48986,7 +48978,7 @@ fn lock_resolution_inputs_prerelease_policy_backtracking() -> Result<()> {
         prerelease = "disallow"
         prerelease-package = { a = "disallow", discarded = "disallow", unused = "allow" }
     "#})?;
-    uv_snapshot!(context.filters(), lock_command(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
