@@ -393,7 +393,28 @@ mod tests {
     use uv_normalize::{ExtraName, GroupName, PackageName};
     use uv_pypi_types::{ConflictItem, ConflictItemRef};
 
-    use super::{ConflictWorlds, propagate_conflict_activations};
+    use super::{ConflictItemId, ConflictWorlds, propagate_conflict_activations};
+
+    #[test]
+    fn conflict_world_ids_are_canonical_and_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+        let package: PackageName = "package".parse()?;
+        let first = ConflictItem::from((package.clone(), "first".parse::<ExtraName>()?));
+        let second = ConflictItem::from((package, "second".parse::<GroupName>()?));
+        let mut worlds = ConflictWorlds::new([first.as_ref(), second.as_ref()]);
+        let first = ConflictItemId(0);
+        let second = ConflictItemId(1);
+        let first_only = worlds.activate(ConflictWorlds::EMPTY, first);
+        let second_only = worlds.activate(ConflictWorlds::EMPTY, second);
+        assert_ne!(first_only, second_only);
+        let forward = worlds.activate(first_only, second);
+        let reverse = worlds.activate(second_only, first);
+        assert_eq!(forward, reverse);
+        assert_eq!(worlds.activate(forward, first), forward);
+        assert_eq!(worlds.activate(reverse, second), forward);
+        assert_eq!(&*worlds.worlds[forward.0], &[first, second]);
+        assert_eq!(worlds.worlds.len(), 4);
+        Ok(())
+    }
 
     // A direct set representation provides an independent oracle for the interned traversal.
     fn propagate_sets<'a>(
