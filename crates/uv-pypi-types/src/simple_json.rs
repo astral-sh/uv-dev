@@ -17,14 +17,11 @@ use crate::lenient_requirement::LenientVersionSpecifiers;
 
 /// A collection of "files" from `PyPI`'s JSON API for a single package, as served by the
 /// `vnd.pypi.simple.v1` media type.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
 pub struct PypiSimpleDetail {
     /// PEP 792 project status information.
-    #[serde(default)]
     pub project_status: ProjectStatus,
     /// The list of [`PypiFile`]s available for download.
-    #[serde(deserialize_with = "deserialize_files")]
     pub files: Vec<PypiFile>,
 }
 
@@ -162,14 +159,26 @@ impl<'de, C: FileCollector> Visitor<'de> for PypiFilesSeed<'_, C> {
     }
 }
 
-/// Deserialize files while parsing each distinct `requires-python` value only once.
-fn deserialize_files<'de, D>(deserializer: D) -> Result<Vec<PypiFile>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let mut files = Vec::new();
-    PypiFilesSeed(&mut files).deserialize(deserializer)?;
-    Ok(files)
+impl<'de> Deserialize<'de> for PypiSimpleDetail {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut files = Vec::new();
+        let project_status = deserialize_simple_detail(deserializer, &mut files)?;
+        Ok(Self {
+            project_status,
+            files,
+        })
+    }
+}
+
+fn deserialize_simple_detail<'de, D: Deserializer<'de>, C: FileCollector>(
+    deserializer: D,
+    collector: &mut C,
+) -> Result<ProjectStatus, D::Error> {
+    deserializer.deserialize_struct(
+        "PypiSimpleDetail",
+        &["project-status", "files"],
+        SimpleVisitor(collector),
+    )
 }
 
 #[derive(Deserialize)]
@@ -191,34 +200,30 @@ impl PypiSimpleDetail {
         deserializer: D,
         on_file: impl FnMut(PypiFile),
     ) -> Result<ProjectStatus, D::Error> {
-        deserializer.deserialize_struct(
-            "PypiSimpleDetail",
-            &["project-status", "files"],
-            SimpleVisitor(FileCallback(on_file)),
-        )
+        deserialize_simple_detail(deserializer, &mut FileCallback(on_file))
     }
 }
 
-struct SimpleVisitor<F>(FileCallback<F>);
+struct SimpleVisitor<'a, C>(&'a mut C);
 
-impl<'de, F: FnMut(PypiFile)> Visitor<'de> for SimpleVisitor<F> {
+impl<'de, C: FileCollector> Visitor<'de> for SimpleVisitor<'_, C> {
     type Value = ProjectStatus;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("struct PypiSimpleDetail")
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(mut self, mut access: A) -> Result<Self::Value, A::Error> {
+    fn visit_seq<A: SeqAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
         let project_status = access.next_element()?.unwrap_or_default();
         access
-            .next_element_seed(PypiFilesSeed(&mut self.0))?
+            .next_element_seed(PypiFilesSeed(&mut *self.0))?
             .ok_or_else(|| {
                 serde::de::Error::invalid_length(1, &"struct PypiSimpleDetail with 2 elements")
             })?;
         Ok(project_status)
     }
 
-    fn visit_map<A: MapAccess<'de>>(mut self, mut access: A) -> Result<Self::Value, A::Error> {
+    fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
         let mut project_status = None;
         let mut files = None;
         while let Some(field) = access.next_key()? {
@@ -233,7 +238,7 @@ impl<'de, F: FnMut(PypiFile)> Visitor<'de> for SimpleVisitor<F> {
                     if files.is_some() {
                         return Err(serde::de::Error::duplicate_field("files"));
                     }
-                    files = Some(access.next_value_seed(PypiFilesSeed(&mut self.0))?);
+                    files = Some(access.next_value_seed(PypiFilesSeed(&mut *self.0))?);
                 }
                 SimpleField::Ignore => {
                     access.next_value::<serde::de::IgnoredAny>()?;
@@ -1016,6 +1021,49 @@ mod tests {
         Ok(())
     }
 
+    mod collected_schema {
+        /// Independent schema oracle for compatibility with the collected response format.
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        pub(super) struct PypiSimpleDetail {
+            #[serde(default)]
+            pub(super) project_status: crate::ProjectStatus,
+            #[serde(deserialize_with = "super::collect_files")]
+            pub(super) files: Vec<crate::PypiFile>,
+        }
+    }
+
+    fn collect_files<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<PypiFile>, D::Error> {
+        let mut files = Vec::new();
+        serde::de::DeserializeSeed::deserialize(super::PypiFilesSeed(&mut files), deserializer)?;
+        Ok(files)
+    }
+
+    #[test]
+    fn collected_decoder_matches_response_schema() -> Result<(), serde_json::Error> {
+        let files = r#"[{"filename":"example.whl","hashes":{},"url":"example.whl"}]"#;
+        for document in [
+            format!(r#"{{"files":{files}}}"#),
+            format!(
+                r#"{{"project-status":{{"status":"archived","reason":"retired"}},"files":{files}}}"#
+            ),
+            format!(
+                r#"{{"files":{files},"project-status":{{"status":"archived","reason":"retired"}}}}"#
+            ),
+            format!("[{{}},{files}]"),
+        ] {
+            let expected: collected_schema::PypiSimpleDetail = serde_json::from_str(&document)?;
+            let actual: crate::PypiSimpleDetail = serde_json::from_str(&document)?;
+            assert_eq!(actual.project_status.status, expected.project_status.status);
+            assert_eq!(actual.project_status.reason, expected.project_status.reason);
+            assert_eq!(actual.files.len(), expected.files.len());
+            assert_eq!(actual.files[0].filename, expected.files[0].filename);
+        }
+        Ok(())
+    }
+
     #[test]
     fn callback_decoder_matches_deserialization_errors() {
         for document in [
@@ -1035,7 +1083,8 @@ mod tests {
             r#"{"files":[],"ignored":[{"nested":null}]} trailing"#,
             r#"{"files":[],"project-status":null}"#,
         ] {
-            let expected = serde_json::from_str::<crate::PypiSimpleDetail>(document)
+            let expected = serde_json::from_str::<collected_schema::PypiSimpleDetail>(document)
+                .map(|detail| (detail.project_status, detail.files))
                 .expect_err("invalid response");
             let mut deserializer = serde_json::Deserializer::from_str(document);
             let actual = crate::PypiSimpleDetail::deserialize_with(&mut deserializer, |_| {})
