@@ -100,6 +100,18 @@ jobs:
       build-docker: ${{ steps.plan.outputs.build_docker }}
       push-docker: ${{ steps.plan.outputs.push_docker }}
     steps:
+      - name: Check out the planner schema
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/ci-changes.schema.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Save the planner schema
+        run: cp .github/ci-changes.schema.json "$RUNNER_TEMP/ci-changes.schema.json"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.head-sha }}
@@ -152,8 +164,9 @@ jobs:
           # a `git diff` failure instead of allowing required jobs to be skipped.
           changed_files="$(git diff --no-ext-diff --no-textconv --name-only "${comparison_base}...HEAD")"
           files=$(jq --raw-input --slurp --compact-output 'split("\n") | map(select(length > 0))' <<< "$changed_files")
-          changes=$(jq --null-input --compact-output --argjson files "$files" --argjson uv_version_changed "$uv_version_changed" '
-            def changed($pattern): any($files[]; test($pattern));
+          changes=$(jq --compact-output --argjson uv_version_changed "$uv_version_changed" '
+            . as $files
+            | def changed($pattern): any($files[]; test($pattern));
 
             {
               "rust-code-changed": changed("\\.rs$"),
@@ -189,14 +202,14 @@ jobs:
               "cache-relevant-changed": ($changes."rust-deps-changed" or $changes."rust-config-changed" or $changes."workflow-changed"),
               "docker-build-changed": ($changes."python-config-changed" or $changes."rust-deps-changed" or $changes."rust-config-changed" or $changes."dockerfile-changed" or $changes."docker-workflow-changed")
             }
-          ')
+          ' <<< "$files")
 
           jq --exit-status --argjson changes "$changes" '
             (.required | sort) as $required
             | (($changes | type) == "object")
               and (($changes | keys | sort) == $required)
               and ($changes | all(.[]; type == "boolean"))
-          ' .github/ci-changes.schema.json > /dev/null
+          ' "$RUNNER_TEMP/ci-changes.schema.json" > /dev/null
           printf 'changes=%s\n' "$changes" >> "$GITHUB_OUTPUT"
 
       - name: "Plan"
@@ -214,13 +227,14 @@ jobs:
           jq --null-input --raw-output --argjson changes "$CHANGES" --argjson labels "$LABELS" --argjson on_main "$ON_MAIN" --arg repository "$REPOSITORY" --arg event_name "$EVENT_NAME" --arg head_repository "$HEAD_REPOSITORY" --arg base_ref "$BASE_REF" '
             def has_label($label): ($labels // []) | index($label) != null;
 
-            {
+            ((has_label("test:skip") | not) and (has_label("build:skip") | not) and (has_label("build:skip-release") | not) and ($changes."release-build-changed" or has_label("build:release"))) as $build_release_binaries
+            | {
               test_code: ((has_label("test:skip") | not) and ($changes."any-code-changed" or $on_main)),
               review_security: $changes."any-code-changed",
               check_schema: $changes."schema-changed",
               check_crates_policies: ($repository == "astral-sh/uv" and $event_name == "pull_request" and $head_repository == $repository and $base_ref == "main" and $changes."uv-version-changed"),
               require_check_release: ($repository == "astral-sh/uv" and $event_name == "pull_request" and $head_repository == $repository and $base_ref == "main" and $changes."uv-version-changed"),
-              build_release_binaries: ((has_label("test:skip") | not) and (has_label("build:skip") | not) and (has_label("build:skip-release") | not) and ($changes."release-build-changed" or has_label("build:release"))),
+              build_release_binaries: $build_release_binaries,
               run_checks: (has_label("test:skip") | not),
               test_publish: ($changes."publish-changed" or has_label("test:publish") or has_label("test:extended") or $on_main),
               test_windows_trampoline: ((has_label("test:skip") | not) and ($changes."trampoline-code-changed" or $changes."trampoline-scripts-changed" or $changes."trampoline-workflow-changed" or $changes."rust-deps-changed" or has_label("build:windows-trampoline") or $on_main)),
@@ -231,7 +245,7 @@ jobs:
               test_ecosystem: (has_label("test:skip") | not),
               test_integration: (has_label("test:integration") or has_label("test:extended") or $on_main or $changes."integration-changed"),
               test_system: (has_label("test:system") or has_label("test:extended") or $on_main or $changes."system-workflow-changed" or $changes."system-test-changed"),
-              test_macos: (has_label("test:macos") or has_label("test:extended") or $on_main or ((has_label("test:skip") | not) and (has_label("build:skip") | not) and (has_label("build:skip-release") | not) and ($changes."release-build-changed" or has_label("build:release")))),
+              test_macos: (has_label("test:macos") or has_label("test:extended") or $on_main or $build_release_binaries),
               build_docker: ((has_label("build:skip") | not) and (has_label("build:skip-docker") | not) and ($changes."docker-build-changed" or has_label("build:push-docker"))),
               push_docker: has_label("build:push-docker")
             }
