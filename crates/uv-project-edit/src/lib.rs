@@ -1138,8 +1138,8 @@ impl PyProjectTomlMut {
     /// Returns all the places in this `pyproject.toml` that contain a dependency with the given
     /// name.
     ///
-    /// This method searches `project.dependencies`, `tool.uv.dev-dependencies`, and
-    /// `tool.uv.optional-dependencies`.
+    /// This method searches `project.dependencies`, `project.optional-dependencies`,
+    /// `dependency-groups`, and `tool.uv.dev-dependencies`.
     pub fn find_dependency(
         &self,
         name: &PackageName,
@@ -1158,9 +1158,9 @@ impl PyProjectTomlMut {
             // Check `project.optional-dependencies`.
             if let Some(extras) = project
                 .get("optional-dependencies")
-                .and_then(Item::as_table)
+                .and_then(Item::as_table_like)
             {
-                for (extra, dependencies) in extras {
+                for (extra, dependencies) in extras.iter() {
                     let Some(dependencies) = dependencies.as_array() else {
                         continue;
                     };
@@ -1176,8 +1176,12 @@ impl PyProjectTomlMut {
         }
 
         // Check `dependency-groups`.
-        if let Some(groups) = self.doc.get("dependency-groups").and_then(Item::as_table) {
-            for (group, dependencies) in groups {
+        if let Some(groups) = self
+            .doc
+            .get("dependency-groups")
+            .and_then(Item::as_table_like)
+        {
+            for (group, dependencies) in groups.iter() {
                 let Some(dependencies) = dependencies.as_array() else {
                     continue;
                 };
