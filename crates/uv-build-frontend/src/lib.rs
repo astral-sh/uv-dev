@@ -380,6 +380,7 @@ impl SourceBuild {
                 let interpreter = interpreter.clone();
                 environment::create_isolated_environment(
                     temp_dir,
+                    build_context.cache().clone(),
                     source_build_context.concurrent_build_slots.clone(),
                     move |path| {
                         uv_virtualenv::create_venv(

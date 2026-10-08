@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 use tracing::Span;
+use uv_cache::Cache;
 use uv_python_interpreter::PythonEnvironment;
 
 use crate::Error;
@@ -14,12 +15,14 @@ use crate::Error;
 /// Admission ends before the environment is returned for recursive build-dependency installation.
 pub(super) async fn create_isolated_environment(
     temp_dir: TempDir,
+    cache: Cache,
     slots: Arc<Semaphore>,
     create: impl FnOnce(&Path) -> Result<PythonEnvironment, uv_virtualenv::Error> + Send + 'static,
 ) -> Result<(TempDir, PythonEnvironment), Error> {
     let permit = slots.acquire_owned().await.map_err(io::Error::other)?;
     let span = Span::current();
     Ok(tokio::task::spawn_blocking(move || {
+        let _cache = cache;
         let _permit = permit;
         let _entered = span.enter();
         let environment = create(temp_dir.path())?;
@@ -41,6 +44,8 @@ mod tests {
 
     use tokio::runtime::Builder;
     use tokio::sync::{Semaphore, oneshot};
+    use uv_cache::Cache;
+    use uv_fs::{LockedFile, LockedFileMode};
 
     use crate::Error as BuildError;
 
@@ -54,15 +59,20 @@ mod tests {
 
     #[test]
     fn isolated_creation_waits_for_admission() -> Result<(), Error> {
-        let directory = tempfile::tempdir()?;
+        let cache = Cache::temp()?;
+        let directory = cache.venv_dir()?;
         let path = directory.path().to_owned();
         let started = Arc::new(AtomicBool::new(false));
         let worker_started = started.clone();
-        let future =
-            create_isolated_environment(directory, Arc::new(Semaphore::new(0)), move |_| {
+        let future = create_isolated_environment(
+            directory,
+            cache.clone(),
+            Arc::new(Semaphore::new(0)),
+            move |_| {
                 worker_started.store(true, Ordering::SeqCst);
                 Err(io::Error::other("unexpected creation").into())
-            });
+            },
+        );
         assert!(poll_once(future).is_pending());
         assert!(!started.load(Ordering::SeqCst));
         assert!(!path.exists());
@@ -70,12 +80,14 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_creation_keeps_its_directory_and_slot() -> Result<(), Error> {
+    fn cancelled_creation_keeps_parent_cache_directory_and_slot() -> Result<(), Error> {
         let runtime = Builder::new_current_thread()
             .enable_all()
             .max_blocking_threads(1)
             .build()?;
-        let directory = tempfile::tempdir()?;
+        let cache = runtime.block_on(Cache::temp()?.init())?;
+        let cache_root = cache.root().to_owned();
+        let directory = cache.venv_dir()?;
         let path = directory.path().to_owned();
         let slots = Arc::new(Semaphore::new(1));
         runtime.block_on(async {
@@ -87,13 +99,24 @@ mod tests {
             });
             start.await?;
             let (created, completed) = oneshot::channel();
-            let future = create_isolated_environment(directory, slots.clone(), move |path| {
-                fs_err::write(path.join("created"), b"created by worker")?;
-                let _ = created.send(());
-                Err(io::Error::other("fixture creation failure").into())
-            });
+            let future =
+                create_isolated_environment(directory, cache.clone(), slots.clone(), move |path| {
+                    fs_err::write(path.join("created"), b"created by worker")?;
+                    let _ = created.send(());
+                    Err(io::Error::other("fixture creation failure").into())
+                });
             assert!(poll_once(future).is_pending());
+            drop(cache);
+            assert!(cache_root.is_dir());
             assert!(path.is_dir());
+            assert!(
+                LockedFile::acquire_no_wait(
+                    cache_root.join(".lock"),
+                    LockedFileMode::Exclusive,
+                    "test cache"
+                )
+                .is_none()
+            );
             assert_eq!(slots.available_permits(), 0);
             tokio::task::yield_now().await;
             release.send(())?;
@@ -102,6 +125,7 @@ mod tests {
             // This cannot run until the sole worker finishes creation and drops its directory.
             tokio::task::spawn_blocking(|| {}).await?;
             assert!(!path.exists());
+            assert!(!cache_root.exists());
             assert_eq!(slots.available_permits(), 1);
             Ok(())
         })
@@ -109,10 +133,11 @@ mod tests {
 
     #[tokio::test]
     async fn failed_creation_keeps_error_context_and_releases_resources() -> Result<(), Error> {
-        let directory = tempfile::tempdir()?;
+        let cache = Cache::temp()?;
+        let directory = cache.venv_dir()?;
         let path = directory.path().to_owned();
         let slots = Arc::new(Semaphore::new(1));
-        let error = create_isolated_environment(directory, slots.clone(), |_| {
+        let error = create_isolated_environment(directory, cache.clone(), slots.clone(), |_| {
             Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "fixture permission failure",
