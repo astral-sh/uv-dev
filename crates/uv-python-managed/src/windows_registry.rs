@@ -115,11 +115,11 @@ fn registry_python_tag(key: &PythonInstallationKey) -> String {
 }
 
 /// Remove requested Python entries from the Windows Registry (PEP 514).
+#[must_use]
 pub fn remove_registry_entry<'a>(
     installations: impl IntoIterator<Item = &'a ManagedPythonInstallation>,
     all: bool,
-    errors: &mut Vec<(PythonInstallationKey, anyhow::Error)>,
-) {
+) -> Vec<(PythonInstallationKey, ManagedPep514Error)> {
     let astral_key = format!("Software\\Python\\{COMPANY_KEY}");
     if all {
         debug!("Removing registry key HKCU:\\{}", astral_key);
@@ -132,9 +132,10 @@ pub fn remove_registry_entry<'a>(
                 warn_user!("Failed to clear registry entries under {astral_key}: {err}");
             }
         }
-        return;
+        return Vec::new();
     }
 
+    let mut errors = Vec::new();
     for installation in installations {
         let python_tag = registry_python_tag(installation.key());
         let python_entry = format!("{astral_key}\\{python_tag}");
@@ -154,12 +155,12 @@ pub fn remove_registry_entry<'a>(
                     ManagedPep514Error::RemoveError {
                         key: python_entry,
                         source: err,
-                    }
-                    .into(),
+                    },
                 ));
             }
         }
     }
+    errors
 }
 
 /// Remove Python entries from the Windows Registry (PEP 514) that are not matching any
