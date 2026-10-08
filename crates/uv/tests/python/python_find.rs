@@ -120,8 +120,6 @@ fn python_find_warning_chain() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     [PYTHON-3.12]
-
-    ----- stderr -----
     warning: Failed to parse: pyproject.toml
       cause: TOML parse error at line 2, column 8
                |
@@ -354,21 +352,15 @@ fn python_find_pin_utf8_bom() {
         .unwrap();
 
     uv_snapshot!(context.filters(), context.python_find(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     [PYTHON-3.12]
-
-    ----- stderr -----
     ");
 
     uv_snapshot!(context.filters(), context.python_pin().arg("3.11"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     Updated `.python-version` from `3.12` -> `3.11`
-
-    ----- stderr -----
     ");
 }
 
