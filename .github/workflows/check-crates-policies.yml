@@ -30,10 +30,13 @@ jobs:
 
       - name: "Check crates.io publish setup"
         id: check
+        shell: bash
         run: |
-          git clone --depth=1 --quiet https://github.com/astral-sh/crates-policies.git "$RUNNER_TEMP/crates-policies"
-          git -C "$RUNNER_TEMP/crates-policies" log -1 --format='crates-policies commit: %H'
-          uv run "$RUNNER_TEMP/crates-policies/check.py" "$GITHUB_WORKSPACE"
+          {
+            git clone --depth=1 --quiet https://github.com/astral-sh/crates-policies.git "$RUNNER_TEMP/crates-policies"
+            git -C "$RUNNER_TEMP/crates-policies" log -1 --format='crates-policies commit: %H'
+            uv run "$RUNNER_TEMP/crates-policies/check.py" "$GITHUB_WORKSPACE"
+          } 2>&1 | tee "$RUNNER_TEMP/crates-policies.log"
 
       - name: "Get pull request comment token"
         id: token
@@ -54,14 +57,30 @@ jobs:
         run: |
           assignees="$(gh pr view "$PULL_REQUEST_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --json assignees --jq '[.assignees[].login | "@" + .] | join(" ")')"
+          log="$(jq --null-input --raw-output --rawfile log "$RUNNER_TEMP/crates-policies.log" '
+            $log | if length > 10000 then
+              "Output truncated; showing the last 10,000 characters:\n\n" + .[-10000:]
+            else
+              .
+            end | @html
+          ')"
           body="$(cat <<EOF
           The [crates.io publishing policy check]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT) failed.
 
-          Register any newly publishable crates in [astral-sh/crates-policies](https://github.com/astral-sh/crates-policies).
-          Re-run the check after the policy is updated.
+          If the output reports missing crates or publishing policies, update [astral-sh/crates-policies](https://github.com/astral-sh/crates-policies) and re-run the check.
+          For transient registry or network errors, re-run the check.
+
+          <details>
+          <summary>Check output</summary>
+
+          <pre>$log</pre>
+
+          </details>
           EOF
           )"
           if [ -n "$assignees" ]; then
             printf -v body '%s\n\n%s' "$assignees" "$body"
           fi
-          gh pr comment "$PULL_REQUEST_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body"
+          printf '%s\n' "$body" > "$RUNNER_TEMP/crates-policies-comment.md"
+          gh pr comment "$PULL_REQUEST_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --body-file "$RUNNER_TEMP/crates-policies-comment.md"
