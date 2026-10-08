@@ -83,6 +83,7 @@ pub use crate::lock::map::PackageMap;
 pub use crate::lock::tree::{TreeDisplay, TreeJsonTarget};
 
 use self::requirements::{RequirementNormalizer, normalize_collection, normalize_requirement};
+use self::static_metadata::{normalize_static_metadata, same_static_metadata};
 
 mod deserialize;
 pub(crate) mod export;
@@ -91,6 +92,7 @@ mod installable;
 mod map;
 mod requirements;
 mod serialize;
+mod static_metadata;
 mod tree;
 #[cfg(test)]
 mod windows_emulation_tests;
@@ -4494,7 +4496,7 @@ impl Lock {
                     .cloned(),
             );
             let actual = &self.manifest.dependency_metadata;
-            if expected != *actual {
+            if !same_static_metadata(&expected, actual) {
                 return Ok(SatisfiesResult::MismatchedStaticMetadata(expected, actual));
             }
             if !self.manifest.dependency_metadata_ordered && self.static_metadata_needs_provenance()
@@ -6302,7 +6304,7 @@ impl From<ExcludeNewer> for ExcludeNewerWire {
     }
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, serde::Deserialize, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct ResolverManifest {
     /// The workspace members included in the lockfile.
@@ -6345,6 +6347,35 @@ pub struct ResolverManifest {
     /// Whether declaration order and cardinality are known, rather than inferred from a sorted set.
     #[serde(default)]
     dependency_metadata_ordered: bool,
+}
+
+impl PartialEq for ResolverManifest {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            members,
+            default_groups,
+            group_requires_python,
+            requirements,
+            dependency_groups,
+            constraints,
+            overrides,
+            excludes,
+            build_constraints,
+            dependency_metadata,
+            dependency_metadata_ordered,
+        } = self;
+        members == &other.members
+            && default_groups == &other.default_groups
+            && group_requires_python == &other.group_requires_python
+            && requirements == &other.requirements
+            && dependency_groups == &other.dependency_groups
+            && constraints == &other.constraints
+            && overrides == &other.overrides
+            && excludes == &other.excludes
+            && build_constraints == &other.build_constraints
+            && dependency_metadata_ordered == &other.dependency_metadata_ordered
+            && same_static_metadata(dependency_metadata, &other.dependency_metadata)
+    }
 }
 
 /// Group entries by name and version without reordering matching keys or removing duplicates.
@@ -6464,7 +6495,14 @@ impl ResolverManifest {
         dependency_metadata: impl IntoIterator<Item = StaticMetadata>,
     ) -> Self {
         let normalize = uv_preview::is_enabled(PreviewFeature::LockfileNormalization);
-        let dependency_metadata = collect_static_metadata(dependency_metadata);
+        let dependency_metadata =
+            collect_static_metadata(dependency_metadata.into_iter().map(|metadata| {
+                if normalize {
+                    normalize_static_metadata(metadata)
+                } else {
+                    metadata
+                }
+            }));
         let dependency_metadata_ordered = has_duplicate_static_metadata_keys(&dependency_metadata);
         Self {
             members: members.into_iter().collect(),

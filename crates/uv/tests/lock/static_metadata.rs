@@ -82,6 +82,147 @@ fn package_names(context: &TestContext) -> Result<Vec<String>> {
         .collect())
 }
 
+fn configure_payload(
+    context: &TestContext,
+    previews: &[&str],
+    requires_dist: &[&str],
+    requires_python: &str,
+    extras: &[&str],
+) -> Result<()> {
+    let previews = serde_json::to_string(previews)?;
+    let requires_dist = serde_json::to_string(requires_dist)?;
+    let requires_python = serde_json::to_string(requires_python)?;
+    let extras = serde_json::to_string(extras)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = {previews}
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = {requires_dist}
+        requires-python = {requires_python}
+        provides-extra = {extras}
+    "#})?;
+    Ok(())
+}
+
+#[test]
+fn equivalent_static_metadata_payloads_keep_the_lock() -> Result<()> {
+    insta::allow_duplicates! {
+        for metadata_free in [false, true] {
+            for normalize in [false, true] {
+                let context = uv_test::test_context!("3.12");
+                wheelhouse(&context)?;
+                let mut previews = Vec::new();
+                if metadata_free {
+                    previews.push("lock-without-metadata");
+                }
+                if normalize {
+                    previews.push("lockfile-normalization");
+                }
+                configure_payload(&context, &previews, &["b", "a>=0", "a>=1"], ">=3.9,>=3.10", &["gpu", "cpu", "gpu"])?;
+                uv_snapshot!(context.filters(), lock(&context), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Resolved 4 packages in [TIME]
+                ");
+                assert_eq!(package_names(&context)?, ["a", "b", "parent", "project"]);
+                let original = context.read("uv.lock");
+
+                configure_payload(&context, &previews, &["a>=1", "b"], ">=3.10", &["cpu", "gpu"])?;
+                uv_snapshot!(context.filters(), lock(&context).arg("--locked"), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Resolved 4 packages in [TIME]
+                ");
+                uv_snapshot!(context.filters(), lock(&context), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Resolved 4 packages in [TIME]
+                ");
+                assert_eq!(context.read("uv.lock"), original);
+
+                // A fresh resolve compares payload semantics too, without rewriting equivalent inputs.
+                uv_snapshot!(context.filters(), context.lock()
+                    .args(["--no-index", "--find-links", "links", "--refresh", "--locked"]), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Resolved 4 packages in [TIME]
+                ");
+                uv_snapshot!(context.filters(), context.lock()
+                    .args(["--no-index", "--find-links", "links", "--refresh"]), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Resolved 4 packages in [TIME]
+                ");
+                assert_eq!(context.read("uv.lock"), original);
+
+                let parsed: toml::Value = toml::from_str(&original)?;
+                let payload = &parsed["manifest"]["dependency-metadata"][0];
+                assert_eq!(payload["requires-dist"].as_array().expect("requirements").len(), if normalize { 2 } else { 3 });
+                assert_eq!(payload["provides-extras"].as_array().expect("extras").len(), if normalize { 2 } else { 3 });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn static_metadata_payload_policy_changes_need_a_new_lock() -> Result<()> {
+    insta::allow_duplicates! {
+        for metadata_free in [false, true] {
+            let previews = if metadata_free { vec!["lock-without-metadata"] } else { Vec::new() };
+            for (before, after, before_python, after_python, before_extras, after_extras) in [
+                ("a>=1rc1,>=1", "a>=1", ">=3.10", ">=3.10", vec![], vec![]),
+                ("a==1", "a==1,>=0", ">=3.10", ">=3.10", vec![], vec![]),
+                ("a", "a", ">=3.9,!=3.10.*", ">=3.9,!=3.10.0.*", vec![], vec![]),
+                ("a", "a", ">=3.10", ">=3.10", vec!["gpu"], vec![]),
+            ] {
+                let context = uv_test::test_context!("3.12");
+                wheelhouse(&context)?;
+                configure_payload(&context, &previews, &[before], before_python, &before_extras)?;
+                uv_snapshot!(context.filters(), lock(&context), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Resolved 3 packages in [TIME]
+                ");
+                let original = context.read("uv.lock");
+                configure_payload(&context, &previews, &[after], after_python, &after_extras)?;
+                uv_snapshot!(context.filters(), lock(&context).arg("--locked"), @"
+                exit_code: 1 (failure)
+                ----- stderr -----
+                Resolved 3 packages in [TIME]
+                error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+                hint: To update the lockfile, run `uv lock`.
+                ");
+                assert_eq!(context.read("uv.lock"), original);
+                uv_snapshot!(context.filters(), lock(&context), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Resolved 3 packages in [TIME]
+                ");
+                uv_snapshot!(context.filters(), lock(&context).arg("--locked"), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Resolved 3 packages in [TIME]
+                ");
+            }
+        }
+        Ok(())
+    }
+}
+
 #[test]
 fn repeated_static_metadata_follows_declaration_order() -> Result<()> {
     insta::allow_duplicates! {
