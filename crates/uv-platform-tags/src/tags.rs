@@ -171,7 +171,16 @@ impl Tags {
         implementation_version: (u8, u8),
         options: TagsOptions,
     ) -> Result<Self, TagsError> {
-        let implementation = TagImplementation::from_env(implementation_name, options)?;
+        // CPython-specific ABI errors take precedence over unrecognized implementation names.
+        let implementation = implementation_name.parse().map_err(|error| {
+            if options.gil_disabled {
+                TagsError::GilIsACPythonProblem(implementation_name.to_owned())
+            } else if options.debug_enabled {
+                TagsError::DebugIsACPythonProblem(implementation_name.to_owned())
+            } else {
+                error
+            }
+        })?;
         Self::from_implementation(
             platform,
             python_version,
@@ -182,7 +191,7 @@ impl Tags {
     }
 
     /// Returns the compatible tags for a supported Python implementation, version, and platform.
-    pub fn from_implementation(
+    fn from_implementation(
         platform: Platform,
         python_version: (u8, u8),
         implementation: TagImplementation,
@@ -507,7 +516,7 @@ impl std::fmt::Display for Tags {
 
 /// A Python implementation supported by wheel-tag generation.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum TagImplementation {
+enum TagImplementation {
     CPython,
     PyPy,
     GraalPy,
@@ -532,21 +541,6 @@ impl FromStr for TagImplementation {
 }
 
 impl TagImplementation {
-    /// Parse an interpreter-reported name with its ABI options.
-    ///
-    /// CPython-specific ABI errors take precedence over unrecognized implementation names.
-    pub fn from_env(name: &str, options: TagsOptions) -> Result<Self, TagsError> {
-        name.parse().map_err(|error| {
-            if options.gil_disabled {
-                TagsError::GilIsACPythonProblem(name.to_owned())
-            } else if options.debug_enabled {
-                TagsError::DebugIsACPythonProblem(name.to_owned())
-            } else {
-                error
-            }
-        })
-    }
-
     fn as_str(self) -> &'static str {
         match self {
             Self::CPython => "cpython",
