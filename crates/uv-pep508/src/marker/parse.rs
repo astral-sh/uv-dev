@@ -571,90 +571,89 @@ fn parse_extra_expr(
     None
 }
 
-/// ```text
-/// marker_expr   = marker_var:l marker_op:o marker_var:r -> (o, l, r)
-///               | wsp* '(' marker:m wsp* ')' -> m
-/// ```
-fn parse_marker_expr<T: Pep508Url>(
-    cursor: &mut Cursor,
-    reporter: &mut impl Reporter,
-) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    cursor.eat_whitespace();
-    if let Some(start_pos) = cursor.eat_char('(') {
-        let marker = parse_marker_or(cursor, reporter)?;
-        cursor.next_expect_char(')', start_pos)?;
-        Ok(marker)
-    } else {
-        Ok(parse_marker_key_op_value(cursor, reporter)?.map(MarkerTree::expression))
+/// The partially parsed expression inside one pair of parentheses.
+#[derive(Default)]
+struct MarkerFrame {
+    conjunction: Option<MarkerTree>,
+    disjunction: Option<MarkerTree>,
+}
+
+impl MarkerFrame {
+    fn push(&mut self, expression: Option<MarkerTree>) {
+        if let Some(expression) = expression {
+            self.conjunction = Some(match self.conjunction {
+                Some(tree) => tree.and(expression),
+                None => expression,
+            });
+        }
+    }
+
+    fn finish_conjunction(&mut self) {
+        if let Some(conjunction) = self.conjunction.take() {
+            self.disjunction = Some(match self.disjunction {
+                Some(tree) => tree.or(conjunction),
+                None => conjunction,
+            });
+        }
+    }
+
+    fn finish(mut self) -> Option<MarkerTree> {
+        self.finish_conjunction();
+        self.disjunction
     }
 }
 
-/// ```text
-/// marker_and    = marker_expr:l wsp* 'and' marker_expr:r -> ('and', l, r)
-///               | marker_expr:m -> m
-/// ```
-fn parse_marker_and<T: Pep508Url>(
-    cursor: &mut Cursor,
-    reporter: &mut impl Reporter,
-) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    parse_marker_op(cursor, "and", MarkerTree::and, parse_marker_expr, reporter)
-}
-
-/// ```text
-/// marker_or     = marker_and:l wsp* 'or' marker_and:r -> ('or', l, r)
-///                   | marker_and:m -> m
-/// ```
+/// Parse marker expressions with `and` taking precedence over `or`.
+///
+/// Parenthesized expressions retain their parent frame on the heap, so nesting does not consume
+/// the thread's call stack. Ignored expressions contribute no tree at any nesting level.
 fn parse_marker_or<T: Pep508Url>(
     cursor: &mut Cursor,
     reporter: &mut impl Reporter,
 ) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    parse_marker_op(
-        cursor,
-        "or",
-        MarkerTree::or,
-        |cursor, reporter| parse_marker_and(cursor, reporter),
-        reporter,
-    )
-}
-
-/// Parses both `marker_and` and `marker_or`
-#[expect(clippy::type_complexity)]
-fn parse_marker_op<T: Pep508Url, R: Reporter>(
-    cursor: &mut Cursor,
-    op: &str,
-    apply: fn(MarkerTree, MarkerTree) -> MarkerTree,
-    parse_inner: fn(&mut Cursor, &mut R) -> Result<Option<MarkerTree>, Pep508Error<T>>,
-    reporter: &mut R,
-) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    let mut tree = None;
-
-    // marker_and or marker_expr
-    let first_element = parse_inner(cursor, reporter)?;
-
-    if let Some(expression) = first_element {
-        tree = Some(match tree {
-            Some(tree) => apply(tree, expression),
-            None => expression,
-        });
-    }
+    let mut parents = Vec::new();
+    let mut frame = MarkerFrame::default();
 
     loop {
-        // wsp*
         cursor.eat_whitespace();
-        // ('or' marker_and) or ('and' marker_or)
-        let (start, len) = cursor.peek_while(|c| !c.is_whitespace() && c != '(');
-        match cursor.slice(start, len) {
-            value if value == op => {
-                cursor.take_while(|c| !c.is_whitespace() && c != '(');
+        if let Some(start_pos) = cursor.eat_char('(') {
+            parents.push((frame, start_pos));
+            frame = MarkerFrame::default();
+            continue;
+        }
 
-                if let Some(expression) = parse_inner(cursor, reporter)? {
-                    tree = Some(match tree {
-                        Some(tree) => apply(tree, expression),
-                        None => expression,
-                    });
+        frame.push(parse_marker_key_op_value(cursor, reporter)?.map(MarkerTree::expression));
+
+        loop {
+            cursor.eat_whitespace();
+            // Closing a parenthesized expression must not scan the remaining closing delimiters.
+            let operator = match cursor.peek_char() {
+                Some('a' | 'o') => {
+                    let (start, len) = cursor.peek_while(|c| !c.is_whitespace() && c != '(');
+                    cursor.slice(start, len)
+                }
+                _ => "",
+            };
+            match operator {
+                "and" => {
+                    cursor.take_while(|c| !c.is_whitespace() && c != '(');
+                    break;
+                }
+                "or" => {
+                    cursor.take_while(|c| !c.is_whitespace() && c != '(');
+                    frame.finish_conjunction();
+                    break;
+                }
+                _ => {
+                    let marker = frame.finish();
+                    let Some((parent, start_pos)) = parents.pop() else {
+                        return Ok(marker);
+                    };
+                    cursor.next_expect_char(')', start_pos)?;
+                    frame = parent;
+                    frame.push(marker);
                 }
             }
-            _ => return Ok(tree),
         }
     }
 }
@@ -669,8 +668,7 @@ pub(crate) fn parse_markers_cursor<T: Pep508Url>(
     let marker = parse_marker_or(cursor, reporter)?;
     cursor.eat_whitespace();
     if let Some((pos, unexpected)) = cursor.next() {
-        // If we're here, both parse_marker_or and parse_marker_and returned because the next
-        // character was neither "and" nor "or"
+        // Parsing stops when the next token is neither "and" nor "or".
         let input = cursor.to_string();
         return Err(Pep508Error {
             message: Pep508ErrorSource::String(format!(
@@ -696,4 +694,71 @@ pub(crate) fn parse_markers<T: Pep508Url>(
     // If the tree consisted entirely of arbitrary expressions
     // that were ignored, it evaluates to true.
     parse_markers_cursor(&mut chars, reporter).map(|result| result.unwrap_or(MarkerTree::TRUE))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{MarkerTree, Pep508Error, VerbatimUrl};
+
+    use super::parse_markers;
+
+    #[test]
+    fn nested_precedence_ignored_expressions_and_warning_order() -> Result<(), Pep508Error> {
+        let input = format!(
+            "{}os.name == 'posix' or ((sys.platform == 'win32' and (python_version >= '3.10' or python_version >= 'invalid'))){}",
+            "(".repeat(64),
+            ")".repeat(64),
+        );
+        let mut warnings = Vec::new();
+        let actual = parse_markers::<VerbatimUrl>(&input, &mut |kind, warning| {
+            warnings.push((kind, warning));
+        })?;
+        let posix: MarkerTree = "os_name == 'posix'".parse()?;
+        let windows: MarkerTree = "sys_platform == 'win32'".parse()?;
+        let python: MarkerTree = "python_version >= '3.10'".parse()?;
+        assert_eq!(actual, posix.or(windows.and(python)));
+        insta::assert_debug_snapshot!(warnings, @r#"
+        [
+            (
+                DeprecatedMarkerName,
+                "os.name is deprecated in favor of os_name",
+            ),
+            (
+                DeprecatedMarkerName,
+                "sys.platform is deprecated in favor of sys_platform",
+            ),
+            (
+                Pep440Error,
+                "Expected PEP 440 version to compare with python_version, found invalid,\n                    will be ignored: expected version to start with a number, but no leading ASCII digits were found",
+            ),
+        ]
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn nested_error_spans_include_multibyte_text() {
+        let input = "((os_name == 'λ') and (unknown == 'x'))";
+        let error = parse_markers::<VerbatimUrl>(input, &mut |_, _| {})
+            .expect_err("unknown marker variable");
+        assert_eq!(
+            error.start,
+            input.find("unknown").expect("unknown variable")
+        );
+        assert_eq!(error.len, "unknown".len());
+        insta::assert_snapshot!(error, @"
+        Expected a quoted string or a valid marker name, found `unknown`
+        ((os_name == 'λ') and (unknown == 'x'))
+                               ^^^^^^^
+        ");
+
+        let input = "((os_name == 'λ')";
+        let error = parse_markers::<VerbatimUrl>(input, &mut |_, _| {})
+            .expect_err("missing outer delimiter");
+        insta::assert_snapshot!(error, @"
+        Expected ')', found end of dependency specification
+        ((os_name == 'λ')
+        ^
+        ");
+    }
 }
