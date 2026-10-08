@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use std::path::PathBuf;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use std::process::Command;
 use std::{env, path::Path};
 
