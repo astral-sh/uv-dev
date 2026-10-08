@@ -3,10 +3,6 @@ use clap::{Args, ValueEnum};
 
 use uv_warnings::warn_user;
 
-pub trait CompatArgs {
-    fn validate(&self) -> Result<()>;
-}
-
 /// Arguments for `pip-compile` compatibility.
 ///
 /// These represent a subset of the `pip-compile` interface that uv supports by default.
@@ -57,13 +53,13 @@ pub struct PipCompileCompatArgs {
     pip_args: Option<String>,
 }
 
-impl CompatArgs for PipCompileCompatArgs {
+impl PipCompileCompatArgs {
     /// Validate the arguments passed for `pip-compile` compatibility.
     ///
     /// This method will warn when an argument is passed that has no effect but matches uv's
     /// behavior. If an argument is passed that does _not_ match uv's behavior (e.g.,
     /// `--no-build-isolation`), this method will return an error.
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.allow_unsafe {
             warn_user!(
                 "pip-compile's `--allow-unsafe` has no effect (uv can safely pin `pip` and other packages)"
@@ -160,13 +156,13 @@ pub struct PipListCompatArgs {
     disable_pip_version_check: bool,
 }
 
-impl CompatArgs for PipListCompatArgs {
+impl PipListCompatArgs {
     /// Validate the arguments passed for `pip list` compatibility.
     ///
     /// This method will warn when an argument is passed that has no effect but matches uv's
     /// behavior. If an argument is passed that does _not_ match uv's behavior (e.g.,
     /// `--disable-pip-version-check`), this method will return an error.
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.disable_pip_version_check {
             warn_user!("pip's `--disable-pip-version-check` has no effect");
         }
@@ -202,13 +198,13 @@ pub struct PipSyncCompatArgs {
     pip_args: Option<String>,
 }
 
-impl CompatArgs for PipSyncCompatArgs {
+impl PipSyncCompatArgs {
     /// Validate the arguments passed for `pip-sync` compatibility.
     ///
     /// This method will warn when an argument is passed that has no effect but matches uv's
     /// behavior. If an argument is passed that does _not_ match uv's behavior, this method will
     /// return an error.
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.ask {
             return Err(anyhow!(
                 "pip-sync's `--ask` is unsupported (uv never asks for confirmation)"
@@ -273,13 +269,13 @@ pub struct VenvCompatArgs {
     no_wheel: bool,
 }
 
-impl CompatArgs for VenvCompatArgs {
+impl VenvCompatArgs {
     /// Validate the arguments passed for `venv` compatibility.
     ///
     /// This method will warn when an argument is passed that has no effect but matches uv's
     /// behavior. If an argument is passed that does _not_ match uv's behavior, this method will
     /// return an error.
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.no_seed {
             warn_user!(
                 "virtualenv's `--no-seed` has no effect (uv omits seed packages by default)"
@@ -319,13 +315,13 @@ pub struct PipUninstallCompatArgs {
     disable_pip_version_check: bool,
 }
 
-impl CompatArgs for PipUninstallCompatArgs {
+impl PipUninstallCompatArgs {
     /// Validate the arguments passed for `pip uninstall` compatibility.
     ///
     /// This method will warn when an argument is passed that has no effect but matches uv's
     /// behavior. If an argument is passed that does _not_ match uv's behavior, this method will
     /// return an error.
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.yes {
             warn_user!("`--yes` has no effect (uv never asks for confirmation)");
         }
@@ -350,13 +346,13 @@ pub struct PipInstallCompatArgs {
     user: bool,
 }
 
-impl CompatArgs for PipInstallCompatArgs {
+impl PipInstallCompatArgs {
     /// Validate the arguments passed for `pip install` compatibility.
     ///
     /// This method will warn when an argument is passed that has no effect but matches uv's
     /// behavior. If an argument is passed that does _not_ match uv's behavior, this method will
     /// return an error.
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.disable_pip_version_check {
             warn_user!("pip's `--disable-pip-version-check` has no effect");
         }
@@ -378,19 +374,4 @@ impl CompatArgs for PipInstallCompatArgs {
 pub struct PipGlobalCompatArgs {
     #[clap(long, hide = true)]
     disable_pip_version_check: bool,
-}
-
-impl CompatArgs for PipGlobalCompatArgs {
-    /// Validate the arguments passed for `pip` compatibility.
-    ///
-    /// This method will warn when an argument is passed that has no effect but matches uv's
-    /// behavior. If an argument is passed that does _not_ match uv's behavior, this method will
-    /// return an error.
-    fn validate(&self) -> Result<()> {
-        if self.disable_pip_version_check {
-            warn_user!("pip's `--disable-pip-version-check` has no effect");
-        }
-
-        Ok(())
-    }
 }
