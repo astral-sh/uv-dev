@@ -268,11 +268,16 @@ impl VerbatimUrl {
     ///
     /// When `false`, preserve the original input's path preference.
     #[must_use]
-    pub fn with_force_relative(self, force_relative: bool) -> Self {
-        Self {
-            force_relative,
-            ..self
-        }
+    pub fn with_force_relative(mut self, force_relative: bool) -> Self {
+        self.set_force_relative(force_relative);
+        self
+    }
+
+    /// Set whether this URL should be represented by a relative path regardless of its input.
+    ///
+    /// When `false`, the original input determines the path preference.
+    pub fn set_force_relative(&mut self, force_relative: bool) {
+        self.force_relative = force_relative;
     }
 
     /// Return whether this URL is forced to prefer a relative path.
@@ -796,11 +801,13 @@ mod tests {
     #[test]
     fn forced_relative_overrides_absolute_spelling() -> Result<(), VerbatimUrlError> {
         let absolute: VerbatimUrl = "file:///path/to/distribution".parse()?;
-        let relative = absolute.clone().with_force_relative(true);
+        let mut relative = absolute.clone().with_force_relative(true);
 
         assert!(relative.prefers_relative());
         assert_eq!(absolute, relative);
-        assert!(!relative.with_force_relative(false).prefers_relative());
+        relative.set_force_relative(false);
+        assert!(!relative.prefers_relative());
+        assert_eq!(relative.given(), absolute.given());
 
         Ok(())
     }
