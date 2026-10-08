@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/var/lib/apt/lists \
   curl
 
 # Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv@sha256:2381d6aa60c326b71fd40023f921a0a3b8f91b14d5db6b90402e65a635053709 /uv /usr/local/bin/uv
 
 # Setup zig as cross compiling linker
 COPY pyproject.toml uv.lock ./
