@@ -18,7 +18,7 @@ use assert_fs::{
 use indoc::indoc;
 use predicates::prelude::predicate;
 use tracing::debug;
-use uv_test::{LATEST_PYTHON_3_12, apply_filters, uv_snapshot};
+use uv_test::{LATEST_PYTHON_3_12, uv_snapshot};
 
 use uv_fs::Simplified;
 use uv_python_managed::platform_key_from_env;
@@ -593,16 +593,10 @@ fn python_uninstall_executable_candidates() {
         invalid_name
     };
 
-    let output = context
-        .python_uninstall()
-        .arg("3.12")
-        .assert()
-        .success()
-        .stdout("");
-    insta::assert_snapshot!(apply_filters(
-        String::from_utf8_lossy(&output.get_output().stderr).into_owned(),
-        context.filters(),
-    ), @"
+    uv_snapshot!(context.filters(), context.python_uninstall()
+        .arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
     Searching for Python versions matching: Python 3.12
     Uninstalled 2 versions in [TIME]
      - cpython-3.12.6-[PLATFORM]
@@ -647,17 +641,11 @@ fn python_uninstall_retargeted_executable() {
     fs_err::remove_file(python_312.path()).unwrap();
     uv_fs::symlink_or_copy_file(source, python_312.path()).unwrap();
 
-    let output = context
-        .python_uninstall()
+    uv_snapshot!(context.filters(), context.python_uninstall()
         .arg("3.11.13")
-        .arg("3.12.11")
-        .assert()
-        .success()
-        .stdout("");
-    insta::assert_snapshot!(apply_filters(
-        String::from_utf8_lossy(&output.get_output().stderr).into_owned(),
-        context.filters(),
-    ), @"
+        .arg("3.12.11"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
     Searching for Python versions matching: Python 3.11.13
     Searching for Python versions matching: Python 3.12.11
     Uninstalled 2 versions in [TIME]
@@ -704,17 +692,11 @@ fn python_uninstall_executable_first_owner() {
         (metadata_312.dev(), metadata_312.ino())
     );
 
-    let output = context
-        .python_uninstall()
+    uv_snapshot!(context.filters(), context.python_uninstall()
         .arg("3.11.13")
-        .arg("3.12.11")
-        .assert()
-        .success()
-        .stdout("");
-    insta::assert_snapshot!(apply_filters(
-        String::from_utf8_lossy(&output.get_output().stderr).into_owned(),
-        context.filters(),
-    ), @"
+        .arg("3.12.11"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
     Searching for Python versions matching: Python 3.11.13
     Searching for Python versions matching: Python 3.12.11
     Uninstalled 2 versions in [TIME]
