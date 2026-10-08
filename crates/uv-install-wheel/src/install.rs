@@ -66,8 +66,8 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     let wheel = wheel.as_ref();
     let (dist_info_prefix, site_packages) = wheel_destination(layout, wheel)?;
     let metadata = dist_info_metadata(&dist_info_prefix, wheel)?;
-    let Metadata10 { name, version } = Metadata10::parse_pkg_info(&metadata)
-        .map_err(|err| Error::InvalidWheel(err.to_string()))?;
+    let Metadata10 { name, version } =
+        Metadata10::parse_pkg_info(&metadata).map_err(Error::InvalidMetadata)?;
 
     let version = Version::from_str(&version)?;
 
