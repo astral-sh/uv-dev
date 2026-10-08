@@ -1,5 +1,6 @@
 # Reproduce reported issue behavior and open draft regression tests for bugs in uv-dev.
-name: "reproduce-bug"
+name: Reproduce
+run-name: "Reproduce issue ${{ inputs.issue }}"
 
 on:
   workflow_call:
@@ -237,6 +238,7 @@ jobs:
           REPRODUCTION_RESULT: ${{ needs.reproduce.outputs.result }}
 
   create-integration-test:
+    name: create test
     needs: reproduce
     if: >-
       inputs.issue-type != 'question' &&
@@ -378,6 +380,7 @@ jobs:
           retention-days: 1
 
   publish-integration-test:
+    name: publish test
     needs: [reproduce, create-integration-test]
     if: needs.create-integration-test.outputs.created == 'true'
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
