@@ -6070,13 +6070,14 @@ impl<'lock> Auditable<'lock> {
 
     /// Return the distinct registry-hosted projects among the auditable
     /// packages, deduplicated by `(name, index URL)`. Non-registry sources
-    /// (Git, direct URL, path, editable) are excluded.
+    /// (Git, direct URL, path, editable) are excluded. Embedded userinfo is
+    /// ignored, while query parameters remain part of the index identity.
     pub fn projects(&self, root: &Path) -> Result<Vec<(&'lock PackageName, IndexUrl)>, LockError> {
-        let mut seen: FxHashSet<(&PackageName, String)> = FxHashSet::default();
+        let mut seen: FxHashSet<(&PackageName, DisplaySafeUrl)> = FxHashSet::default();
         let mut projects: Vec<(&PackageName, IndexUrl)> = Vec::with_capacity(self.packages.len());
         for (package, _version) in &self.packages {
             if let Some(index) = package.index(root)?
-                && seen.insert((package.name(), index.url().to_string()))
+                && seen.insert((package.name(), index.without_credentials().into_owned()))
             {
                 projects.push((package.name(), index));
             }
@@ -10580,6 +10581,8 @@ pub(crate) fn is_wheel_unreachable(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write;
+
     use uv_distribution_types::HashCollection;
     use uv_pep440::VersionSpecifiers;
     use uv_pep508::MarkerEnvironmentBuilder;
@@ -10611,6 +10614,47 @@ mod tests {
             sys_platform: "darwin",
         })
         .expect("valid marker environment")
+    }
+
+    #[test]
+    fn audit_projects_compare_index_urls() -> Result<(), Box<dyn Error>> {
+        let indexes = [
+            "https://user:one@example.com/simple?sig=first",
+            "https://user:two@example.com/simple?sig=first",
+            "https://user:one@example.com/simple?sig=second",
+            "https://example.com/simple?project=first",
+            "https://example.com/simple?project=second",
+            "https://example.com/other?sig=first",
+            "https://example.com/simple?X-Amz-Signature=first",
+            "https://example.com/simple?X-Amz-Signature=second",
+        ];
+        let mut contents = "version = 1\nrequires-python = '>=3.12'\n".to_owned();
+        for (version, index) in indexes.iter().enumerate() {
+            writeln!(
+                contents,
+                "\n[[package]]\nname = 'example'\nversion = '{version}.0'\nsource = {{ registry = '{index}' }}"
+            )?;
+        }
+        let lock: Lock = toml::from_str(&contents)?;
+        let auditable = Auditable {
+            packages: lock
+                .packages()
+                .iter()
+                .filter_map(|package| package.version().map(|version| (package, version)))
+                .collect(),
+        };
+        let projects = auditable.projects(Path::new("."))?;
+        let actual: Vec<_> = projects
+            .iter()
+            .map(|(_, index)| index.url().as_str())
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                indexes[0], indexes[2], indexes[3], indexes[4], indexes[5], indexes[6], indexes[7]
+            ]
+        );
+        Ok(())
     }
 
     #[test]
