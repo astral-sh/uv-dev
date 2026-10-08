@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use tracing::warn;
 
@@ -21,7 +21,7 @@ use uv_environment_operations::{
 };
 use uv_fs::Simplified;
 use uv_install_operations::loggers::DefaultInstallLogger;
-use uv_lock_operations::{LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockMode, LockOperation, LockTarget, MetadataLock};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
@@ -66,6 +66,7 @@ pub async fn remove(
     preview: Preview,
     malware_settings: MalwareCheckSettings,
 ) -> Result<ExitStatus> {
+    let _metadata_lock;
     let target = if let Some(script) = script {
         // If we found a PEP 723 script and the user provided a project-only setting, warn.
         if package.is_some() {
@@ -88,11 +89,15 @@ pub async fn remove(
                 "`--no-sync` is a no-op for Python scripts with inline metadata, which always run in isolation"
             );
         }
-        EditTarget::Script(script)
+        let (script, lock) = MetadataLock::read_script(&script.path).await?;
+        _metadata_lock = lock;
+        EditTarget::Script(
+            script.context("Script metadata was removed while waiting for its lock")?,
+        )
     } else {
         // Find the project in the workspace.
         // No workspace caching since `uv remove` changes the workspace definition.
-        let project = if let Some(package) = package {
+        let project = if let Some(package) = package.as_ref() {
             VirtualProject::discover_with_package(
                 project_dir,
                 &DiscoveryOptions::default(),
@@ -111,6 +116,15 @@ pub async fn remove(
             .await?
         };
 
+        let (project, lock, _) = MetadataLock::project(
+            project,
+            project_dir,
+            package.as_ref(),
+            &DiscoveryOptions::default(),
+            cache,
+        )
+        .await?;
+        _metadata_lock = lock;
         EditTarget::Project(project)
     };
 

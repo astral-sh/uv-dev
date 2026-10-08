@@ -24,7 +24,7 @@ use uv_test::{TestContext, apply_filters, uv_snapshot};
 
 /// The workspace discovered while resolving settings is reused by a normal `uv export`.
 #[test]
-fn export_reuses_settings_workspace_discovery() -> Result<()> {
+fn export_reloads_workspace_before_lockfile_publication() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -61,6 +61,12 @@ fn export_reuses_settings_workspace_discovery() -> Result<()> {
     TRACE Processing workspace member: member
     DEBUG Adding discovered workspace member: [TEMP_DIR]/member
     DEBUG Found project root: [TEMP_DIR]/
+    DEBUG Found project root: [TEMP_DIR]/
+    DEBUG Found workspace root: [TEMP_DIR]/
+    TRACE Discovering workspace members for: [TEMP_DIR]/
+    DEBUG Adding root workspace member: [TEMP_DIR]/
+    TRACE Processing workspace member: member
+    DEBUG Adding discovered workspace member: [TEMP_DIR]/member
     Resolved 2 packages in [TIME]
     ");
 

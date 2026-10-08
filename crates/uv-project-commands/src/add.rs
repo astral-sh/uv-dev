@@ -35,7 +35,7 @@ use uv_errors::HintOrdering;
 use uv_fs::Simplified;
 use uv_git::store_credentials;
 use uv_install_operations::loggers::DefaultInstallLogger;
-use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget, MetadataLock};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, ExtraName, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
@@ -194,6 +194,7 @@ pub async fn add(
     // Default groups we need the actual project for, interpreter discovery will use this!
     let defaulted_groups;
 
+    let _metadata_lock;
     let (mut target, python_target) = if let Some(script) = script {
         // If we found a PEP 723 script and the user provided a project-only setting, warn.
         if package.is_some() {
@@ -219,25 +220,30 @@ pub async fn add(
 
         // If we found a script, add to the existing metadata. Otherwise, create a new inline
         // metadata tag.
-        let script = match script {
-            ScriptPath::Script(script) => script,
-            ScriptPath::Path(path) => {
-                let requires_python = init_script_python_requirement(
-                    python.as_deref(),
-                    &install_mirrors,
-                    project_dir,
-                    false,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    config_discovery,
-                    &client_builder,
-                    cache,
-                    &reporter,
-                )
-                .await?;
-                Pep723Script::init(&path, requires_python.specifiers()).await?
-            }
+        let path = match script {
+            ScriptPath::Script(script) => script.path,
+            ScriptPath::Path(path) => path,
+        };
+        let (script, lock) = MetadataLock::read_script(&path).await?;
+        _metadata_lock = lock;
+        let script = if let Some(script) = script {
+            script
+        } else {
+            let requires_python = init_script_python_requirement(
+                python.as_deref(),
+                &install_mirrors,
+                project_dir,
+                false,
+                python_preference,
+                python_arch,
+                python_downloads,
+                config_discovery,
+                &client_builder,
+                cache,
+                &reporter,
+            )
+            .await?;
+            Pep723Script::init(&path, requires_python.specifiers()).await?
         };
 
         // Scripts don't actually have groups
@@ -268,13 +274,13 @@ pub async fn add(
     } else {
         // Find the project in the workspace.
         // No workspace caching since `uv add` changes the workspace definition.
-        let project = if let Some(package) = package {
+        let project = if let Some(package) = package.as_ref() {
             VirtualProject::discover_with_package(
                 project_dir,
                 &DiscoveryOptions::default(),
                 cache,
                 &WorkspaceCache::default(),
-                package,
+                package.clone(),
             )
             .await?
         } else {
@@ -286,6 +292,16 @@ pub async fn add(
             )
             .await?
         };
+
+        let (project, lock, _) = MetadataLock::project(
+            project,
+            project_dir,
+            package.as_ref(),
+            &DiscoveryOptions::default(),
+            cache,
+        )
+        .await?;
+        _metadata_lock = lock;
 
         // For non-project workspace roots, allow dev dependencies, but nothing else.
         // TODO(charlie): Automatically "upgrade" the project by adding a `[project]` table.

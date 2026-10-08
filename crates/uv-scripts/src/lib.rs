@@ -265,13 +265,18 @@ impl Pep723Script {
         ))
     }
 
-    /// Create a PEP 723 script at the given path.
-    pub async fn create(
+    /// Render a PEP 723 script and publish it through the caller's metadata writer.
+    pub async fn create<F, W>(
         file: impl AsRef<Path>,
         requires_python: &VersionSpecifiers,
         existing_contents: Option<Vec<u8>>,
         bare: bool,
-    ) -> Result<(), Pep723Error> {
+        write: W,
+    ) -> Result<(), Pep723Error>
+    where
+        F: Future<Output = io::Result<()>>,
+        W: FnOnce(PathBuf, String) -> F,
+    {
         let file = file.as_ref();
 
         let script_name = file
@@ -324,7 +329,7 @@ impl Pep723Script {
             }
         };
 
-        Ok(fs_err::tokio::write(file, script).await?)
+        Ok(write(file.to_path_buf(), script).await?)
     }
 
     /// Replace the existing metadata in the file with new metadata and write the updated content.

@@ -3,7 +3,7 @@ use std::fmt::Write;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use rustc_hash::FxHashSet;
 use serde::Serialize;
@@ -32,7 +32,7 @@ use uv_install_operations::report::{PackageChangesReport, SchemaReport};
 use uv_lock::{Installable, Lock, PythonReport};
 use uv_lock_operations::{
     DiscoveredProject, FrozenWorkspace, LockError, LockMode, LockOperation, LockResult, LockTarget,
-    MissingLockfileSource,
+    MetadataLock, MissingLockfileSource,
 };
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::{Preview, PreviewFeature};
@@ -90,6 +90,23 @@ pub async fn sync(
         );
     }
 
+    let writable =
+        frozen.is_none() && matches!(lock_check, LockCheck::Disabled) && !dry_run.enabled();
+    let mut metadata_lock = None;
+    let metadata_workspace_cache;
+    let mut workspace_cache = workspace_cache;
+    let script = if writable {
+        if let Some(script) = script {
+            let (script, lock) = MetadataLock::read_script(&script.path).await?;
+            metadata_lock = Some(lock);
+            Some(script.context("Script metadata was removed while waiting for its lock")?)
+        } else {
+            None
+        }
+    } else {
+        script
+    };
+
     // Identify the target.
     let manifest_target;
     let frozen_workspace;
@@ -124,6 +141,22 @@ pub async fn sync(
         .await?
         {
             DiscoveredProject::Manifest(project) => {
+                let project = if writable {
+                    let (project, lock, fresh_cache) = MetadataLock::project(
+                        project,
+                        project_dir,
+                        selected_package,
+                        &options,
+                        cache,
+                    )
+                    .await?;
+                    metadata_lock = Some(lock);
+                    metadata_workspace_cache = fresh_cache;
+                    workspace_cache = &metadata_workspace_cache;
+                    project
+                } else {
+                    project
+                };
                 if frozen.is_none() {
                     for name in &package {
                         if !project.workspace().packages().contains_key(name) {
@@ -469,7 +502,9 @@ pub async fn sync(
                         preview,
                     )
                     .with_first_party_exclusions(first_party_exclusions)
-                    .execute(lock_target),
+                    .execute_with_writer(lock_target, |path, contents| {
+                        MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+                    }),
                 )
                 .await
             };
@@ -499,6 +534,8 @@ pub async fn sync(
     }
 
     // Identify the installation target.
+    drop(metadata_lock);
+
     let sync_target = identify_installation_target(&target, outcome.lock(), all_packages, &package);
 
     // TODO(lucab): improve warning content

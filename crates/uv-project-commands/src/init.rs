@@ -20,6 +20,7 @@ use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
 use uv_git::GIT;
 use uv_install_wheel::reserved_script_name;
+use uv_lock_operations::MetadataLock;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
@@ -236,30 +237,31 @@ async fn init_script(
     }
     let reporter = PythonDownloadReporter::single(printer);
 
-    // If the file already exists, read its content.
-    let content = match fs_err::tokio::read(script_path).await {
-        Ok(metadata) => {
-            // If the file is already a script, raise an error.
-            if ScriptTag::parse(&metadata)?.is_some() {
-                anyhow::bail!(
-                    "`{}` is already a PEP 723 script; use `{}` to execute it",
-                    script_path.simplified_display().cyan(),
-                    "uv run".green()
-                );
-            }
+    let read_content = || async {
+        match fs_err::tokio::read(script_path).await {
+            Ok(metadata) => {
+                // If the file is already a script, raise an error.
+                if ScriptTag::parse(&metadata)?.is_some() {
+                    anyhow::bail!(
+                        "`{}` is already a PEP 723 script; use `{}` to execute it",
+                        script_path.simplified_display().cyan(),
+                        "uv run".green()
+                    );
+                }
 
-            Some(metadata)
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => {
-            return Err(err).with_context(|| {
+                Ok(Some(metadata))
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err).with_context(|| {
                 format!(
                     "Failed to read script at `{}`",
                     script_path.simplified_display().cyan()
                 )
-            });
+            }),
         }
     };
+    // Report an existing script or unreadable file before resolving Python.
+    read_content().await?;
 
     let requires_python = init_script_python_requirement(
         python.as_deref(),
@@ -280,7 +282,23 @@ async fn init_script(
         fs_err::tokio::create_dir_all(parent).await?;
     }
 
-    Pep723Script::create(script_path, requires_python.specifiers(), content, bare).await?;
+    let metadata_lock = MetadataLock::script(script_path).await?;
+    let content = read_content().await?;
+    let existed = content.is_some();
+    Pep723Script::create(
+        script_path,
+        requires_python.specifiers(),
+        content,
+        bare,
+        |path, contents| async {
+            if existed {
+                metadata_lock.write_file(path, contents).await
+            } else {
+                metadata_lock.create_file(path, contents).await
+            }
+        },
+    )
+    .await?;
 
     Ok(())
 }
@@ -370,6 +388,25 @@ async fn init_project(
                 }
             }
         }
+    };
+
+    let _metadata_lock;
+    let workspace = if let Some(workspace) = workspace {
+        let (workspace, lock, _) = MetadataLock::reload_workspace(
+            workspace,
+            path.parent().unwrap_or(path),
+            &DiscoveryOptions {
+                members: MemberDiscovery::Ignore(std::iter::once(path.to_path_buf()).collect()),
+                ..DiscoveryOptions::default()
+            },
+            cache,
+        )
+        .await?;
+        _metadata_lock = Some(lock);
+        Some(workspace)
+    } else {
+        _metadata_lock = None;
+        None
     };
 
     let reporter = PythonDownloadReporter::single(printer);
@@ -793,7 +830,6 @@ fn init_project_kind(
                     def main():
                         print("Hello from {name}!")
 
-
                     if __name__ == "__main__":
                         main()
                 "#};
@@ -1056,14 +1092,12 @@ fn generate_package_scripts(
         indoc::formatdoc! {r"
         from {module_name}._core import hello_from_bin
 
-
         def hello() -> str:
             return hello_from_bin()
         "}
     } else {
         indoc::formatdoc! {r"
         from {module_name}._core import hello_from_bin
-
 
         def main() -> None:
             print(hello_from_bin())

@@ -42,7 +42,7 @@ use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
-use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget, MetadataLock};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
@@ -183,6 +183,29 @@ pub async fn run(
     // Determine whether the command to execute is a PEP 723 script.
     let temp_dir;
     let script_interpreter = if let Some(script) = script {
+        let metadata_lock;
+        let script = if frozen.is_none() && matches!(lock_check, LockCheck::Disabled) {
+            match script {
+                Pep723Item::Script(script) => {
+                    let (script, lock) = MetadataLock::read_script(&script.path).await?;
+                    metadata_lock = Some(lock);
+                    Pep723Item::Script(
+                        script.context("Script metadata was removed while waiting for its lock")?,
+                    )
+                }
+                Pep723Item::Stdin(metadata) => {
+                    metadata_lock = None;
+                    Pep723Item::Stdin(metadata)
+                }
+                Pep723Item::Remote(metadata, url) => {
+                    metadata_lock = None;
+                    Pep723Item::Remote(metadata, url)
+                }
+            }
+        } else {
+            metadata_lock = None;
+            script
+        };
         match &script {
             Pep723Item::Script(script) => {
                 debug!(
@@ -263,7 +286,9 @@ pub async fn run(
                     printer,
                     preview,
                 )
-                .execute(target),
+                .execute_with_writer(target, |path, contents| {
+                    MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+                }),
             )
             .await
             {
@@ -596,6 +621,35 @@ pub async fn run(
             }
         };
 
+        let metadata_lock;
+        let metadata_workspace_cache;
+        let (project, workspace_cache) = if !no_sync
+            && !no_project
+            && !isolated
+            && frozen.is_none()
+            && matches!(lock_check, LockCheck::Disabled)
+        {
+            if let Some(project) = project {
+                let (project, lock, fresh_cache) = MetadataLock::project(
+                    project,
+                    project_dir,
+                    package.as_ref(),
+                    &DiscoveryOptions::default(),
+                    &cache,
+                )
+                .await?;
+                metadata_lock = Some(lock);
+                metadata_workspace_cache = fresh_cache;
+                (Some(project), &metadata_workspace_cache)
+            } else {
+                metadata_lock = None;
+                (None, workspace_cache)
+            }
+        } else {
+            metadata_lock = None;
+            (project, workspace_cache)
+        };
+
         if no_project {
             // If the user ran with `--no-project` and provided a project-only setting, warn.
             for flag in extras.history().as_flags_pretty() {
@@ -778,7 +832,12 @@ pub async fn run(
                         printer,
                         preview,
                     )
-                    .execute(project.workspace().into()),
+                    .execute_with_writer(
+                        project.workspace().into(),
+                        |path, contents| {
+                            MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+                        },
+                    ),
                 )
                 .await
                 {

@@ -22,7 +22,7 @@ use uv_environment_operations::{
 };
 use uv_fs::Simplified;
 use uv_install_operations::loggers::DefaultInstallLogger;
-use uv_lock_operations::{LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockMode, LockOperation, LockTarget, MetadataLock};
 use uv_normalize::{DefaultExtras, PackageName};
 use uv_pep440::{BumpCommand, PrereleaseKind, Version};
 use uv_preview::Preview;
@@ -111,6 +111,25 @@ pub async fn project_version(
         workspace_cache,
     )
     .await?;
+
+    let _metadata_lock;
+    let metadata_workspace_cache;
+    let (project, workspace_cache) = if !dry_run && (value.is_some() || !bump.is_empty()) {
+        let (project, lock, fresh_cache) = MetadataLock::project(
+            project,
+            project_dir,
+            package.as_ref(),
+            &DiscoveryOptions::default(),
+            cache,
+        )
+        .await?;
+        _metadata_lock = Some(lock);
+        metadata_workspace_cache = fresh_cache;
+        (project, &metadata_workspace_cache)
+    } else {
+        _metadata_lock = None;
+        (project, workspace_cache)
+    };
 
     let pyproject_path = project.root().join("pyproject.toml");
     let Some(name) = project.project_name().cloned() else {
