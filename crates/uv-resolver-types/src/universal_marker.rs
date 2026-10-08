@@ -946,9 +946,7 @@ fn resolve_activated_extras_bdd(
         .filter(|(extra, _)| extras.contains(extra))
         .collect();
 
-    // Substitute extras in BDD variable order. Restricting a later variable before an earlier one
-    // can leave adjacent version/string ranges pointing at the same child, which is semantically
-    // equivalent but not canonical and can prevent downstream reachability from converging.
+    // Substitute extras in BDD variable order to keep the sequence of intermediate markers deterministic.
     let mut extras: Vec<_> = extras.into_iter().collect();
     extras.sort_unstable();
 
@@ -1557,8 +1555,8 @@ mod tests {
             let mut marker = MarkerTree::TRUE;
             let mut known_conflicts = FxHashMap::default();
             for index in 0..pairs {
-                let left = create_extra(&format!("left-{index}"));
-                let right = create_extra(&format!("right-{index}"));
+                let left = create_extra(&format!("pair-{index:03}-left"));
+                let right = create_extra(&format!("pair-{index:03}-right"));
                 let disjunction = MarkerTree::from_str(&format!(
                     "extra == 'extra-3-pkg-{left}' or extra == 'extra-3-pkg-{right}'"
                 ))

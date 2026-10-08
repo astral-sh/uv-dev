@@ -551,23 +551,38 @@ impl InternerGuard<'_> {
         i: NodeId,
         f: &impl Fn(&Variable) -> Option<bool>,
     ) -> NodeId {
+        self.restrict_by_cached(i, f, &mut FxHashMap::default())
+    }
+
+    fn restrict_by_cached(
+        &mut self,
+        i: NodeId,
+        f: &impl Fn(&Variable) -> Option<bool>,
+        cache: &mut FxHashMap<NodeId, NodeId>,
+    ) -> NodeId {
         if matches!(i, NodeId::TRUE | NodeId::FALSE) {
             return i;
         }
-
-        let node = self.shared.node(i);
-        if let Edges::Boolean { high, low } = node.children {
-            if let Some(value) = f(&node.var) {
-                // Restrict this variable to the given output by merging it
-                // with the relevant child.
-                let node = if value { high } else { low };
-                return self.restrict_by(node.negate(i), f);
-            }
+        if let Some(&result) = cache.get(&i) {
+            return result;
         }
 
-        // Restrict all nodes recursively.
-        let children = node.children.map(i, |node| self.restrict_by(node, f));
-        self.create_node(node.var.clone(), children)
+        let node = self.shared.node(i);
+        let result = if let Edges::Boolean { high, low } = node.children
+            && let Some(value) = f(&node.var)
+        {
+            // Restrict this variable to the given output by merging it with the relevant child.
+            let node = if value { high } else { low };
+            self.restrict_by_cached(node.negate(i), f, cache)
+        } else {
+            // Restrict each shared subgraph once, including when its root variable is unchanged.
+            let children = node
+                .children
+                .map(i, |node| self.restrict_by_cached(node, f, cache));
+            self.create_node(node.var.clone(), children)
+        };
+        cache.insert(i, result);
+        result
     }
 
     /// Restrict a marker by assuming that another marker is true.

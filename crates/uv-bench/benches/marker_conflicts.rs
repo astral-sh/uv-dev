@@ -70,6 +70,39 @@ fn marker_conflicts(criterion: &mut Criterion<WallTime>) {
             },
         );
     }
+    let package = PackageName::from_str("repro").expect("valid benchmark package");
+    for pairs in [4, 12, 20] {
+        let mut marker = MarkerTree::TRUE;
+        let mut known_conflicts = FxHashMap::default();
+        for index in 0..pairs {
+            let left =
+                ExtraName::from_str(&format!("pair-{index:03}-a")).expect("valid benchmark extra");
+            let right =
+                ExtraName::from_str(&format!("pair-{index:03}-b")).expect("valid benchmark extra");
+            marker = marker.and(
+                MarkerTree::from_str(&format!("extra == '{left}' or extra == '{right}'"))
+                    .expect("valid benchmark marker"),
+            );
+            known_conflicts.insert(ConflictItem::from((package.clone(), left)), darwin);
+            known_conflicts.insert(
+                ConflictItem::from((package.clone(), right)),
+                darwin.negate(),
+            );
+        }
+        group.bench_with_input(
+            BenchmarkId::new("resolve_shared_extra_pairs", pairs),
+            &(marker, known_conflicts),
+            |benchmark, (marker, known_conflicts)| {
+                benchmark.iter(|| {
+                    black_box(resolve_activated_extras(
+                        black_box(*marker),
+                        Some(black_box(&package)),
+                        black_box(known_conflicts),
+                    ))
+                });
+            },
+        );
+    }
     group.finish();
 }
 
