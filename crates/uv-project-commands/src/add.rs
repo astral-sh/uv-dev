@@ -51,7 +51,7 @@ use uv_redacted::SafeUrl;
 use uv_redacted::policy::Raw;
 use uv_requirements::{NamedRequirementsResolver, RequirementsSource, RequirementsSpecification};
 use uv_resolve_operations::Error as ResolveError;
-use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
+use uv_resolve_operations::ResolveSummary;
 use uv_resolver::FlatIndex;
 use uv_scripts::Pep723Script;
 use uv_settings::{
@@ -1140,7 +1140,7 @@ async fn lock_and_sync(
             &settings.resolver,
             client_builder,
             &lock_state,
-            Box::new(DefaultResolveLogger),
+            ResolveSummary::Display,
             concurrency,
             cache,
             &WorkspaceCache::default(),
@@ -1270,7 +1270,7 @@ async fn lock_and_sync(
                     &settings.resolver,
                     client_builder,
                     &lock_state,
-                    Box::new(SummaryResolveLogger),
+                    ResolveSummary::Suppress,
                     concurrency,
                     cache,
                     &WorkspaceCache::default(),
