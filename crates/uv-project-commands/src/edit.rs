@@ -192,6 +192,7 @@ impl EditState {
                     path,
                     original,
                     written: None,
+                    created_path: None,
                 })
             })
             .collect::<io::Result<Vec<_>>>()?;
@@ -256,6 +257,7 @@ struct FileSnapshot {
     path: PathBuf,
     original: Option<FileContents>,
     written: Option<FileContents>,
+    created_path: Option<PathBuf>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -285,11 +287,15 @@ impl FileSnapshot {
             publication.writer().write_all(contents)?;
             let identity = Handle::from_file(publication.writer().file().try_clone()?)?;
             let contents = contents.to_vec();
+            let created_path = publication.creation_path().map(Path::to_path_buf);
             if read_file(&self.path)?.as_ref() != expected {
                 return Err(io::Error::other("file changed before publication"));
             }
             publication.publish()?;
             self.written = Some(FileContents { identity, contents });
+            if let Some(created_path) = created_path {
+                self.created_path = Some(created_path);
+            }
             Ok(())
         } else {
             self.write_opened(publication.writer(), contents)
@@ -360,6 +366,22 @@ impl FileSnapshot {
         let Some(written) = &self.written else {
             return Ok(());
         };
+        if let Some(created_path) = &self.created_path {
+            let metadata = match fs_err::symlink_metadata(created_path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error),
+            };
+            if !metadata.is_file()
+                || metadata.is_symlink()
+                || read_file(created_path)?.as_ref() != Some(written)
+            {
+                return Err(io::Error::other(
+                    "created file changed outside this project edit; leaving it unchanged",
+                ));
+            }
+            return fs_err::remove_file(created_path);
+        }
         let current = read_file(&self.path)?;
         if current.as_ref().map(|file| &file.contents)
             == self.original.as_ref().map(|file| &file.contents)
@@ -453,6 +475,86 @@ mod tests {
         Ok(paths)
     }
 
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn rollback_preserves_dangling_lockfile_links() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let link = directory.path().join("uv.lock");
+        let middle = directory.path().join("middle");
+        let target = directory.path().join("created.lock");
+        fs_err::os::unix::fs::symlink("middle", &link)?;
+        fs_err::os::unix::fs::symlink("created.lock", &middle)?;
+        let state = Arc::new(EditState::new([link.clone()])?);
+        Arc::clone(&state)
+            .write_lockfile(link.clone(), "first lockfile".into())
+            .await?;
+        Arc::clone(&state)
+            .write_lockfile(link.clone(), "second lockfile".into())
+            .await?;
+        assert_eq!(fs_err::read(&target)?, b"second lockfile");
+        state.finish(false);
+        assert_eq!(fs_err::read_link(&link)?, Path::new("middle"));
+        assert_eq!(fs_err::read_link(&middle)?, Path::new("created.lock"));
+        assert!(!target.exists());
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rollback_keeps_a_foreign_created_target() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let link = directory.path().join("uv.lock");
+        let target = directory.path().join("created.lock");
+        fs_err::os::unix::fs::symlink("created.lock", &link)?;
+        let state = EditState::new([link.clone()])?;
+        state.write_file(&link, b"published")?;
+        fs_err::remove_file(&target)?;
+        fs_err::write(&target, "foreign")?;
+        state.finish(false);
+        assert_eq!(fs_err::read_link(&link)?, Path::new("created.lock"));
+        assert_eq!(fs_err::read(&target)?, b"foreign");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rollback_cleans_created_target_after_link_retargeting() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let link = directory.path().join("uv.lock");
+        let target = directory.path().join("created.lock");
+        let foreign = directory.path().join("foreign.lock");
+        fs_err::os::unix::fs::symlink("created.lock", &link)?;
+        let state = EditState::new([link.clone()])?;
+        state.write_file(&link, b"published")?;
+        fs_err::write(&foreign, "foreign")?;
+        fs_err::remove_file(&link)?;
+        fs_err::os::unix::fs::symlink("foreign.lock", &link)?;
+        state.finish(false);
+        assert_eq!(fs_err::read_link(&link)?, Path::new("foreign.lock"));
+        assert_eq!(fs_err::read(&foreign)?, b"foreign");
+        assert!(!target.exists());
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rollback_keeps_a_foreign_link_at_the_created_target() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let link = directory.path().join("uv.lock");
+        let target = directory.path().join("created.lock");
+        let moved = directory.path().join("moved.lock");
+        fs_err::os::unix::fs::symlink("created.lock", &link)?;
+        let state = EditState::new([link.clone()])?;
+        state.write_file(&link, b"published")?;
+        fs_err::rename(&target, &moved)?;
+        fs_err::os::unix::fs::symlink("moved.lock", &target)?;
+        state.finish(false);
+        assert_eq!(fs_err::read_link(&link)?, Path::new("created.lock"));
+        assert_eq!(fs_err::read_link(&target)?, Path::new("moved.lock"));
+        assert_eq!(fs_err::read(&moved)?, b"published");
+        Ok(())
+    }
+
     #[test]
     #[cfg(unix)]
     fn tracked_special_file_writes_do_not_truncate() -> Result<()> {
@@ -523,6 +625,7 @@ mod tests {
             path: path.clone(),
             original: read_file(&path)?,
             written: None,
+            created_path: None,
         };
         assert_eq!(read_file(&path)?, snapshot.original);
         // Replace the path after the initial comparison, before opening it for publication.

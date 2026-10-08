@@ -52,9 +52,21 @@ impl FilePublication {
             Err(err) => return Err(err),
         };
         let target = destination(path)?;
-        if let Some(file) = original.as_ref() {
-            same_identity(file, &target)?;
-        }
+        let original = match original {
+            Some(original) => {
+                same_identity(&original, &target)?;
+                if !shares_parent_mount(&original, &target) {
+                    // File mountpoints allow descriptor writes, but cannot be renamed over.
+                    return Ok(Self {
+                        path: path.to_owned(),
+                        writer: original,
+                        staging: None,
+                    });
+                }
+                Some(original)
+            }
+            None => None,
+        };
         let parent = target.parent().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "file has no parent directory")
         })?;
@@ -119,6 +131,16 @@ impl FilePublication {
         self.staging.is_some()
     }
 
+    /// The resolved destination that publication will create, if no file existed there.
+    ///
+    /// This can differ from the requested path when writing through a dangling symbolic link.
+    pub fn creation_path(&self) -> Option<&Path> {
+        self.staging
+            .as_ref()
+            .filter(|staging| staging.original.is_none())
+            .map(|staging| staging.target.as_path())
+    }
+
     /// The descriptor receiving bytes. In-place callers must retain partial-write ownership.
     pub fn writer(&mut self) -> &mut fs_err::File {
         &mut self.writer
@@ -136,7 +158,10 @@ impl FilePublication {
                 same_identity(original, &self.path)?;
                 same_identity(original, &staging.target)?;
                 // A newly added ACL or hard link must not be discarded by inode replacement.
-                if !can_replace(original) || !prepare_permissions(original, &self.writer) {
+                if !can_replace(original)
+                    || !shares_parent_mount(original, &staging.target)
+                    || !prepare_permissions(original, &self.writer)
+                {
                     return Err(io::Error::other(
                         "file access metadata no longer permits replacement",
                     ));
@@ -258,6 +283,30 @@ fn can_replace(file: &fs_err::File) -> bool {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn can_replace(_file: &fs_err::File) -> bool {
     false
+}
+
+#[cfg(target_os = "linux")]
+fn shares_parent_mount(file: &fs_err::File, target: &Path) -> bool {
+    use rustix::fs::{AtFlags, CWD, StatxFlags, statx};
+
+    let Some(parent) = target.parent() else {
+        return false;
+    };
+    let mask = StatxFlags::MNT_ID;
+    let Ok(file_metadata) = statx(file, "", AtFlags::EMPTY_PATH, mask) else {
+        return false;
+    };
+    let Ok(parent_metadata) = statx(CWD, parent, AtFlags::empty(), mask) else {
+        return false;
+    };
+    file_metadata.stx_mask & mask.bits() != 0
+        && parent_metadata.stx_mask & mask.bits() != 0
+        && file_metadata.stx_mnt_id == parent_metadata.stx_mnt_id
+}
+
+#[cfg(not(target_os = "linux"))]
+fn shares_parent_mount(_file: &fs_err::File, _target: &Path) -> bool {
+    true
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -666,6 +715,78 @@ mod tests {
         let mut value = [0; 8];
         let length = rustix::fs::fgetxattr(&file, "user.uv-test", &mut value)?;
         assert_eq!(&value[..length], b"metadata");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_file_mountpoints_use_in_place_publication() -> io::Result<()> {
+        const CHILD: &str = "UV_TEST_FILE_MOUNTPOINT";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = std::path::PathBuf::from(root);
+            let source = root.join("source.toml");
+            let target = root.join("pyproject.toml");
+            fs_err::write(&source, "original")?;
+            fs_err::write(&target, "covered file")?;
+            let source_file = fs_err::OpenOptions::new().write(true).open(&source)?;
+            assert!(
+                super::can_replace(&source_file),
+                "the fixture must satisfy the non-mount replacement checks"
+            );
+            let mounted = Command::new("mount")
+                .arg("--bind")
+                .arg(&source)
+                .arg(&target)
+                .output()?;
+            assert!(mounted.status.success(), "{mounted:?}");
+            write_file(&target, b"replacement")?;
+            assert!(!FilePublication::new(&target)?.is_staged());
+            assert_eq!(fs_err::read(&source)?, b"replacement");
+            assert_eq!(fs_err::read(&target)?, b"replacement");
+            let unmounted = Command::new("umount").arg(&target).output()?;
+            assert!(unmounted.status.success(), "{unmounted:?}");
+            assert_eq!(fs_err::read(&target)?, b"covered file");
+            return Ok(());
+        }
+
+        // The child owns a private mount namespace. Its exit releases mounts even after a panic,
+        // and the parent's directory owner removes the fixture only after the child has exited.
+        let directory = tempfile::tempdir()?;
+        let output = match Command::new("unshare")
+            .args([
+                "--user",
+                "--map-root-user",
+                "--mount",
+                "--propagation",
+                "private",
+            ])
+            .arg(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "file_publication::tests::linux_file_mountpoints_use_in_place_publication",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, directory.path())
+            .env("LC_ALL", "C")
+            .output()
+        {
+            Ok(output) => output,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                eprintln!("skipping file-mount regression: unshare is unavailable");
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !output.status.success()
+            && stderr.starts_with("unshare:")
+            && (stderr.contains("Operation not permitted") || stderr.contains("Permission denied"))
+        {
+            eprintln!("skipping file-mount regression: private user namespaces are unavailable");
+            return Ok(());
+        }
+        assert!(output.status.success(), "{output:?}");
         Ok(())
     }
 }

@@ -8676,6 +8676,68 @@ fn remove_version_build_failure_reverts_project() -> Result<()> {
     Ok(())
 }
 
+/// A failed installation removes its new lockfile target, leaving the user's dangling link intact.
+#[test]
+#[cfg(unix)]
+fn failed_install_restores_dangling_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def build_editable(*args, **kwargs):
+            lock = Path(__file__).with_name("uv.lock").read_text()
+            assert "[[package]]" in lock
+            Path(__file__).with_name("published-lock").write_text(lock)
+            raise RuntimeError("build failed after lockfile publication")
+    "#})?;
+    let locks = context.temp_dir.child("locks");
+    locks.create_dir_all()?;
+    let link = context.temp_dir.child("uv.lock");
+    let target = locks.child("project.lock");
+    fs_err::os::unix::fs::symlink("locks/project.lock", link.path())?;
+    let pyproject = context.read("pyproject.toml");
+
+    context
+        .remove()
+        .args(["iniconfig", "--offline"])
+        .assert()
+        .code(1);
+    assert!(context.temp_dir.join("published-lock").exists());
+    assert_eq!(context.read("pyproject.toml"), pyproject);
+    assert_eq!(
+        fs_err::read_link(link.path())?,
+        Path::new("locks/project.lock")
+    );
+    assert!(!target.exists());
+
+    context
+        .remove()
+        .args(["iniconfig", "--offline", "--no-sync"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs_err::read_link(link.path())?,
+        Path::new("locks/project.lock")
+    );
+    assert!(!fs_err::read(target.path())?.is_empty());
+    Ok(())
+}
+
 /// Interrupt during a build, after the manifest and lockfile have both been written.
 #[test]
 #[cfg(unix)]
