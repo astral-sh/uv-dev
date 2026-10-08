@@ -1,4 +1,9 @@
-use tracing::debug;
+use std::io;
+use std::path::Path;
+use std::sync::Arc;
+
+use tokio::sync::Semaphore;
+use tracing::{Span, debug};
 
 use crate::{
     EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
@@ -19,6 +24,7 @@ use uv_distribution_types::{
     BuiltDist, Dist, Identifier, Node, Resolution, ResolvedDist, SourceDist,
 };
 use uv_preview::Preview;
+use uv_pypi_types::HashDigests;
 use uv_python_interpreter::{Interpreter, PythonEnvironment, canonicalize_executable};
 use uv_settings::MalwareCheckSettings;
 use uv_types::{HashStrategy, HashVerification, SourceTreeEditablePolicy};
@@ -39,6 +45,52 @@ struct CachedEnvironmentDist {
     dist: ResolvedDist,
     hashes: uv_pypi_types::HashDigests,
     cache_info: Option<CacheInfo>,
+}
+
+/// Scan mutable local inputs and hash the resolution without blocking the async executor.
+async fn resolution_cache_key(
+    distributions: Vec<(ResolvedDist, HashDigests)>,
+    slots: Arc<Semaphore>,
+) -> Result<String, EnvironmentError> {
+    if distributions
+        .iter()
+        .all(|(dist, _)| CachedEnvironment::cache_info_path(dist).is_none())
+    {
+        return Ok(hash_resolution(distributions)?);
+    }
+    let permit = slots.acquire_owned().await.map_err(io::Error::other)?;
+    let span = Span::current();
+    Ok(tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let _entered = span.enter();
+        hash_resolution(distributions)
+    })
+    .await
+    .map_err(io::Error::other)??)
+}
+
+fn hash_resolution(
+    distributions: Vec<(ResolvedDist, HashDigests)>,
+) -> Result<String, uv_cache_info::CacheInfoError> {
+    let mut distributions = distributions
+        .into_iter()
+        .map(|(dist, hashes)| {
+            let cache_info = CachedEnvironment::cache_info_path(&dist)
+                .map(CacheInfo::from_path)
+                .transpose()?;
+            Ok(CachedEnvironmentDist {
+                dist,
+                hashes,
+                cache_info,
+            })
+        })
+        .collect::<Result<Vec<_>, uv_cache_info::CacheInfoError>>()?;
+    distributions.sort_unstable_by(|left, right| {
+        left.dist
+            .distribution_id()
+            .cmp(&right.dist.distribution_id())
+    });
+    Ok(hash_digest(&distributions))
 }
 
 fn cached_environment_resolution_hash(
@@ -188,34 +240,23 @@ impl CachedEnvironment {
         printer: Printer,
         preview: Preview,
     ) -> Result<Self, EnvironmentError> {
-        // Hash the resolution by hashing the generated lockfile.
-        let resolution_hash = {
-            let mut distributions = resolution
-                .graph()
-                .node_weights()
-                .filter_map(|node| match node {
-                    Node::Dist {
-                        dist,
-                        hashes,
-                        install: true,
-                    } => Some((dist, hashes)),
-                    Node::Dist { install: false, .. } | Node::Root => None,
-                })
-                .map(|(dist, hashes)| {
-                    Ok(CachedEnvironmentDist {
-                        dist: dist.clone(),
-                        hashes: hashes.clone(),
-                        cache_info: Self::cache_info(dist).map_err(EnvironmentError::from)?,
-                    })
-                })
-                .collect::<Result<Vec<_>, EnvironmentError>>()?;
-            distributions.sort_unstable_by(|left, right| {
-                left.dist
-                    .distribution_id()
-                    .cmp(&right.dist.distribution_id())
-            });
-            cached_environment_resolution_hash(hash_digest(&distributions), &hash_strategy)
-        };
+        // Compute mutable source cache keys in one ordered batch before hashing the resolution.
+        let distributions = resolution
+            .graph()
+            .node_weights()
+            .filter_map(|node| match node {
+                Node::Dist {
+                    dist,
+                    hashes,
+                    install: true,
+                } => Some((dist.clone(), hashes.clone())),
+                Node::Dist { install: false, .. } | Node::Root => None,
+            })
+            .collect();
+        let resolution_hash = cached_environment_resolution_hash(
+            resolution_cache_key(distributions, concurrency.downloads_semaphore.clone()).await?,
+            &hash_strategy,
+        );
 
         // Construct a hash for the environment.
         //
@@ -281,20 +322,17 @@ impl CachedEnvironment {
         Ok(Self(PythonEnvironment::from_root(root, cache)?))
     }
 
-    /// Return any mutable cache info that should invalidate a cached environment for a given
-    /// distribution.
-    fn cache_info(dist: &ResolvedDist) -> Result<Option<CacheInfo>, uv_cache_info::CacheInfoError> {
-        let path = match dist {
-            ResolvedDist::Installed { .. } => return Ok(None),
+    /// Return the local path whose mutable cache keys can invalidate this distribution.
+    fn cache_info_path(dist: &ResolvedDist) -> Option<&Path> {
+        match dist {
+            ResolvedDist::Installed { .. } => None,
             ResolvedDist::Installable { dist, .. } => match dist.as_ref() {
-                Dist::Built(BuiltDist::Path(wheel)) => wheel.install_path.as_ref(),
-                Dist::Source(SourceDist::Path(sdist)) => sdist.install_path.as_ref(),
-                Dist::Source(SourceDist::Directory(directory)) => directory.install_path.as_ref(),
-                _ => return Ok(None),
+                Dist::Built(BuiltDist::Path(wheel)) => Some(&wheel.install_path),
+                Dist::Source(SourceDist::Path(sdist)) => Some(&sdist.install_path),
+                Dist::Source(SourceDist::Directory(directory)) => Some(&directory.install_path),
+                _ => None,
             },
-        };
-
-        Ok(Some(CacheInfo::from_path(path)?))
+        }
     }
 
     /// Return the [`Interpreter`] to use for the cached environment, based on a given
@@ -330,11 +368,68 @@ impl CachedEnvironment {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::pin;
     use std::sync::Arc;
-
+    use std::task::{Context, Poll, Waker};
+    use tokio::sync::Semaphore;
+    use uv_distribution_types::{Dist, ResolvedDist};
+    use uv_pypi_types::HashDigests;
+    use uv_redacted::DisplaySafeUrl;
     use uv_types::HashStrategy;
 
-    use super::{cached_environment_resolution_hash, hash_digest};
+    use super::{cached_environment_resolution_hash, hash_digest, resolution_cache_key};
+
+    fn poll_once<F: Future>(future: F) -> Poll<F::Output> {
+        pin!(future).poll(&mut Context::from_waker(Waker::noop()))
+    }
+
+    #[tokio::test]
+    async fn local_resolution_keys_wait_for_admission_and_refresh() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        fs_err::write(
+            directory.path().join("pyproject.toml"),
+            "[tool.uv]\ncache-keys = [{dir = 'generated'}]\n",
+        )?;
+        let dist = Dist::from_directory_url(
+            "demo".parse()?,
+            DisplaySafeUrl::from_file_path(directory.path())
+                .map_err(|()| anyhow::anyhow!("invalid fixture URL"))?
+                .as_str()
+                .parse()?,
+            directory.path(),
+            None,
+            None,
+        )?;
+        let distributions = vec![(
+            ResolvedDist::Installable {
+                dist: Arc::new(dist),
+                version: None,
+            },
+            HashDigests::empty(),
+        )];
+        let slots = Arc::new(Semaphore::new(1));
+        let reserved = slots.clone().try_acquire_owned()?;
+        assert!(poll_once(resolution_cache_key(distributions.clone(), slots.clone())).is_pending());
+        drop(reserved);
+        let before = resolution_cache_key(distributions.clone(), slots.clone()).await?;
+        fs_err::create_dir(directory.path().join("generated"))?;
+        let after = resolution_cache_key(distributions, slots).await?;
+        assert_ne!(before, after);
+        Ok(())
+    }
+
+    #[test]
+    fn resolution_without_local_inputs_does_not_need_admission() -> anyhow::Result<()> {
+        let Poll::Ready(result) = poll_once(resolution_cache_key(
+            Vec::new(),
+            Arc::new(Semaphore::new(0)),
+        )) else {
+            anyhow::bail!("expected inline resolution key");
+        };
+        result?;
+        Ok(())
+    }
 
     #[test]
     fn verified_cached_environment_uses_separate_resolution_hash() {

@@ -62,4 +62,5 @@ owo-colors = { workspace = true }
 rustc-hash = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }

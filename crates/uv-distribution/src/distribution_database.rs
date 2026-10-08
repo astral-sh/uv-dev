@@ -87,7 +87,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         Self {
             recorder: None,
             build_context,
-            builder: SourceDistributionBuilder::new(build_context),
+            builder: SourceDistributionBuilder::new(build_context, downloads_semaphore.clone()),
             client: ManagedClient::new(client, downloads_semaphore),
             reporter: None,
             content_addressed_cache,
