@@ -443,12 +443,13 @@ struct DisplaySafeService<'a>(&'a str);
 
 impl std::fmt::Display for DisplaySafeService<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.0.contains("://") {
+            return formatter.write_str(self.0);
+        }
         if let Ok(url) = DisplaySafeUrl::parse(self.0) {
             std::fmt::Display::fmt(&url, formatter)
-        } else if self.0.contains("://") {
-            formatter.write_str("[invalid service URL]")
         } else {
-            formatter.write_str(self.0)
+            formatter.write_str("[invalid service URL]")
         }
     }
 }
@@ -463,6 +464,7 @@ mod tests {
         insta::assert_snapshot!(DisplaySafeService("https://synthetic-token@example.com/service?sig=signature"), @"https://****@example.com/service?sig=****");
         insta::assert_snapshot!(DisplaySafeService("https://user:secret@[invalid-host"), @"[invalid service URL]");
         insta::assert_snapshot!(DisplaySafeService("example.com:8443"), @"example.com:8443");
+        insta::assert_snapshot!(DisplaySafeService("https:8443"), @"https:8443");
     }
 
     #[tokio::test]

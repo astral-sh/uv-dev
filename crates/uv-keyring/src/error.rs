@@ -122,13 +122,15 @@ mod native_tests {
             "Unable to fetch credentials for https://****@example.com/?sig=**** from system keyring",
         );
         let mut output = String::new();
-        write_error_chain_with_options(
-            error.as_ref(),
-            &Hints::none(),
-            ErrorOptions::default()
-                .with_level("warning")
-                .with_stream(&mut output),
-        )?;
+        temp_env::with_var("UV_NO_WRAP", Some("1"), || {
+            write_error_chain_with_options(
+                error.as_ref(),
+                &Hints::none(),
+                ErrorOptions::default()
+                    .with_level("warning")
+                    .with_stream(&mut output),
+            )
+        })?;
         assert_snapshot!(anstream::adapter::strip_str(&output), @"
         warning: Unable to fetch credentials for https://****@example.com/?sig=**** from system keyring
           cause: Entry is matched by multiple credentials (2 matches)

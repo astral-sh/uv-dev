@@ -7019,6 +7019,7 @@ dependencies = [
  "insta",
  "secret-service",
  "security-framework",
+ "temp-env",
  "thiserror",
  "tokio",
  "uv-errors",
