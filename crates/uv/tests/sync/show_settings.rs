@@ -2,8 +2,6 @@ use std::process::Command;
 
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
-use insta::allow_duplicates;
-use predicates::prelude::predicate;
 use url::Url;
 use uv_static::EnvVars;
 
@@ -570,13 +568,8 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
 )]
 fn publish_modes_follow_source_precedence() {
     let context = uv_test::test_context!("3.12");
-    let command = || {
-        let mut command = add_shared_args(context.publish());
-        command.arg("--show-settings");
-        command
-    };
-
-    let password = capture_uv_snapshot!(context.filters(), command()
+    let password = capture_uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .arg("--show-settings")
         .args(["--username", "publisher", "--password", "fake-password"]), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -659,32 +652,29 @@ fn publish_modes_follow_source_precedence() {
         },
     }
     "#);
-    for (arguments, environment) in [
-        (
-            vec!["--username", "publisher", "--password", "fake-password"],
-            vec![],
-        ),
-        (
-            vec!["--username", "publisher"],
-            vec![(EnvVars::UV_PUBLISH_PASSWORD, "fake-password")],
-        ),
-        (
-            vec!["--password", "fake-password"],
-            vec![(EnvVars::UV_PUBLISH_USERNAME, "publisher")],
-        ),
-    ] {
-        allow_duplicates! {
-            diff_uv_snapshot!(context.filters(), &password, command()
-                .args(arguments)
-                .envs(environment)
-                .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token"), @"");
-        }
-    }
-    diff_uv_snapshot!(context.filters(), &password, command()
+    diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--username", "publisher", "--password", "fake-password"])
+        .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token"), @"");
+
+    diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--username", "publisher"])
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "fake-password")
+        .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token"), @"");
+
+    diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--password", "fake-password"])
+        .env(EnvVars::UV_PUBLISH_USERNAME, "publisher")
+        .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token"), @"");
+    diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
         .env(EnvVars::UV_PUBLISH_USERNAME, "publisher")
         .env(EnvVars::UV_PUBLISH_PASSWORD, "fake-password"), @"");
 
-    let token = diff_uv_snapshot!(context.filters(), &password, command()
+    let token = diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
         .args(["--token", "fake-token"]), @r#"
     ...
              "dist/*",
@@ -697,20 +687,28 @@ fn publish_modes_follow_source_precedence() {
              "****",
     ...
     "#);
-    for value in ["fake-token", ""] {
-        allow_duplicates! {
-            diff_uv_snapshot!(context.filters(), &token, command()
-                .args(["--token", value])
-                .env(EnvVars::UV_PUBLISH_USERNAME, "ambient-user")
-                .env(EnvVars::UV_PUBLISH_PASSWORD, "ambient-password"), @"");
-        }
-        allow_duplicates! {
-            diff_uv_snapshot!(context.filters(), &token, command()
-                .env(EnvVars::UV_PUBLISH_TOKEN, value), @"");
-        }
-    }
+    diff_uv_snapshot!(context.filters(), &token, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--token", "fake-token"])
+        .env(EnvVars::UV_PUBLISH_USERNAME, "ambient-user")
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "ambient-password"), @"");
 
-    let urls = diff_uv_snapshot!(context.filters(), &password, command()
+    diff_uv_snapshot!(context.filters(), &token, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token"), @"");
+
+    diff_uv_snapshot!(context.filters(), &token, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--token", ""])
+        .env(EnvVars::UV_PUBLISH_USERNAME, "ambient-user")
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "ambient-password"), @"");
+
+    diff_uv_snapshot!(context.filters(), &token, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_TOKEN, ""), @"");
+
+    let urls = diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
         .args(["--publish-url", "https://publish.example.org/legacy/", "--check-url", "https://check.example.org/simple/"]), @r#"
     ...
          files: [
@@ -772,43 +770,29 @@ fn publish_modes_follow_source_precedence() {
              flat_index: [],
     ...
     "#);
-    for (arguments, environment) in [
-        (
-            vec![
-                "--publish-url",
-                "https://publish.example.org/legacy/",
-                "--check-url",
-                "https://check.example.org/simple/",
-            ],
-            vec![],
-        ),
-        (
-            vec!["--publish-url", "https://publish.example.org/legacy/"],
-            vec![(
-                EnvVars::UV_PUBLISH_CHECK_URL,
-                "https://check.example.org/simple/",
-            )],
-        ),
-        (
-            vec!["--check-url", "https://check.example.org/simple/"],
-            vec![(
-                EnvVars::UV_PUBLISH_URL,
-                "https://publish.example.org/legacy/",
-            )],
-        ),
-    ] {
-        allow_duplicates! {
-            diff_uv_snapshot!(context.filters(), &urls, command()
-                .args(arguments)
-                .envs(environment)
-                .env(EnvVars::UV_PUBLISH_INDEX, "ambient-index"), @"");
-        }
-    }
-    diff_uv_snapshot!(context.filters(), &urls, command()
+    diff_uv_snapshot!(context.filters(), &urls, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--publish-url", "https://publish.example.org/legacy/", "--check-url", "https://check.example.org/simple/"])
+        .env(EnvVars::UV_PUBLISH_INDEX, "ambient-index"), @"");
+
+    diff_uv_snapshot!(context.filters(), &urls, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--publish-url", "https://publish.example.org/legacy/"])
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/")
+        .env(EnvVars::UV_PUBLISH_INDEX, "ambient-index"), @"");
+
+    diff_uv_snapshot!(context.filters(), &urls, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--check-url", "https://check.example.org/simple/"])
+        .env(EnvVars::UV_PUBLISH_URL, "https://publish.example.org/legacy/")
+        .env(EnvVars::UV_PUBLISH_INDEX, "ambient-index"), @"");
+    diff_uv_snapshot!(context.filters(), &urls, add_shared_args(context.publish())
+        .arg("--show-settings")
         .env(EnvVars::UV_PUBLISH_URL, "https://publish.example.org/legacy/")
         .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/"), @"");
 
-    let index = diff_uv_snapshot!(context.filters(), &password, command()
+    let index = diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.publish())
+        .arg("--show-settings")
         .args(["--index", "private"]), @r#"
     ...
          files: [
@@ -830,11 +814,13 @@ fn publish_modes_follow_source_precedence() {
          publish_url: DisplaySafeUrl {
     ...
     "#);
-    diff_uv_snapshot!(context.filters(), &index, command()
+    diff_uv_snapshot!(context.filters(), &index, add_shared_args(context.publish())
+        .arg("--show-settings")
         .args(["--index", "private"])
         .env(EnvVars::UV_PUBLISH_URL, "invalid URL")
         .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/"), @"");
-    diff_uv_snapshot!(context.filters(), &index, command()
+    diff_uv_snapshot!(context.filters(), &index, add_shared_args(context.publish())
+        .arg("--show-settings")
         .env(EnvVars::UV_PUBLISH_INDEX, "private"), @"");
 }
 
@@ -923,33 +909,48 @@ fn publish_environment_url_errors_retain_redacted_causes() {
 }
 
 #[test]
-fn publish_environment_check_url_rejects_empty() -> anyhow::Result<()> {
+fn publish_environment_check_url_rejects_empty() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--check-url", ""]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: invalid value '' for '--check-url <CHECK_URL>': path could not be converted to an absolute path:
+
+    For more information, try '--help'.
+    ");
+    uv_snapshot!(context.filters(), context.publish()
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, ""), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_CHECK_URL`: expected an index URL
+      cause: path could not be converted to an absolute path
+      cause: invalid input parameter
+    ");
+}
+
+#[test]
+fn publish_environment_check_url_rejects_empty_with_directory() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     context.temp_dir.child("nested").create_dir_all()?;
-    for directory in [None, Some("nested")] {
-        let command = || {
-            let mut command = context.publish();
-            if let Some(directory) = directory {
-                command.args(["--directory", directory]);
-            }
-            command
-        };
-        command()
-            .args(["--check-url", ""])
-            .assert()
-            .code(2)
-            .stderr(predicate::str::contains("--check-url"));
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), command()
-                .env(EnvVars::UV_PUBLISH_CHECK_URL, ""), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: Invalid value for `UV_PUBLISH_CHECK_URL`: expected an index URL
-              cause: path could not be converted to an absolute path
-              cause: invalid input parameter
-            ");
-        }
-    }
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--directory", "nested"])
+        .args(["--check-url", ""]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: invalid value '' for '--check-url <CHECK_URL>': path could not be converted to an absolute path:
+
+    For more information, try '--help'.
+    ");
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--directory", "nested"])
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, ""), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_CHECK_URL`: expected an index URL
+      cause: path could not be converted to an absolute path
+      cause: invalid input parameter
+    ");
     Ok(())
 }
 
@@ -965,24 +966,22 @@ fn publish_environment_check_url_keeps_invocation_directory() -> anyhow::Result<
         context.filters(),
         add_shared_args(context.publish()).args(["--show-settings", "--check-url", "./simple"])
     );
-    for working_directory_environment in [false, true] {
-        let command = || {
-            let mut command = add_shared_args(context.publish());
-            command.arg("--show-settings");
-            if working_directory_environment {
-                command.env(EnvVars::UV_WORKING_DIRECTORY, "nested");
-            } else {
-                command.args(["--directory", "nested"]);
-            }
-            command
-        };
-        allow_duplicates! {
-            diff_uv_snapshot!(context.filters(), &baseline, command()
-                .args(["--check-url", "./simple"]), @"");
-            diff_uv_snapshot!(context.filters(), &baseline, command()
-                .env(EnvVars::UV_PUBLISH_CHECK_URL, "./simple"), @"");
-        }
-    }
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .args(["--check-url", "./simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "./simple"), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .args(["--check-url", "./simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "./simple"), @"");
     Ok(())
 }
 
@@ -5961,35 +5960,60 @@ fn no_cache_env_override() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// CLI and environment check URLs share Windows drive-relative and rooted path semantics.
+/// CLI and environment check URLs resolve before changing the working directory.
 #[test]
 #[cfg(windows)]
-fn publish_environment_check_url_windows_paths() -> anyhow::Result<()> {
+fn publish_environment_check_url_windows_drive_relative() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     context.temp_dir.child("nested").create_dir_all()?;
-    for check_url in ["C:simple", r"\simple"] {
-        let baseline = capture_uv_snapshot!(
-            context.filters(),
-            add_shared_args(context.publish()).args(["--show-settings", "--check-url", check_url])
-        );
-        for working_directory_environment in [false, true] {
-            let command = || {
-                let mut command = add_shared_args(context.publish());
-                command.arg("--show-settings");
-                if working_directory_environment {
-                    command.env(EnvVars::UV_WORKING_DIRECTORY, "nested");
-                } else {
-                    command.args(["--directory", "nested"]);
-                }
-                command
-            };
-            allow_duplicates! {
-                diff_uv_snapshot!(context.filters(), &baseline, command()
-                    .args(["--check-url", check_url]), @"");
-                diff_uv_snapshot!(context.filters(), &baseline, command()
-                    .env(EnvVars::UV_PUBLISH_CHECK_URL, check_url), @"");
-            }
-        }
-    }
+    let baseline = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.publish()).args(["--show-settings", "--check-url", "C:simple"])
+    );
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .args(["--check-url", "C:simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "C:simple"), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .args(["--check-url", "C:simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "C:simple"), @"");
+    Ok(())
+}
+
+/// CLI and environment check URLs resolve before changing the working directory.
+#[test]
+#[cfg(windows)]
+fn publish_environment_check_url_windows_rooted() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("nested").create_dir_all()?;
+    let baseline = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.publish()).args(["--show-settings", "--check-url", "\\simple"])
+    );
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .args(["--check-url", "\\simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .args(["--directory", "nested"])
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "\\simple"), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .args(["--check-url", "\\simple"]), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_WORKING_DIRECTORY, "nested")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "\\simple"), @"");
     Ok(())
 }

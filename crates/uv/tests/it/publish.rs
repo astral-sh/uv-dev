@@ -1446,89 +1446,140 @@ fn non_normalized_filename_skip() {
     );
 }
 
-/// The selected credential mode controls the actual authorization header sent during publishing.
+/// The selected credential mode controls the authorization header sent during publishing.
 #[tokio::test]
-async fn publish_credential_mode_precedence() {
+async fn publish_credential_mode_cli_token() {
     let context = uv_test::test_context!("3.12").with_filtered_sizes();
-    for (arguments, environment, username, password) in [
-        (
-            vec!["--token", "cli-token"],
-            vec![
-                (EnvVars::UV_PUBLISH_TOKEN, "ambient-token"),
-                (EnvVars::UV_PUBLISH_USERNAME, "ambient-user"),
-                (EnvVars::UV_PUBLISH_PASSWORD, "ambient-password"),
-            ],
-            "__token__",
-            "cli-token",
-        ),
-        (
-            vec!["--username", "cli-user", "--password", "cli-password"],
-            vec![
-                (EnvVars::UV_PUBLISH_TOKEN, "ambient-token"),
-                (EnvVars::UV_PUBLISH_USERNAME, "ambient-user"),
-                (EnvVars::UV_PUBLISH_PASSWORD, "ambient-password"),
-            ],
-            "cli-user",
-            "cli-password",
-        ),
-        (
-            vec!["--username", "cli-user"],
-            vec![
-                (EnvVars::UV_PUBLISH_TOKEN, "ambient-token"),
-                (EnvVars::UV_PUBLISH_PASSWORD, "ambient-password"),
-            ],
-            "cli-user",
-            "ambient-password",
-        ),
-        (
-            vec!["--password", "cli-password"],
-            vec![
-                (EnvVars::UV_PUBLISH_TOKEN, "ambient-token"),
-                (EnvVars::UV_PUBLISH_USERNAME, "ambient-user"),
-            ],
-            "ambient-user",
-            "cli-password",
-        ),
-        (
-            vec!["--token", ""],
-            vec![
-                (EnvVars::UV_PUBLISH_TOKEN, "ambient-token"),
-                (EnvVars::UV_PUBLISH_USERNAME, "ambient-user"),
-                (EnvVars::UV_PUBLISH_PASSWORD, "ambient-password"),
-            ],
-            "__token__",
-            "",
-        ),
-    ] {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/upload"))
-            .and(basic_auth(username, password))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let mut command = context.publish();
-        command
-            .args(arguments)
-            .envs(environment)
-            .args([
-                "--trusted-publishing",
-                "never",
-                "--keyring-provider",
-                "disabled",
-                "--publish-url",
-            ])
-            .arg(format!("{}/upload", server.uri()))
-            .arg(dummy_wheel());
-        insta::allow_duplicates! {
-            uv_snapshot!(context.filters(), command, @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Publishing 1 file to http://[LOCALHOST]/upload
-            Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-            Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-            ");
-        }
-    }
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .and(basic_auth("__token__", "cli-token"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--token", "cli-token"])
+        .env(EnvVars::UV_PUBLISH_TOKEN, "ambient-token")
+        .env(EnvVars::UV_PUBLISH_USERNAME, "ambient-user")
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "ambient-password")
+        .args(["--trusted-publishing", "never", "--keyring-provider", "disabled", "--publish-url"])
+        .arg(format!("{}/upload", server.uri()))
+        .arg(dummy_wheel()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 1 file to http://[LOCALHOST]/upload
+    Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    ");
+}
+
+/// The selected credential mode controls the authorization header sent during publishing.
+#[tokio::test]
+async fn publish_credential_mode_cli_username_and_password() {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .and(basic_auth("cli-user", "cli-password"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--username", "cli-user", "--password", "cli-password"])
+        .env(EnvVars::UV_PUBLISH_TOKEN, "ambient-token")
+        .env(EnvVars::UV_PUBLISH_USERNAME, "ambient-user")
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "ambient-password")
+        .args(["--trusted-publishing", "never", "--keyring-provider", "disabled", "--publish-url"])
+        .arg(format!("{}/upload", server.uri()))
+        .arg(dummy_wheel()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 1 file to http://[LOCALHOST]/upload
+    Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    ");
+}
+
+/// The selected credential mode controls the authorization header sent during publishing.
+#[tokio::test]
+async fn publish_credential_mode_cli_username() {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .and(basic_auth("cli-user", "ambient-password"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--username", "cli-user"])
+        .env(EnvVars::UV_PUBLISH_TOKEN, "ambient-token")
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "ambient-password")
+        .args(["--trusted-publishing", "never", "--keyring-provider", "disabled", "--publish-url"])
+        .arg(format!("{}/upload", server.uri()))
+        .arg(dummy_wheel()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 1 file to http://[LOCALHOST]/upload
+    Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    ");
+}
+
+/// The selected credential mode controls the authorization header sent during publishing.
+#[tokio::test]
+async fn publish_credential_mode_cli_password() {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .and(basic_auth("ambient-user", "cli-password"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--password", "cli-password"])
+        .env(EnvVars::UV_PUBLISH_TOKEN, "ambient-token")
+        .env(EnvVars::UV_PUBLISH_USERNAME, "ambient-user")
+        .args(["--trusted-publishing", "never", "--keyring-provider", "disabled", "--publish-url"])
+        .arg(format!("{}/upload", server.uri()))
+        .arg(dummy_wheel()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 1 file to http://[LOCALHOST]/upload
+    Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    ");
+}
+
+/// The selected credential mode controls the authorization header sent during publishing.
+#[tokio::test]
+async fn publish_credential_mode_empty_cli_token() {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .and(basic_auth("__token__", ""))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--token", ""])
+        .env(EnvVars::UV_PUBLISH_TOKEN, "ambient-token")
+        .env(EnvVars::UV_PUBLISH_USERNAME, "ambient-user")
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "ambient-password")
+        .args(["--trusted-publishing", "never", "--keyring-provider", "disabled", "--publish-url"])
+        .arg(format!("{}/upload", server.uri()))
+        .arg(dummy_wheel()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Publishing 1 file to http://[LOCALHOST]/upload
+    Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    ");
 }
