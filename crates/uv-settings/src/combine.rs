@@ -44,7 +44,7 @@ impl Combine for GlobalOptions {
         reason = "The legacy certificate setting shares precedence with its replacement"
     )]
     fn combine(self, other: Self) -> Self {
-        // Either spelling selects the certificate policy for this configuration layer. Keep the
+        // Either spelling selects the certificate policy for this configuration layer. Keep
         // that layer's spellings so a lower-priority alias cannot produce a deprecation warning.
         let (system_certs, native_tls) = if self.system_certs.is_some() || self.native_tls.is_some()
         {
