@@ -445,7 +445,7 @@ fn update_project(
     // Save to disk
     toml.set_version(new_version)?;
     let content = toml.to_string();
-    edit.write(|| fs_err::write(pyproject_path, &content))?;
+    edit.write_file(pyproject_path, content.as_bytes())?;
 
     // Update the `pyproject.toml` in-memory.
     let project = project

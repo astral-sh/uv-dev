@@ -7370,6 +7370,7 @@ dependencies = [
  "jiff",
  "owo-colors",
  "rustc-hash",
+ "same-file",
  "serde",
  "serde_json",
  "tempfile",

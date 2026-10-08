@@ -329,6 +329,15 @@ impl Pep723Script {
 
     /// Replace the existing metadata in the file with new metadata and write the updated content.
     pub fn write(&self, metadata: &str) -> Result<(), io::Error> {
+        self.write_with(metadata, |path, contents| fs_err::write(path, contents))
+    }
+
+    /// Replace the metadata and publish the complete script with a caller-owned writer.
+    pub fn write_with(
+        &self,
+        metadata: &str,
+        write: impl FnOnce(&Path, &str) -> io::Result<()>,
+    ) -> io::Result<()> {
         let content = format!(
             "{}{}{}",
             self.prelude,
@@ -336,9 +345,7 @@ impl Pep723Script {
             self.postlude
         );
 
-        fs_err::write(&self.path, content)?;
-
-        Ok(())
+        write(&self.path, &content)
     }
 
     /// Return the [`Sources`] defined in the PEP 723 metadata.

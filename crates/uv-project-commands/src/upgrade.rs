@@ -511,7 +511,7 @@ pub async fn upgrade(
         apply_requirement_replacements(&mut pyproject, updated_requirements.values())?;
         let pyproject_path = project.project_root().join("pyproject.toml");
         let edit = ProjectEdit::new([pyproject_path.clone()])?;
-        edit.write(|| fs_err::write(pyproject_path, pyproject.to_string()))?;
+        edit.write_file(&pyproject_path, pyproject.to_string().as_bytes())?;
         Some(edit)
     } else {
         None

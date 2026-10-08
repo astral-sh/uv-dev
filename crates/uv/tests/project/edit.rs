@@ -8728,6 +8728,137 @@ fn edit_interrupt_reverts_project() -> Result<()> {
     Ok(())
 }
 
+/// A failing metadata build must not roll back edits made by the backend process.
+#[test]
+fn rollback_preserves_external_project_edits() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dependency"]
+
+        [tool.uv.sources]
+        dependency = { path = "dependency" }
+    "#})?;
+    let original = context.read("pyproject.toml");
+    let external = indoc! {r#"
+        [project]
+        name = "project"
+        version = "9.9.9"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#};
+    let dependency = context.temp_dir.child("dependency");
+    dependency.create_dir_all()?;
+    dependency.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        dynamic = ["version"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    dependency.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+
+        def get_requires_for_build_wheel(*args, **kwargs):
+            return []
+
+        def prepare_metadata_for_build_wheel(*args, **kwargs):
+            Path({manifest}).write_bytes({external}.encode())
+            Path({lock}).write_bytes(b"externally created lockfile\n")
+            raise RuntimeError("metadata failed after external edit")
+    "#,
+        manifest = serde_json::to_string(pyproject.path())?,
+        external = serde_json::to_string(external)?,
+        lock = serde_json::to_string(context.temp_dir.child("uv.lock").path())?,
+    })?;
+    let mut filters = context.filters();
+    filters.push((
+        r"\.uv-project-recovery-[a-zA-Z0-9]+",
+        ".uv-project-recovery-[ID]",
+    ));
+    uv_snapshot!(filters, context.command().args(["version", "--bump", "minor", "--offline"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Did not restore `pyproject.toml`: file changed outside this project edit; leaving it unchanged; original contents saved to `.uv-project-recovery-[ID]`
+    error: Failed to build `dependency @ file://[TEMP_DIR]/dependency`
+      cause: The build backend returned an error
+      cause: Call to `backend.prepare_metadata_for_build_wheel` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 14, in <module>
+               File "[TEMP_DIR]/dependency/backend.py", line 9, in prepare_metadata_for_build_wheel
+                 raise RuntimeError("metadata failed after external edit")
+             RuntimeError: metadata failed after external edit
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
+    assert_eq!(context.read("pyproject.toml"), external);
+    assert_eq!(context.read("uv.lock"), "externally created lockfile\n");
+    let recovery = fs_err::read_dir(context.temp_dir.path())?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".uv-project-recovery-")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(recovery.len(), 1);
+    assert_eq!(fs_err::read_to_string(recovery[0].path())?, original);
+    Ok(())
+}
+
+/// Partial writes remain transaction-owned and can be restored after a filesystem error.
+#[test]
+#[cfg(unix)]
+fn rollback_restores_partial_project_write() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let original = context.read("pyproject.toml");
+    uv_snapshot!(context.filters(), context.python_command()
+        .arg("-c")
+        .arg(indoc! {r"
+            import os
+            import resource
+            import signal
+            import sys
+
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (65536, 65536))
+            os.execv(sys.argv[1], sys.argv[1:])
+        "})
+        .arg(uv_test::get_bin!())
+        .arg("--cache-dir")
+        .arg(context.cache_dir.path())
+        .arg("add")
+        .arg("a".repeat(98304))
+        .arg("--frozen"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: failed to write to file `[TEMP_DIR]/pyproject.toml`: File too large (os error 27)
+    ");
+    assert_eq!(context.read("pyproject.toml"), original);
+    Ok(())
+}
+
 /// Revert changes to the `pyproject.toml` and `uv.lock` when the `add` operation fails.
 #[test]
 fn fail_to_add_revert_project() -> Result<()> {
