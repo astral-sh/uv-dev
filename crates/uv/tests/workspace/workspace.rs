@@ -247,6 +247,273 @@ fn workspace_resolution_roots_relock() -> Result<()> {
     Ok(())
 }
 
+/// Parent dependency markers apply to the entire dependency graph of a workspace member.
+#[test]
+#[cfg(feature = "test-universal")]
+fn workspace_resolution_roots_platform_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.workspace_root.join("test/links");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "applications"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "windows-app; sys_platform == 'win32'",
+            "linux-app; sys_platform == 'linux'",
+        ]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.workspace]
+        members = ["packages/*"]
+        roots = ["applications"]
+
+        [tool.uv.sources]
+        windows-app = { workspace = true }
+        linux-app = { workspace = true }
+    "#})?;
+    for (name, dependency) in [
+        ("windows-app", "ok==1.0.0"),
+        ("linux-app", "ok==2.0.0"),
+        ("unused", "missing-package==1"),
+    ] {
+        context
+            .temp_dir
+            .child(format!("packages/{name}/pyproject.toml"))
+            .write_str(&format!(
+                r#"
+                [project]
+                name = "{name}"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+                dependencies = ["{dependency}"]
+
+                [tool.uv]
+                package = true
+                "#,
+            ))?;
+    }
+
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index").arg("--find-links").arg(&links), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        resolution-markers = [
+            "sys_platform == 'linux'",
+            "sys_platform == 'win32'",
+            "sys_platform != 'linux' and sys_platform != 'win32'",
+        ]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [manifest]
+        members = [
+            "applications",
+        ]
+
+        [[package]]
+        name = "applications"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "linux-app", marker = "sys_platform == 'linux'" },
+            { name = "windows-app", marker = "sys_platform == 'win32'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "linux-app", marker = "sys_platform == 'linux'", editable = "packages/linux-app" },
+            { name = "windows-app", marker = "sys_platform == 'win32'", editable = "packages/windows-app" },
+        ]
+
+        [[package]]
+        name = "linux-app"
+        version = "0.1.0"
+        source = { editable = "packages/linux-app" }
+        dependencies = [
+            { name = "ok", version = "2.0.0", source = { registry = "[WORKSPACE]/test/links" } },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "ok", specifier = "==2.0.0" }]
+
+        [[package]]
+        name = "ok"
+        version = "1.0.0"
+        source = { registry = "[WORKSPACE]/test/links" }
+        resolution-markers = [
+            "sys_platform == 'win32'",
+        ]
+        wheels = [
+            { path = "[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl" },
+        ]
+
+        [[package]]
+        name = "ok"
+        version = "2.0.0"
+        source = { registry = "[WORKSPACE]/test/links" }
+        resolution-markers = [
+            "sys_platform == 'linux'",
+        ]
+        wheels = [
+            { path = "[WORKSPACE]/test/links/ok-2.0.0-py3-none-any.whl" },
+        ]
+
+        [[package]]
+        name = "windows-app"
+        version = "0.1.0"
+        source = { editable = "packages/windows-app" }
+        dependencies = [
+            { name = "ok", version = "1.0.0", source = { registry = "[WORKSPACE]/test/links" } },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "ok", specifier = "==1.0.0" }]
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-index").arg("--find-links").arg(&links), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--dry-run").arg("--python-platform").arg("windows"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + ok==1.0.0
+     + windows-app @ file://[TEMP_DIR]/packages/windows-app
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--dry-run").arg("--python-platform").arg("linux"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + linux-app @ file://[TEMP_DIR]/packages/linux-app
+     + ok==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--dry-run").arg("--python-platform").arg("macos"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Checked in [TIME]
+    Would make no changes
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--all-packages").arg("--dry-run").arg("--python-platform").arg("windows"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + ok==1.0.0
+     + windows-app @ file://[TEMP_DIR]/packages/windows-app
+    ");
+
+    // Selecting a member directly does not apply markers from its parent's dependency edges.
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("windows-app").arg("--dry-run").arg("--python-platform").arg("linux"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 2 packages
+    Would install 2 packages
+     + ok==1.0.0
+     + windows-app @ file://[TEMP_DIR]/packages/windows-app
+    ");
+
+    // Changing a parent's marker invalidates the lockfile even when the members are unchanged.
+    let pyproject = context.read("pyproject.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&pyproject.replace("sys_platform == 'linux'", "sys_platform == 'darwin'"))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-index").arg("--find-links").arg(&links), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // The parent cannot select both incompatible members in the same environment.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&pyproject.replace("sys_platform == 'linux'", "sys_platform == 'win32'"))?;
+    let filters: Vec<_> = context
+        .filters()
+        .into_iter()
+        .chain([(
+            // This hint is only shown when the current platform doesn't match the target.
+            r"\nhint: The resolution failed for an environment that is not the current one[^\n]*",
+            "",
+        )])
+        .collect();
+    uv_snapshot!(filters, context.lock().arg("--offline").arg("--no-index").arg("--find-links").arg(&links), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.12' and sys_platform == 'win32')
+      cause: Because only linux-app{sys_platform == 'win32'}==0.1.0 is available and linux-app depends on ok==2.0.0, we can conclude that all versions of linux-app{sys_platform == 'win32'} depend on ok==2.0.0.
+             And because windows-app depends on ok==1.0.0, we can conclude that windows-app and all versions of linux-app{sys_platform == 'win32'} are incompatible.
+             And because only windows-app{sys_platform == 'win32'}==0.1.0 is available and applications depends on linux-app{sys_platform == 'win32'}, we can conclude that applications and all versions of windows-app{sys_platform == 'win32'} are incompatible.
+             And because applications depends on windows-app{sys_platform == 'win32'} and your workspace requires applications, we can conclude that your workspace's requirements are unsatisfiable.
+
+    ");
+
+    // The parent selects the member's extras; unrelated extras and groups do not become roots.
+    let windows_app = context.read("packages/windows-app/pyproject.toml");
+    context
+        .temp_dir
+        .child("packages/windows-app/pyproject.toml")
+        .write_str(&format!(
+            r#"{windows_app}
+            [project.optional-dependencies]
+            gui = ["validation==1.0.0"]
+            unused = ["missing-package==1"]
+
+            [dependency-groups]
+            dev = ["missing-package==1"]
+            "#,
+        ))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&pyproject.replace("windows-app;", "windows-app[gui];"))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--no-index").arg("--find-links").arg(&links), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 6 packages in [TIME]
+    Added validation v1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--dry-run").arg("--python-platform").arg("windows"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + ok==1.0.0
+     + validation==1.0.0
+     + windows-app @ file://[TEMP_DIR]/packages/windows-app
+    ");
+
+    Ok(())
+}
+
 #[test]
 #[cfg(feature = "test-pypi")]
 fn test_albatross_in_examples_bird_feeder() {

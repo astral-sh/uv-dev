@@ -669,11 +669,14 @@ impl Workspace {
     }
 
     /// Returns the workspace members that are resolution roots.
+    pub fn resolution_root_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
+        self.members_requirements()
+            .filter(|requirement| self.is_resolution_root(&requirement.name))
+    }
+
+    /// Returns the set of all workspace members.
     pub fn members_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
         self.packages.iter().filter_map(|(name, member)| {
-            if !self.is_resolution_root(name) {
-                return None;
-            }
             let url = VerbatimUrl::from_absolute_path(&member.root).expect("path is valid URL");
             Some(Requirement {
                 name: member.pyproject_toml.project.as_ref()?.name.clone(),
@@ -2547,7 +2550,7 @@ mod tests {
         ]
         "#);
         assert_json_snapshot!(
-            workspace.members_requirements().map(|requirement| requirement.name).collect::<Vec<_>>(),
+            workspace.resolution_root_requirements().map(|requirement| requirement.name).collect::<Vec<_>>(),
             @r#"
         [
           "root"
