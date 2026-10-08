@@ -1,7 +1,9 @@
 #[cfg(windows)]
 use std::path::PathBuf;
 
-use std::{env, path::Path, process::Command};
+#[cfg(target_os = "macos")]
+use std::process::Command;
+use std::{env, path::Path};
 
 use anyhow::Context;
 use assert_cmd::assert::OutputAssertExt;
