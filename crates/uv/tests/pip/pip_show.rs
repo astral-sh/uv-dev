@@ -416,6 +416,7 @@ fn show_required_by_multiple() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn show_required_by_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let target = context.temp_dir.child("target");
