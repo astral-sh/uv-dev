@@ -48,21 +48,7 @@ impl From<&Url> for Realm {
 
 impl Display for Realm {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if let Some(port) = self.port {
-            write!(
-                f,
-                "{}://{}:{port}",
-                self.scheme,
-                self.host.as_deref().unwrap_or_default()
-            )
-        } else {
-            write!(
-                f,
-                "{}://{}",
-                self.scheme,
-                self.host.as_deref().unwrap_or_default()
-            )
-        }
+        Display::fmt(&RealmRef::from(self), f)
     }
 }
 
@@ -86,6 +72,21 @@ pub struct RealmRef<'a> {
     scheme: &'a str,
     host: Option<&'a str>,
     port: Option<u16>,
+}
+
+impl Display for RealmRef<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if let Some(port) = self.port {
+            write!(
+                f,
+                "{}://{}:{port}",
+                self.scheme,
+                self.host.unwrap_or_default()
+            )
+        } else {
+            write!(f, "{}://{}", self.scheme, self.host.unwrap_or_default())
+        }
+    }
 }
 
 impl RealmRef<'_> {
@@ -155,7 +156,23 @@ impl<'a> From<&'a Realm> for RealmRef<'a> {
 mod tests {
     use url::{ParseError, Url};
 
-    use crate::Realm;
+    use crate::{Realm, RealmRef};
+
+    #[test]
+    fn borrowed_realm_display_matches_owned() -> Result<(), ParseError> {
+        for (url, expected) in [
+            ("https://example.com/path", "https://example.com"),
+            ("https://example.com:443/path", "https://example.com"),
+            ("https://example.com:8443/path", "https://example.com:8443"),
+            ("https://[::1]:8443/path", "https://[::1]:8443"),
+            ("file:///path", "file://"),
+        ] {
+            let url = Url::parse(url)?;
+            assert_eq!(RealmRef::from(&url).to_string(), expected);
+            assert_eq!(Realm::from(&url).to_string(), expected);
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_should_retain_auth() -> Result<(), ParseError> {

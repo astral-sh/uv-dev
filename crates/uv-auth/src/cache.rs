@@ -3,7 +3,8 @@ use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use rustc_hash::{FxHashMap, FxHasher};
+use hashbrown::{Equivalent, HashMap};
+use rustc_hash::{FxBuildHasher, FxHasher};
 use tracing::trace;
 use url::Url;
 
@@ -11,9 +12,19 @@ use uv_once_map::OnceMap;
 use uv_redacted::DisplaySafeUrl;
 
 use crate::credentials::{Authentication, CredentialsFromUrlError, Username};
-use crate::{Credentials, Realm};
+use crate::{Credentials, Realm, RealmRef};
 
 type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
+
+/// Hash fields in the same order as the owned `(Realm, Username)` key.
+#[derive(Hash)]
+struct RealmKeyRef<'a>(RealmRef<'a>, Option<&'a str>);
+
+impl Equivalent<(Realm, Username)> for RealmKeyRef<'_> {
+    fn equivalent(&self, key: &(Realm, Username)) -> bool {
+        self.0 == key.0 && self.1 == key.1.as_deref()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum FetchUrl {
@@ -35,7 +46,7 @@ impl Display for FetchUrl {
 #[derive(Debug)] // All internal types are redacted.
 pub struct CredentialsCache {
     /// A cache per realm and username
-    realms: RwLock<FxHashMap<(Realm, Username), Arc<Authentication>>>,
+    realms: RwLock<HashMap<(Realm, Username), Arc<Authentication>, FxBuildHasher>>,
     /// A cache tracking the result of realm or index URL fetches from external services
     pub(crate) fetches: FxOnceMap<(FetchUrl, Username), Option<Arc<Authentication>>>,
     /// A cache per URL, uses a trie for efficient prefix queries.
@@ -53,7 +64,7 @@ impl CredentialsCache {
     pub fn new() -> Self {
         Self {
             fetches: FxOnceMap::default(),
-            realms: RwLock::new(FxHashMap::default()),
+            realms: RwLock::new(HashMap::default()),
             urls: RwLock::new(UrlTrie::new()),
         }
     }
@@ -85,14 +96,13 @@ impl CredentialsCache {
     /// Return the credentials that should be used for a realm and username, if any.
     pub(crate) fn get_realm(
         &self,
-        realm: Realm,
-        username: Username,
+        realm: RealmRef<'_>,
+        username: &Username,
     ) -> Option<Arc<Authentication>> {
         let realms = self.realms.read().unwrap();
         let given_username = username.is_some();
-        let key = (realm, username);
+        let key = RealmKeyRef(realm, username.as_deref());
         let realm_username = fmt::from_fn(|f| {
-            let (realm, username) = &key;
             if let Some(username) = username.as_deref() {
                 write!(f, "{username}@{realm}")
             } else {
@@ -283,12 +293,126 @@ impl<T> TrieState<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+    use std::hash::BuildHasher;
+
     use url::ParseError;
 
     use crate::Credentials;
     use crate::credentials::Password;
 
     use super::*;
+
+    #[test]
+    fn borrowed_realm_keys_match_owned_hashes() -> Result<(), ParseError> {
+        let urls = [
+            "https://example.com/simple",
+            "https://example.com:443/other",
+            "https://example.com:8443/simple",
+            "http://example.com/simple",
+            "https://other.example.com/simple",
+            "https://[::1]:8443/simple",
+            "file:///path/to/index",
+        ]
+        .map(Url::parse)
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+        let hasher = FxBuildHasher;
+        for url in &urls {
+            for username in [None, Some(""), Some("alice"), Some("bob")] {
+                let owned = (Realm::from(url), Username::new(username.map(str::to_owned)));
+                let borrowed = RealmKeyRef(RealmRef::from(url), owned.1.as_deref());
+                assert!(borrowed.equivalent(&owned));
+                assert_eq!(hasher.hash_one(&borrowed), hasher.hash_one(&owned));
+
+                for other_url in &urls {
+                    for other_username in [None, Some("alice"), Some("bob")] {
+                        let other = (
+                            Realm::from(other_url),
+                            Username::new(other_username.map(str::to_owned)),
+                        );
+                        assert_eq!(borrowed.equivalent(&other), owned == other);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn realm_cache_matches_borrowed_keys() -> Result<(), Box<dyn Error>> {
+        let cache = CredentialsCache::new();
+        let url = DisplaySafeUrl::parse("https://example.com/simple")?;
+        let credentials = Arc::new(Authentication::from(Credentials::basic(
+            Some("alice".to_owned()),
+            Some("password".to_owned()),
+        )));
+        cache.insert(&url, credentials.clone());
+
+        for url in ["https://example.com/other", "https://example.com:443/other"] {
+            let url = Url::parse(url)?;
+            for username in [None, Some(""), Some("alice")] {
+                let username = Username::new(username.map(str::to_owned));
+                assert_eq!(
+                    cache.get_realm(RealmRef::from(&url), &username),
+                    Some(credentials.clone())
+                );
+            }
+            assert_eq!(
+                cache.get_realm(RealmRef::from(&url), &Username::from("bob".to_owned())),
+                None
+            );
+        }
+        for url in [
+            "http://example.com/simple",
+            "https://example.com:8443/simple",
+            "https://other.example.com/simple",
+            "file:///path/to/index",
+        ] {
+            let url = Url::parse(url)?;
+            for username in [None, Some("alice")] {
+                let username = Username::new(username.map(str::to_owned));
+                assert_eq!(cache.get_realm(RealmRef::from(&url), &username), None);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn realm_cache_keeps_passwordless_lookup_policy() -> Result<(), Box<dyn Error>> {
+        let cache = CredentialsCache::new();
+        let url = DisplaySafeUrl::parse("https://example.com/simple")?;
+        let realm = RealmRef::from(&*url);
+        let username = Username::from("alice".to_owned());
+        let empty_username = Username::from(String::new());
+        let passwordless = Arc::new(Authentication::from(Credentials::basic(
+            Some("alice".to_owned()),
+            None,
+        )));
+        cache.insert(&url, passwordless.clone());
+        assert_eq!(
+            cache.get_realm(realm, &Username::none()),
+            Some(passwordless.clone())
+        );
+        assert_eq!(
+            cache.get_realm(realm, &empty_username),
+            Some(passwordless.clone())
+        );
+        assert_eq!(cache.get_realm(realm, &username), None);
+
+        let authenticated = Arc::new(Authentication::from(Credentials::basic(
+            Some("alice".to_owned()),
+            Some("password".to_owned()),
+        )));
+        cache.insert(&url, authenticated.clone());
+        cache.insert(&url, passwordless);
+        assert_eq!(
+            cache.get_realm(realm, &Username::none()),
+            Some(authenticated.clone())
+        );
+        assert_eq!(cache.get_realm(realm, &username), Some(authenticated));
+        Ok(())
+    }
 
     #[test]
     fn test_trie() {
