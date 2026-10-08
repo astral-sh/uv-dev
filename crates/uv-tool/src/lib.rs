@@ -214,7 +214,7 @@ impl InstalledTools {
     /// If the tool is not installed, returns `Ok(None)`. If the receipt is invalid, returns an
     /// error.
     ///
-    /// Note it is generally incorrect to use this without [`Self::acquire_lock`].
+    /// The caller must hold the guard returned by [`Self::lock`] or [`Self::lock_for_removal`].
     pub fn get_tool_receipt(&self, name: &PackageName) -> Result<Option<Tool>, Error> {
         let directory = self.tool_dir(name);
         Self::recover_metadata(&directory)?;
