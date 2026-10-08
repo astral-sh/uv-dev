@@ -50,7 +50,6 @@ use uv_python_types::{
 use uv_requirements::RequirementsSource;
 use uv_resolve_operations as operations;
 use uv_resolver::{ExcludeNewer, FlatIndex};
-use uv_settings::PythonInstallMirrors;
 use uv_types::{AnyErrorBuild, BuildContext, BuildStack, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user;
 use uv_workspace::pyproject::ExtraBuildDependencies;
@@ -59,7 +58,10 @@ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::PythonSelectionError;
 use uv_python_discovery::find_requires_python;
-use uv_settings::ResolverSettings;
+use uv_settings::{
+    BuildLogs, BuildMode, BuildOutputSelection, BuildPackageSelection, PythonInstallMirrors,
+    ResolverSettings,
+};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -97,8 +99,6 @@ pub enum Error {
     PythonSelection(#[from] Box<PythonSelectionError>),
     #[error("Failed to write message")]
     Fmt(#[from] fmt::Error),
-    #[error("Can't use `--force-pep517` with `--list`")]
-    ListForcePep517,
     #[error(
         "Can only use `--list` with a compatible uv build backend, but `{name}` is not compatible because {reason}"
     )]
@@ -205,20 +205,16 @@ impl Hinted for Error {
 /// Build source distributions and wheels.
 // https://github.com/rust-lang/rust/issues/147648
 #[allow(unused_assignments)]
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn build_frontend(
     project_dir: &Path,
     skip_dependency_check: bool,
     src: Option<PathBuf>,
-    package: Option<PackageName>,
-    all_packages: bool,
+    package: BuildPackageSelection,
     output_dir: Option<PathBuf>,
-    sdist: bool,
-    wheel: bool,
-    list: bool,
-    build_logs: bool,
+    output: BuildOutputSelection,
+    mode: BuildMode,
+    build_logs: BuildLogs,
     gitignore: bool,
-    force_pep517: bool,
     clear: bool,
     build_constraints: Vec<RequirementsSource>,
     build_constraints_from_workspace: Vec<NameRequirementSpecification>,
@@ -308,85 +304,88 @@ pub async fn build_frontend(
     );
 
     // If a `--package` or `--all-packages` was provided, adjust the source directory.
-    let packages = if let Some(package) = package.as_ref() {
-        if matches!(src, Source::File(_)) {
-            return Err(anyhow::anyhow!(
-                "Cannot specify `--package` when building from a file"
-            ));
-        }
-
-        let workspace = match workspace {
-            Ok(ref workspace) => workspace,
-            Err(err) => {
-                return Err(err).context("`--package` was provided, but no workspace was found");
+    let packages = match &package {
+        BuildPackageSelection::Package(package) => {
+            if matches!(src, Source::File(_)) {
+                return Err(anyhow::anyhow!(
+                    "Cannot specify `--package` when building from a file"
+                ));
             }
-        };
 
-        let package = workspace
-            .packages()
-            .get(package)
-            .ok_or_else(|| anyhow::anyhow!("Package `{package}` not found in workspace"))?;
+            let workspace = match workspace {
+                Ok(ref workspace) => workspace,
+                Err(err) => {
+                    return Err(err)
+                        .context("`--package` was provided, but no workspace was found");
+                }
+            };
 
-        if !package.pyproject_toml().is_package(true) {
-            let name = &package.project().name;
-            let pyproject_toml = package.root().join("pyproject.toml");
-            return Err(anyhow::anyhow!(
-                "Package `{}` is missing a `{}`. For example, to build with `{}`, add the following to `{}`:\n```toml\n[build-system]\nrequires = [\"uv_build>={min_version},<{max_version}\"]\nbuild-backend = \"uv_build\"\n```",
-                name.cyan(),
-                "build-system".green(),
-                "uv_build".cyan(),
-                pyproject_toml.user_display().cyan()
-            ));
-        }
+            let package = workspace
+                .packages()
+                .get(package)
+                .ok_or_else(|| anyhow::anyhow!("Package `{package}` not found in workspace"))?;
 
-        vec![AnnotatedSource::from(Source::Directory(Cow::Borrowed(
-            package.root(),
-        )))]
-    } else if all_packages {
-        if matches!(src, Source::File(_)) {
-            return Err(anyhow::anyhow!(
-                "Cannot specify `--all-packages` when building from a file"
-            ));
-        }
-
-        let workspace = match workspace {
-            Ok(ref workspace) => workspace,
-            Err(err) => {
-                return Err(err)
-                    .context("`--all-packages` was provided, but no workspace was found");
+            if !package.pyproject_toml().is_package(true) {
+                let name = &package.project().name;
+                let pyproject_toml = package.root().join("pyproject.toml");
+                return Err(anyhow::anyhow!(
+                    "Package `{}` is missing a `{}`. For example, to build with `{}`, add the following to `{}`:\n```toml\n[build-system]\nrequires = [\"uv_build>={min_version},<{max_version}\"]\nbuild-backend = \"uv_build\"\n```",
+                    name.cyan(),
+                    "build-system".green(),
+                    "uv_build".cyan(),
+                    pyproject_toml.user_display().cyan()
+                ));
             }
-        };
 
-        if workspace.packages().is_empty() {
-            return Err(anyhow::anyhow!("No packages found in workspace"));
+            vec![AnnotatedSource::from(Source::Directory(Cow::Borrowed(
+                package.root(),
+            )))]
         }
+        BuildPackageSelection::AllPackages => {
+            if matches!(src, Source::File(_)) {
+                return Err(anyhow::anyhow!(
+                    "Cannot specify `--all-packages` when building from a file"
+                ));
+            }
 
-        let packages: Vec<_> = workspace
-            .packages()
-            .values()
-            .filter(|package| package.pyproject_toml().is_package(true))
-            .map(|package| AnnotatedSource {
-                source: Source::Directory(Cow::Borrowed(package.root())),
-                package: Some(package.project().name.clone()),
-            })
-            .collect();
+            let workspace = match workspace {
+                Ok(ref workspace) => workspace,
+                Err(err) => {
+                    return Err(err)
+                        .context("`--all-packages` was provided, but no workspace was found");
+                }
+            };
 
-        if packages.is_empty() {
-            let member = workspace.packages().values().next().unwrap();
-            let name = &member.project().name;
-            let pyproject_toml = member.root().join("pyproject.toml");
-            return Err(anyhow::anyhow!(
-                "Workspace does not contain any buildable packages. For example, to build `{}` with `{}`, add a `{}` to `{}`:\n```toml\n[build-system]\nrequires = [\"uv_build>={min_version},<{max_version}\"]\nbuild-backend = \"uv_build\"\n```",
-                name.cyan(),
-                "uv_build".cyan(),
-                "build-system".green(),
-                pyproject_toml.user_display().cyan()
-            ));
+            if workspace.packages().is_empty() {
+                return Err(anyhow::anyhow!("No packages found in workspace"));
+            }
+
+            let packages: Vec<_> = workspace
+                .packages()
+                .values()
+                .filter(|package| package.pyproject_toml().is_package(true))
+                .map(|package| AnnotatedSource {
+                    source: Source::Directory(Cow::Borrowed(package.root())),
+                    package: Some(package.project().name.clone()),
+                })
+                .collect();
+
+            if packages.is_empty() {
+                let member = workspace.packages().values().next().unwrap();
+                let name = &member.project().name;
+                let pyproject_toml = member.root().join("pyproject.toml");
+                return Err(anyhow::anyhow!(
+                    "Workspace does not contain any buildable packages. For example, to build `{}` with `{}`, add a `{}` to `{}`:\n```toml\n[build-system]\nrequires = [\"uv_build>={min_version},<{max_version}\"]\nbuild-backend = \"uv_build\"\n```",
+                    name.cyan(),
+                    "uv_build".cyan(),
+                    "build-system".green(),
+                    pyproject_toml.user_display().cyan()
+                ));
+            }
+
+            packages
         }
-
-        packages
-    } else {
-        vec![AnnotatedSource::from(src)]
+        BuildPackageSelection::Source => vec![AnnotatedSource::from(src)],
     };
 
     // Build backends can include arbitrary files from the source directory in the distribution.
@@ -424,7 +423,6 @@ pub async fn build_frontend(
             hash_checking,
             build_logs,
             gitignore,
-            force_pep517,
             clear,
             &build_constraints,
             &build_constraints_from_workspace,
@@ -437,9 +435,8 @@ pub async fn build_frontend(
             sources.clone(),
             &concurrency,
             build_options,
-            sdist,
-            wheel,
-            list,
+            output,
+            mode,
             dependency_metadata,
             *link_mode,
             config_setting,
@@ -477,7 +474,6 @@ pub async fn build_frontend(
     }
 }
 
-#[expect(clippy::fn_params_excessive_bools)]
 async fn build_package(
     source: AnnotatedSource<'_>,
     skip_dependency_check: bool,
@@ -495,9 +491,8 @@ async fn build_package(
     index_locations: &IndexLocations,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
-    build_logs: bool,
+    build_logs: BuildLogs,
     gitignore: bool,
-    force_pep517: bool,
     clear: bool,
     build_constraints: &[RequirementsSource],
     build_constraints_from_workspace: &[NameRequirementSpecification],
@@ -510,9 +505,8 @@ async fn build_package(
     sources: NoSources,
     concurrency: &Concurrency,
     build_options: &BuildOptions,
-    sdist: bool,
-    wheel: bool,
-    list: bool,
+    output: BuildOutputSelection,
+    mode: BuildMode,
     dependency_metadata: &DependencyMetadata,
     link_mode: LinkMode,
     config_setting: &ConfigSettings,
@@ -683,32 +677,28 @@ async fn build_package(
     prepare_output_directory(&output_dir, gitignore).await?;
 
     // Determine the build plan.
-    let plan = BuildPlan::determine(&source, sdist, wheel)?;
+    let plan = BuildPlan::determine(&source, output)?;
 
     // Check if the build backend is matching uv version that allows calling in the uv build backend
     // directly.
-    let build_action = if list {
-        if force_pep517 {
-            return Err(Error::ListForcePep517);
-        }
+    let build_action = match mode {
+        BuildMode::List => {
+            if let Err(reason) = check_direct_build(
+                source.path(),
+                uv_version::version(),
+                &interpreter.to_resolver_marker_environment(),
+                build_constraints.requirements().cloned().map(Into::into),
+            ) {
+                return Err(Error::ListNonUv {
+                    name: source.path().user_display().to_string(),
+                    reason: reason.to_string(),
+                });
+            }
 
-        if let Err(reason) = check_direct_build(
-            source.path(),
-            uv_version::version(),
-            &interpreter.to_resolver_marker_environment(),
-            build_constraints.requirements().cloned().map(Into::into),
-        ) {
-            return Err(Error::ListNonUv {
-                name: source.path().user_display().to_string(),
-                reason: reason.to_string(),
-            });
+            BuildAction::List
         }
-
-        BuildAction::List
-    } else if force_pep517 {
-        BuildAction::Pep517
-    } else {
-        match check_direct_build(
+        BuildMode::Pep517 => BuildAction::Pep517,
+        BuildMode::Build => match check_direct_build(
             source.path(),
             uv_version::version(),
             &interpreter.to_resolver_marker_environment(),
@@ -723,7 +713,7 @@ async fn build_package(
                 );
                 BuildAction::Pep517
             }
-        }
+        },
     };
 
     if matches!(build_action, BuildAction::DirectBuild | BuildAction::List) {
@@ -740,7 +730,9 @@ async fn build_package(
 
     let build_output = match printer {
         Printer::Default | Printer::NoProgress | Printer::Verbose => {
-            if build_logs && !uv_flags::contains(uv_flags::EnvironmentFlags::HIDE_BUILD_OUTPUT) {
+            if let BuildLogs::Show = build_logs
+                && !uv_flags::contains(uv_flags::EnvironmentFlags::HIDE_BUILD_OUTPUT)
+            {
                 BuildOutput::Stderr
             } else {
                 BuildOutput::Quiet
@@ -754,7 +746,7 @@ async fn build_package(
         BuildPlan::SdistToWheel => {
             // Even when listing files, we still need to build the source distribution for the wheel
             // build.
-            if list {
+            if let BuildMode::List = mode {
                 let sdist_list = build_sdist(
                     source.path(),
                     &output_dir,
@@ -1503,27 +1495,27 @@ enum BuildPlan {
 }
 
 impl BuildPlan {
-    fn determine(source: &AnnotatedSource, sdist: bool, wheel: bool) -> Result<Self, Error> {
+    fn determine(source: &AnnotatedSource, output: BuildOutputSelection) -> Result<Self, Error> {
         Ok(match &source.source {
             Source::File(_) => {
                 // We're building from a file, which must be a source distribution.
-                match (sdist, wheel) {
-                    (false, true) => Self::WheelFromSdist,
-                    (false, false) => {
+                match output {
+                    BuildOutputSelection::Wheel => Self::WheelFromSdist,
+                    BuildOutputSelection::Default => {
                         return Err(Error::WheelFromSdistRequiresFlag);
                     }
-                    (true, _) => {
+                    BuildOutputSelection::Sdist | BuildOutputSelection::SdistAndWheel => {
                         return Err(Error::SdistFromSdist);
                     }
                 }
             }
             Source::Directory(_) => {
                 // We're building from a directory.
-                match (sdist, wheel) {
-                    (false, false) => Self::SdistToWheel,
-                    (false, true) => Self::Wheel,
-                    (true, false) => Self::Sdist,
-                    (true, true) => Self::SdistAndWheel,
+                match output {
+                    BuildOutputSelection::Default => Self::SdistToWheel,
+                    BuildOutputSelection::Wheel => Self::Wheel,
+                    BuildOutputSelection::Sdist => Self::Sdist,
+                    BuildOutputSelection::SdistAndWheel => Self::SdistAndWheel,
                 }
             }
         })

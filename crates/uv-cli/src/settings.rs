@@ -42,11 +42,12 @@ use uv_python_types::{
 };
 use uv_redacted::DisplaySafeUrl;
 use uv_settings::{
-    Combine, EnvFlag, EnvironmentOptions, FilesystemOptions, FrozenFlag, FrozenSource,
-    IndexOptions, LockCheck, LockedFlag, LockedSource, MalwareCheckSettings, Options, PipOptions,
-    PreviewFeaturesOption, PreviewOption, PublishOptions, PythonInstallMirrors, PythonListKinds,
-    ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
-    ResolverSettings, resolve_prerelease,
+    BuildLogs, BuildMode, BuildOutputSelection, BuildPackageSelection, Combine, EnvFlag,
+    EnvironmentOptions, FilesystemOptions, FrozenFlag, FrozenSource, IndexOptions, LockCheck,
+    LockedFlag, LockedSource, MalwareCheckSettings, Options, PipOptions, PreviewFeaturesOption,
+    PreviewOption, PublishOptions, PythonInstallMirrors, PythonListKinds, ResolverInstallerOptions,
+    ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions, ResolverSettings,
+    resolve_prerelease,
 };
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
@@ -4185,15 +4186,12 @@ impl PipCheckSettings {
 pub struct BuildSettings {
     pub skip_dependency_check: bool,
     pub src: Option<PathBuf>,
-    pub package: Option<PackageName>,
-    pub all_packages: bool,
+    pub package: BuildPackageSelection,
     pub out_dir: Option<PathBuf>,
-    pub sdist: bool,
-    pub wheel: bool,
-    pub list: bool,
-    pub build_logs: bool,
+    pub output: BuildOutputSelection,
+    pub mode: BuildMode,
+    pub build_logs: BuildLogs,
     pub gitignore: bool,
-    pub force_pep517: bool,
     pub clear: bool,
     pub build_constraints: Vec<RequirementsInput>,
     pub build_constraints_from_workspace: Vec<NameRequirementSpecification>,
@@ -4266,14 +4264,13 @@ impl BuildSettings {
         Ok(Self {
             skip_dependency_check,
             src,
-            package,
-            all_packages,
+            package: BuildPackageSelection::from_args(package, all_packages),
             out_dir,
-            sdist,
-            wheel,
-            list,
-            build_logs: flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
-            force_pep517,
+            output: BuildOutputSelection::from_args(sdist, wheel),
+            mode: BuildMode::from_args(list, force_pep517),
+            build_logs: BuildLogs::from_args(
+                flag(build_logs, no_build_logs, "build-logs")?.unwrap_or(true),
+            ),
             clear,
             gitignore: flag(create_gitignore, no_create_gitignore, "create-gitignore")?
                 .unwrap_or(true),

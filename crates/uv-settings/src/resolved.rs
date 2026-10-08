@@ -7,6 +7,7 @@ use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, IndexLocations, PackageConfigSettings,
 };
 use uv_install_wheel::LinkMode;
+use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
 use uv_warnings::warn_user_once;
@@ -164,6 +165,75 @@ pub struct ResolverSettings {
     pub cuda_driver_version: Option<Version>,
     pub amd_gpu_architecture: Option<AmdGpuArchitecture>,
     pub upgrade: Upgrade,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BuildOutputSelection {
+    Default,
+    Sdist,
+    Wheel,
+    SdistAndWheel,
+}
+
+impl BuildOutputSelection {
+    pub fn from_args(sdist: bool, wheel: bool) -> Self {
+        match (sdist, wheel) {
+            (false, false) => Self::Default,
+            (true, false) => Self::Sdist,
+            (false, true) => Self::Wheel,
+            (true, true) => Self::SdistAndWheel,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum BuildPackageSelection {
+    Source,
+    Package(PackageName),
+    AllPackages,
+}
+
+impl BuildPackageSelection {
+    pub fn from_args(package: Option<PackageName>, all_packages: bool) -> Self {
+        if let Some(package) = package {
+            Self::Package(package)
+        } else if all_packages {
+            Self::AllPackages
+        } else {
+            Self::Source
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BuildMode {
+    Build,
+    List,
+    Pep517,
+}
+
+impl BuildMode {
+    pub fn from_args(list: bool, force_pep517: bool) -> Self {
+        if list {
+            Self::List
+        } else if force_pep517 {
+            Self::Pep517
+        } else {
+            Self::Build
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BuildLogs {
+    Show,
+    Hide,
+}
+
+impl BuildLogs {
+    pub fn from_args(build_logs: bool) -> Self {
+        if build_logs { Self::Show } else { Self::Hide }
+    }
 }
 
 /// Normalize a deprecated prerelease mode and emit its warning.
