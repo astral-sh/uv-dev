@@ -25,14 +25,14 @@ impl RequirementSelection {
         }
     }
 
-    pub fn extras(&self) -> &[ExtraName] {
+    pub(crate) fn extras(&self) -> &[ExtraName] {
         match self {
             Self::Extras(extras) => extras,
             Self::Groups(_) => &[],
         }
     }
 
-    pub fn groups(&self) -> &[GroupName] {
+    pub(crate) fn groups(&self) -> &[GroupName] {
         match self {
             Self::Extras(_) => &[],
             Self::Groups(groups) => groups,
