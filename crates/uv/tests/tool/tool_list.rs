@@ -282,7 +282,10 @@ fn tool_list_missing_receipt() {
     uv_snapshot!(context.filters(), context.tool_list(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Ignoring malformed tool `black` (run `uv tool uninstall black` to remove)
+    warning: Ignoring malformed tool `black`
+      cause: Failed to find a receipt for tool `black` at `[TEMP_DIR]/tools/black/uv-receipt.toml`
+
+    hint: Run `uv tool uninstall black` to remove the tool.
     ");
 }
 
@@ -322,7 +325,10 @@ fn tool_list_bad_environment() -> Result<()> {
     - ruff
 
     ----- stderr -----
-    warning: Invalid environment at `tools/black`: missing Python executable at `tools/black/[BIN]/[PYTHON]` (run `uv tool install black --reinstall` to reinstall)
+    warning: Ignoring tool `black` with an invalid environment
+      cause: Invalid environment at `tools/black`: missing Python executable at `tools/black/[BIN]/[PYTHON]`
+
+    hint: Run `uv tool install black --reinstall` to reinstall the tool.
     "
     );
 
@@ -399,7 +405,11 @@ fn tool_list_deprecated() -> Result<()> {
     uv_snapshot!(context.filters(), context.tool_list(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Ignoring malformed tool `black` (run `uv tool uninstall black` to remove)
+    warning: Ignoring malformed tool `black`
+      cause: Failed to read `uv-receipt.toml` at `[TEMP_DIR]/tools/black/uv-receipt.toml`
+      cause: Invalid TOML tool receipt at line 3, column 24
+
+    hint: Run `uv tool uninstall black` to remove the tool.
     ");
 
     Ok(())
@@ -674,4 +684,31 @@ fn tool_list_show_all() {
     flask v3.0.2 [extras: async, dotenv] [with: requests] [CPython 3.12.[X]] ([TEMP_DIR]/tools/flask)
     - flask ([TEMP_DIR]/bin/flask)
     ");
+}
+
+#[test]
+fn tool_list_missing_package() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    context
+        .tool_install()
+        .arg("simple-launcher")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(context.workspace_root.join("test/links"))
+        .assert()
+        .success();
+    let site_packages = uv_test::site_packages_path(
+        context.temp_dir.child("tools/simple-launcher").path(),
+        "python3.12",
+    );
+    fs_err::remove_dir_all(site_packages.join("simple_launcher-0.1.0.dist-info"))?;
+    uv_snapshot!(context.filters(), context.tool_list(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Ignoring tool `simple-launcher` with an invalid environment
+      cause: Failed find package `simple-launcher` in tool environment
+
+    hint: Run `uv tool install simple-launcher --reinstall` to reinstall the tool.
+    ");
+    Ok(())
 }

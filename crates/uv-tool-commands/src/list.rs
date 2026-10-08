@@ -17,13 +17,14 @@ use uv_normalize::PackageName;
 use uv_python_types::LenientImplementationName;
 use uv_settings::{Combine, ResolverInstallerOptions};
 use uv_tool::InstalledTools;
-use uv_warnings::warn_user;
 
 use uv_command_support::ExitStatus;
 use uv_command_support::Printer;
 use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::reporters::LatestVersionReporter;
 use uv_settings::ResolverInstallerSettings;
+
+use crate::warnings::{warn_invalid_environment, warn_malformed_tool};
 
 /// List installed tools.
 #[expect(clippy::fn_params_excessive_bools)]
@@ -67,29 +68,29 @@ pub async fn list(
     let mut valid_tools = Vec::new();
     for (name, tool) in tools {
         // Skip invalid tools
-        let Ok(tool) = tool else {
-            warn_user!(
-                "Ignoring malformed tool `{name}` (run `{}` to remove)",
-                format!("uv tool uninstall {name}").green()
-            );
-            continue;
+        let tool = match tool {
+            Ok(tool) => tool,
+            Err(error) => {
+                warn_malformed_tool(&name, error);
+                continue;
+            }
         };
 
         // Get the tool environment
         let tool_env = match installed_tools.get_environment(&name, cache) {
             Ok(Some(env)) => env,
             Ok(None) => {
-                warn_user!(
-                    "Tool `{name}` environment not found (run `{}` to reinstall)",
-                    format!("uv tool install {name} --reinstall").green()
+                warn_invalid_environment(
+                    &name,
+                    uv_tool::Error::ToolEnvironmentNotFound(
+                        name.clone(),
+                        installed_tools.tool_dir(&name),
+                    ),
                 );
                 continue;
             }
-            Err(e) => {
-                warn_user!(
-                    "{e} (run `{}` to reinstall)",
-                    format!("uv tool install {name} --reinstall").green()
-                );
+            Err(error) => {
+                warn_invalid_environment(&name, error);
                 continue;
             }
         };
@@ -97,15 +98,8 @@ pub async fn list(
         // Get the tool version
         let version = match tool_env.version() {
             Ok(version) => version,
-            Err(e) => {
-                if let uv_tool::Error::EnvironmentError(e) = e {
-                    warn_user!(
-                        "{e} (run `{}` to reinstall)",
-                        format!("uv tool install {name} --reinstall").green()
-                    );
-                } else {
-                    writeln!(printer.stderr(), "{e}")?;
-                }
+            Err(error) => {
+                warn_invalid_environment(&name, error);
                 continue;
             }
         };
