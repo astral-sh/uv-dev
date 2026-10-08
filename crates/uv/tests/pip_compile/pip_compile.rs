@@ -9,7 +9,6 @@ use std::str::FromStr;
 use anyhow::Result;
 #[cfg(all(feature = "test-git", feature = "test-universal"))]
 use anyhow::{Context, anyhow};
-#[cfg(feature = "test-universal")]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use fs_err::{File, read};
