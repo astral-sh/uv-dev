@@ -2,6 +2,7 @@ use std::process::Command;
 
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
+use insta::allow_duplicates;
 use url::Url;
 use uv_static::EnvVars;
 
@@ -100,6 +101,8 @@ fn show_settings_returns_before_running_commands() {
         .arg("--python")
         .arg("does-not-exist")
         .arg("--show-settings")
+        .env(EnvVars::UV_NO_BINARY, "invalid")
+        .env(EnvVars::UV_NO_BUILD, "invalid")
         .assert()
         .success();
 
@@ -566,10 +569,10 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
     windows,
     ignore = "Configuration tests are not yet supported on Windows"
 )]
-fn pip_install_baseline() {
+fn pip_install_baseline() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    capture_uv_snapshot!(context.filters(), add_shared_args(context.pip_install())
+    let baseline = capture_uv_snapshot!(context.filters(), add_shared_args(context.pip_install())
         .arg("--show-settings")
         .arg("-r")
         .arg("requirements.in"), @r#"
@@ -755,6 +758,39 @@ fn pip_install_baseline() {
         },
     }
     "#);
+
+    // Environment booleans override both configuration spellings, including package lists.
+    for configuration in [
+        "no-binary = true\nno-build = true\n",
+        "[pip]\nno-binary = [\":all:\"]\nonly-binary = [\":all:\"]\nno-build = true\n",
+    ] {
+        context.temp_dir.child("uv.toml").write_str(configuration)?;
+        allow_duplicates! {
+            diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.pip_install())
+                .args(["--show-settings", "-r", "requirements.in"])
+                .env(EnvVars::UV_NO_BINARY, "0")
+                .env(EnvVars::UV_NO_BINARY_PACKAGE, "a")
+                .env(EnvVars::UV_NO_BUILD, "0")
+                .env(EnvVars::UV_NO_BUILD_PACKAGE, "a"), @"");
+        }
+    }
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.pip_install())
+        .args(["--show-settings", "-r", "requirements.in", "--no-binary", ":none:", "--only-binary", ":none:"])
+        .env(EnvVars::UV_NO_BINARY, "1")
+        .env(EnvVars::UV_NO_BINARY_PACKAGE, "a")
+        .env(EnvVars::UV_NO_BUILD, "1")
+        .env(EnvVars::UV_NO_BUILD_PACKAGE, "a"), @"");
+
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str("[pip]\nno-build = true\n")?;
+    diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.pip_install())
+        .args(["--show-settings", "-r", "requirements.in", "--build"])
+        .env(EnvVars::UV_NO_BUILD, "1")
+        .env(EnvVars::UV_NO_BUILD_PACKAGE, "a"), @"");
+
+    Ok(())
 }
 
 #[test]

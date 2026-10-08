@@ -21,10 +21,11 @@ use uv_configuration::{
     DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
-    KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
-    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
-    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
-    TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
+    KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override,
+    PackageNameSpecifier, PackageOverride, PipCompileFormat, Prerelease, ProjectBuildBackend,
+    ProxyUrl, PythonUpgrade, PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput,
+    ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade,
+    VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
@@ -48,7 +49,7 @@ use uv_settings::{
     ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
     ResolverSettings, resolve_prerelease,
 };
-use uv_static::EnvVars;
+use uv_static::{EnvVars, parse_boolish_environment_variable};
 use uv_torch::{AmdGpuArchitecture, TorchMode};
 use uv_warnings::warn_user_once;
 use uv_workspace::pyproject::{DependencyType, ExtraBuildDependencies, OverrideDependency};
@@ -3507,7 +3508,7 @@ impl PipCompileSettings {
             required_environments,
             minimum_libc_version,
             refresh: Refresh::try_from(refresh)?,
-            settings: PipSettings::combine(
+            settings: PipSettings::combine_with_build_environment(
                 PipOptions {
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
@@ -3552,7 +3553,7 @@ impl PipCompileSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )?,
         })
     }
 }
@@ -3634,7 +3635,7 @@ impl PipSyncSettings {
             },
             output_format,
             refresh: Refresh::try_from(refresh)?,
-            settings: PipSettings::combine(
+            settings: PipSettings::combine_with_build_environment(
                 PipOptions {
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
@@ -3666,7 +3667,7 @@ impl PipSyncSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )?,
         })
     }
 }
@@ -3838,7 +3839,7 @@ impl PipInstallSettings {
                 no_editable_package,
             ),
             refresh: Refresh::try_from(refresh)?,
-            settings: PipSettings::combine(
+            settings: PipSettings::combine_with_build_environment(
                 PipOptions {
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
@@ -3866,7 +3867,7 @@ impl PipInstallSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )?,
         })
     }
 }
@@ -4563,6 +4564,69 @@ pub struct PipSettings {
 }
 
 impl PipSettings {
+    /// Resolve the build policy used by `pip install`, `pip sync`, and `pip compile`.
+    fn combine_with_build_environment(
+        mut args: PipOptions,
+        filesystem: Option<FilesystemOptions>,
+        mut environment: EnvironmentOptions,
+    ) -> anyhow::Result<Self> {
+        // Explicit CLI policies for all or no packages replace lower-precedence package lists.
+        let reset_no_binary = args.no_binary.as_ref().is_some_and(|specifiers| {
+            specifiers.iter().any(|specifier| match specifier {
+                PackageNameSpecifier::All | PackageNameSpecifier::None => true,
+                PackageNameSpecifier::Package(_) => false,
+            })
+        });
+        let reset_no_build = args.no_build.is_some()
+            || args.only_binary.as_ref().is_some_and(|specifiers| {
+                specifiers.iter().any(|specifier| match specifier {
+                    PackageNameSpecifier::All | PackageNameSpecifier::None => true,
+                    PackageNameSpecifier::Package(_) => false,
+                })
+            });
+        let (environment_no_binary, environment_no_binary_package) = if reset_no_binary {
+            (None, Vec::new())
+        } else {
+            (
+                parse_boolish_environment_variable(EnvVars::UV_NO_BINARY)?,
+                environment.no_binary_package.take().unwrap_or_default(),
+            )
+        };
+        let (environment_no_build, environment_no_build_package) = if reset_no_build {
+            (None, Vec::new())
+        } else {
+            (
+                parse_boolish_environment_variable(EnvVars::UV_NO_BUILD)?,
+                environment.no_build_package.take().unwrap_or_default(),
+            )
+        };
+
+        // Resolve configuration without CLI build options, then apply the higher-precedence layers.
+        let cli_no_binary = NoBinary::from_pip_args(args.no_binary.take().unwrap_or_default());
+        let cli_no_build = NoBuild::from_pip_args(
+            args.only_binary.take().unwrap_or_default(),
+            args.no_build.take().unwrap_or_default(),
+        );
+        let mut settings = Self::combine(args, filesystem, environment);
+        let no_binary = NoBinary::from_args(environment_no_binary, environment_no_binary_package);
+        let no_binary = if reset_no_binary || environment_no_binary.is_some() {
+            no_binary
+        } else {
+            no_binary.combine(settings.build_options.no_binary().clone())
+        };
+        let no_build = NoBuild::from_args(environment_no_build, environment_no_build_package);
+        let no_build = if reset_no_build || environment_no_build.is_some() {
+            no_build
+        } else {
+            no_build.combine(settings.build_options.no_build().clone())
+        };
+        settings.build_options = BuildOptions::new(
+            cli_no_binary.combine(no_binary),
+            cli_no_build.combine(no_build),
+        );
+        Ok(settings)
+    }
+
     /// Resolve the [`PipSettings`] from the CLI and filesystem configuration.
     fn combine(
         args: PipOptions,
