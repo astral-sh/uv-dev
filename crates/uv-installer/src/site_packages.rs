@@ -32,7 +32,30 @@ use crate::satisfies::{BuildSettings, RequirementSatisfaction};
 
 /// A failure to discover installed packages or check their requirements.
 #[derive(Debug, thiserror::Error)]
-pub enum SitePackagesError {
+#[error(transparent)]
+pub struct SitePackagesError(Box<SitePackagesErrorKind>);
+
+impl From<SitePackagesErrorKind> for SitePackagesError {
+    fn from(error: SitePackagesErrorKind) -> Self {
+        Self(Box::new(error))
+    }
+}
+
+impl From<ScopedOverrideSourceError> for SitePackagesError {
+    fn from(error: ScopedOverrideSourceError) -> Self {
+        SitePackagesErrorKind::ScopedOverride(error).into()
+    }
+}
+
+impl AsRef<SitePackagesErrorKind> for SitePackagesError {
+    fn as_ref(&self) -> &SitePackagesErrorKind {
+        &self.0
+    }
+}
+
+/// The cause and context of an installed-package failure.
+#[derive(Debug, thiserror::Error)]
+pub enum SitePackagesErrorKind {
     #[error("Failed to read site-packages directory")]
     ReadDirectory {
         path: PathBuf,
@@ -112,7 +135,7 @@ impl SitePackages {
             // Read the site-packages directory.
             let site_packages = match fs::read_dir(site_packages.as_ref()) {
                 Ok(read_dir) => sorted_dist_like_paths(read_dir).map_err(|source| {
-                    SitePackagesError::ReadDirectoryContents {
+                    SitePackagesErrorKind::ReadDirectoryContents {
                         path: site_packages.to_path_buf(),
                         source,
                     }
@@ -121,10 +144,11 @@ impl SitePackages {
                     continue;
                 }
                 Err(source) => {
-                    return Err(SitePackagesError::ReadDirectory {
+                    return Err(SitePackagesErrorKind::ReadDirectory {
                         path: site_packages.to_path_buf(),
                         source,
-                    });
+                    }
+                    .into());
                 }
             };
 
@@ -152,7 +176,9 @@ impl SitePackages {
                         continue;
                     }
                     Err(err) => {
-                        return Err(SitePackagesError::ReadMetadata { path, source: err });
+                        return Err(
+                            SitePackagesErrorKind::ReadMetadata { path, source: err }.into()
+                        );
                     }
                 };
 
@@ -609,7 +635,7 @@ impl SitePackages {
                         Cow::Owned(metadata)
                     } else {
                         Cow::Borrowed(distribution.read_metadata().map_err(|source| {
-                            SitePackagesError::ReadDistributionMetadata {
+                            SitePackagesErrorKind::ReadDistributionMetadata {
                                 distribution: Box::new((*distribution).clone()),
                                 source,
                             }
@@ -871,7 +897,7 @@ mod tests {
 
     use super::sorted_dist_like_paths;
     #[cfg(unix)]
-    use super::{SitePackages, SitePackagesError};
+    use super::{SitePackages, SitePackagesErrorKind};
 
     #[test]
     fn sorted_dist_like_paths_filters_and_sorts() -> Result<()> {
@@ -984,8 +1010,8 @@ mod tests {
         let error = SitePackages::from_interpreter(&interpreter)
             .expect_err("invalid installed version must fail discovery");
         assert!(matches!(
-            &error,
-            SitePackagesError::ReadMetadata {
+            error.as_ref(),
+            SitePackagesErrorKind::ReadMetadata {
                 path,
                 source: InstalledDistError::VersionParse(_),
             } if path == &invalid

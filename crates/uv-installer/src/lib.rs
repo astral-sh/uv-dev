@@ -5,6 +5,7 @@ pub use preparer::{Error as PrepareError, Preparer, Reporter as PrepareReporter}
 pub use satisfies::BuildSettings;
 pub use site_packages::{
     InstallationStrategy, SatisfiesResult, SitePackages, SitePackagesDiagnostic, SitePackagesError,
+    SitePackagesErrorKind,
 };
 pub use uninstall::{UninstallError, uninstall};
 
