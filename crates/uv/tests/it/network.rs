@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::future::ready;
 use std::io;
@@ -6,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild};
 use bytes::Bytes;
 use http::StatusCode;
@@ -248,6 +250,87 @@ where
         });
     });
     (server, shutdown_tx)
+}
+
+/// Explicit requirements files use one download slot in input order.
+#[test]
+fn requirements_input_downloads_are_serial() -> Result<()> {
+    check_requirements_input_downloads(1)
+}
+
+/// Explicit requirements files share a smaller download limit than the input batch.
+#[test]
+fn requirements_input_downloads_are_bounded() -> Result<()> {
+    check_requirements_input_downloads(2)
+}
+
+/// The entire input batch can download when every request has an available slot.
+#[test]
+fn requirements_input_downloads_fill_the_batch() -> Result<()> {
+    check_requirements_input_downloads(12)
+}
+
+fn check_requirements_input_downloads(concurrency: usize) -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let response_gate = gate.clone();
+    let (started, requests) = std::sync::mpsc::channel();
+    let (server, _guard) = streaming_server(move |request| {
+        let _ = started.send(request.uri().path().to_owned());
+        let gate = response_gate.clone();
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        tokio::spawn(async move {
+            let Ok(permit) = gate.acquire().await else {
+                return;
+            };
+            permit.forget();
+            let _ = sender
+                .send(Ok(Frame::data(Bytes::from_static(b"build-tag==1.0.0\n"))))
+                .await;
+        });
+        hyper::Response::builder()
+            .header("Content-Type", "text/plain")
+            .body(StreamBody::new(ReceiverStream::new(receiver)).boxed())
+    });
+    let mut command = context.pip_compile();
+    command
+        .args(["--no-index", "--no-header", "--no-annotate", "--find-links"])
+        .arg(context.workspace_root.join("test/links"))
+        .env(EnvVars::UV_CONCURRENT_DOWNLOADS, concurrency.to_string());
+    for index in 0..12 {
+        command.arg(format!("{server}/{index}.txt"));
+    }
+    let process = std::thread::spawn(move || command.output());
+    let mut seen = BTreeSet::new();
+    for _ in 0..concurrency {
+        assert!(seen.insert(requests.recv_timeout(Duration::from_secs(10))?));
+    }
+    assert_eq!(
+        seen,
+        (0..concurrency)
+            .map(|index| format!("/{index}.txt"))
+            .collect::<BTreeSet<_>>()
+    );
+    assert!(matches!(
+        requests.recv_timeout(Duration::from_millis(100)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
+    gate.add_permits(concurrency);
+    if concurrency < 12 {
+        for _ in 0..concurrency.min(12 - concurrency) {
+            assert!(seen.insert(requests.recv_timeout(Duration::from_secs(10))?));
+        }
+        assert!(matches!(
+            requests.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        gate.add_permits(12 - concurrency);
+    }
+    let output = process
+        .join()
+        .map_err(|_| anyhow::anyhow!("requirements command panicked"))??;
+    output.assert().success().stdout("build-tag==1.0.0\n");
+    Ok(())
 }
 
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
