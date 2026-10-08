@@ -48708,3 +48708,377 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
 
     Ok(())
 }
+
+/// Only effective policies for retained names participate in preview lock validation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_resolution_inputs_prerelease_policy_equivalence() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "resolution-inputs-prerelease-policy-equivalence"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        [packages.a.versions."2.0.0a1"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#})?;
+    let preview_lock = || {
+        let mut command = context.lock();
+        command
+            .arg("--index-url")
+            .arg(server.index_url())
+            .args(["--preview-features", "resolution-inputs"]);
+        command
+    };
+
+    uv_snapshot!(context.filters(), preview_lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(original, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:a-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a" }]
+        "#);
+    });
+
+    // The cold cache makes an unnecessary resolution observable even with a live local index.
+    uv_snapshot!(context.filters(), preview_lock().args([
+        "--locked", "--offline", "--no-cache",
+        "--prerelease-package", "unused=allow",
+        "--prerelease-package", "a=if-necessary",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+
+    // A real resolution also omits unrelated and redundant locked-package policies.
+    uv_snapshot!(context.filters(), preview_lock().args([
+        "--refresh",
+        "--prerelease-package", "unused=disallow",
+        "--prerelease-package", "a=if-necessary",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+
+    // Without the preview, all explicitly configured policies remain lockfile inputs.
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--locked", "--prerelease-package", "unused=allow"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+
+    uv_snapshot!(context.filters(), preview_lock().args([
+        "--locked", "--prerelease-package", "a=allow",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+
+    uv_snapshot!(context.filters(), preview_lock().args([
+        "--locked", "--prerelease", "allow",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolving despite existing lockfile due to change in pre-release mode: `if-necessary` vs. `allow`
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--preview-features", "resolution-inputs", "--upgrade", "--prerelease-package", "a=allow"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v1.0
+    └── a v2.0.0a1
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A redundant policy can record a consulted name that is absent after backtracking.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_resolution_inputs_prerelease_policy_backtracking() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "resolution-inputs-prerelease-policy-backtracking"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        [packages.a.versions."2.0.0"]
+        requires = ["discarded"]
+        sdist = false
+        [packages.discarded.versions."1.0.0a1"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [tool.uv]
+        preview-features = ["resolution-inputs"]
+        prerelease = "disallow"
+        prerelease-package = { a = "disallow", discarded = "disallow", unused = "allow" }
+    "#})?;
+    let lock_command = || {
+        let mut command = context.lock();
+        command.arg("--index-url").arg(server.index_url());
+        command
+    };
+    uv_snapshot!(context.filters(), lock_command(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(original, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        prerelease-mode = "disallow"
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [options.prerelease-package]
+        discarded = "disallow"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:a-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a" }]
+        "#);
+    });
+
+    uv_snapshot!(context.filters(), lock_command().args([
+        "--locked", "--offline", "--no-cache",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+
+    uv_snapshot!(context.filters(), lock_command().args([
+        "--locked", "--prerelease-package", "discarded=allow",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+
+    uv_snapshot!(context.filters(), context.tree()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--upgrade", "--prerelease-package", "discarded=allow"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v1.0
+    └── a v2.0.0
+        └── discarded v1.0.0a1
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        preview-features = ["resolution-inputs"]
+        prerelease = "disallow"
+        prerelease-package = { a = "disallow", discarded = "disallow", unused = "allow" }
+    "#})?;
+    uv_snapshot!(context.filters(), lock_command(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Removed a v2.0.0
+    Removed discarded v1.0.0a1
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        prerelease-mode = "disallow"
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "project"
+        version = "1.0"
+        source = { virtual = "." }
+        "#);
+    });
+    Ok(())
+}
+
+/// Previously stored policy keys stay relevant when adopting input retention.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_resolution_inputs_prerelease_policy_legacy_keys() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--prerelease-package", "unused=allow"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let original = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(original, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [options.prerelease-package]
+        unused = "allow"
+
+        [[package]]
+        name = "project"
+        version = "1.0"
+        source = { virtual = "." }
+        "#);
+    });
+
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--locked", "--preview-features", "resolution-inputs",
+    ]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--preview-features", "resolution-inputs",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let updated = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--offline", "--locked", "--no-cache", "--preview-features", "resolution-inputs",
+        "--prerelease-package", "unused=allow",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(updated, context.read("uv.lock"));
+    Ok(())
+}
