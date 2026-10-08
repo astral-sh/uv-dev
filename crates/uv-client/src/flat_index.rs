@@ -1,8 +1,11 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use futures::{FutureExt, StreamExt};
 use reqwest::Response;
-use tracing::{Instrument, debug, info_span, warn};
+use tokio::sync::{AcquireError, Semaphore};
+use tokio::task::JoinError;
+use tracing::{Instrument, Span, debug, info_span, warn};
 use url::Url;
 
 use uv_cache::{Cache, CacheBucket};
@@ -49,6 +52,10 @@ pub enum FindLinksDirectoryError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     VerbatimUrl(#[from] uv_pep508::VerbatimUrlError),
+    #[error(transparent)]
+    Admission(#[from] AcquireError),
+    #[error(transparent)]
+    Worker(#[from] JoinError),
 }
 
 /// An entry in a `--find-links` index.
@@ -126,15 +133,32 @@ pub struct FlatIndexClient<'a> {
     client: &'a CachedClient,
     connectivity: Connectivity,
     cache: &'a Cache,
+    directory_concurrency: Arc<Semaphore>,
 }
 
 impl<'a> FlatIndexClient<'a> {
     /// Create a new [`FlatIndexClient`].
     pub fn new(client: &'a CachedClient, connectivity: Connectivity, cache: &'a Cache) -> Self {
+        Self::new_with_directory_concurrency(
+            client,
+            connectivity,
+            cache,
+            Arc::new(Semaphore::new(16)),
+        )
+    }
+
+    /// Share directory admission across independently cached index lookups.
+    pub(crate) fn new_with_directory_concurrency(
+        client: &'a CachedClient,
+        connectivity: Connectivity,
+        cache: &'a Cache,
+        directory_concurrency: Arc<Semaphore>,
+    ) -> Self {
         Self {
             client,
             connectivity,
             cache,
+            directory_concurrency,
         }
     }
 
@@ -180,13 +204,16 @@ impl<'a> FlatIndexClient<'a> {
                 let path = url
                     .to_file_path()
                     .map_err(|()| FlatIndexError::NonFileUrl(url.to_url()))?;
-                if path.is_file() {
-                    self.read_from_file(&path, index)
+                match self
+                    .read_local_index(path.clone(), index.clone())
+                    .await
+                    .map_err(|err| FlatIndexError::FindLinksDirectory(path.clone(), err))?
+                {
+                    Some(entries) => Ok(entries),
+                    None => self
+                        .read_from_file(&path, index)
                         .await
-                        .map_err(|err| FlatIndexError::FindLinksFile(path.clone(), err))
-                } else {
-                    Self::read_from_directory(&path, index)
-                        .map_err(|err| FlatIndexError::FindLinksDirectory(path.clone(), err))
+                        .map_err(|err| FlatIndexError::FindLinksFile(path.clone(), err)),
                 }
             }
             IndexUrl::Pypi(url) | IndexUrl::Url(url) => self
@@ -321,6 +348,28 @@ impl<'a> FlatIndexClient<'a> {
         FlatIndexEntries::from_entries(entries)
     }
 
+    /// Classify a local index and read directory entries on a bounded blocking worker.
+    ///
+    /// Files are returned to the caller for asynchronous HTML reads.
+    async fn read_local_index(
+        &self,
+        path: PathBuf,
+        index: IndexUrl,
+    ) -> Result<Option<FlatIndexEntries>, FindLinksDirectoryError> {
+        let permit = self.directory_concurrency.clone().acquire_owned().await?;
+        let span = Span::current();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _entered = span.enter();
+            if path.is_file() {
+                Ok(None)
+            } else {
+                Self::read_from_directory(&path, &index).map(Some)
+            }
+        })
+        .await?
+    }
+
     /// Read a flat remote index from a `--find-links` directory.
     fn read_from_directory(
         path: &Path,
@@ -402,9 +451,85 @@ impl<'a> FlatIndexClient<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BaseClientBuilder;
     use fs_err::File;
     use std::io::Write;
+    use std::sync::mpsc;
+    use std::time::Duration;
     use tempfile::tempdir;
+    use tokio::runtime::Builder;
+    use tokio::sync::oneshot;
+
+    #[test]
+    fn cancelled_directory_scan_retains_admission() -> Result<(), Box<dyn std::error::Error>> {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()?;
+        let cache = Cache::temp()?;
+        let http = CachedClient::new(BaseClientBuilder::default().build()?);
+        let slots = Arc::new(Semaphore::new(1));
+        let client = FlatIndexClient::new_with_directory_concurrency(
+            &http,
+            Connectivity::Online,
+            &cache,
+            slots.clone(),
+        );
+        let directory = tempdir()?;
+        let index = IndexUrl::parse(&directory.path().to_string_lossy(), None)?;
+
+        runtime.block_on(async {
+            let (started, start) = oneshot::channel();
+            let (release, finish) = mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                let _ = started.send(());
+                finish.recv()
+            });
+            start.await?;
+
+            // Poll the actual client once to queue its scan, then drop the waiting future.
+            assert!(client.fetch_index(&index).now_or_never().is_none());
+            assert_eq!(slots.available_permits(), 0);
+            assert!(client.clone().fetch_index(&index).now_or_never().is_none());
+            tokio::task::yield_now().await;
+            assert_eq!(slots.available_permits(), 0);
+
+            release.send(())?;
+            blocker.await??;
+            let permit = tokio::time::timeout(Duration::from_secs(10), slots.acquire()).await??;
+            drop(permit);
+            assert!(client.fetch_index(&index).await?.is_empty());
+            Ok(())
+        })
+    }
+
+    #[tokio::test]
+    async fn local_index_file_and_missing_directory() -> Result<(), Box<dyn std::error::Error>> {
+        let cache = Cache::temp()?;
+        let http = CachedClient::new(BaseClientBuilder::default().build()?);
+        let client = FlatIndexClient::new(&http, Connectivity::Online, &cache);
+        let directory = tempdir()?;
+        let html = directory.path().join("index.html");
+        fs_err::write(&html, r#"<a href="demo-1.0.tar.gz">demo</a>"#)?;
+        let index = IndexUrl::parse(&html.to_string_lossy(), None)?;
+        let entries = client.fetch_index(&index).await?;
+        assert_eq!(entries.entries.len(), 1);
+        assert_eq!(entries.entries[0].filename.to_string(), "demo-1.0.tar.gz");
+
+        let missing = directory.path().join("missing");
+        let index = IndexUrl::parse(&missing.to_string_lossy(), None)?;
+        let error = client
+            .fetch_index(&index)
+            .await
+            .expect_err("missing directory");
+        let FlatIndexError::FindLinksDirectory(path, FindLinksDirectoryError::Io(error)) = error
+        else {
+            return Err("expected a directory I/O error".into());
+        };
+        assert_eq!(path, missing);
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        Ok(())
+    }
 
     /// Round-trip a synthetic flat-index cache entry and preserve sidecar hashes.
     #[test]
