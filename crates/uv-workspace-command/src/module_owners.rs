@@ -26,7 +26,7 @@ use uv_operations::loggers::DefaultInstallLogger;
 use uv_operations::resolution::{resolution_markers, resolution_tags};
 use uv_project::install_target::InstallTarget;
 use uv_project::malware::MalwareCheckContext;
-use uv_sync_command::sync::do_sync;
+use uv_project::sync::do_sync;
 
 /// Map importable modules to package IDs, optionally syncing all locked extras and groups first.
 ///
@@ -63,6 +63,7 @@ pub(crate) async fn collect_module_owners(
             config_setting: &settings.config_setting,
             config_settings_package: &settings.config_settings_package,
             build_isolation: &settings.build_isolation,
+            build_hash_checking: settings.build_hash_checking,
             extra_build_dependencies: &settings.extra_build_dependencies,
             extra_build_variables: &settings.extra_build_variables,
             exclude_newer: &settings.exclude_newer,

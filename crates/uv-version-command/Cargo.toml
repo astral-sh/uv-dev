@@ -34,12 +34,12 @@ uv-project-edit = { workspace = true }
 uv-python-discovery = { workspace = true }
 uv-python-types = { workspace = true }
 uv-settings = { workspace = true }
-uv-sync-command = { workspace = true }
 uv-workspace = { workspace = true }
 
 anyhow = { workspace = true }
 fs-err = { workspace = true }
 owo-colors = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

@@ -379,7 +379,7 @@ pub async fn remove(
 
     let state = state.fork();
 
-    match uv_sync_command::sync::do_sync(
+    match uv_project::sync::do_sync(
         target,
         venv,
         &extras,

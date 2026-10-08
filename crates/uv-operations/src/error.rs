@@ -61,6 +61,11 @@ pub enum Error {
         source: uv_requirements::Error,
     },
 
+    #[error(
+        "Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file"
+    )]
+    ExtrasWithoutSource { has_editable: bool },
+
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 
@@ -87,6 +92,7 @@ impl Error {
             | Self::Fmt(_)
             | Self::Requirements(_)
             | Self::RequirementsWithContext { .. }
+            | Self::ExtrasWithoutSource { .. }
             | Self::Anyhow(_)
             | Self::OutdatedEnvironment(_) => None,
         }
@@ -109,6 +115,7 @@ impl Error {
             | Self::Fmt(_)
             | Self::Requirements(_)
             | Self::RequirementsWithContext { .. }
+            | Self::ExtrasWithoutSource { .. }
             | Self::Anyhow(_) => None,
         }
     }
@@ -136,6 +143,7 @@ impl Error {
             | Self::Fmt(_)
             | Self::Requirements(_)
             | Self::RequirementsWithContext { .. }
+            | Self::ExtrasWithoutSource { .. }
             | Self::Anyhow(_)
             | Self::OutdatedEnvironment(_)) => error,
         }
@@ -162,6 +170,7 @@ impl Error {
             | Self::Hash(_)
             | Self::Io(_)
             | Self::Fmt(_)
+            | Self::ExtrasWithoutSource { .. }
             | Self::Anyhow(_)
             | Self::OutdatedEnvironment(_)) => error,
         }
@@ -184,6 +193,7 @@ impl Error {
             | Self::CompileFiles(_)
             | Self::Io(_)
             | Self::Fmt(_)
+            | Self::ExtrasWithoutSource { .. }
             | Self::Anyhow(_) => false,
         }
     }
@@ -213,14 +223,14 @@ impl uv_errors::Hinted for Error {
             Self::Prepare(uv_installer::PrepareError::Dist(_, dist, chain, error)) => {
                 crate::diagnostics::dist_hints(dist.name(), dist.version(), chain, error.hints())
             }
-            Self::Anyhow(err) => {
-                for cause in err.chain() {
-                    if let Some(extra_err) = cause.downcast_ref::<ExtrasWithoutSourceError>() {
-                        return uv_errors::Hinted::hints(extra_err);
-                    }
-                }
-                uv_errors::Hints::none()
+            Self::ExtrasWithoutSource { has_editable } => {
+                uv_errors::Hints::from(if *has_editable {
+                    "Use `<dir>[extra]` syntax or `-r <file>` instead"
+                } else {
+                    "Use `package[extra]` syntax instead"
+                })
             }
+            Self::Anyhow(_) => uv_errors::Hints::none(),
             Self::Plan(_)
             | Self::Prepare(_)
             | Self::Install(_)
@@ -234,24 +244,5 @@ impl uv_errors::Hinted for Error {
             | Self::RequirementsWithContext { .. }
             | Self::OutdatedEnvironment(_) => uv_errors::Hints::none(),
         }
-    }
-}
-
-/// Extras were requested but no valid source was provided.
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file"
-)]
-pub struct ExtrasWithoutSourceError {
-    pub(crate) has_editable: bool,
-}
-
-impl uv_errors::Hinted for ExtrasWithoutSourceError {
-    fn hints(&self) -> uv_errors::Hints<'_> {
-        uv_errors::Hints::from(if self.has_editable {
-            "Use `<dir>[extra]` syntax or `-r <file>` instead"
-        } else {
-            "Use `package[extra]` syntax instead"
-        })
     }
 }

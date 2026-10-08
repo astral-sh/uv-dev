@@ -35,7 +35,6 @@ uv-python-interpreter = { workspace = true }
 uv-python-types = { workspace = true }
 uv-scripts = { workspace = true }
 uv-settings = { workspace = true }
-uv-sync-command = { workspace = true }
 uv-warnings = { workspace = true }
 uv-workspace = { workspace = true }
 

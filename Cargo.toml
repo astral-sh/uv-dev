@@ -50,7 +50,6 @@ uv-workspace-command = { version = "0.0.92", path = "crates/uv-workspace-command
 uv-cli-arguments = { version = "0.0.92", path = "crates/uv-cli-arguments" }
 uv = { version = "0.13.0", path = "crates/uv", default-features = false }
 uv-audit = { version = "0.0.92", path = "crates/uv-audit" }
-uv-audit-operations = { version = "0.0.92", path = "crates/uv-audit-operations" }
 uv-auth = { version = "0.0.92", path = "crates/uv-auth" }
 uv-bin-install = { version = "0.0.92", path = "crates/uv-bin-install" }
 uv-build-backend = { version = "0.0.92", path = "crates/uv-build-backend" }
@@ -68,7 +67,6 @@ uv-dispatch = { version = "0.0.92", path = "crates/uv-dispatch" }
 uv-distribution = { version = "0.0.92", path = "crates/uv-distribution" }
 uv-distribution-filename = { version = "0.0.92", path = "crates/uv-distribution-filename" }
 uv-distribution-types = { version = "0.0.92", path = "crates/uv-distribution-types" }
-uv-environment-operations = { version = "0.0.92", path = "crates/uv-environment-operations" }
 uv-errors = { version = "0.0.92", path = "crates/uv-errors" }
 uv-extract = { version = "0.0.92", path = "crates/uv-extract" }
 uv-fastid = { version = "0.0.92", path = "crates/uv-fastid" }
@@ -80,12 +78,10 @@ uv-fs = { version = "0.0.92", path = "crates/uv-fs", features = [
 uv-git = { version = "0.0.92", path = "crates/uv-git" }
 uv-git-types = { version = "0.0.92", path = "crates/uv-git-types" }
 uv-globfilter = { version = "0.0.92", path = "crates/uv-globfilter" }
-uv-install-operations = { version = "0.0.92", path = "crates/uv-install-operations" }
 uv-install-wheel = { version = "0.0.92", path = "crates/uv-install-wheel", default-features = false }
 uv-installer = { version = "0.0.92", path = "crates/uv-installer" }
 uv-keyring = { version = "0.0.92", path = "crates/uv-keyring" }
 uv-lock = { version = "0.0.92", path = "crates/uv-lock" }
-uv-lock-operations = { version = "0.0.92", path = "crates/uv-lock-operations" }
 uv-logging = { version = "0.0.92", path = "crates/uv-logging" }
 uv-macros = { version = "0.0.92", path = "crates/uv-macros" }
 uv-metadata = { version = "0.0.92", path = "crates/uv-metadata" }
@@ -103,14 +99,12 @@ uv-pep508 = { version = "0.0.92", path = "crates/uv-pep508", features = [
   "non-pep508-extensions",
 ] }
 uv-performance-memory-allocator = { version = "0.0.92", path = "crates/uv-performance-memory-allocator" }
-uv-pip-commands = { version = "0.0.92", path = "crates/uv-pip-commands" }
 uv-platform = { version = "0.0.92", path = "crates/uv-platform" }
 uv-platform-tags = { version = "0.0.92", path = "crates/uv-platform-tags" }
 uv-preview = { version = "0.0.92", path = "crates/uv-preview" }
 uv-project-edit = { version = "0.0.92", path = "crates/uv-project-edit" }
 uv-publish = { version = "0.0.92", path = "crates/uv-publish" }
 uv-pypi-types = { version = "0.0.92", path = "crates/uv-pypi-types" }
-uv-python-commands = { version = "0.0.92", path = "crates/uv-python-commands" }
 uv-python-discovery = { version = "0.0.92", path = "crates/uv-python-discovery" }
 uv-python-interpreter = { version = "0.0.92", path = "crates/uv-python-interpreter" }
 uv-python-managed = { version = "0.0.92", path = "crates/uv-python-managed" }
@@ -118,7 +112,6 @@ uv-python-types = { version = "0.0.92", path = "crates/uv-python-types" }
 uv-redacted = { version = "0.0.92", path = "crates/uv-redacted" }
 uv-requirements = { version = "0.0.92", path = "crates/uv-requirements" }
 uv-requirements-txt = { version = "0.0.92", path = "crates/uv-requirements-txt" }
-uv-resolve-operations = { version = "0.0.92", path = "crates/uv-resolve-operations" }
 uv-resolver = { version = "0.0.92", path = "crates/uv-resolver" }
 uv-resolver-types = { version = "0.0.92", path = "crates/uv-resolver-types" }
 uv-scripts = { version = "0.0.92", path = "crates/uv-scripts" }
@@ -131,7 +124,6 @@ uv-test = { version = "0.0.92", path = "crates/uv-test" }
 uv-threads = { version = "0.0.92", path = "crates/uv-threads" }
 uv-toml = { version = "0.0.92", path = "crates/uv-toml" }
 uv-tool = { version = "0.0.92", path = "crates/uv-tool" }
-uv-tool-commands = { version = "0.0.92", path = "crates/uv-tool-commands" }
 uv-torch = { version = "0.0.92", path = "crates/uv-torch" }
 uv-trampoline-builder = { version = "0.0.92", path = "crates/uv-trampoline-builder" }
 uv-types = { version = "0.0.92", path = "crates/uv-types" }
@@ -141,7 +133,6 @@ uv-virtualenv = { version = "0.0.92", path = "crates/uv-virtualenv" }
 uv-warnings = { version = "0.0.92", path = "crates/uv-warnings" }
 uv-windows = { version = "0.0.92", path = "crates/uv-windows" }
 uv-workspace = { version = "0.0.92", path = "crates/uv-workspace" }
-uv-workspace-commands = { version = "0.0.92", path = "crates/uv-workspace-commands" }
 
 ambient-id = { version = "0.0.11", default-features = false, features = [
   "reqwest-middleware",

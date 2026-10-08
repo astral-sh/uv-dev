@@ -56,6 +56,8 @@ use uv_operations::loggers::{DefaultInstallLogger, DefaultResolveLogger};
 use uv_operations::resolution::{resolution_markers, resolution_tags};
 use uv_pylock_command::pylock::{read_pylock_toml, resolve_pylock_toml};
 
+use crate::resolve_build_hash_checking;
+
 /// Install a set of locked requirements into the current Python environment.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn pip_sync(
@@ -68,6 +70,7 @@ pub async fn pip_sync(
     link_mode: LinkMode,
     compile: bool,
     hash_checking: Option<HashCheckingMode>,
+    build_hash_checking: HashCheckingMode,
     index_locations: IndexLocations,
     index_strategy: IndexStrategy,
     torch_backend: Option<TorchMode>,
@@ -148,6 +151,7 @@ pub async fn pip_sync(
     .await?;
 
     let hash_checking = HashCheckingMode::from_requirements_txt(hash_checking, require_hashes);
+    let build_hash_checking = resolve_build_hash_checking(hash_checking, build_hash_checking);
 
     if pylock.is_some() {
         if !preview.is_enabled(PreviewFeature::Pylock) {
@@ -350,13 +354,8 @@ pub async fn pip_sync(
         }
     };
 
-    // Verify supplied build hashes unless hash verification was explicitly disabled.
-    let build_hasher = if hash_checking.is_some() {
-        HashStrategy::from_constraints(
-            &build_constraints,
-            Some(&marker_env),
-            HashCheckingMode::Verify,
-        )?
+    let build_hasher = if let Some(build_hash_checking) = build_hash_checking {
+        HashStrategy::from_constraints(&build_constraints, Some(&marker_env), build_hash_checking)?
     } else {
         HashStrategy::default()
     };

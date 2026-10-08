@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fmt::Write;
+use std::io;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -25,6 +26,14 @@ use crate::{ChangeEvent, ChangeEventKind};
 use uv_cli_output::format::elapsed;
 use uv_cli_output::printer::Printer;
 use uv_cli_types::exit::ExitStatus;
+
+#[derive(Debug, thiserror::Error)]
+#[error("Failed to remove symlink directory `{}`", path.display())]
+struct MinorVersionLinkRemovalError {
+    path: PathBuf,
+    #[source]
+    source: io::Error,
+}
 
 /// Uninstall managed Python versions.
 pub async fn uninstall(
@@ -252,12 +261,12 @@ async fn do_uninstall(
                 PythonMinorVersionLink::from_installation(installation)
             {
                 if minor_version_link.exists() {
-                    if uv_fs::remove_symlink(&minor_version_link.symlink_directory).is_err() {
-                        return Err(anyhow::anyhow!(
-                            "Failed to remove symlink directory `{}`",
-                            minor_version_link.symlink_directory.display()
-                        ));
-                    }
+                    uv_fs::remove_symlink(&minor_version_link.symlink_directory).map_err(
+                        |source| MinorVersionLinkRemovalError {
+                            path: minor_version_link.symlink_directory.clone(),
+                            source,
+                        },
+                    )?;
                     let symlink_term = if cfg!(windows) {
                         "junction"
                     } else {

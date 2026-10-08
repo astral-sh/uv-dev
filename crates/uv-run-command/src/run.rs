@@ -288,7 +288,7 @@ pub async fn run(
 
             let install_options = InstallOptions::default();
 
-            match uv_sync_command::sync::do_sync(
+            match uv_project::sync::do_sync(
                 target,
                 &environment,
                 &extras.with_defaults(DefaultExtras::default()),
@@ -806,7 +806,7 @@ pub async fn run(
                 target.validate_extras(&extras)?;
                 target.validate_groups(&groups)?;
 
-                match uv_sync_command::sync::do_sync(
+                match uv_project::sync::do_sync(
                     target,
                     &venv,
                     &extras,

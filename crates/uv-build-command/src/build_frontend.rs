@@ -71,12 +71,14 @@ pub enum Error {
     FlatIndex(#[from] uv_client::FlatIndexError),
     #[error(transparent)]
     ClientBuild(#[from] uv_client::ClientBuildError),
-    #[error(transparent)]
-    BuildPlan(anyhow::Error),
+    #[error("Pass `--wheel` explicitly to build a wheel from a source distribution")]
+    WheelFromSdistRequiresFlag,
+    #[error("Building an `--sdist` from a source distribution is not supported")]
+    SdistFromSdist,
     #[error(transparent)]
     Extract(#[from] uv_extract::Error),
     #[error(transparent)]
-    Operations(#[from] uv_operations::error::Error),
+    Operations(#[from] Box<uv_operations::error::Error>),
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
     #[error(transparent)]
@@ -121,6 +123,12 @@ pub enum Error {
         output_dir: PathBuf,
         source_path: PathBuf,
     },
+}
+
+impl From<uv_operations::error::Error> for Error {
+    fn from(error: uv_operations::error::Error) -> Self {
+        Self::Operations(Box::new(error))
+    }
 }
 
 impl From<ProjectError> for Error {
@@ -241,90 +249,14 @@ pub async fn build_frontend(
     preview: Preview,
     hints_for_error: fn(&anyhow::Error) -> uv_errors::Hints<'static>,
 ) -> Result<ExitStatus> {
-    let build_result = build_impl(
-        project_dir,
-        skip_dependency_check,
-        src.as_deref(),
-        package.as_ref(),
-        all_packages,
-        output_dir.as_deref(),
-        sdist,
-        wheel,
-        list,
-        build_logs,
-        gitignore,
-        force_pep517,
-        clear,
-        &build_constraints,
-        &build_constraints_from_workspace,
-        hash_checking,
-        python.as_deref(),
-        install_mirrors,
-        settings,
-        client_builder,
-        config_discovery,
-        python_preference,
-        python_arch,
-        python_downloads,
-        &concurrency,
-        cache,
-        workspace_cache,
-        printer,
-        preview,
-        hints_for_error,
-    )
-    .await?;
+    let src = src.as_deref();
+    let package = package.as_ref();
+    let output_dir = output_dir.as_deref();
+    let build_constraints = build_constraints.as_slice();
+    let build_constraints_from_workspace = build_constraints_from_workspace.as_slice();
+    let python_request = python.as_deref();
+    let concurrency = &concurrency;
 
-    match build_result {
-        BuildResult::Failure => Ok(ExitStatus::Error),
-        BuildResult::Success => Ok(ExitStatus::Success),
-    }
-}
-
-/// Represents the overall result of a build process.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BuildResult {
-    /// Indicates that at least one of the builds failed.
-    Failure,
-    /// Indicates that all builds succeeded.
-    Success,
-}
-
-// https://github.com/rust-lang/rust/issues/147648
-#[allow(unused_assignments)]
-#[expect(clippy::fn_params_excessive_bools)]
-async fn build_impl(
-    project_dir: &Path,
-    skip_dependency_check: bool,
-    src: Option<&Path>,
-    package: Option<&PackageName>,
-    all_packages: bool,
-    output_dir: Option<&Path>,
-    sdist: bool,
-    wheel: bool,
-    list: bool,
-    build_logs: bool,
-    gitignore: bool,
-    force_pep517: bool,
-    clear: bool,
-    build_constraints: &[RequirementsSource],
-    build_constraints_from_workspace: &[NameRequirementSpecification],
-    hash_checking: Option<HashCheckingMode>,
-    python_request: Option<&str>,
-    install_mirrors: PythonInstallMirrors,
-    settings: &ResolverSettings,
-    client_builder: &BaseClientBuilder<'_>,
-    config_discovery: ConfigDiscovery,
-    python_preference: PythonPreference,
-    python_arch: Option<PythonArchitecture>,
-    python_downloads: PythonDownloads,
-    concurrency: &Concurrency,
-    cache: &Cache,
-    workspace_cache: &WorkspaceCache,
-    printer: Printer,
-    preview: Preview,
-    hints_for_error: fn(&anyhow::Error) -> uv_errors::Hints<'static>,
-) -> Result<BuildResult> {
     // Extract the resolver settings.
     let ResolverSettings {
         index_locations,
@@ -595,9 +527,9 @@ async fn build_impl(
     }
 
     if success {
-        Ok(BuildResult::Success)
+        Ok(ExitStatus::Success)
     } else {
-        Ok(BuildResult::Failure)
+        Ok(ExitStatus::Error)
     }
 }
 
@@ -798,7 +730,7 @@ async fn build_package(
     prepare_output_directory(output_dir, gitignore).await?;
 
     // Determine the build plan.
-    let plan = BuildPlan::determine(&source, sdist, wheel).map_err(Error::BuildPlan)?;
+    let plan = BuildPlan::determine(&source, sdist, wheel)?;
 
     // Check if the build backend is matching uv version that allows calling in the uv build backend
     // directly.
@@ -1632,21 +1564,17 @@ enum BuildPlan {
 }
 
 impl BuildPlan {
-    fn determine(source: &AnnotatedSource, sdist: bool, wheel: bool) -> Result<Self> {
+    fn determine(source: &AnnotatedSource, sdist: bool, wheel: bool) -> Result<Self, Error> {
         Ok(match &source.source {
             Source::File(_) => {
                 // We're building from a file, which must be a source distribution.
                 match (sdist, wheel) {
                     (false, true) => Self::WheelFromSdist,
                     (false, false) => {
-                        return Err(anyhow::anyhow!(
-                            "Pass `--wheel` explicitly to build a wheel from a source distribution"
-                        ));
+                        return Err(Error::WheelFromSdistRequiresFlag);
                     }
                     (true, _) => {
-                        return Err(anyhow::anyhow!(
-                            "Building an `--sdist` from a source distribution is not supported"
-                        ));
+                        return Err(Error::SdistFromSdist);
                     }
                 }
             }
