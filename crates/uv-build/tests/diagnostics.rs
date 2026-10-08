@@ -8,6 +8,7 @@ fn command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_uv-build"));
     command
         .env(EnvVars::NO_COLOR, "1")
+        .env(EnvVars::UV_NO_WRAP, "1")
         .env_remove(EnvVars::RUST_LOG)
         .env_remove(EnvVars::UV_PREVIEW)
         .env_remove(EnvVars::UV_PREVIEW_FEATURES);
