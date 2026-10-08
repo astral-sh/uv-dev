@@ -1,16 +1,44 @@
 use std::collections::BTreeSet;
-use std::collections::hash_map::Entry;
+use std::ops::{Index, IndexMut};
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::{Direction, Graph};
-use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_pep508::MarkerTree;
 use uv_pypi_types::{ConflictItem, ConflictItemRef, Conflicts, Inference};
 
 use crate::ResolutionGraphNode;
 use crate::universal_marker::UniversalMarker;
+
+/// Optional state indexed by the dense node indices of a graph with fixed structure.
+///
+/// Node removal or insertion can invalidate the association with the original graph. A stored
+/// false marker remains distinct from a node that has no state.
+#[derive(Debug)]
+pub struct NodeMap<T>(Vec<Option<T>>);
+
+impl<T> NodeMap<T> {
+    /// Allocate an empty slot for every node in the graph.
+    pub fn new(node_count: usize) -> Self {
+        Self((0..node_count).map(|_| None).collect())
+    }
+}
+
+impl<T> Index<NodeIndex> for NodeMap<T> {
+    type Output = Option<T>;
+
+    fn index(&self, index: NodeIndex) -> &Self::Output {
+        &self.0[index.index()]
+    }
+}
+
+impl<T> IndexMut<NodeIndex> for NodeMap<T> {
+    fn index_mut(&mut self, index: NodeIndex) -> &mut Self::Output {
+        &mut self.0[index.index()]
+    }
+}
 
 /// Determine the markers under which a package is reachable in the dependency tree.
 ///
@@ -22,10 +50,10 @@ use crate::universal_marker::UniversalMarker;
 pub fn marker_reachability<Marker: Boolean + Copy + PartialEq, Node, Edge: Reachable<Marker>>(
     graph: &Graph<Node, Edge>,
     fork_markers: &[Edge],
-) -> FxHashMap<NodeIndex, Marker> {
+) -> NodeMap<Marker> {
     // Note that we build including the virtual packages due to how we propagate markers through
     // the graph, even though we then only read the markers for base packages.
-    let mut reachability = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
+    let mut reachability = NodeMap::new(graph.node_count());
 
     // Collect the root nodes.
     //
@@ -54,29 +82,31 @@ pub fn marker_reachability<Marker: Boolean + Copy + PartialEq, Node, Edge: Reach
             })
     };
     for root_index in &queue {
-        reachability.insert(*root_index, root_markers);
+        reachability[*root_index] = Some(root_markers);
     }
 
     // Propagate all markers through the graph, so that the eventual marker for each node is the
     // union of the markers of each path we can reach the node by.
     while let Some(parent_index) = queue.pop() {
-        let marker = reachability[&parent_index];
+        let Some(marker) = reachability[parent_index] else {
+            continue;
+        };
         for child_edge in graph.edges_directed(parent_index, Direction::Outgoing) {
             // The marker for all paths to the child through the parent.
             let mut child_marker = child_edge.weight().marker();
             child_marker.and(marker);
-            match reachability.entry(child_edge.target()) {
-                Entry::Occupied(mut existing) => {
+            match &mut reachability[child_edge.target()] {
+                Some(existing) => {
                     // If the marker is a subset of the existing marker (A ⊆ B exactly if
                     // A ∪ B = A), updating the child wouldn't change child's marker.
-                    child_marker.or(*existing.get());
-                    if &child_marker != existing.get() {
-                        existing.insert(child_marker);
+                    child_marker.or(*existing);
+                    if child_marker != *existing {
+                        *existing = child_marker;
                         queue.push(child_edge.target());
                     }
                 }
-                Entry::Vacant(vacant) => {
-                    vacant.insert(child_marker);
+                slot @ None => {
+                    *slot = Some(child_marker);
                     queue.push(child_edge.target());
                 }
             }
@@ -330,5 +360,65 @@ impl Boolean for MarkerTree {
 
     fn or(&mut self, other: Self) {
         *self = Self::or(*self, other);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use petgraph::Graph;
+    use uv_pep508::{MarkerTree, Pep508Error};
+
+    use super::marker_reachability;
+
+    #[test]
+    fn reachability_unions_diamonds_and_handles_cycles() -> Result<(), Pep508Error> {
+        let linux = MarkerTree::from_str("sys_platform == 'linux'")?;
+        let windows = MarkerTree::from_str("sys_platform == 'win32'")?;
+        let mut graph = Graph::new();
+        let root = graph.add_node(());
+        let left = graph.add_node(());
+        let right = graph.add_node(());
+        let join = graph.add_node(());
+        graph.add_edge(root, left, linux);
+        graph.add_edge(root, right, windows);
+        graph.add_edge(left, join, MarkerTree::TRUE);
+        graph.add_edge(right, join, MarkerTree::TRUE);
+        graph.add_edge(join, left, linux);
+        let markers = marker_reachability(&graph, &[]);
+        assert_eq!(markers[root], Some(MarkerTree::TRUE));
+        assert_eq!(markers[left], Some(linux));
+        assert_eq!(markers[right], Some(windows));
+        assert_eq!(markers[join], Some(linux.or(windows)));
+
+        let markers = marker_reachability(&graph, &[linux]);
+        assert_eq!(markers[root], Some(linux));
+        assert_eq!(markers[left], Some(linux));
+        assert_eq!(markers[right], Some(MarkerTree::FALSE));
+        assert_eq!(markers[join], Some(linux));
+        Ok(())
+    }
+
+    #[test]
+    fn reachability_distinguishes_false_from_unvisited() {
+        let mut graph = Graph::new();
+        let root = graph.add_node(());
+        let false_child = graph.add_node(());
+        let descendant = graph.add_node(());
+        let isolated = graph.add_node(());
+        let unreachable_left = graph.add_node(());
+        let unreachable_right = graph.add_node(());
+        graph.add_edge(root, false_child, MarkerTree::FALSE);
+        graph.add_edge(false_child, descendant, MarkerTree::TRUE);
+        graph.add_edge(unreachable_left, unreachable_right, MarkerTree::TRUE);
+        graph.add_edge(unreachable_right, unreachable_left, MarkerTree::TRUE);
+        let markers = marker_reachability(&graph, &[]);
+        assert_eq!(markers[root], Some(MarkerTree::TRUE));
+        assert_eq!(markers[false_child], Some(MarkerTree::FALSE));
+        assert_eq!(markers[descendant], Some(MarkerTree::FALSE));
+        assert_eq!(markers[isolated], Some(MarkerTree::TRUE));
+        assert_eq!(markers[unreachable_left], None);
+        assert_eq!(markers[unreachable_right], None);
     }
 }
