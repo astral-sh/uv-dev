@@ -784,6 +784,20 @@ impl InternerGuard<'_> {
                 .map_or(NodeId::FALSE, |child| {
                     self.only_extras_for_environment_cached(child, env, cache)
                 }),
+            (Variable::VersionString(key), Edges::Version { edges }) => {
+                if let Ok(version) = env.get_string(*key).parse::<Version>() {
+                    edges
+                        .iter()
+                        .find_map(|(range, child)| {
+                            range.contains(&version).then_some(child.negate(i))
+                        })
+                        .map_or(NodeId::FALSE, |child| {
+                            self.only_extras_for_environment_cached(child, env, cache)
+                        })
+                } else {
+                    NodeId::FALSE
+                }
+            }
             (Variable::String(key), Edges::String { edges }) => {
                 let value = env.get_string(*key);
                 edges
@@ -834,16 +848,28 @@ impl InternerGuard<'_> {
             (Variable::List(CanonicalMarkerListPair::Arbitrary { .. }), Edges::Boolean { .. }) => {
                 NodeId::FALSE
             }
-            (Variable::List(_), Edges::Boolean { low, .. }) => {
-                self.only_extras_for_environment_cached(low.negate(i), env, cache)
-            }
+            (
+                Variable::List(
+                    CanonicalMarkerListPair::Extras(_)
+                    | CanonicalMarkerListPair::DependencyGroup(_),
+                ),
+                Edges::Boolean { low, .. },
+            ) => self.only_extras_for_environment_cached(low.negate(i), env, cache),
             (Variable::Extra(_), children) => {
                 let children = children.map(i, |child| {
                     self.only_extras_for_environment_cached(child, env, cache)
                 });
                 self.create_node(node.var.clone(), children)
             }
-            _ => NodeId::FALSE,
+            (
+                Variable::Version(_) | Variable::VersionString(_),
+                Edges::String { .. } | Edges::Boolean { .. },
+            )
+            | (Variable::String(_), Edges::Version { .. } | Edges::Boolean { .. })
+            | (
+                Variable::In { .. } | Variable::Contains { .. } | Variable::List(_),
+                Edges::Version { .. } | Edges::String { .. },
+            ) => NodeId::FALSE,
         };
         cache.insert(i, result);
         result

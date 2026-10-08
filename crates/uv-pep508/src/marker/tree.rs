@@ -2323,7 +2323,7 @@ mod test {
             marker.only_extras_for_environment(&env),
             m("extra == 'foo'")
         );
-        logs_contain("Comparing 10 and 2 lexicographically");
+        assert!(logs_contain("Comparing 10 and 2 lexicographically"));
     }
 
     #[test]
@@ -3777,6 +3777,28 @@ mod test {
         assert!(
             MarkerTree::FALSE
                 .only_extras_for_environment(&env)
+                .is_false()
+        );
+    }
+
+    #[test]
+    fn only_extras_for_environment_darwin_release() {
+        let env = env37()
+            .with_sys_platform("darwin")
+            .with_platform_release("24.10.0");
+        let marker = m("platform_release >= '24.9' and extra == 'foo'");
+        assert_eq!(
+            marker.only_extras_for_environment(&env),
+            m("extra == 'foo'")
+        );
+        assert!(
+            marker
+                .only_extras_for_environment(&env.clone().with_platform_release("24.8.0"))
+                .is_false()
+        );
+        assert!(
+            marker
+                .only_extras_for_environment(&env.with_platform_release("invalid"))
                 .is_false()
         );
     }
