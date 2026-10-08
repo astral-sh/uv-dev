@@ -2835,18 +2835,15 @@ fn build_fast_path_unbounded_backend() -> Result<()> {
 async fn build_fast_path_skips_flat_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let pyproject = context.temp_dir.child("pyproject.toml");
-    let write_project = |requirement| {
-        pyproject.write_str(&formatdoc! {r#"
-            [project]
-            name = "project"
-            version = "1.0.0"
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
 
-            [build-system]
-            requires = ["{requirement}"]
-            build-backend = "uv_build"
-        "#})
-    };
-    write_project("uv_build")?;
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#})?;
     context.temp_dir.child("src/project/__init__.py").touch()?;
 
     let server = MockServer::start().await;
@@ -2876,22 +2873,34 @@ async fn build_fast_path_skips_flat_index() -> Result<()> {
         .arg(&links)
         .assert()
         .success();
-    for list in [false, true] {
-        context
-            .build()
-            .args([
-                "--wheel",
-                "--no-build-isolation",
-                "--preview-features",
-                "build-dependency-check",
-            ])
-            .args(list.then_some("--list"))
-            .arg("--find-links")
-            .arg(&links)
-            .env(EnvVars::UV_HTTP_RETRIES, "0")
-            .assert()
-            .success();
-    }
+    context
+        .build()
+        .args([
+            "--wheel",
+            "--no-build-isolation",
+            "--preview-features",
+            "build-dependency-check",
+        ])
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .assert()
+        .success();
+    context
+        .build()
+        .args([
+            "--wheel",
+            "--no-build-isolation",
+            "--preview-features",
+            "build-dependency-check",
+        ])
+        .arg("--list")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .assert()
+        .success();
+
     assert!(
         server
             .received_requests()
@@ -2899,24 +2908,41 @@ async fn build_fast_path_skips_flat_index() -> Result<()> {
             .is_some_and(|requests| requests.is_empty())
     );
 
-    for (requirement, force_pep517) in [("uv_build", true), ("uv_build==0.5.15", false)] {
-        write_project(requirement)?;
-        insta::allow_duplicates! {
-            uv_snapshot!(context.filters(), context.build()
-                .arg("--wheel")
-                .args(force_pep517.then_some("--force-pep517"))
-                .arg("--find-links")
-                .arg(&links)
-                .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: Failed to build `[TEMP_DIR]/`
-              cause: Failed to read `--find-links` URL: http://[LOCALHOST]/links
-              cause: Failed to fetch: http://[LOCALHOST]/links
-              cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/links)
-            ");
-        }
-    }
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--wheel")
+        .arg("--force-pep517")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Failed to read `--find-links` URL: http://[LOCALHOST]/links
+      cause: Failed to fetch: http://[LOCALHOST]/links
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/links)
+    ");
+
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+
+        [build-system]
+        requires = ["uv_build==0.5.15"]
+        build-backend = "uv_build"
+    "#})?;
+    uv_snapshot!(context.filters(), context.build()
+        .arg("--wheel")
+        .arg("--find-links")
+        .arg(&links)
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Failed to read `--find-links` URL: http://[LOCALHOST]/links
+      cause: Failed to fetch: http://[LOCALHOST]/links
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/links)
+    ");
     server.verify().await;
     Ok(())
 }
