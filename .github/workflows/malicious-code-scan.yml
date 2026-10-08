@@ -35,6 +35,7 @@ jobs:
       pull-requests: read
     outputs:
       ready: ${{ steps.context.outputs.ready }}
+      target-validated: ${{ steps.context.outputs.target-validated }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,6 +79,10 @@ jobs:
               echo "The pull request no longer matches the dispatched revision; skipping the stale scan." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
+          fi
+          echo 'target-validated=true' >> "$GITHUB_OUTPUT"
+
+          if [ -n "$PULL_REQUEST" ]; then
             jq '{number, title, body}' "$RUNNER_TEMP/malicious-code/pull-request.json" \
               > "$RUNNER_TEMP/malicious-code/context.json"
           else
@@ -144,7 +149,7 @@ jobs:
 
   report:
     needs: scan
-    if: always() && needs.scan.outputs.ready == 'true'
+    if: always() && needs.scan.outputs.target-validated == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -154,18 +159,20 @@ jobs:
       - name: "Report status on scanned commit"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_SHA: ${{ inputs.base_sha }}
           HEAD_SHA: ${{ inputs.head_sha }}
+          SCAN_READY: ${{ needs.scan.outputs.ready }}
           SCAN_RESULT: ${{ needs.scan.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          case "$SCAN_RESULT" in
-            success) state=success; description='Static scan found no suspicious changes.' ;;
-            failure) state=failure; description='Scan needs human review; see findings or coverage gaps.' ;;
+          case "$SCAN_READY:$SCAN_RESULT" in
+            true:success) state=success; description='Static scan found no suspicious changes.' ;;
+            true:failure) state=failure; description='Scan needs human review; see findings or coverage gaps.' ;;
             *) state=error; description='The malicious-code scan did not complete.' ;;
           esac
           gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
             --raw-field state="$state" \
-            --raw-field context='Malicious-code scan' \
+            --raw-field context="Malicious-code scan / $BASE_SHA" \
             --raw-field description="$description" \
             --raw-field target_url="$RUN_URL" \
             --silent

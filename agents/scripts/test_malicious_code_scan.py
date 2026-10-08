@@ -170,6 +170,9 @@ class MaliciousCodeScanTests(unittest.TestCase):
         before = self.commit("README.md", "Replacement content\n")
         receipt = self.prepare(before, self.base)
         self.assertEqual(receipt["commits"], [])
+        net_diff = (self.output / "net.diff").read_text()
+        self.assertIn("+Original content", net_diff)
+        self.assertIn("-Replacement content", net_diff)
         report = self.clean_report(receipt)
         report["outcome"] = "SUSPICIOUS"
         report["findings"] = [
