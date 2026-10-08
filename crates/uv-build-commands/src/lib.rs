@@ -711,9 +711,9 @@ async fn build_package(
     let extra_build_requires;
     let build_dispatch;
     let (build_action, dependency_check) = match build_action {
-        BuildAction::List if !check_dependencies => (BuildAction::List, None),
-        BuildAction::DirectBuild if !check_dependencies => (BuildAction::DirectBuild, None),
-        build_action => {
+        BuildAction::List => (BuildAction::List, None),
+        BuildAction::DirectBuild => (BuildAction::DirectBuild, None),
+        BuildAction::Pep517(()) => {
             // Initialize the registry client.
             client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
                 .index_locations(index_locations.clone())
@@ -765,10 +765,7 @@ async fn build_package(
                 constraints: &build_constraints,
                 credentials_cache: client.credentials_cache(),
             });
-            (
-                build_action.with_pep517_context(&build_dispatch),
-                dependency_check,
-            )
+            (BuildAction::Pep517(&build_dispatch), dependency_check)
         }
     };
 
@@ -1081,15 +1078,6 @@ enum BuildAction<T> {
 }
 
 impl<T> BuildAction<T> {
-    /// Attach the services needed to execute a PEP 517 action.
-    fn with_pep517_context<C>(self, context: C) -> BuildAction<C> {
-        match self {
-            Self::List => BuildAction::List,
-            Self::DirectBuild => BuildAction::DirectBuild,
-            Self::Pep517(_) => BuildAction::Pep517(context),
-        }
-    }
-
     /// If in list mode, still build the distribution.
     fn force_build(self) -> Self {
         match self {

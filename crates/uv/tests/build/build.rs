@@ -2901,6 +2901,22 @@ async fn build_fast_path_skips_flat_index() -> Result<()> {
         .arg(&links)
         .assert()
         .success();
+    for list in [false, true] {
+        context
+            .build()
+            .args([
+                "--wheel",
+                "--no-build-isolation",
+                "--preview-features",
+                "build-dependency-check",
+            ])
+            .args(list.then_some("--list"))
+            .arg("--find-links")
+            .arg(&links)
+            .env(EnvVars::UV_HTTP_RETRIES, "0")
+            .assert()
+            .success();
+    }
     assert!(
         server
             .received_requests()
