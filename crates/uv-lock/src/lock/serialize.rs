@@ -214,6 +214,7 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
 fn write_manifest(writer: &mut LockWriter, manifest: &ResolverManifest) -> Result<(), WriteError> {
     let has_dependency_groups = !manifest.dependency_groups.is_empty();
     let has_manifest = manifest.default_groups.is_some()
+        || manifest.dependency_metadata_ordered
         || !manifest.members.is_empty()
         || !manifest.requirements.is_empty()
         || !manifest.constraints.is_empty()
@@ -238,6 +239,9 @@ fn write_manifest(writer: &mut LockWriter, manifest: &ResolverManifest) -> Resul
     write_serialized_non_empty_array(writer, "overrides", &manifest.overrides)?;
     write_serialized_non_empty_array(writer, "excludes", &manifest.excludes)?;
     write_serialized_non_empty_array(writer, "build-constraints", &manifest.build_constraints)?;
+    if manifest.dependency_metadata_ordered {
+        writer.key_value("dependency-metadata-ordered", true)?;
+    }
 
     if has_dependency_groups {
         writer.table(&["manifest", "dependency-groups"])?;

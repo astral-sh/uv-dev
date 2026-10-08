@@ -10,7 +10,7 @@ use uv_normalize::PackageName;
 use uv_preview::PreviewFeature;
 
 use super::requirements::normalize_collection;
-use super::{Lock, Package, Source};
+use super::{Lock, Package, Source, has_duplicate_static_metadata_keys};
 
 impl Lock {
     /// Retain settings for locked packages and settings consulted during runtime resolution.
@@ -32,6 +32,8 @@ impl Lock {
         self.manifest
             .dependency_metadata
             .retain(|entry| filter.includes_metadata(entry));
+        self.manifest.dependency_metadata_ordered &=
+            has_duplicate_static_metadata_keys(&self.manifest.dependency_metadata);
         self.options.exclude_newer = self.options.exclude_newer.filter_packages(
             self.packages
                 .iter()

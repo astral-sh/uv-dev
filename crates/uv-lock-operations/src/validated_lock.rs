@@ -426,6 +426,12 @@ impl ValidatedLock {
                 );
                 Ok(Self::Preferable(lock))
             }
+            SatisfiesResult::MissingStaticMetadataOrder => {
+                debug!(
+                    "Resolving despite existing lockfile because repeated static metadata keys lack recorded declaration precedence"
+                );
+                Ok(Self::Preferable(lock))
+            }
             SatisfiesResult::MismatchedStaticMetadata(expected, actual) => {
                 debug!(
                     "Resolving despite existing lockfile due to mismatched static metadata:\n  Requested: {:?}\n  Existing: {:?}",
