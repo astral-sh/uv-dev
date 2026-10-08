@@ -36,13 +36,13 @@ pub async fn uninstall(
 
     // Perform the uninstallation.
     let mut errors = Vec::new();
-    let status = do_uninstall(&installations, targets, all, printer, &mut errors).await?;
+    do_uninstall(&installations, targets, all, printer, &mut errors).await?;
 
     // Complete cleanup before returning any independent installation failures.
     let cleanup = cleanup_empty_directories(&installations).await;
     if errors.is_empty() {
         cleanup?;
-        return Ok(status);
+        return Ok(ExitStatus::Success);
     }
 
     errors.sort_by(|(left, _), (right, _)| left.cmp(right));

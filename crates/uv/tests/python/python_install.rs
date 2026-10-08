@@ -24,6 +24,40 @@ use uv_static::EnvVars;
 use walkdir::WalkDir;
 
 #[test]
+fn python_uninstall_no_matches() {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Searching for Python versions matching: Python 3.12
+    No existing installations found for: Python 3.12
+    No Python installations found matching the requests
+    ");
+    insta::allow_duplicates! {
+        for _ in 0..2 {
+            uv_snapshot!(context.filters(), context.python_uninstall().arg("--all"), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Searching for Python installations
+            No Python installations found
+            ");
+        }
+    }
+    for quiet in ["-q", "-qq"] {
+        for target in ["3.12", "--all", "--all"] {
+            context
+                .python_uninstall()
+                .args([target, quiet])
+                .assert()
+                .success()
+                .stdout("")
+                .stderr("");
+        }
+    }
+}
+
+#[test]
 #[cfg(unix)]
 fn python_uninstall_error_batches() -> Result<()> {
     for quiet in ["", "-q", "-qq"] {
