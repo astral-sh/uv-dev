@@ -5,7 +5,7 @@ use anyhow::Result;
 #[cfg(feature = "test-git")]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
-use indoc::formatdoc;
+use indoc::{formatdoc, indoc};
 
 use uv_test::packse::generate_wheel;
 use uv_test::{TestContext, uv_snapshot};
@@ -80,6 +80,1170 @@ fn package_names(context: &TestContext) -> Result<Vec<String>> {
         .iter()
         .map(|package| package["name"].as_str().expect("package name").to_string())
         .collect())
+}
+
+#[test]
+fn equivalent_static_metadata_payloads_keep_the_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = []
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["b", "a>=0", "a>=1"]
+        requires-python = ">=3.9,>=3.10"
+        provides-extra = ["gpu", "cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(package_names(&context)?, ["a", "b", "parent", "project"]);
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = []
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a>=1", "b"]
+        requires-python = ">=3.10"
+        provides-extra = ["cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+
+    // A fresh resolve compares payload semantics without rewriting equivalent inputs.
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "links", "--refresh", "--locked"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "links", "--refresh"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+
+    let parsed: toml::Value = toml::from_str(&original)?;
+    let payload = &parsed["manifest"]["dependency-metadata"][0];
+    assert_eq!(
+        payload["requires-dist"]
+            .as_array()
+            .expect("requirements")
+            .len(),
+        3
+    );
+    assert_eq!(
+        payload["provides-extras"].as_array().expect("extras").len(),
+        3
+    );
+    Ok(())
+}
+
+#[test]
+fn equivalent_static_metadata_payloads_keep_the_lock_normalized() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lockfile-normalization"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["b", "a>=0", "a>=1"]
+        requires-python = ">=3.9,>=3.10"
+        provides-extra = ["gpu", "cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(package_names(&context)?, ["a", "b", "parent", "project"]);
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lockfile-normalization"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a>=1", "b"]
+        requires-python = ">=3.10"
+        provides-extra = ["cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+
+    // A fresh resolve compares payload semantics without rewriting equivalent inputs.
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "links", "--refresh", "--locked"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "links", "--refresh"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+
+    let parsed: toml::Value = toml::from_str(&original)?;
+    let payload = &parsed["manifest"]["dependency-metadata"][0];
+    assert_eq!(
+        payload["requires-dist"]
+            .as_array()
+            .expect("requirements")
+            .len(),
+        2
+    );
+    assert_eq!(
+        payload["provides-extras"].as_array().expect("extras").len(),
+        2
+    );
+    Ok(())
+}
+
+#[test]
+fn equivalent_static_metadata_payloads_keep_the_lock_without_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["b", "a>=0", "a>=1"]
+        requires-python = ">=3.9,>=3.10"
+        provides-extra = ["gpu", "cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(package_names(&context)?, ["a", "b", "parent", "project"]);
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a>=1", "b"]
+        requires-python = ">=3.10"
+        provides-extra = ["cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+
+    // A fresh resolve compares payload semantics without rewriting equivalent inputs.
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "links", "--refresh", "--locked"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "links", "--refresh"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+
+    let parsed: toml::Value = toml::from_str(&original)?;
+    let payload = &parsed["manifest"]["dependency-metadata"][0];
+    assert_eq!(
+        payload["requires-dist"]
+            .as_array()
+            .expect("requirements")
+            .len(),
+        3
+    );
+    assert_eq!(
+        payload["provides-extras"].as_array().expect("extras").len(),
+        3
+    );
+    Ok(())
+}
+
+#[test]
+fn equivalent_static_metadata_payloads_keep_the_lock_normalized_without_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata", "lockfile-normalization"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["b", "a>=0", "a>=1"]
+        requires-python = ">=3.9,>=3.10"
+        provides-extra = ["gpu", "cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(package_names(&context)?, ["a", "b", "parent", "project"]);
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata", "lockfile-normalization"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a>=1", "b"]
+        requires-python = ">=3.10"
+        provides-extra = ["cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+
+    // A fresh resolve compares payload semantics without rewriting equivalent inputs.
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "links", "--refresh", "--locked"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-index", "--find-links", "links", "--refresh"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+
+    let parsed: toml::Value = toml::from_str(&original)?;
+    let payload = &parsed["manifest"]["dependency-metadata"][0];
+    assert_eq!(
+        payload["requires-dist"]
+            .as_array()
+            .expect("requirements")
+            .len(),
+        2
+    );
+    assert_eq!(
+        payload["provides-extras"].as_array().expect("extras").len(),
+        2
+    );
+    Ok(())
+}
+
+#[test]
+fn equivalent_static_path_wheel_metadata_keeps_the_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv.sources]
+        parent = { path = "links/parent-1.0.0-py3-none-any.whl" }
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["b", "a>=0", "a>=1"]
+        requires-python = ">=3.9,>=3.10"
+        provides-extra = ["gpu", "cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(original, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[manifest.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["b", "a>=0", "a>=1"]
+        requires-python = ">=3.9, >=3.10"
+        provides-extras = ["gpu", "cpu", "gpu"]
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "links" }
+        wheels = [
+            { path = "a-1.0.0-py3-none-any.whl" },
+        ]
+
+        [[package]]
+        name = "b"
+        version = "1.0.0"
+        source = { registry = "links" }
+        wheels = [
+            { path = "b-1.0.0-py3-none-any.whl" },
+        ]
+
+        [[package]]
+        name = "parent"
+        version = "1.0.0"
+        source = { path = "links/parent-1.0.0-py3-none-any.whl" }
+        dependencies = [
+            { name = "a" },
+            { name = "b" },
+        ]
+        wheels = [
+            { filename = "parent-1.0.0-py3-none-any.whl", hash = "sha256:a4aea21704ea482b671a53998378d2365acd69b5c497aa3bc9c5d4bd97cd8683" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "a", specifier = ">=0" },
+            { name = "a", specifier = ">=1" },
+            { name = "b" },
+        ]
+        provides-extras = ["gpu", "cpu", "gpu"]
+
+        [[package]]
+        name = "project"
+        version = "1.0.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "parent" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "parent", path = "links/parent-1.0.0-py3-none-any.whl" }]
+        "#);
+    });
+
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv.sources]
+        parent = { path = "links/parent-1.0.0-py3-none-any.whl" }
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a>=1", "b"]
+        requires-python = ">=3.10"
+        provides-extra = ["cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]).arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--no-index", "--find-links", "links", "--refresh", "--locked",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--no-index", "--find-links", "links", "--refresh",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+    Ok(())
+}
+
+#[test]
+fn static_metadata_payload_prerelease_policy_requires_new_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = []
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a>=1rc1,>=1"]
+        requires-python = ">=3.10"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = []
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a>=1"]
+        requires-python = ">=3.10"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn static_metadata_payload_exact_pin_policy_requires_new_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = []
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a==1"]
+        requires-python = ">=3.10"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = []
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a==1,>=0"]
+        requires-python = ">=3.10"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn static_metadata_payload_python_wildcard_precision_requires_new_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = []
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a"]
+        requires-python = ">=3.9,!=3.10.*"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = []
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a"]
+        requires-python = ">=3.9,!=3.10.0.*"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn static_metadata_payload_extra_removal_requires_new_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = []
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a"]
+        requires-python = ">=3.10"
+        provides-extra = ["gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = []
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a"]
+        requires-python = ">=3.10"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn static_metadata_payload_prerelease_policy_requires_new_lock_without_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a>=1rc1,>=1"]
+        requires-python = ">=3.10"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a>=1"]
+        requires-python = ">=3.10"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn static_metadata_payload_exact_pin_policy_requires_new_lock_without_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a==1"]
+        requires-python = ">=3.10"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a==1,>=0"]
+        requires-python = ">=3.10"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn static_metadata_payload_python_wildcard_precision_requires_new_lock_without_metadata()
+-> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a"]
+        requires-python = ">=3.9,!=3.10.*"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a"]
+        requires-python = ">=3.9,!=3.10.0.*"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn static_metadata_payload_extra_removal_requires_new_lock_without_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a"]
+        requires-python = ">=3.10"
+        provides-extra = ["gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a"]
+        requires-python = ">=3.10"
+        provides-extra = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links", "links"])
+        .arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
 }
 
 #[test]
