@@ -2,7 +2,6 @@
 // https://github.com/rust-lang/rust/issues/64402
 extern crate uv_performance_memory_allocator;
 
-use std::cell::LazyCell;
 use std::env;
 use std::fmt::Write;
 use std::hint::black_box;
@@ -36,7 +35,7 @@ use uv_extract::hash::{HashReader, Hasher};
 use uv_install_wheel::{InstallState, Layout, LinkMode};
 use uv_preview::{MaybePreviewFeature, Preview, PreviewFeature};
 use uv_pypi_types::{HashAlgorithm, Scheme};
-use uv_python::PythonEnvironment;
+use uv_python_interpreter::PythonEnvironment;
 use uv_resolver::Manifest;
 
 const MANY_FILES_WHEEL_FILENAME: &str = "manyfiles-0.0.0-py3-none-any.whl";
@@ -422,17 +421,16 @@ fn resolve_warm_jupyter(c: &mut Criterion<WallTime>) {
     let manifest = Manifest::simple(vec![Requirement::from(
         uv_pep508::Requirement::from_str("jupyter==1.0.0").unwrap(),
     )]);
-    // Initialize resolver fixtures only when Criterion selects this benchmark.
-    let run = LazyCell::new(|| setup(manifest, false));
-    c.bench_function("resolve_warm_jupyter", |b| b.iter(&*run));
+    let run = setup(manifest, false);
+    c.bench_function("resolve_warm_jupyter", |b| b.iter(&run));
 }
 
 fn resolve_warm_jupyter_universal(c: &mut Criterion<WallTime>) {
     let manifest = Manifest::simple(vec![Requirement::from(
         uv_pep508::Requirement::from_str("jupyter==1.0.0").unwrap(),
     )]);
-    let run = LazyCell::new(|| setup(manifest, true));
-    c.bench_function("resolve_warm_jupyter_universal", |b| b.iter(&*run));
+    let run = setup(manifest, true);
+    c.bench_function("resolve_warm_jupyter_universal", |b| b.iter(&run));
 }
 
 fn resolve_warm_airflow(c: &mut Criterion<WallTime>) {
@@ -442,8 +440,8 @@ fn resolve_warm_airflow(c: &mut Criterion<WallTime>) {
             uv_pep508::Requirement::from_str("apache-airflow-providers-apache-beam>3.0.0").unwrap(),
         ),
     ]);
-    let run = LazyCell::new(|| setup(manifest, false));
-    c.bench_function("resolve_warm_airflow", |b| b.iter(&*run));
+    let run = setup(manifest, false);
+    c.bench_function("resolve_warm_airflow", |b| b.iter(&run));
 }
 
 // This takes >5m to run in CodSpeed.
@@ -556,7 +554,7 @@ mod resolver {
     use uv_platform_tags::{Arch, Os, Platform, Tags, TagsOptions};
     use uv_preview::Preview;
     use uv_pypi_types::{Conflicts, ResolverMarkerEnvironment};
-    use uv_python::Interpreter;
+    use uv_python_interpreter::Interpreter;
     use uv_resolver::{
         ExcludeNewer, FlatIndex, InMemoryIndex, Manifest, OptionsBuilder, PythonRequirement,
         Resolver, ResolverEnvironment, ResolverOutput,

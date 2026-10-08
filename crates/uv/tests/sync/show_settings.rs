@@ -162,6 +162,66 @@ fn show_settings_returns_before_running_commands() {
     +}
     ...
     ");
+
+    let password = diff_uv_snapshot!(context.filters(), &baseline, add_shared_args(context.auth_login())
+        .arg("https://example.com")
+        .arg("--username").arg("ferris")
+        .arg("--password").arg("auth-password")
+        .arg("--show-settings"), @r#"
+    ...
+             "[CACHE_DIR]/",
+         ),
+     }
+    +AuthLoginSettings {
+    +    service: Service(
+    +        DisplaySafeUrl {
+    +            scheme: "https",
+    +            cannot_be_a_base: false,
+    +            username: "",
+    +            password: None,
+    +            host: Some(
+    +                Domain(
+    +                    "example.com",
+    +                ),
+    +            ),
+    +            port: None,
+    +            path: "/",
+    +            query: None,
+    +            fragment: None,
+    +        },
+    +    ),
+    +    username: Some(
+    +        "ferris",
+    +    ),
+    +    password: Some(
+    +        "****",
+    +    ),
+    +    token: None,
+    +}
+    ...
+    "#);
+
+    diff_uv_snapshot!(context.filters(), &password, add_shared_args(context.auth_login())
+        .arg("https://example.com")
+        .arg("--token").arg("auth-token")
+        .arg("--show-settings"), @r#"
+    ...
+                 fragment: None,
+             },
+         ),
+    -    username: Some(
+    -        "ferris",
+    -    ),
+    -    password: Some(
+    +    username: None,
+    +    password: None,
+    +    token: Some(
+             "****",
+         ),
+    -    token: None,
+     }
+    ...
+    "#);
 }
 
 #[test]

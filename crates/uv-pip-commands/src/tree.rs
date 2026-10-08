@@ -22,9 +22,8 @@ use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{Requirement, VersionOrUrl};
 use uv_pypi_types::{ResolutionMetadata, ResolverMarkerEnvironment, VerbatimParsedUrl};
-use uv_python::{
-    EnvironmentPreference, PythonArchitecture, PythonEnvironment, PythonPreference, PythonRequest,
-};
+use uv_python_discovery::find_environment;
+use uv_python_types::{EnvironmentPreference, PythonArchitecture, PythonPreference, PythonRequest};
 use uv_resolver::{ExcludeNewer, Prerelease};
 
 use crate::reporters::report_target_environment;
@@ -59,7 +58,7 @@ pub async fn pip_tree(
     printer: Printer,
 ) -> Result<ExitStatus> {
     // Detect the current Python interpreter.
-    let environment = PythonEnvironment::find(
+    let environment = find_environment(
         &python.map(PythonRequest::parse).unwrap_or_default(),
         EnvironmentPreference::from_system_flag(system, false),
         PythonPreference::default().with_system_flag(system),

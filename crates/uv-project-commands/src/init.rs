@@ -22,19 +22,23 @@ use uv_git::GIT;
 use uv_install_wheel::reserved_script_name;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonEnvironment,
-    PythonInstallation, PythonPreference, PythonRequest, PythonVariant, PythonVersionFile,
-    VersionFileDiscoveryOptions, VersionRequest,
-};
-use uv_python_context::{
-    PythonDownloadReporter, find_requires_python, init_script_python_requirement,
+use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::PythonInstallation;
+use uv_python_discovery::PythonVersionFile;
+use uv_python_discovery::VersionFileDiscoveryOptions;
+use uv_python_discovery::find_requires_python;
+use uv_python_discovery::init_script_python_requirement;
+use uv_python_interpreter::PythonEnvironment;
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
+    PythonVariant, VersionRequest,
 };
 use uv_scripts::{Pep723Script, ScriptTag};
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
-use uv_workspace::pyproject_mut::{DependencyTarget, PyProjectTomlMut};
 use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache, WorkspaceErrorKind,
 };
@@ -652,8 +656,8 @@ async fn determine_requires_python(
         .flatten()
     {
         // (3) `requires-python` from the workspace
-        let python_request =
-            PythonRequest::from_requires_python(&requires_python).unwrap_or(PythonRequest::Default);
+        let python_request = PythonRequest::from_specifiers(requires_python.specifiers())
+            .unwrap_or(PythonRequest::Default);
 
         // Pin to the minor version.
         let python_pin = if pin_python {

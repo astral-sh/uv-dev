@@ -19,10 +19,10 @@ use uv_fs::{CWD, PythonExt, Simplified, cachedir};
 use uv_platform_tags::Os;
 use uv_preview::PreviewFeature;
 use uv_pypi_types::Scheme;
-use uv_python::managed::{
+use uv_python_interpreter::{Interpreter, VirtualEnvironment};
+use uv_python_managed::{
     ManagedPythonInstallation, PythonExecutable, PythonMinorVersionLink, replace_link_to_executable,
 };
-use uv_python::{Interpreter, VirtualEnvironment};
 use uv_shell::escape_posix_for_single_quotes;
 use uv_version::version;
 
@@ -77,10 +77,15 @@ pub(crate) fn create(
     //
     // For consistency with the standard library, rely on `sys._base_executable`, _unless_ we're
     // using a uv-managed Python (in which case, we can do better for symlinked executables).
-    let base_python = if cfg!(unix) && interpreter.is_standalone() {
-        interpreter.find_base_python()?
-    } else {
-        interpreter.to_base_python()?
+    let base_python = cfg_select! {
+        unix => {
+            if interpreter.is_standalone() {
+                interpreter.find_base_python()?
+            } else {
+                interpreter.to_base_python()?
+            }
+        }
+        _ => { interpreter.to_base_python()? }
     };
 
     debug!(
