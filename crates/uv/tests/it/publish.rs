@@ -1,8 +1,6 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
-use async_zip::base::write::ZipFileWriter;
-use async_zip::{Compression, ZipEntryBuilder};
 use fs_err::OpenOptions;
 use indoc::{formatdoc, indoc};
 use serde_json::{Value, json};
@@ -100,36 +98,11 @@ fn username_password_no_longer_supported() {
 }
 
 #[tokio::test]
-async fn invalid_token() -> Result<()> {
+async fn invalid_token() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_sizes()
         .with_filtered_http_retries();
     let server = MockServer::start().await;
-    let wheel = context.temp_dir.child("ok-1.0.0-py3-none-any.whl");
-    let mut writer = ZipFileWriter::new(Vec::new());
-    for (name, contents) in [
-        (
-            "ok-1.0.0.dist-info/METADATA",
-            "Metadata-Version: 2.1\nName: ok\nVersion: 1.0.0\n",
-        ),
-        (
-            "ok-1.0.0.dist-info/WHEEL",
-            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-        ),
-        (
-            "ok-1.0.0.dist-info/RECORD",
-            "ok-1.0.0.dist-info/METADATA,,\nok-1.0.0.dist-info/WHEEL,,\nok-1.0.0.dist-info/RECORD,,\n",
-        ),
-    ] {
-        writer
-            .write_entry_whole(
-                ZipEntryBuilder::new(name.into(), Compression::Stored),
-                contents.as_bytes(),
-            )
-            .await?;
-    }
-    fs_err::write(wheel.path(), writer.close().await?)?;
-
     Mock::given(method("POST"))
         .and(path("/legacy/"))
         .and(basic_auth("__token__", "dummy"))
@@ -149,7 +122,7 @@ async fn invalid_token() -> Result<()> {
         .arg("dummy")
         .arg("--publish-url")
         .arg(format!("{}/legacy/", server.uri()))
-        .arg(wheel.path())
+        .arg(dummy_wheel())
         .env(EnvVars::NO_PROXY, "*")
         .env_remove("GH_TOKEN")
         .env_remove("GITHUB_TOKEN")
@@ -160,7 +133,7 @@ async fn invalid_token() -> Result<()> {
     Publishing 1 file to http://[LOCALHOST]/legacy/
     Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
     Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    error: Failed to publish `ok-1.0.0-py3-none-any.whl` to `http://[LOCALHOST]/legacy/`
+    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `http://[LOCALHOST]/legacy/`
       cause: Server returned status code 403 Forbidden. Server says: 403 Invalid or non-existent authentication information. See https://test.pypi.org/help/#invalid-auth for more information.
     "
     );
@@ -174,7 +147,6 @@ async fn invalid_token() -> Result<()> {
         1
     );
     server.verify().await;
-    Ok(())
 }
 
 /// Emulate a missing `permission` `id-token: write` situation.
