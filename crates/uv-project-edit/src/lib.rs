@@ -7,7 +7,7 @@ use std::{fmt, mem};
 use itertools::Itertools;
 use thiserror::Error;
 use toml_edit::{
-    Array, ArrayOfTables, DocumentMut, Formatted, InlineTable, Item, RawString, Table, TomlError,
+    Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TableLike, TomlError,
     Value,
 };
 
@@ -1129,13 +1129,13 @@ impl PyProjectTomlMut {
         let Some(sources) = self
             .doc
             .get_mut("tool")
-            .map(|tool| tool.as_table_mut().ok_or(Error::MalformedSources))
+            .map(|tool| tool.as_table_like_mut().ok_or(Error::MalformedSources))
             .transpose()?
             .and_then(|tool| tool.get_mut("uv"))
-            .map(|tool_uv| tool_uv.as_table_mut().ok_or(Error::MalformedSources))
+            .map(|tool_uv| tool_uv.as_table_like_mut().ok_or(Error::MalformedSources))
             .transpose()?
             .and_then(|tool_uv| tool_uv.get_mut("sources"))
-            .map(|sources| sources.as_table_mut().ok_or(Error::MalformedSources))
+            .map(|sources| sources.as_table_like_mut().ok_or(Error::MalformedSources))
             .transpose()?
         else {
             return Ok(());
@@ -1148,7 +1148,7 @@ impl PyProjectTomlMut {
             return Ok(());
         };
 
-        let remove = if let Some(source) = source.as_inline_table() {
+        let remove = if let Some(source) = source.as_table_like() {
             is_unscoped_source(source)
         } else if let Some(source) = source.as_array_mut() {
             source.retain(|source| {
@@ -1156,6 +1156,9 @@ impl PyProjectTomlMut {
                     .as_inline_table()
                     .is_none_or(|source| !is_unscoped_source(source))
             });
+            source.is_empty()
+        } else if let Some(source) = source.as_array_of_tables_mut() {
+            source.retain(|source| !is_unscoped_source(source));
             source.is_empty()
         } else {
             false
@@ -1169,9 +1172,9 @@ impl PyProjectTomlMut {
             if let Some(uv) = self
                 .doc
                 .get_mut("tool")
-                .and_then(Item::as_table_mut)
+                .and_then(Item::as_table_like_mut)
                 .and_then(|tool| tool.get_mut("uv"))
-                .and_then(Item::as_table_mut)
+                .and_then(Item::as_table_like_mut)
             {
                 uv.remove("sources");
             }
@@ -1713,8 +1716,8 @@ fn same_requirement_declaration(left: &Requirement, right: &Requirement) -> bool
 }
 
 /// Returns the key in `tool.uv.sources` that matches the given package name.
-fn find_source(name: &PackageName, sources: &Table) -> Option<String> {
-    for (key, _) in sources {
+fn find_source(name: &PackageName, sources: &dyn TableLike) -> Option<String> {
+    for (key, _) in sources.iter() {
         if PackageName::from_str(key).is_ok_and(|ref key| key == name) {
             return Some(key.to_string());
         }
@@ -1722,7 +1725,7 @@ fn find_source(name: &PackageName, sources: &Table) -> Option<String> {
     None
 }
 
-fn is_unscoped_source(source: &InlineTable) -> bool {
+fn is_unscoped_source(source: &dyn TableLike) -> bool {
     !source.contains_key("extra")
         && !source.contains_key("group")
         && source.get("marker").is_none_or(|marker| {
@@ -2079,6 +2082,35 @@ dependencies = ["dep"]
 [tool.uv.sources]
 dep = [
     { path = "always", marker = "sys_platform == 'win32' or sys_platform != 'win32'" },
+]
+"#,
+            DependencyTarget::PyProjectToml,
+        )?;
+
+        pyproject_toml.add_dependency(
+            &Requirement::from_str("dep @ https://example.com/dep-1.0.0-py3-none-any.whl")?,
+            None,
+            true,
+        )?;
+
+        assert_snapshot!(pyproject_toml.to_string(), @r#"
+        [project]
+        dependencies = [
+            "dep @ https://example.com/dep-1.0.0-py3-none-any.whl",
+        ]
+        "#);
+
+        Ok(())
+    }
+
+    #[test]
+    fn add_raw_dependency_preserves_conditional_source_markers() -> Result<()> {
+        let mut pyproject_toml = PyProjectTomlMut::from_toml(
+            r#"[project]
+dependencies = ["dep"]
+
+[tool.uv.sources]
+dep = [
     { path = "windows", marker = "sys_platform == 'win32'" },
 ]
 "#,
@@ -2103,6 +2135,35 @@ dep = [
 ]
 "#);
 
+        Ok(())
+    }
+
+    #[test]
+    fn add_raw_dependency_inline_sources() -> Result<()> {
+        let mut pyproject_toml = PyProjectTomlMut::from_toml(
+            r#"[project]
+dependencies = ["dep", "other"]
+
+[tool.uv]
+sources = { dep = { path = "old" }, other = { path = "other" } }
+"#,
+            DependencyTarget::PyProjectToml,
+        )?;
+        pyproject_toml.add_dependency(
+            &Requirement::from_str("dep @ https://example.com/dep-1.0.0-py3-none-any.whl")?,
+            None,
+            true,
+        )?;
+        assert_snapshot!(pyproject_toml.to_string(), @r#"
+        [project]
+        dependencies = [
+            "dep @ https://example.com/dep-1.0.0-py3-none-any.whl",
+            "other",
+        ]
+
+        [tool.uv]
+        sources = { other = { path = "other" } }
+        "#);
         Ok(())
     }
 
