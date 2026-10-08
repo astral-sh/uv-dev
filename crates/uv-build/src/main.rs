@@ -1,7 +1,9 @@
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::str::FromStr;
+use uv_errors::{Hinted, Hints};
 use uv_preview::Preview;
 use uv_static::{EnvVars, parse_boolish_environment_variable};
 
@@ -15,7 +17,23 @@ use tracing_subscriber::{EnvFilter, Layer};
 use uv_logging::UvFormat;
 
 /// Entrypoint for the `uv-build` Python package.
-fn main() -> Result<()> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let mut hints = Hints::none();
+            for cause in error.chain() {
+                if let Some(error) = cause.downcast_ref::<uv_build_backend::Error>() {
+                    hints.extend(error.hints());
+                }
+            }
+            let _ = uv_errors::write_error_chain(error.as_ref(), &hints);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<()> {
     // Support configuring the log level with `RUST_LOG` (shows only the error level by default) and
     // color.
     //
