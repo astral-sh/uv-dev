@@ -155,6 +155,9 @@ pub enum EnvironmentError {
     Accelerator(#[from] uv_torch::AcceleratorError),
 
     #[error(transparent)]
+    SitePackages(#[from] uv_installer::SitePackagesError),
+
+    #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 }
 
@@ -247,6 +250,7 @@ impl From<EnvironmentError> for UvError {
             | EnvironmentError::Io(..)
             | EnvironmentError::RetryParsing(..)
             | EnvironmentError::Accelerator(..)
+            | EnvironmentError::SitePackages(..)
             | EnvironmentError::Anyhow(..)) => Self::unexpected(error.into()),
         }
     }
@@ -297,6 +301,7 @@ impl uv_errors::Hinted for EnvironmentError {
             | Self::Io(..)
             | Self::RetryParsing(..)
             | Self::Accelerator(..)
+            | Self::SitePackages(..)
             | Self::Anyhow(..) => uv_errors::Hints::none(),
         }
     }

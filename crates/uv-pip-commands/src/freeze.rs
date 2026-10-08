@@ -77,7 +77,7 @@ pub fn pip_freeze(
                         .ok()
                 })
                 .map(|environment| SitePackages::from_environment(&environment))
-                .collect::<Result<Vec<_>>>()?
+                .collect::<Result<Vec<_>, _>>()?
         }
         None => vec![SitePackages::from_environment(&environment)?],
     };
