@@ -5,7 +5,10 @@ use uv_normalize::PackageName;
 pub enum ExportPackageSelection {
     /// Export all packages in the workspace.
     All,
-    /// Export the root project or the selected packages.
+    /// Export the selected packages.
+    ///
+    /// An empty selection defaults to the current project, including a workspace member, or to the
+    /// non-project workspace when no project exists.
     Selected(Vec<PackageName>),
 }
 
