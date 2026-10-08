@@ -521,19 +521,13 @@ impl Interpreter {
     /// freethreading Python is incompatible with earlier native modules, re-introducing
     /// abiflags with a `t` flag. <https://peps.python.org/pep-0703/#build-configuration-changes>
     pub fn gil_disabled(&self) -> bool {
-        matches!(
-            self.variant,
-            PythonVariant::Freethreaded | PythonVariant::FreethreadedDebug
-        )
+        self.variant.is_freethreaded()
     }
 
     /// Return whether this is a debug build of Python, as specified by the sysconfig var
     /// `Py_DEBUG`.
     pub fn debug_enabled(&self) -> bool {
-        matches!(
-            self.variant,
-            PythonVariant::Debug | PythonVariant::FreethreadedDebug
-        )
+        self.variant.is_debug()
     }
 
     /// Return the `--target` directory for this interpreter, if any.
