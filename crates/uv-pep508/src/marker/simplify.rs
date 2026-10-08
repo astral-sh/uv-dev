@@ -264,7 +264,8 @@ fn simplify_indexed(dnf: &mut Vec<Vec<MarkerExpression>>) -> bool {
     let words = terms.len().div_ceil(64);
     // A sparse expression can have far more distinct terms than terms per clause.
     // Bound the dense index to 32 MiB and use the linear algorithm beyond that.
-    if dnf.len().saturating_mul(words) > MAX_INDEX_WORDS {
+    let index_words = dnf.len().saturating_mul(words);
+    if index_words > MAX_INDEX_WORDS {
         return false;
     }
     let negated: Vec<_> = terms
@@ -273,101 +274,92 @@ fn simplify_indexed(dnf: &mut Vec<Vec<MarkerExpression>>) -> bool {
         .collect();
     drop(terms);
 
-    let Some(mut sets) = clauses
-        .iter()
-        .map(|clause| {
-            let mut set = vec![0u64; words];
-            for &term in clause {
-                // The linear algorithm tracks the first occurrence of a repeated term.
-                // A set cannot represent that distinction.
-                if set[term / 64] & (1 << (term % 64)) != 0 {
-                    return None;
-                }
-                set[term / 64] |= 1 << (term % 64);
+    // Every clause is empty, so at most one is needed.
+    if words == 0 {
+        dnf.truncate(1);
+        return true;
+    }
+
+    // Store each word across all clauses together so membership checks scan contiguous memory.
+    let clause_count = clauses.len();
+    let mut sets = vec![0u64; index_words];
+    for (i, clause) in clauses.iter().enumerate() {
+        for &term in clause {
+            let index = (term / 64) * clause_count + i;
+            // The linear algorithm tracks the first occurrence of a repeated term.
+            // A set cannot represent that distinction.
+            if sets[index] & (1 << (term % 64)) != 0 {
+                return false;
             }
-            Some(set)
-        })
-        .collect::<Option<Vec<_>>>()
-    else {
-        return false;
-    };
+            sets[index] |= 1 << (term % 64);
+        }
+    }
     // One or two words are cheap to scan without consulting clause lengths.
     let sparse_comparisons = words > 2;
 
     // A term is redundant when another clause is a subset of this clause with that term negated.
-    for i in 0..clauses.len() {
+    for i in 0..clause_count {
         let clause = &clauses[i];
         for &skipped in clause {
-            let set = &sets[i];
-            let redundant = sets
-                .iter()
-                .zip(&clauses)
-                .enumerate()
-                .any(|(j, (other_set, other))| {
-                    if i == j || other_set[skipped / 64] & (1 << (skipped % 64)) != 0 {
-                        return false;
-                    }
-                    // Short clauses use term lookups instead of scanning mostly empty words.
-                    if sparse_comparisons && words > other.len().min(clause.len()) {
-                        other.iter().all(|&term| {
-                            negated[term] == Some(skipped)
-                                || set[term / 64] & (1 << (term % 64)) != 0
-                        })
-                    } else {
-                        other_set
-                            .iter()
-                            .zip(set)
-                            .enumerate()
-                            .all(|(word, (&other, &this))| {
-                                let mut missing = other & !this;
-                                while missing != 0 {
-                                    let term = word * 64 + missing.trailing_zeros() as usize;
-                                    if negated[term] != Some(skipped) {
-                                        return false;
-                                    }
-                                    missing &= missing - 1;
+            let offset = (skipped / 64) * clause_count;
+            let skipped_word = &sets[offset..offset + clause_count];
+            let skipped_mask = 1 << (skipped % 64);
+            let redundant = clauses.iter().enumerate().any(|(j, other)| {
+                if i == j || skipped_word[j] & skipped_mask != 0 {
+                    return false;
+                }
+                // Short clauses use term lookups instead of scanning mostly empty words.
+                if sparse_comparisons && words > other.len().min(clause.len()) {
+                    other.iter().all(|&term| {
+                        negated[term] == Some(skipped)
+                            || sets[(term / 64) * clause_count + i] & (1 << (term % 64)) != 0
+                    })
+                } else {
+                    sets.chunks_exact(clause_count)
+                        .enumerate()
+                        .all(|(word, column)| {
+                            let mut missing = column[j] & !column[i];
+                            while missing != 0 {
+                                let term = word * 64 + missing.trailing_zeros() as usize;
+                                if negated[term] != Some(skipped) {
+                                    return false;
                                 }
-                                true
-                            })
-                    }
-                });
+                                missing &= missing - 1;
+                            }
+                            true
+                        })
+                }
+            });
             if redundant {
-                sets[i][skipped / 64] &= !(1 << (skipped % 64));
+                sets[offset + i] &= !skipped_mask;
             }
         }
-        let set = &sets[i];
         let mut position = 0;
         dnf[i].retain(|_| {
             let term = clause[position];
             position += 1;
-            set[term / 64] & (1 << (term % 64)) != 0
+            sets[(term / 64) * clause_count + i] & (1 << (term % 64)) != 0
         });
         // Later comparisons use the surviving terms, including when a dense clause becomes sparse.
-        clauses[i].retain(|&term| set[term / 64] & (1 << (term % 64)) != 0);
+        clauses[i].retain(|&term| sets[(term / 64) * clause_count + i] & (1 << (term % 64)) != 0);
     }
 
     // After removing terms, eliminate clauses that contain another surviving clause.
-    let mut redundant_clauses = vec![false; clauses.len()];
-    for (i, (set, clause)) in sets.iter().zip(&clauses).enumerate() {
-        redundant_clauses[i] =
-            sets.iter()
-                .zip(&clauses)
-                .enumerate()
-                .any(|(j, (other_set, other))| {
-                    i != j
-                        && !redundant_clauses[j]
-                        && (!sparse_comparisons || other.len() <= clause.len())
-                        && if sparse_comparisons && words > other.len() {
-                            other
-                                .iter()
-                                .all(|&term| set[term / 64] & (1 << (term % 64)) != 0)
-                        } else {
-                            other_set
-                                .iter()
-                                .zip(set)
-                                .all(|(&other, &this)| other & !this == 0)
-                        }
-                });
+    let mut redundant_clauses = vec![false; clause_count];
+    for (i, clause) in clauses.iter().enumerate() {
+        redundant_clauses[i] = clauses.iter().enumerate().any(|(j, other)| {
+            i != j
+                && !redundant_clauses[j]
+                && (!sparse_comparisons || other.len() <= clause.len())
+                && if sparse_comparisons && words > other.len() {
+                    other
+                        .iter()
+                        .all(|&term| sets[(term / 64) * clause_count + i] & (1 << (term % 64)) != 0)
+                } else {
+                    sets.chunks_exact(clause_count)
+                        .all(|column| column[j] & !column[i] == 0)
+                }
+        });
     }
 
     let mut position = 0;
@@ -782,7 +774,7 @@ mod tests {
 
     #[test]
     fn indexed_simplification_sparse_clauses() {
-        for size in [7, 8, 9, 63, 64, 65, 127, 128, 129] {
+        for size in [0, 7, 8, 9, 63, 64, 65, 127, 128, 129] {
             let terms: Vec<_> = (0..size)
                 .map(|index| expression(&format!("platform_machine == 'arch-{index}'")))
                 .collect();
