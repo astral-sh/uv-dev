@@ -31,7 +31,7 @@ use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_tool::{InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
@@ -116,9 +116,19 @@ pub async fn install(
                 RequirementsSource::from_package(requirement)?
             };
             Some(
-                RequirementsSpecification::from_source(&source, &client_builder)
-                    .await?
-                    .requirements,
+                RequirementsSpecification::from_source(
+                    &source,
+                    &client_builder,
+                    LoweringContext::new(
+                        &settings.resolver.sources,
+                        &settings.resolver.index_locations,
+                        &cache,
+                        workspace_cache,
+                        client_builder.credentials_cache(),
+                    ),
+                )
+                .await?
+                .requirements,
             )
         }
         _ => None,
@@ -157,8 +167,18 @@ pub async fn install(
     .await?
     .into_interpreter();
 
-    let receipt_build_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+    let receipt_build_constraints = operations::read_constraints(
+        build_constraints,
+        &client_builder,
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            &cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
+    )
+    .await?;
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
 
@@ -380,6 +400,13 @@ pub async fn install(
         excludes,
         None,
         &client_builder,
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            &cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
     )
     .await?;
 

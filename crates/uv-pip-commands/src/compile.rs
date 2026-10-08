@@ -41,7 +41,8 @@ use uv_python_types::{
     PythonVersion, VersionRequest,
 };
 use uv_requirements::{
-    GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
+    GroupsSpecification, LoweringContext, RequirementsSource, RequirementsSpecification,
+    is_pylock_toml,
 };
 use uv_resolver::{
     AnnotationStyle, DependencyMode, DisplayResolutionGraph, ExcludeNewer, FlatIndex, ForkStrategy,
@@ -205,6 +206,13 @@ pub async fn pip_compile(
     }
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
+    let lowering_context = LoweringContext::new(
+        &sources,
+        &index_locations,
+        &cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Read all requirements from the provided sources.
     let RequirementsSpecification {
@@ -233,6 +241,7 @@ pub async fn pip_compile(
         excludes,
         Some(&groups),
         &client_builder,
+        lowering_context,
     )
     .await?;
 
@@ -262,10 +271,14 @@ pub async fn pip_compile(
 
     // Read build constraints.
     let build_constraints = Constraints::from_specifications(
-        uv_resolve_operations::read_constraints(build_constraints, &client_builder)
-            .await?
-            .into_iter()
-            .chain(build_constraints_from_workspace),
+        uv_resolve_operations::read_constraints(
+            build_constraints,
+            &client_builder,
+            lowering_context,
+        )
+        .await?
+        .into_iter()
+        .chain(build_constraints_from_workspace),
     );
 
     // If all the metadata could be statically resolved, validate that every extra was used. If we

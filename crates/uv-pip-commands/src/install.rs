@@ -35,7 +35,9 @@ use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonDownloads, PythonPreference,
     PythonRequest, PythonVersion, Target,
 };
-use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{
+    GroupsSpecification, LoweringContext, RequirementsSource, RequirementsSpecification,
+};
 use uv_resolver::{
     DependencyMode, ExcludeNewer, FlatIndex, OptionsBuilder, Prerelease, PythonRequirement,
     ResolutionMode, ResolverEnvironment,
@@ -142,6 +144,13 @@ pub async fn pip_install(
     let start = std::time::Instant::now();
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
+    let lowering_context = LoweringContext::new(
+        &sources,
+        &index_locations,
+        &cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Read all requirements from the provided sources.
     let RequirementsSpecification {
@@ -171,6 +180,7 @@ pub async fn pip_install(
         extras,
         Some(groups),
         &client_builder,
+        lowering_context,
     )
     .await?;
 
@@ -204,10 +214,14 @@ pub async fn pip_install(
 
     // Read build constraints.
     let build_constraints = Constraints::from_specifications(
-        uv_resolve_operations::read_constraints(build_constraints, &client_builder)
-            .await?
-            .into_iter()
-            .chain(build_constraints_from_workspace.iter().cloned()),
+        uv_resolve_operations::read_constraints(
+            build_constraints,
+            &client_builder,
+            lowering_context,
+        )
+        .await?
+        .into_iter()
+        .chain(build_constraints_from_workspace.iter().cloned()),
     );
 
     // Detect the current Python interpreter.

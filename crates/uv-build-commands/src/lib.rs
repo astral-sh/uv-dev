@@ -47,7 +47,7 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::RequirementsSource;
+use uv_requirements::{LoweringContext, RequirementsSource};
 use uv_resolve_operations as operations;
 use uv_resolver::{ExcludeNewer, FlatIndex};
 use uv_settings::PythonInstallMirrors;
@@ -580,8 +580,18 @@ async fn build_package(
     .into_interpreter();
 
     // Read build constraints.
-    let command_line_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+    let command_line_constraints = operations::read_constraints(
+        build_constraints,
+        &client_builder,
+        LoweringContext::new(
+            &sources,
+            index_locations,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
+    )
+    .await?;
     let build_constraints = Constraints::from_specifications(
         command_line_constraints
             .iter()
