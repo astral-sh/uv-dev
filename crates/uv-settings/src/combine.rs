@@ -20,7 +20,7 @@ use uv_redacted::DisplaySafeUrl;
 use uv_torch::TorchMode;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
-use crate::{AuditOptions, FilesystemOptions, Options, PipOptions, PreviewOption};
+use crate::{AuditOptions, FilesystemOptions, IndexOptions, Options, PipOptions, PreviewOption};
 
 pub trait Combine {
     /// Combine two values, preferring the values in `self`.
@@ -36,6 +36,20 @@ pub trait Combine {
     /// ...with one exception: we place items with higher precedence earlier in the merged array.
     #[must_use]
     fn combine(self, other: Self) -> Self;
+}
+
+impl Combine for IndexOptions {
+    fn combine(self, other: Self) -> Self {
+        let this = self.normalize();
+        let other = other.normalize();
+        Self {
+            index: this.index.combine(other.index),
+            index_url: None,
+            extra_index_url: None,
+            no_index: this.no_index.combine(other.no_index),
+            find_links: this.find_links.combine(other.find_links),
+        }
+    }
 }
 
 impl Combine for Option<FilesystemOptions> {
