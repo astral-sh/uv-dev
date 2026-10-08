@@ -430,10 +430,25 @@ fn tool_audit_unparsable_unsupported_lockfile_version() -> Result<()> {
     install_tool(&context, "simple-launcher", true);
 
     let lock_path = tool_dir.join("simple-launcher").join("uv.lock");
-    let contents = fs_err::read_to_string(&lock_path)?
-        .replacen("version = 1\n", "version = 2\n", 1)
-        .replacen("version = \"0.1.0\"\n", "version = false\n", 1);
-    fs_err::write(&lock_path, contents)?;
+    fs_err::write(&lock_path, "version = 2\nrequires-python = false\n")?;
+
+    uv_snapshot!(context.filters(), context.tool_audit()
+        .arg("--all")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
+        , @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Skipping tool `simple-launcher` because its lockfile at `tools/simple-launcher/uv.lock` uses an unsupported schema version
+      cause: failed to parse lockfile using an unsupported schema version (v2, but only v1 is supported)
+      cause: TOML parse error at line 2, column 19
+               |
+             2 | requires-python = false
+               |                   ^^^^^
+             invalid type: boolean `false`, expected a string
+
+    hint: Update `uv`, or reinstall the tool with `--preview-features tool-install-locks` to recreate its lockfile.
+    No auditable tools installed
+    ");
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("simple-launcher")

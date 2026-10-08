@@ -181,10 +181,10 @@ pub async fn audit(
         let lock = match Lock::from_toml(&contents) {
             Ok(lock) => lock,
             Err(
-                LockParseError::UnsupportedVersion { supported, version }
+                error @ (LockParseError::UnsupportedVersion { supported, version }
                 | LockParseError::UnparsableVersion {
                     supported, version, ..
-                },
+                }),
             ) => {
                 if explicit_tool {
                     bail!(
@@ -193,7 +193,7 @@ pub async fn audit(
                     );
                 }
                 warn_user_with_chain!(
-                    anyhow::Error::from(LockParseError::UnsupportedVersion { supported, version })
+                    anyhow::Error::from(error)
                         .context(format!("Skipping tool `{name}` because its lockfile at `{}` uses an unsupported schema version", lock_path.user_display()))
                         .as_ref(),
                     Hints::from("Update `uv`, or reinstall the tool with `--preview-features tool-install-locks` to recreate its lockfile."),
