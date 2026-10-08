@@ -11,7 +11,6 @@ use jiff::civil::{Date, DateTime, Time};
 use jiff::tz::{Offset, TimeZone};
 use petgraph::graph::NodeIndex;
 use serde::Deserialize;
-use tokio::sync::Semaphore;
 use toml::Table as TomlTable;
 use toml_edit::{Array, ArrayOfTables, Item, Table, Value, value};
 use url::Url;
@@ -1136,14 +1135,10 @@ impl<'lock> PylockToml {
             }
         }
 
-        // Local workers retain admission if a sibling failure drops the waiting futures.
-        let local_concurrency = Arc::new(Semaphore::new(concurrency.min(jobs.len())));
-        let local_concurrency = &local_concurrency;
-
         // Fetch and hash the files.
         let hashed = futures::stream::iter(jobs)
             .map(|(destination, source)| async move {
-                let hashes = Hashes::from(client.hash_file(&source, local_concurrency).await?);
+                let hashes = Hashes::from(client.hash_file(&source).await?);
                 Ok::<_, PylockTomlErrorKind>((destination, hashes))
             })
             .buffer_unordered(concurrency)

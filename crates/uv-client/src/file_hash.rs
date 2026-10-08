@@ -1,9 +1,7 @@
 use std::io::{self, Read};
 use std::path::Path;
-use std::sync::Arc;
 
 use futures::TryStreamExt;
-use tokio::sync::Semaphore;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::Span;
 use url::Url;
@@ -31,26 +29,12 @@ pub enum FileHashError {
 
 impl RegistryClient {
     /// Read or download a file and compute its SHA-256 digest without extracting its contents.
-    ///
-    /// Local reads own a permit from `local_concurrency` until their blocking worker completes.
-    pub async fn hash_file(
-        &self,
-        url: &DisplaySafeUrl,
-        local_concurrency: &Arc<Semaphore>,
-    ) -> Result<HashDigest, FileHashError> {
+    pub async fn hash_file(&self, url: &DisplaySafeUrl) -> Result<HashDigest, FileHashError> {
         if url.scheme() == "file" {
             let path = url.to_file_path().map_err(|()| FileHashError::UrlToPath)?;
-            let permit = local_concurrency
-                .clone()
-                .acquire_owned()
-                .await
-                .map_err(|err| {
-                    FileHashError::ReadFile(path.clone().into_boxed_path(), io::Error::other(err))
-                })?;
             let worker_path = path.clone();
             let span = Span::current();
             return tokio::task::spawn_blocking(move || {
-                let _permit = permit;
                 let _entered = span.enter();
                 let mut file = fs_err::File::open(worker_path)?;
                 let mut hasher = Hasher::from(HashAlgorithm::Sha256);
@@ -106,12 +90,8 @@ impl RegistryClient {
 #[cfg(test)]
 mod tests {
     use std::io;
-    use std::sync::{Arc, mpsc};
     use std::time::Duration;
 
-    use futures::FutureExt;
-    use tokio::runtime::Builder;
-    use tokio::sync::{Semaphore, oneshot};
     use uv_cache::Cache;
     use uv_extract::hash::{HashReader, Hasher};
     use uv_pypi_types::{HashAlgorithm, HashDigest};
@@ -131,7 +111,6 @@ mod tests {
     #[tokio::test]
     async fn local_hash_matches_streaming_hash() -> Result<(), Error> {
         let client = client()?;
-        let slots = Arc::new(Semaphore::new(1));
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("artifact.whl");
         let url = DisplaySafeUrl::from_file_path(&path).map_err(|()| "invalid fixture URL")?;
@@ -143,17 +122,11 @@ mod tests {
                 .finish()
                 .await?;
             let [expected] = hashers;
-            assert_eq!(
-                client.hash_file(&url, &slots).await?,
-                HashDigest::from(expected)
-            );
+            assert_eq!(client.hash_file(&url).await?, HashDigest::from(expected));
         }
 
         fs_err::remove_file(&path)?;
-        let error = client
-            .hash_file(&url, &slots)
-            .await
-            .expect_err("missing file");
+        let error = client.hash_file(&url).await.expect_err("missing file");
         let FileHashError::ReadFile(error_path, source) = error else {
             return Err("expected a path-rich local read error".into());
         };
@@ -162,50 +135,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn cancelled_local_hash_retains_admission() -> Result<(), Error> {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .max_blocking_threads(1)
-            .build()?;
-        let client = client()?;
-        let slots = Arc::new(Semaphore::new(1));
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("artifact.whl");
-        fs_err::write(&path, b"abc")?;
-        let url = DisplaySafeUrl::from_file_path(&path).map_err(|()| "invalid fixture URL")?;
-
-        // The actual client must wait for admission before starting any file I/O.
-        let reserved = slots.clone().try_acquire_owned()?;
-        assert!(client.hash_file(&url, &slots).now_or_never().is_none());
-        drop(reserved);
-        runtime.block_on(async {
-            let (started, start) = oneshot::channel();
-            let (release, finish) = mpsc::channel();
-            let blocker = tokio::task::spawn_blocking(move || {
-                let _ = started.send(());
-                finish.recv()
-            });
-            start.await?;
-            assert!(client.hash_file(&url, &slots).now_or_never().is_none());
-            assert_eq!(slots.available_permits(), 0);
-            tokio::task::yield_now().await;
-            assert_eq!(slots.available_permits(), 0);
-            release.send(())?;
-            blocker.await??;
-            let permit = tokio::time::timeout(Duration::from_secs(10), slots.acquire()).await??;
-            drop(permit);
-            let hash = client.hash_file(&url, &slots).await?;
-            assert_eq!(
-                hash.to_string(),
-                "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-            );
-            Ok(())
-        })
-    }
-
     #[tokio::test]
-    async fn remote_hash_does_not_wait_for_local_slots() -> Result<(), Error> {
+    async fn remote_hash_streams_identity_response() -> Result<(), Error> {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(header("accept-encoding", "identity"))
@@ -215,9 +146,7 @@ mod tests {
             .await;
         let url = DisplaySafeUrl::parse(&server.uri())?;
         let client = client()?;
-        let slots = Arc::new(Semaphore::new(0));
-        let hash =
-            tokio::time::timeout(Duration::from_secs(10), client.hash_file(&url, &slots)).await??;
+        let hash = tokio::time::timeout(Duration::from_secs(10), client.hash_file(&url)).await??;
         assert_eq!(
             hash.to_string(),
             "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
@@ -234,9 +163,7 @@ mod tests {
         fs_err::write(&path, b"abc")?;
         fs_err::os::unix::fs::symlink(&path, &link)?;
         let url = DisplaySafeUrl::from_file_path(&link).map_err(|()| "invalid fixture URL")?;
-        let hash = client()?
-            .hash_file(&url, &Arc::new(Semaphore::new(1)))
-            .await?;
+        let hash = client()?.hash_file(&url).await?;
         assert_eq!(
             hash.to_string(),
             "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"

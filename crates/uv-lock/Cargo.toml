@@ -59,7 +59,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 toml_parser = { workspace = true }
@@ -71,4 +70,5 @@ url = { workspace = true }
 uv-cache = { workspace = true }
 
 insta = { workspace = true }
+tokio = { workspace = true }
 toml = { workspace = true }
