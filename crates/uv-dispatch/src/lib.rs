@@ -72,6 +72,9 @@ pub enum BuildDispatchError {
     Join(#[from] tokio::task::JoinError),
 
     #[error(transparent)]
+    SitePackages(#[from] uv_installer::SitePackagesError),
+
+    #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 
     #[error(transparent)]
@@ -99,6 +102,7 @@ impl uv_errors::Hinted for BuildDispatchError {
             Self::BuildBackend(_)
             | Self::Tags(_)
             | Self::Join(_)
+            | Self::SitePackages(_)
             | Self::Anyhow(_)
             | Self::Prepare(_)
             | Self::UninstallBuildDependencies(_)
@@ -120,6 +124,7 @@ impl IsBuildBackendError for BuildDispatchError {
             Self::BuildBackend(_)
             | Self::Tags(_)
             | Self::Join(_)
+            | Self::SitePackages(_)
             | Self::Anyhow(_)
             | Self::UninstallBuildDependencies(_)
             | Self::InstallBuildDependencies(_)
@@ -134,6 +139,7 @@ impl IsBuildBackendError for BuildDispatchError {
             | Self::Resolve(_)
             | Self::ResolveRequirements { .. }
             | Self::Join(_)
+            | Self::SitePackages(_)
             | Self::Anyhow(_)
             | Self::Prepare(_)
             | Self::UninstallBuildDependencies(_)
