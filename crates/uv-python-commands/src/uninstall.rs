@@ -35,8 +35,7 @@ pub async fn uninstall(
     let _lock = installations.lock().await?;
 
     // Perform the uninstallation.
-    let mut errors = Vec::new();
-    do_uninstall(&installations, targets, all, printer, &mut errors).await?;
+    let mut errors = do_uninstall(&installations, targets, all, printer).await?;
 
     // Complete cleanup before returning any independent installation failures.
     let cleanup = cleanup_empty_directories(&installations).await;
@@ -84,8 +83,7 @@ async fn do_uninstall(
     targets: Vec<String>,
     all: bool,
     printer: Printer,
-    errors: &mut Vec<(PythonInstallationKey, anyhow::Error)>,
-) -> Result<ExitStatus> {
+) -> Result<Vec<(PythonInstallationKey, anyhow::Error)>> {
     let start = std::time::Instant::now();
 
     let requests = if all {
@@ -139,7 +137,7 @@ async fn do_uninstall(
 
             if matches!(requests.as_slice(), [PythonRequest::Default]) {
                 writeln!(printer.stderr(), "No Python installations found")?;
-                return Ok(ExitStatus::Failure);
+                return Ok(Vec::new());
             }
 
             writeln!(
@@ -155,14 +153,19 @@ async fn do_uninstall(
             printer.stderr(),
             "No Python installations found matching the requests"
         )?;
-        return Ok(ExitStatus::Failure);
+        return Ok(Vec::new());
     }
 
     // Remove registry entries first, so we don't have dangling entries between the file removal
     // and the registry removal.
+    let mut errors = Vec::new();
     #[cfg(windows)]
     {
-        uv_python::windows_registry::remove_registry_entry(&matching_installations, all, errors);
+        uv_python::windows_registry::remove_registry_entry(
+            &matching_installations,
+            all,
+            &mut errors,
+        );
         uv_python::windows_registry::remove_orphan_registry_entries(&installed_installations);
     }
 
@@ -338,5 +341,5 @@ async fn do_uninstall(
         }
     }
 
-    Ok(ExitStatus::Success)
+    Ok(errors)
 }
