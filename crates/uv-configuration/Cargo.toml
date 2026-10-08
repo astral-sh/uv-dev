@@ -33,6 +33,7 @@ uv-static = { workspace = true }
 uv-warnings = { workspace = true }
 
 anstream = { workspace = true }
+bitflags = { workspace = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 either = { workspace = true }
 fs-err = { workspace = true }

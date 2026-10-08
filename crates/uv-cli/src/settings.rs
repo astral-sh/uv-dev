@@ -21,8 +21,8 @@ use uv_configuration::{
     DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
-    KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
-    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
+    KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, OutputFlags, Override,
+    PackageOverride, PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
     PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
     TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
 };
@@ -74,7 +74,6 @@ use crate::{
         resolver_installer_options, resolver_options, upgrade_options,
     },
 };
-
 /// The default publish URL.
 const PYPI_PUBLISH_URL: &str = "https://upload.pypi.org/legacy/";
 
@@ -2801,7 +2800,6 @@ impl TreeSettings {
 }
 
 /// The resolved settings to use for an `export` invocation.
-#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct ExportSettings {
     pub format: Option<ExportFormat>,
@@ -2811,16 +2809,12 @@ pub struct ExportSettings {
     pub extras: ExtrasSpecification,
     pub groups: DependencyGroups,
     pub editable: Option<EditableMode>,
-    pub hashes: bool,
+    pub output_flags: OutputFlags,
     pub install_options: InstallOptions,
     pub batch: Option<PathBuf>,
     pub output_file: Option<PathBuf>,
     pub lock_check: LockCheck,
     pub frozen: Option<FrozenSource>,
-    pub include_annotations: bool,
-    pub include_header: bool,
-    pub include_index_url: bool,
-    pub include_find_links: bool,
     pub script: Option<PathBuf>,
     pub python: Option<String>,
     pub install_mirrors: PythonInstallMirrors,
@@ -2921,6 +2915,28 @@ impl ExportSettings {
             Some(environment.no_editable),
         );
 
+        let mut output_flags = OutputFlags::empty();
+        output_flags.set(
+            OutputFlags::HASHES,
+            flag(hashes, no_hashes, "hashes")?.unwrap_or(true),
+        );
+        output_flags.set(
+            OutputFlags::ANNOTATIONS,
+            flag(annotate, no_annotate, "annotate")?.unwrap_or(true),
+        );
+        output_flags.set(
+            OutputFlags::HEADER,
+            flag(header, no_header, "header")?.unwrap_or(true),
+        );
+        output_flags.set(
+            OutputFlags::INDEX_URL,
+            flag(emit_index_url, no_emit_index_url, "emit-index-url")?.unwrap_or(false),
+        );
+        output_flags.set(
+            OutputFlags::FIND_LINKS,
+            flag(emit_find_links, no_emit_find_links, "emit-find-links")?.unwrap_or(false),
+        );
+
         Ok(Self {
             format,
             all_packages,
@@ -2951,7 +2967,7 @@ impl ExportSettings {
                 flag(editable.into(), no_editable.into(), "editable")?,
                 no_editable_package,
             ),
-            hashes: flag(hashes, no_hashes, "hashes")?.unwrap_or(true),
+            output_flags,
             install_options: InstallOptions::new(
                 no_emit_project,
                 only_emit_project,
@@ -2966,12 +2982,6 @@ impl ExportSettings {
             output_file,
             lock_check: locked,
             frozen,
-            include_annotations: flag(annotate, no_annotate, "annotate")?.unwrap_or(true),
-            include_header: flag(header, no_header, "header")?.unwrap_or(true),
-            include_index_url: flag(emit_index_url, no_emit_index_url, "emit-index-url")?
-                .unwrap_or(false),
-            include_find_links: flag(emit_find_links, no_emit_find_links, "emit-find-links")?
-                .unwrap_or(false),
             script,
             python: python.and_then(Maybe::into_option),
             refresh: Refresh::try_from(refresh)?,
