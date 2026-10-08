@@ -511,11 +511,11 @@ pub async fn sync(
                 && member.pyproject_toml().has_scripts()
                 && !member.pyproject_toml().is_package(!is_required_member)
             {
-                let entry_points = describe_skipped_entry_points(&member.pyproject_toml().raw)
-                    .unwrap_or_else(|| "entry points (`project.scripts`)".to_owned());
                 warn_user!(
                     "Skipping installation of {entry_points} for package `{}` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`",
-                    name
+                    name,
+                    entry_points = describe_skipped_entry_points(&member.pyproject_toml().raw)
+                        .unwrap_or_else(|| "entry points (`project.scripts`)".to_owned()),
                 );
             }
         }
