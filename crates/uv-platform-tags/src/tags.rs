@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::{cmp, num::NonZeroU32};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::abi_tag::CPythonAbiVariants;
 use crate::{AbiTag, Arch, LanguageTag, Os, Platform, PlatformError, PlatformTag, ReleaseArch};
@@ -110,9 +110,8 @@ pub struct CompressedTags<'a> {
 /// wheel are compatible with the current environment.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Tags {
-    /// `python_tag` |--> `abi_tag` |--> `platform_tag` |--> priority
-    #[expect(clippy::type_complexity)]
-    map: Arc<FxHashMap<LanguageTag, FxHashMap<AbiTag, FxHashMap<PlatformTag, TagPriority>>>>,
+    /// Python/ABI priority rows share one dictionary of platform tags.
+    map: Arc<TagMap>,
     /// The highest-priority tag for the Python version and platform.
     best: Option<(LanguageTag, AbiTag, PlatformTag)>,
     /// Python platform used to generate the tags, for error messages.
@@ -124,6 +123,69 @@ pub struct Tags {
     is_cross: bool,
     /// Whether this is free-threaded Python.
     is_freethreaded: bool,
+}
+
+/// Platform keys are shared across Python/ABI combinations. Sorted dictionary positions make
+/// equality independent of the order in which equivalent tag sets are constructed.
+#[derive(Debug, Eq, PartialEq)]
+struct TagMap {
+    platforms: Vec<PlatformTag>,
+    platform_indices: FxHashMap<PlatformTag, usize>,
+    rows: FxHashMap<LanguageTag, FxHashMap<AbiTag, PlatformPriorities>>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum PlatformPriorities {
+    /// Pure-Python rows commonly accept only `any`.
+    Single {
+        platform: usize,
+        priority: TagPriority,
+    },
+    Dense(Box<[Option<TagPriority>]>),
+}
+
+impl PlatformPriorities {
+    fn insert(&mut self, platform: usize, priority: TagPriority, platform_count: usize) {
+        match self {
+            Self::Single {
+                platform: existing_platform,
+                priority: existing_priority,
+            } => {
+                if *existing_platform != platform {
+                    let mut priorities = vec![None; platform_count].into_boxed_slice();
+                    priorities[*existing_platform] = Some(*existing_priority);
+                    priorities[platform] = Some(priority);
+                    *self = Self::Dense(priorities);
+                }
+            }
+            Self::Dense(priorities) => {
+                priorities[platform].get_or_insert(priority);
+            }
+        }
+    }
+
+    fn get(&self, platform: usize) -> Option<TagPriority> {
+        match self {
+            Self::Single {
+                platform: existing_platform,
+                priority,
+            } => (*existing_platform == platform).then_some(*priority),
+            Self::Dense(priorities) => priorities[platform],
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (usize, TagPriority)> {
+        let (single, dense): (Option<(usize, TagPriority)>, &[Option<TagPriority>]) = match self {
+            Self::Single { platform, priority } => (Some((*platform, *priority)), &[]),
+            Self::Dense(priorities) => (None, priorities),
+        };
+        single.into_iter().chain(
+            dense
+                .iter()
+                .enumerate()
+                .filter_map(|(index, priority)| priority.map(|priority| (index, priority))),
+        )
+    }
 }
 
 impl Tags {
@@ -141,16 +203,36 @@ impl Tags {
         // Store the highest-priority tag for each component.
         let best = tags.first().cloned();
 
-        // Index the tags by Python version, ABI, and platform.
-        let mut map = FxHashMap::default();
-        for (index, (py, abi, platform)) in tags.into_iter().rev().enumerate() {
-            map.entry(py)
+        // Assign each distinct platform a stable dictionary position without cloning repeated keys.
+        let mut platforms: Vec<_> = tags
+            .iter()
+            .map(|(_, _, platform)| platform)
+            .collect::<FxHashSet<_>>()
+            .into_iter()
+            .cloned()
+            .collect();
+        platforms.sort_unstable();
+        let platform_indices: FxHashMap<_, _> = platforms
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, platform)| (platform, index))
+            .collect();
+        let mut rows = FxHashMap::default();
+        for (index, (python, abi, platform)) in tags.into_iter().rev().enumerate() {
+            let platform = platform_indices[&platform];
+            let priority = TagPriority::try_from(index).expect("valid tag priority");
+            rows.entry(python)
                 .or_insert(FxHashMap::default())
                 .entry(abi)
-                .or_insert(FxHashMap::default())
-                .entry(platform)
-                .or_insert(TagPriority::try_from(index).expect("valid tag priority"));
+                .or_insert(PlatformPriorities::Single { platform, priority })
+                .insert(platform, priority, platforms.len());
         }
+        let map = TagMap {
+            platforms,
+            platform_indices,
+            rows,
+        };
 
         Self {
             map: Arc::new(map),
@@ -346,7 +428,7 @@ impl Tags {
         // with hashmap lookups.
 
         for wheel_py in wheel_tags.python_tags {
-            let Some(abis) = self.map.get(wheel_py) else {
+            let Some(abis) = self.map.rows.get(wheel_py) else {
                 continue;
             };
             for wheel_abi in wheel_tags.abi_tags {
@@ -354,7 +436,12 @@ impl Tags {
                     continue;
                 };
                 for wheel_platform in wheel_tags.platform_tags {
-                    if platforms.contains_key(wheel_platform) {
+                    if self
+                        .map
+                        .platform_indices
+                        .get(wheel_platform)
+                        .is_some_and(|index| platforms.get(*index).is_some())
+                    {
                         return true;
                     }
                 }
@@ -385,7 +472,7 @@ impl Tags {
         let mut max_compatibility = TagCompatibility::Incompatible(IncompatibleTag::Invalid);
 
         for wheel_py in wheel_tags.python_tags {
-            let Some(abis) = self.map.get(wheel_py) else {
+            let Some(abis) = self.map.rows.get(wheel_py) else {
                 max_compatibility =
                     max_compatibility.max(TagCompatibility::Incompatible(IncompatibleTag::Python));
                 continue;
@@ -397,7 +484,11 @@ impl Tags {
                     continue;
                 };
                 for wheel_platform in wheel_tags.platform_tags {
-                    let priority = platforms.get(wheel_platform).copied();
+                    let priority = self
+                        .map
+                        .platform_indices
+                        .get(wheel_platform)
+                        .and_then(|index| platforms.get(*index));
                     if let Some(priority) = priority {
                         max_compatibility =
                             max_compatibility.max(TagCompatibility::Compatible(priority));
@@ -422,13 +513,18 @@ impl Tags {
             return TagCompatibility::Incompatible(IncompatibleTag::FreethreadedAbi);
         }
 
-        let Some(abis) = self.map.get(wheel_python_tag) else {
+        let Some(abis) = self.map.rows.get(wheel_python_tag) else {
             return TagCompatibility::Incompatible(IncompatibleTag::Python);
         };
         let Some(platforms) = abis.get(wheel_abi_tag) else {
             return TagCompatibility::Incompatible(IncompatibleTag::Abi);
         };
-        let Some(priority) = platforms.get(wheel_platform_tag).copied() else {
+        let Some(priority) = self
+            .map
+            .platform_indices
+            .get(wheel_platform_tag)
+            .and_then(|index| platforms.get(*index))
+        else {
             return TagCompatibility::Incompatible(IncompatibleTag::Platform);
         };
 
@@ -454,6 +550,7 @@ impl Tags {
     /// environment.
     pub fn is_compatible_abi(&self, python_tag: LanguageTag, abi_tag: AbiTag) -> bool {
         self.map
+            .rows
             .get(&python_tag)
             .is_some_and(|abis| abis.contains_key(&abi_tag))
     }
@@ -498,9 +595,10 @@ impl std::fmt::Display for Tags {
     /// Display tags from high to low priority
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut tags = BTreeSet::new();
-        for (python_tag, abi_tags) in self.map.iter() {
+        for (python_tag, abi_tags) in &self.map.rows {
             for (abi_tag, platform_tags) in abi_tags {
-                for (platform_tag, priority) in platform_tags {
+                for (platform_index, priority) in platform_tags.iter() {
+                    let platform_tag = &self.map.platforms[platform_index];
                     tags.insert((priority, format!("{python_tag}-{abi_tag}-{platform_tag}")));
                 }
             }
@@ -1174,6 +1272,88 @@ mod tests {
     use insta::{assert_debug_snapshot, assert_snapshot};
 
     use super::*;
+
+    #[test]
+    fn factored_priorities_match_nested_maps_and_duplicate_order()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let first = (
+            "cp312".parse::<LanguageTag>()?,
+            "cp312".parse::<AbiTag>()?,
+            "manylinux_2_28_x86_64".parse::<PlatformTag>()?,
+        );
+        let second = (first.0, first.1, "win_amd64".parse::<PlatformTag>()?);
+        let third = (
+            "py3".parse::<LanguageTag>()?,
+            AbiTag::None,
+            PlatformTag::Any,
+        );
+        let input = vec![
+            first.clone(),
+            second.clone(),
+            third.clone(),
+            second.clone(),
+            third.clone(),
+            first.clone(),
+        ];
+        let reordered = vec![
+            first.clone(),
+            third.clone(),
+            second.clone(),
+            second.clone(),
+            third.clone(),
+            first.clone(),
+        ];
+        let platform = Platform::new(Os::Windows, Arch::X86_64);
+        let tags = Tags::new(input.clone(), platform.clone(), (3, 12), false, false);
+        assert_eq!(tags, Tags::new(reordered, platform, (3, 12), false, false));
+        assert_eq!(tags.python_tag(), Some(first.0));
+        assert_eq!(tags.abi_tag(), Some(first.1));
+        assert_eq!(tags.platform_tag(), Some(&first.2));
+
+        let mut nested = FxHashMap::default();
+        for (index, (python, abi, platform)) in input.into_iter().rev().enumerate() {
+            nested
+                .entry(python)
+                .or_insert_with(FxHashMap::default)
+                .entry(abi)
+                .or_insert_with(FxHashMap::default)
+                .entry(platform)
+                .or_insert(TagPriority::try_from(index)?);
+        }
+        let python_tags = [first.0, third.0, "cp311".parse()?];
+        let abi_tags = [first.1, AbiTag::None, "abi3".parse()?];
+        let platform_tags = [
+            first.2,
+            second.2,
+            PlatformTag::Any,
+            "linux_aarch64".parse()?,
+        ];
+        for python in &python_tags {
+            for abi in &abi_tags {
+                for platform in &platform_tags {
+                    let expected = match nested.get(python) {
+                        None => TagCompatibility::Incompatible(IncompatibleTag::Python),
+                        Some(abis) => match abis.get(abi) {
+                            None => TagCompatibility::Incompatible(IncompatibleTag::Abi),
+                            Some(platforms) => match platforms.get(platform) {
+                                None => TagCompatibility::Incompatible(IncompatibleTag::Platform),
+                                Some(priority) => TagCompatibility::Compatible(*priority),
+                            },
+                        },
+                    };
+                    let compressed = CompressedTags {
+                        python_tags: slice::from_ref(python),
+                        abi_tags: slice::from_ref(abi),
+                        platform_tags: slice::from_ref(platform),
+                    };
+                    assert_eq!(tags.compatibility_tag(python, abi, platform), expected);
+                    assert_eq!(tags.compatibility(compressed), expected);
+                    assert_eq!(tags.is_compatible(compressed), expected.is_compatible());
+                }
+            }
+        }
+        Ok(())
+    }
 
     /// Check platform tag ordering.
     /// The list is displayed in decreasing priority.
