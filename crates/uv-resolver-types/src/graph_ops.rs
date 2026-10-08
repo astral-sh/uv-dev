@@ -244,8 +244,11 @@ impl<'a> ConflictWorlds<'a> {
         match self.worlds[world.0].binary_search(&item) {
             Ok(_) => world,
             Err(index) => {
-                let mut items = self.worlds[world.0].to_vec();
-                items.insert(index, item);
+                let current = &self.worlds[world.0];
+                let mut items = Vec::with_capacity(current.len() + 1);
+                items.extend_from_slice(&current[..index]);
+                items.push(item);
+                items.extend_from_slice(&current[index..]);
                 WorldId(self.worlds.insert_full(items.into_boxed_slice()).0)
             }
         }
