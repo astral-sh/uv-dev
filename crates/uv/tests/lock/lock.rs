@@ -31365,17 +31365,7 @@ async fn lock_keyring_credentials() -> Result<()> {
     let keyring_context = uv_test::test_context!("3.12");
 
     // Install our keyring plugin
-    keyring_context
-        .pip_install()
-        .arg(
-            keyring_context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = keyring_context.install_keyring_plugin();
 
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
@@ -31404,7 +31394,7 @@ async fn lock_keyring_credentials() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock()
         .env(EnvVars::index_username("PROXY"), "public")
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"public": "heron"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 0 (success)
     ----- stderr -----
     Keyring request for public@http://[LOCALHOST]/basic-auth/simple
@@ -31462,14 +31452,7 @@ async fn lock_keyring_explicit_always() -> Result<()> {
 
     // Install our keyring plugin
     keyring_context
-        .pip_install()
-        .arg(
-            keyring_context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
+        .keyring_plugin_install_command()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .env_remove(EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF)
         // (from `echo "keyring==v25.6.0" | uv pip compile - --no-annotate --no-header -q`)
@@ -31545,14 +31528,7 @@ async fn lock_keyring_credentials_always_authenticate_fetches_username() -> Resu
 
     // Install our keyring plugin
     keyring_context
-        .pip_install()
-        .arg(
-            keyring_context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
+        .keyring_plugin_install_command()
         // We need a newer version of keyring that supports `--mode`, so unset the timestamp
         // cutoffs and pin the dependencies.
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
@@ -31648,17 +31624,7 @@ async fn lock_keyring_credentials_always_authenticate_unsupported_mode() -> Resu
     let keyring_context = uv_test::test_context!("3.12");
 
     // Install our keyring plugin
-    keyring_context
-        .pip_install()
-        .arg(
-            keyring_context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = keyring_context.install_keyring_plugin();
 
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let proxy = crate::pypi_proxy::start().await;
@@ -31686,7 +31652,7 @@ async fn lock_keyring_credentials_always_authenticate_unsupported_mode() -> Resu
 
     uv_snapshot!(context.filters(), context.lock()
         .env(EnvVars::KEYRING_TEST_CREDENTIALS, format!(r#"{{"{host}": {{"public": "heron"}}}}"#, host = proxy.host_port()))
-        .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
+        .env(EnvVars::PATH, &keyring_bin), @"
     exit_code: 2 (failure)
     ----- stderr -----
     warning: Attempted to fetch credentials using the `keyring` command, but it does not support `--mode creds`; upgrade to `keyring>=v25.2.1` or provide a username

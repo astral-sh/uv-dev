@@ -9,7 +9,7 @@ use fs_err::{metadata, set_permissions};
 use indoc::indoc;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::uv_snapshot;
 
 #[test]
 fn tool_run_args() {
@@ -3596,17 +3596,7 @@ async fn tool_run_latest_keyring_auth() {
     let keyring_context = uv_test::test_context!("3.12");
 
     // Install our keyring plugin
-    keyring_context
-        .pip_install()
-        .arg(
-            keyring_context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = keyring_context.install_keyring_plugin();
 
     let proxy = crate::pypi_proxy::start().await;
 
@@ -3617,8 +3607,7 @@ async fn tool_run_latest_keyring_auth() {
     let bin_dir = context.temp_dir.child("bin");
 
     // Combine keyring venv bin with tool bin directory to avoid PATH warnings.
-    let path = std::env::join_paths([venv_bin_path(&keyring_context.venv), bin_dir.to_path_buf()])
-        .unwrap();
+    let path = std::env::join_paths([keyring_bin, bin_dir.to_path_buf()]).unwrap();
 
     // Test that the keyring is consulted during the @latest version lookup.
     uv_snapshot!(context.filters(), context.tool_install()

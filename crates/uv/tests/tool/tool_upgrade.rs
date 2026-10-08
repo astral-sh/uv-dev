@@ -16,7 +16,7 @@ use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, scenario::Scenario};
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::uv_snapshot;
 
 #[test]
 fn tool_upgrade_empty() {
@@ -1443,17 +1443,7 @@ fn tool_upgrade_excludes() {
 #[tokio::test]
 async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
     let keyring_context = uv_test::test_context!("3.12");
-    keyring_context
-        .pip_install()
-        .arg(
-            keyring_context
-                .workspace_root
-                .join("test")
-                .join("packages")
-                .join("keyring_test_plugin"),
-        )
-        .assert()
-        .success();
+    let keyring_bin = keyring_context.install_keyring_plugin();
 
     let proxy = crate::pypi_proxy::start().await;
     let context = uv_test::test_context!("3.12")
@@ -1462,7 +1452,7 @@ async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
-    let path = std::env::join_paths([venv_bin_path(&keyring_context.venv), bin_dir.to_path_buf()])?;
+    let path = std::env::join_paths([keyring_bin, bin_dir.to_path_buf()])?;
     let credentials = format!(
         r#"{{"{host}": {{"public": "heron"}}}}"#,
         host = proxy.host_port()
