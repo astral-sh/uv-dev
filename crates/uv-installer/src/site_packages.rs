@@ -835,6 +835,8 @@ mod tests {
 
         // Include both legacy file formats and unrelated entries, created out of sorted order.
         fs_err::write(platlib.join("module.py"), "")?;
+        // A dist-info filename alone does not make a regular file a distribution.
+        fs_err::write(platlib.join("unexpected-1.0.dist-info"), "")?;
         fs_err::create_dir(platlib.join("ordinary_package"))?;
         let editable = temp_dir.path().join("editable");
         let egg_info = editable.join("b_editable.egg-info");
