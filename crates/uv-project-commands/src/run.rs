@@ -27,7 +27,7 @@ use uv_configuration::{
     ExtrasSpecification, InstallOptions, Modifications, RequirementsInput, TargetTriple,
 };
 use uv_dispatch::UniversalState;
-use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
+use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::NameRequirementSpecification;
 use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
@@ -45,15 +45,20 @@ use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
-use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, Interpreter, PyVenvConfiguration, PythonArchitecture,
-    PythonDownloads, PythonEnvironment, PythonInstallation, PythonPreference, PythonRequest,
-    PythonVersionFile, VersionFileDiscoveryOptions,
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::PythonInstallation;
+use uv_python_discovery::PythonVersionFile;
+use uv_python_discovery::ScriptInterpreter;
+use uv_python_discovery::VersionFileDiscoveryOptions;
+use uv_python_interpreter::{Interpreter, PyVenvConfiguration, PythonEnvironment};
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_python_context::{ProjectPythonRequest, PythonDownloadReporter, ScriptInterpreter};
 use uv_redacted::DisplaySafeUrl;
 use uv_requirements::{
-    RequirementsSource, RequirementsSpecification, script_extra_build_requires,
+    LoweringContext, RequirementsSource, RequirementsSpecification, script_extra_build_requires,
     script_specification,
 };
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
@@ -909,7 +914,13 @@ pub async fn run(
         let spec = RequirementsSpecification::from_simple_sources(
             &requirements,
             &client_builder,
-            LoweringContext::new(&cache, workspace_cache, client_builder.credentials_cache()),
+            LoweringContext::new(
+                &settings.resolver.sources,
+                &settings.resolver.index_locations,
+                &cache,
+                workspace_cache,
+                client_builder.credentials_cache(),
+            ),
         )
         .await?;
 

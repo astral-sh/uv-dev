@@ -5,6 +5,8 @@ use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
+use indoc::indoc;
+use insta::allow_duplicates;
 
 use uv_test::uv_snapshot;
 
@@ -83,24 +85,37 @@ fn uninstall() -> Result<()> {
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3")?;
 
-    context
-        .pip_sync()
-        .arg("requirements.txt")
-        .assert()
-        .success();
+    let script = context.temp_dir.child("requirements.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["MarkupSafe"]
+        # [tool.uv.sources]
+        # markupsafe = { workspace = "./missing-workspace" }
+        # ///
+    "#})?;
 
-    context.assert_command("import markupsafe").success();
+    allow_duplicates! {
+        for arguments in [&["MarkupSafe"][..], &["-r", "requirements.py"][..]] {
+            context
+                .pip_sync()
+                .arg("requirements.txt")
+                .assert()
+                .success();
 
-    uv_snapshot!(context.pip_uninstall()
-        .arg("MarkupSafe"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Uninstalled 1 package in [TIME]
-     - markupsafe==2.1.3
-    "
-    );
+            context.assert_command("import markupsafe").success();
 
-    context.assert_command("import markupsafe").failure();
+            uv_snapshot!(context.pip_uninstall()
+                .args(arguments), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Uninstalled 1 package in [TIME]
+             - markupsafe==2.1.3
+            "
+            );
+
+            context.assert_command("import markupsafe").failure();
+        }
+    }
 
     Ok(())
 }

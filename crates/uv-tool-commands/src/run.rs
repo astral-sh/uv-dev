@@ -21,7 +21,7 @@ use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, Excludes, GitLfsSetting,
     Overrides, TargetTriple, ToolRunCommand,
 };
-use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
+use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
     IndexCapabilities, IndexUrl, Name, NameRequirementSpecification, Requirement,
@@ -33,11 +33,13 @@ use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
 use uv_pep508::MarkerTree;
 use uv_preview::Preview;
-use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonEnvironment,
-    PythonInstallation, PythonPreference, PythonRequest,
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::PythonInstallation;
+use uv_python_interpreter::PythonEnvironment;
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_shell::WindowsRunnable;
 use uv_static::EnvVars;
@@ -55,7 +57,7 @@ use crate::requirements::resolve_names;
 use crate::{Target, ToolRequest};
 use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
-use uv_python_context::PythonDownloadReporter;
+use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations as operations;
 use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
@@ -838,7 +840,13 @@ async fn get_or_create_environment(
         operations::read_constraints(
             build_constraints,
             client_builder,
-            LoweringContext::new(cache, workspace_cache, client_builder.credentials_cache()),
+            LoweringContext::new(
+                &settings.resolver.sources,
+                &settings.resolver.index_locations,
+                cache,
+                workspace_cache,
+                client_builder.credentials_cache(),
+            ),
         )
         .await?,
     );
@@ -1031,7 +1039,13 @@ async fn get_or_create_environment(
         &[],
         None,
         client_builder,
-        LoweringContext::new(cache, workspace_cache, client_builder.credentials_cache()),
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
     )
     .await?;
     let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
@@ -1097,11 +1111,13 @@ async fn get_or_create_environment(
             let existing_environment = installed_tools
                 .get_environment(&requirement.name, cache)?
                 .filter(|environment| {
-                    python_request
-                        .as_ref()
-                        .unwrap_or(&PythonRequest::Any)
-                        .with_default_arch(python_arch.map(PythonArchitecture::into_inner))
-                        .satisfied(environment.environment().interpreter(), cache)
+                    environment.environment().interpreter().matches_request(
+                        &python_request
+                            .as_ref()
+                            .unwrap_or(&PythonRequest::Any)
+                            .with_default_arch(python_arch.map(PythonArchitecture::into_inner)),
+                        cache,
+                    )
                 });
 
             // Check if the installed packages meet the requirements.

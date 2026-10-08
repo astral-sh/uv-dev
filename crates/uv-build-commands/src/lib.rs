@@ -24,7 +24,7 @@ use uv_configuration::{
     IndexStrategy, KeyringProviderType, NoSources,
 };
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::{LoweredExtraBuildDependencies, LoweringContext};
+use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_filename::{
     DistFilename, SourceDistExtension, SourceDistFilename, WheelFilename,
 };
@@ -39,12 +39,15 @@ use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_preview::{Preview, PreviewFeature};
-use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonEnvironment,
-    PythonInstallation, PythonPreference, PythonRequest, PythonVersionFile,
-    VersionFileDiscoveryOptions,
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::PythonInstallation;
+use uv_python_discovery::PythonVersionFile;
+use uv_python_discovery::VersionFileDiscoveryOptions;
+use uv_python_interpreter::PythonEnvironment;
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::RequirementsSource;
+use uv_requirements::{LoweringContext, RequirementsSource};
 use uv_resolve_operations as operations;
 use uv_resolver::{ExcludeNewer, FlatIndex};
 use uv_settings::PythonInstallMirrors;
@@ -53,7 +56,9 @@ use uv_warnings::warn_user;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 
-use uv_python_context::{PythonContextError, PythonDownloadReporter, find_requires_python};
+use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::PythonSelectionError;
+use uv_python_discovery::find_requires_python;
 use uv_settings::ResolverSettings;
 
 #[derive(Debug, Error)]
@@ -61,7 +66,7 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
-    FindOrDownloadPython(#[from] uv_python::Error),
+    FindOrDownloadPython(#[from] uv_python_discovery::Error),
     #[error(transparent)]
     HashStrategy(#[from] uv_types::HashStrategyError),
     #[error(transparent)]
@@ -89,7 +94,7 @@ pub enum Error {
     #[error("Build requirement is not satisfied: `{0}`")]
     UnsatisfiedBuildRequirement(Box<Requirement>),
     #[error(transparent)]
-    PythonContext(#[from] Box<PythonContextError>),
+    PythonContext(#[from] Box<PythonSelectionError>),
     #[error("Failed to write message")]
     Fmt(#[from] fmt::Error),
     #[error("Can't use `--force-pep517` with `--list`")]
@@ -113,8 +118,8 @@ pub enum Error {
     VersionMismatch(Version, Version),
 }
 
-impl From<PythonContextError> for Error {
-    fn from(error: PythonContextError) -> Self {
+impl From<PythonSelectionError> for Error {
+    fn from(error: PythonSelectionError) -> Self {
         Self::PythonContext(Box::new(error))
     }
 }
@@ -549,9 +554,12 @@ async fn build_package(
     if interpreter_request.is_none() {
         if let Ok(workspace) = workspace {
             let groups = DependencyGroupsWithDefaults::none();
-            interpreter_request = find_requires_python(workspace, &groups)?
-                .as_ref()
-                .and_then(PythonRequest::from_requires_python);
+            interpreter_request =
+                find_requires_python(workspace, &groups)?
+                    .as_ref()
+                    .and_then(|requires_python| {
+                        PythonRequest::from_specifiers(requires_python.specifiers())
+                    });
         }
     }
 
@@ -575,7 +583,13 @@ async fn build_package(
     let command_line_constraints = operations::read_constraints(
         build_constraints,
         &client_builder,
-        LoweringContext::new(cache, workspace_cache, client_builder.credentials_cache()),
+        LoweringContext::new(
+            &sources,
+            index_locations,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
     )
     .await?;
     let build_constraints = Constraints::from_specifications(

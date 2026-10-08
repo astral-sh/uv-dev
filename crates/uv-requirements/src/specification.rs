@@ -35,26 +35,57 @@ use rustc_hash::FxHashSet;
 use tracing::instrument;
 use url::Url;
 
+use uv_auth::CredentialsCache;
+use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    DependencyGroups, ExcludeDependency, NoBinary, NoBuild, Override, PackageOverride,
-    RequirementsInput,
+    DependencyGroups, ExcludeDependency, NoBinary, NoBuild, NoSources, Override, RequirementsInput,
 };
-use uv_distribution::{LoweredRequirement, LoweringContext};
-use uv_distribution_types::{Index, Requirement};
+use uv_distribution_types::{Index, Requirement, RequirementSource};
 use uv_distribution_types::{
     IndexLocations, IndexUrl, NameRequirementSpecification, UnresolvedRequirement,
     UnresolvedRequirementSpecification,
 };
 use uv_fs::{CWD, Simplified};
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
+use uv_pep508::VerbatimUrl;
 use uv_pypi_types::PyProjectToml;
 use uv_requirements_txt::{RequirementsTxt, RequirementsTxtRequirement, SourceCache};
-use uv_scripts::{OverrideDependency, Pep723Metadata};
+use uv_scripts::Pep723Metadata;
 use uv_warnings::warn_user;
+use uv_workspace::WorkspaceCache;
 
+use crate::script::script_metadata_specification;
 use crate::{RequirementsSource, SourceTree};
+
+/// Settings and shared state used to lower requirements from inline script metadata.
+#[derive(Debug, Clone, Copy)]
+pub struct LoweringContext<'a> {
+    sources: &'a NoSources,
+    index_locations: &'a IndexLocations,
+    cache: &'a Cache,
+    workspace_cache: &'a WorkspaceCache,
+    credentials_cache: &'a CredentialsCache,
+}
+
+impl<'a> LoweringContext<'a> {
+    pub fn new(
+        sources: &'a NoSources,
+        index_locations: &'a IndexLocations,
+        cache: &'a Cache,
+        workspace_cache: &'a WorkspaceCache,
+        credentials_cache: &'a CredentialsCache,
+    ) -> Self {
+        Self {
+            sources,
+            index_locations,
+            cache,
+            workspace_cache,
+            credentials_cache,
+        }
+    }
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct RequirementsSpecification {
@@ -120,14 +151,6 @@ impl RequirementsSpecification {
         lowering_context: LoweringContext<'_>,
     ) -> Result<Self> {
         let tool_uv = metadata.tool.as_ref().and_then(|tool| tool.uv.as_ref());
-        let empty_sources = BTreeMap::default();
-        let sources = tool_uv
-            .and_then(|tool_uv| tool_uv.sources.as_ref())
-            .unwrap_or(&empty_sources);
-        let indexes = tool_uv
-            .and_then(|tool_uv| tool_uv.top_level.index.as_deref())
-            .unwrap_or(&[]);
-        let locations = IndexLocations::new(indexes.to_vec(), Vec::new(), false);
         let script_dir = match input {
             RequirementsInput::Stdin | RequirementsInput::Remote(_) => CWD.to_path_buf(),
             RequirementsInput::Local(path) => std::path::absolute(path)?
@@ -136,71 +159,49 @@ impl RequirementsSpecification {
                 .unwrap_or_else(|| CWD.to_path_buf()),
         };
 
-        let mut requirements = Vec::new();
-        for dependency in metadata.dependencies.iter().flatten() {
-            requirements.extend(
-                LoweredRequirement::from_non_workspace_requirement(
-                    dependency.to_owned(),
-                    &script_dir,
-                    sources,
-                    indexes,
-                    &locations,
-                    lowering_context.cache(),
-                    lowering_context.workspace_cache(),
-                    lowering_context.credentials_cache(),
-                )
-                .await
-                .map(|requirement| {
-                    requirement.map(|requirement| {
-                        UnresolvedRequirementSpecification::from(requirement.into_inner())
-                    })
-                })
-                .collect::<Result<Vec<UnresolvedRequirementSpecification>, _>>()?,
-            );
+        let mut specification = script_metadata_specification(
+            metadata,
+            &script_dir,
+            lowering_context.sources,
+            lowering_context.index_locations,
+            lowering_context.cache,
+            lowering_context.workspace_cache,
+            lowering_context.credentials_cache,
+        )
+        .await?;
+
+        // Requirements files are consumed relative to the invoking directory. Script sources
+        // instead use the script's directory, so emit their resolved paths when compiling them.
+        let absolute_path = |requirement: &mut Requirement| match &mut requirement.source {
+            RequirementSource::Path { url, .. } | RequirementSource::Directory { url, .. } => {
+                *url = VerbatimUrl::from_url(url.to_url());
+            }
+            RequirementSource::Registry { .. }
+            | RequirementSource::Url { .. }
+            | RequirementSource::GitDirectory { .. }
+            | RequirementSource::GitPath { .. } => {}
+        };
+        for requirement in &mut specification.requirements {
+            if let UnresolvedRequirement::Named(requirement) = &mut requirement.requirement {
+                absolute_path(requirement);
+            }
+        }
+        for constraint in &mut specification.constraints {
+            absolute_path(&mut constraint.requirement);
+        }
+        for entry in &mut specification.override_dependencies {
+            match entry {
+                Override::Requirement(requirement) => absolute_path(requirement),
+                Override::Package(package) => {
+                    for requirement in &mut package.dependencies {
+                        absolute_path(requirement);
+                    }
+                }
+            }
         }
 
         if let Some(tool_uv) = tool_uv {
-            let constraints = tool_uv
-                .constraint_dependencies
-                .as_ref()
-                .map(|dependencies| {
-                    dependencies
-                        .iter()
-                        .map(|dependency| {
-                            NameRequirementSpecification::from(Requirement::from(
-                                dependency.to_owned(),
-                            ))
-                        })
-                        .collect::<Vec<NameRequirementSpecification>>()
-                })
-                .unwrap_or_default();
-
-            let override_dependencies = tool_uv
-                .override_dependencies
-                .as_ref()
-                .into_iter()
-                .flatten()
-                .map(|dependency| match dependency {
-                    OverrideDependency::Requirement(requirement) => {
-                        Override::Requirement(Requirement::from(requirement.clone()))
-                    }
-                    OverrideDependency::Package(package) => Override::Package(PackageOverride {
-                        package: package.package.clone(),
-                        dependencies: package
-                            .dependencies
-                            .iter()
-                            .cloned()
-                            .map(Requirement::from)
-                            .collect(),
-                    }),
-                })
-                .collect();
-
             Ok(Self {
-                requirements,
-                constraints,
-                override_dependencies,
-                excludes: tool_uv.exclude_dependencies.clone().unwrap_or_default(),
                 index_url: tool_uv
                     .top_level
                     .index_url
@@ -237,13 +238,10 @@ impl RequirementsSpecification {
                         .clone()
                         .unwrap_or_default(),
                 ),
-                ..Self::default()
+                ..specification
             })
         } else {
-            Ok(Self {
-                requirements,
-                ..Self::default()
-            })
+            Ok(specification)
         }
     }
 

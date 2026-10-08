@@ -6,7 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::future::{self, Future};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures::FutureExt;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
@@ -32,7 +32,7 @@ use uv_git::GitResolver;
 use uv_installer::{InstallationStrategy, Installer, Plan, Planner, Preparer, SitePackages};
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
-use uv_python::{Interpreter, PythonEnvironment};
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::LookaheadResolver;
 use uv_resolver::{
     ExcludeNewer, FlatIndex, Flexibility, InMemoryIndex, Manifest, OptionsBuilder,
@@ -77,6 +77,15 @@ pub enum BuildDispatchError {
     #[error(transparent)]
     Prepare(#[from] uv_installer::PrepareError),
 
+    #[error("Failed to uninstall build dependencies")]
+    UninstallBuildDependencies(#[source] uv_installer::UninstallError),
+
+    #[error("Failed to install build dependencies")]
+    InstallBuildDependencies(#[source] uv_installer::InstallError),
+
+    #[error(transparent)]
+    Plan(#[from] uv_installer::PlanError),
+
     #[error(transparent)]
     Lookahead(#[from] uv_requirements::Error),
 }
@@ -85,12 +94,15 @@ impl uv_errors::Hinted for BuildDispatchError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
             Self::BuildFrontend(err) => err.hints(),
+            Self::Plan(error) => error.hints(),
             Self::Resolve(err) | Self::ResolveRequirements { source: err, .. } => err.hints(),
             Self::BuildBackend(_)
             | Self::Tags(_)
             | Self::Join(_)
             | Self::Anyhow(_)
             | Self::Prepare(_)
+            | Self::UninstallBuildDependencies(_)
+            | Self::InstallBuildDependencies(_)
             | Self::Lookahead(_) => uv_errors::Hints::none(),
         }
     }
@@ -105,7 +117,13 @@ impl IsBuildBackendError for BuildDispatchError {
             }
             Self::Prepare(error) => error.is_user_failure(),
             Self::Lookahead(error) => error.is_user_failure(),
-            Self::BuildBackend(_) | Self::Tags(_) | Self::Join(_) | Self::Anyhow(_) => false,
+            Self::BuildBackend(_)
+            | Self::Tags(_)
+            | Self::Join(_)
+            | Self::Anyhow(_)
+            | Self::UninstallBuildDependencies(_)
+            | Self::InstallBuildDependencies(_)
+            | Self::Plan(_) => false,
         }
     }
 
@@ -118,6 +136,9 @@ impl IsBuildBackendError for BuildDispatchError {
             | Self::Join(_)
             | Self::Anyhow(_)
             | Self::Prepare(_)
+            | Self::UninstallBuildDependencies(_)
+            | Self::InstallBuildDependencies(_)
+            | Self::Plan(_)
             | Self::Lookahead(_) => false,
             Self::BuildFrontend(err) => err.is_build_backend_error(),
         }
@@ -491,7 +512,7 @@ impl BuildContext for BuildDispatch<'_> {
             for dist_info in &reinstalls {
                 let summary = uv_installer::uninstall(dist_info, &layout)
                     .await
-                    .context("Failed to uninstall build dependencies")?;
+                    .map_err(BuildDispatchError::UninstallBuildDependencies)?;
                 debug!(
                     "Uninstalled {} ({} file{}, {} director{})",
                     dist_info.name(),
@@ -516,7 +537,7 @@ impl BuildContext for BuildDispatch<'_> {
                 .with_cache(self.cache)
                 .install(wheels)
                 .await
-                .context("Failed to install build dependencies")?;
+                .map_err(BuildDispatchError::InstallBuildDependencies)?;
         }
 
         Ok(wheels)

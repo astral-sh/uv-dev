@@ -7,17 +7,17 @@ use tracing::{debug, warn};
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{DryRun, KeyringProviderType};
-use uv_distribution::LoweringContext;
-use uv_distribution_types::Requirement;
+use uv_configuration::{DryRun, KeyringProviderType, NoSources};
+use uv_distribution_types::{IndexLocations, Requirement};
 use uv_distribution_types::{InstalledMetadata, Name, UnresolvedRequirement};
 use uv_fs::Simplified;
 use uv_pep508::UnnamedRequirement;
 use uv_pypi_types::VerbatimParsedUrl;
-use uv_python::PythonRequest;
-use uv_python::{EnvironmentPreference, PythonArchitecture, PythonPreference};
-use uv_python::{Prefix, PythonEnvironment, Target};
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_python_discovery::find_environment;
+use uv_python_types::{
+    EnvironmentPreference, Prefix, PythonArchitecture, PythonPreference, PythonRequest, Target,
+};
+use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
 use uv_workspace::WorkspaceCache;
 
 use crate::reporters::report_target_environment;
@@ -43,8 +43,15 @@ pub async fn pip_uninstall(
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
     let workspace_cache = WorkspaceCache::default();
-    let lowering_context =
-        LoweringContext::new(&cache, &workspace_cache, client_builder.credentials_cache());
+    let source_policy = NoSources::All;
+    let index_locations = IndexLocations::default();
+    let lowering_context = LoweringContext::new(
+        &source_policy,
+        &index_locations,
+        &cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Read all requirements from the provided sources.
     let spec =
@@ -52,7 +59,7 @@ pub async fn pip_uninstall(
             .await?;
 
     // Detect the current Python interpreter.
-    let environment = PythonEnvironment::find(
+    let environment = find_environment(
         &python
             .as_deref()
             .map(PythonRequest::parse)

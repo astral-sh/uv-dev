@@ -6,10 +6,10 @@ use url::Url;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::RequirementsInput;
-use uv_distribution::LoweringContext;
+use uv_configuration::{NoSources, RequirementsInput};
+use uv_distribution_types::IndexLocations;
 use uv_redacted::DisplaySafeUrl;
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
 use uv_workspace::WorkspaceCache;
 
 #[test]
@@ -105,9 +105,16 @@ async fn constraint_specifications_preserve_hashes() -> Result<()> {
 
     let cache = Cache::temp()?;
     let workspace_cache = WorkspaceCache::default();
+    let sources = NoSources::None;
+    let index_locations = IndexLocations::default();
     let client_builder = BaseClientBuilder::default();
-    let lowering_context =
-        LoweringContext::new(&cache, &workspace_cache, client_builder.credentials_cache());
+    let lowering_context = LoweringContext::new(
+        &sources,
+        &index_locations,
+        &cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     let specification = RequirementsSpecification::from_sources(
         &[],

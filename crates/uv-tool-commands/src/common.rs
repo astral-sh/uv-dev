@@ -36,10 +36,14 @@ use uv_normalize::{DefaultExtras, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_preview::Preview;
 use uv_pypi_types::Conflicts;
-use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, Interpreter, PythonArchitecture, PythonDownloads,
-    PythonEnvironment, PythonInstallation, PythonPreference, PythonRequest, PythonVariant,
-    PythonVersionFile, VersionFileDiscoveryOptions, VersionRequest,
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::PythonInstallation;
+use uv_python_discovery::PythonVersionFile;
+use uv_python_discovery::VersionFileDiscoveryOptions;
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
+    PythonVariant, VersionRequest,
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput};
@@ -113,7 +117,8 @@ impl Hinted for NoExecutablesError {
 use uv_command_support::Printer;
 use uv_environment_operations::{EnvironmentSpecification, PreferenceLocation};
 use uv_lock_operations::ValidatedLock;
-use uv_python_context::{PythonDownloadReporter, PythonRequestSource};
+use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::PythonRequestSource;
 use uv_settings::ResolverSettings;
 
 use crate::error::ToolLockError;
@@ -212,7 +217,7 @@ impl ToolPython {
         .await?
         .filter(|file| match (file.version(), requires_python.as_ref()) {
             (Some(request), Some(requires_python)) => {
-                request.intersects_requires_python(requires_python)
+                request.intersects_specifiers(requires_python.specifiers())
             }
             _ => true,
         }) {
@@ -223,9 +228,9 @@ impl ToolPython {
         } else {
             (
                 PythonRequestSource::RequiresPython,
-                requires_python
-                    .as_ref()
-                    .and_then(PythonRequest::from_requires_python),
+                requires_python.as_ref().and_then(|requires_python| {
+                    PythonRequest::from_specifiers(requires_python.specifiers())
+                }),
             )
         };
 
@@ -650,7 +655,7 @@ pub(super) async fn refine_interpreter(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     cache: &Cache,
-) -> Result<Option<Interpreter>, uv_python::Error> {
+) -> Result<Option<Interpreter>, uv_python_discovery::Error> {
     let Some(no_solution_err) = err.as_no_solution() else {
         return Ok(None);
     };
@@ -718,10 +723,10 @@ pub(super) async fn refine_interpreter(
     // If the user passed a `--python` request, and the refined interpreter is incompatible, we
     // can't use it.
     if let Some(python_request) = python_request {
-        if !python_request
-            .with_default_arch(python_arch.map(PythonArchitecture::into_inner))
-            .satisfied(&interpreter, cache)
-        {
+        if !interpreter.matches_request(
+            &python_request.with_default_arch(python_arch.map(PythonArchitecture::into_inner)),
+            cache,
+        ) {
             return Ok(None);
         }
     }

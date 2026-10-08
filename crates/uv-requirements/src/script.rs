@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
@@ -7,7 +8,7 @@ use uv_distribution::{LoweredExtraBuildDependencies, LoweredRequirement, Lowerin
 use uv_distribution_types::{
     ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, IndexUrlError,
 };
-use uv_scripts::Pep723ItemRef;
+use uv_scripts::{Pep723ItemRef, Pep723Metadata};
 use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependency;
 
@@ -41,25 +42,48 @@ pub async fn script_specification(
     workspace_cache: &WorkspaceCache,
     credentials_cache: &CredentialsCache,
 ) -> Result<Option<RequirementsSpecification>, ScriptRequirementsError> {
-    let Some(dependencies) = script.metadata().dependencies.as_ref() else {
+    if script.metadata().dependencies.is_none() {
         return Ok(None);
-    };
+    }
 
     let script_dir = script.directory()?;
-    let script_indexes = script
+    script_metadata_specification(
+        script.metadata(),
+        &script_dir,
+        sources,
+        index_locations,
+        cache,
+        workspace_cache,
+        credentials_cache,
+    )
+    .await
+    .map(Some)
+}
+
+/// Lower requirements from script metadata relative to its directory.
+pub(crate) async fn script_metadata_specification(
+    metadata: &Pep723Metadata,
+    script_dir: &Path,
+    sources: &NoSources,
+    index_locations: &IndexLocations,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    credentials_cache: &CredentialsCache,
+) -> Result<RequirementsSpecification, ScriptRequirementsError> {
+    let script_indexes = metadata
         .indexes(sources)
         .iter()
         .cloned()
-        .map(|index| index.relative_to(&script_dir))
+        .map(|index| index.relative_to(script_dir))
         .collect::<Result<Vec<_>, _>>()?;
-    let script_sources = script.sources(sources);
+    let script_sources = metadata.sources(sources);
 
     let mut requirements = Vec::new();
-    for requirement in dependencies.iter().cloned() {
+    for requirement in metadata.dependencies.iter().flatten().cloned() {
         requirements.extend(
             LoweredRequirement::from_non_workspace_requirement(
                 requirement,
-                script_dir.as_ref(),
+                script_dir,
                 script_sources.as_ref(),
                 &script_indexes,
                 index_locations,
@@ -72,8 +96,7 @@ pub async fn script_specification(
             .collect::<Result<Vec<_>, _>>()?,
         );
     }
-    let constraint_dependencies = script
-        .metadata()
+    let constraint_dependencies = metadata
         .tool
         .as_ref()
         .and_then(|tool| tool.uv.as_ref())
@@ -86,7 +109,7 @@ pub async fn script_specification(
         constraints.extend(
             LoweredRequirement::from_non_workspace_requirement(
                 requirement,
-                script_dir.as_ref(),
+                script_dir,
                 script_sources.as_ref(),
                 &script_indexes,
                 index_locations,
@@ -100,8 +123,7 @@ pub async fn script_specification(
         );
     }
     let overrides = {
-        let override_entries = script
-            .metadata()
+        let override_entries = metadata
             .tool
             .as_ref()
             .and_then(|tool| tool.uv.as_ref())
@@ -116,7 +138,7 @@ pub async fn script_specification(
                     overrides.extend(
                         LoweredRequirement::from_non_workspace_requirement(
                             requirement,
-                            script_dir.as_ref(),
+                            script_dir,
                             script_sources.as_ref(),
                             &script_indexes,
                             index_locations,
@@ -138,7 +160,7 @@ pub async fn script_specification(
                         dependencies.extend(
                             LoweredRequirement::from_non_workspace_requirement(
                                 requirement,
-                                script_dir.as_ref(),
+                                script_dir,
                                 script_sources.as_ref(),
                                 &script_indexes,
                                 index_locations,
@@ -160,8 +182,7 @@ pub async fn script_specification(
         }
         overrides
     };
-    let excludes = script
-        .metadata()
+    let excludes = metadata
         .tool
         .as_ref()
         .and_then(|tool| tool.uv.as_ref())
@@ -175,7 +196,7 @@ pub async fn script_specification(
         RequirementsSpecification::from_excludes(requirements, constraints, Vec::new(), Vec::new());
     specification.override_dependencies = overrides;
     specification.excludes = excludes;
-    Ok(Some(specification))
+    Ok(specification)
 }
 
 /// Determine the extra build requires for a script.

@@ -4,13 +4,12 @@ use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
-use insta::assert_snapshot;
+use insta::{allow_duplicates, assert_snapshot};
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
-use url::Url;
 use uv_fs::copy_dir_all;
-use uv_python::PYTHON_VERSION_FILENAME;
+use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -858,13 +857,48 @@ fn run_pep723_script_relative_index() -> Result<()> {
     let elsewhere = context.temp_dir.child("elsewhere");
     elsewhere.create_dir_all()?;
 
-    uv_snapshot!(context.filters(), context.run().current_dir(elsewhere).arg("--offline").arg(test_script.path()), @r"
+    uv_snapshot!(context.filters(), context.run().current_dir(&elsewhere).arg("--offline").arg(test_script.path()), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
      + ok==1.0.0
+     + validation==1.0.0
+    ");
+
+    let requirements = scripts.child("requirements.py");
+    requirements.write_str(indoc! { r#"
+        # /// script
+        # dependencies = ["ok", "validation"]
+        #
+        # [[tool.uv.index]]
+        # name = "local"
+        # url = "./links"
+        # format = "flat"
+        # explicit = true
+        #
+        # [tool.uv.sources]
+        # ok = { path = "./links/ok-1.0.0-py3-none-any.whl" }
+        # validation = { index = "local" }
+        # ///
+        "#
+    })?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .current_dir(&elsewhere)
+        .arg("--offline")
+        .arg("--with-requirements")
+        .arg(requirements.path())
+        .arg("python")
+        .arg("-c")
+        .arg("import ok, validation"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + ok==1.0.0 (from file://[TEMP_DIR]/scripts/links/ok-1.0.0-py3-none-any.whl)
      + validation==1.0.0
     ");
 
@@ -900,25 +934,66 @@ fn run_pep723_script_no_sources_package() -> Result<()> {
         index = explicit.index_url(),
     })?;
 
-    uv_snapshot!(context.filters(), context.run().arg("--default-index").arg(default.index_url()).arg("--no-sources-package").arg("unrelated").arg("main.py"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==2.0.0
-    ");
+    for arguments in [
+        &["main.py"][..],
+        &["--with-requirements", "main.py", "python", "-c", "import a"][..],
+    ] {
+        fs_err::remove_dir_all(&context.cache_dir)?;
 
-    fs_err::remove_dir_all(&context.cache_dir)?;
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.run().arg("--default-index").arg(default.index_url()).arg("--no-sources-package").arg("unrelated").args(arguments), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + a==2.0.0
+            ");
+        }
 
-    uv_snapshot!(context.filters(), context.run().arg("--default-index").arg(default.index_url()).arg("--no-sources-package").arg("a").arg("main.py"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + a==1.0.0
-    ");
+        fs_err::remove_dir_all(&context.cache_dir)?;
+
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.run().arg("--default-index").arg(default.index_url()).arg("--no-sources-package").arg("a").args(arguments), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + a==1.0.0
+            ");
+        }
+
+        fs_err::remove_dir_all(&context.cache_dir)?;
+
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.run()
+            .arg("--default-index").arg(default.index_url())
+            .arg("--no-sources").args(arguments), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + a==1.0.0
+            ");
+        }
+
+        fs_err::remove_dir_all(&context.cache_dir)?;
+
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.run()
+            .arg("--index").arg(format!("test={}", default.index_url()))
+            .args(arguments), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + a==1.0.0
+            ");
+        }
+    }
 
     Ok(())
 }
@@ -3042,72 +3117,6 @@ fn run_requirements_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Cannot read both requirements file and script from stdin
-    ");
-
-    Ok(())
-}
-
-/// PEP 723 files used with `--with-requirements` retain relative sources and named indexes.
-#[test]
-fn run_with_pep723_requirements_sources_and_indexes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let scripts = context.temp_dir.child("scripts");
-    scripts.create_dir_all()?;
-    let links = context.temp_dir.child("links");
-    links.create_dir_all()?;
-    for wheel in [
-        "ok-1.0.0-py3-none-any.whl",
-        "tqdm-1000.0.0-py3-none-any.whl",
-    ] {
-        fs_err::copy(
-            context.workspace_root.join("test/links").join(wheel),
-            links.child(wheel),
-        )?;
-    }
-
-    let Ok(links_url) = Url::from_directory_path(links.path()) else {
-        anyhow::bail!("Failed to convert links directory to a URL");
-    };
-    let requirements = scripts.child("requirements.py");
-    requirements.write_str(&formatdoc! {r#"
-        # /// script
-        # requires-python = ">=3.12"
-        # dependencies = ["ok", "tqdm"]
-        #
-        # [[tool.uv.index]]
-        # name = "local"
-        # url = "{}"
-        # format = "flat"
-        # explicit = true
-        #
-        # [tool.uv.sources]
-        # ok = {{ path = "../links/ok-1.0.0-py3-none-any.whl" }}
-        # tqdm = {{ index = "local" }}
-        # ///
-    "#, links_url})?;
-
-    let script = context.temp_dir.child("main.py");
-    script.write_str(indoc! {r#"
-        import importlib.metadata
-        print(importlib.metadata.version("ok"))
-        print(importlib.metadata.version("tqdm"))
-    "#})?;
-
-    uv_snapshot!(context.filters(), context.run()
-        .arg("--with-requirements")
-        .arg(requirements.path())
-        .arg(script.path()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    1.0.0
-    1000.0.0
-
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + ok==1.0.0 (from file://[TEMP_DIR]/links/ok-1.0.0-py3-none-any.whl)
-     + tqdm==1000.0.0
     ");
 
     Ok(())
