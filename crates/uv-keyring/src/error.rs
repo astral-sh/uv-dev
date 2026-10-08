@@ -59,7 +59,7 @@ pub enum Error {
     Invalid(String, String),
     /// This indicates that there is more than one credential found in the store
     /// that matches the entry.  Its value is a vector of the matching credentials.
-    #[error("Entry is matched by multiple credentials: {0:?}")]
+    #[error("Entry is matched by multiple credentials ({} matches)", .0.len())]
     Ambiguous(Vec<Box<Credential>>),
     /// This indicates that there was no default credential builder to use;
     /// the client must set one before creating entries.
@@ -89,5 +89,55 @@ mod tests {
                 Ok(s) => panic!("Bad password ({bytes:?}) decode gave results: {s:?}"),
             }
         }
+    }
+}
+
+#[cfg(all(
+    test,
+    any(
+        all(
+            any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"),
+            feature = "secret-service"
+        ),
+        all(target_os = "macos", feature = "apple-native"),
+        all(target_os = "windows", feature = "windows-native"),
+    )
+))]
+mod native_tests {
+    use insta::assert_snapshot;
+    use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
+
+    use crate::{Entry, Error};
+
+    #[test]
+    fn ambiguous_warning_redacts_credentials() -> anyhow::Result<()> {
+        let service = "uv:https://synthetic-url-token@example.com/?sig=synthetic-signature";
+        let username = "synthetic-username-token";
+        // Constructing entries only records their attributes; it does not access the native store.
+        let credentials = vec![
+            Entry::new(service, username)?.inner,
+            Entry::new(service, username)?.inner,
+        ];
+        let error = anyhow::Error::from(Error::Ambiguous(credentials)).context(
+            "Unable to fetch credentials for https://****@example.com/?sig=**** from system keyring",
+        );
+        let mut output = String::new();
+        write_error_chain_with_options(
+            error.as_ref(),
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_level("warning")
+                .with_stream(&mut output),
+        )?;
+        assert_snapshot!(anstream::adapter::strip_str(&output), @"
+        warning: Unable to fetch credentials for https://****@example.com/?sig=**** from system keyring
+          cause: Entry is matched by multiple credentials (2 matches)
+        ");
+
+        let Some(Error::Ambiguous(credentials)) = error.downcast_ref::<Error>() else {
+            anyhow::bail!("Expected the typed ambiguity error");
+        };
+        assert_eq!(credentials.len(), 2);
+        Ok(())
     }
 }

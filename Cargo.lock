@@ -7010,14 +7010,18 @@ dependencies = [
 name = "uv-keyring"
 version = "0.0.90"
 dependencies = [
+ "anstream",
+ "anyhow",
  "async-trait",
  "byteorder",
  "env_logger",
  "fastrand",
+ "insta",
  "secret-service",
  "security-framework",
  "thiserror",
  "tokio",
+ "uv-errors",
  "windows",
  "zeroize",
 ]
