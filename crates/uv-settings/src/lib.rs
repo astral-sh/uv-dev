@@ -811,18 +811,20 @@ impl EnvironmentOptions {
     pub fn new() -> Result<Self, Error> {
         // Timeout options, matching https://doc.rust-lang.org/nightly/cargo/reference/config.html#httptimeout
         // `UV_REQUEST_TIMEOUT` is provided for backwards compatibility with v0.1.6
-        let http_read_timeout = parse_integer_environment_variable(
+        let http_read_timeout = [
             EnvVars::UV_HTTP_TIMEOUT,
-            Some("value should be an integer number of seconds"),
-        )?
-        .or(parse_integer_environment_variable(
             EnvVars::UV_REQUEST_TIMEOUT,
-            Some("value should be an integer number of seconds"),
-        )?)
-        .or(parse_integer_environment_variable(
             EnvVars::HTTP_TIMEOUT,
-            Some("value should be an integer number of seconds"),
-        )?)
+        ]
+        .into_iter()
+        .find_map(|env_var| {
+            parse_integer_environment_variable(
+                env_var,
+                Some("value should be an integer number of seconds"),
+            )
+            .transpose()
+        })
+        .transpose()?
         .map(Duration::from_secs);
 
         // Ignore the deprecated `UV_NATIVE_TLS` variable when its replacement is set.
