@@ -9,7 +9,7 @@ use rustc_hash::FxHashSet;
 use tracing::trace;
 
 use uv_configuration::{Constraints, DependencyModifierScope, DependencyModifiers};
-use uv_distribution_types::{Requirement, RequirementSelection};
+use uv_distribution_types::Requirement;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::Version;
 use uv_pep508::MarkerTree;
@@ -188,14 +188,9 @@ impl<'a> RequirementExpander<'a> {
         let mut self_constraints = vec![];
         for req in &requirements {
             if name == &req.name && !req.extras().is_empty() && !req.source.is_empty() {
-                self_constraints.push(Requirement {
-                    name: req.name.clone(),
-                    selection: RequirementSelection::Groups(req.groups().into()),
-                    source: req.source.clone(),
-                    scope: req.scope.clone(),
-                    origin: req.origin.clone(),
-                    marker: req.marker,
-                });
+                let mut constraint = req.clone().into_owned();
+                constraint.selection.clear_extras();
+                self_constraints.push(constraint);
             }
         }
 

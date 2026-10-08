@@ -7,7 +7,7 @@ use rustc_hash::FxHashSet;
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::NoSources;
-use uv_distribution_types::{IndexLocations, Requirement, RequirementSelection};
+use uv_distribution_types::{IndexLocations, Requirement};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
 use uv_workspace::dependency_groups::FlatDependencyGroups;
@@ -428,14 +428,9 @@ impl FlatRequiresDist {
         let mut self_constraints = vec![];
         for req in &flattened {
             if req.name == *name && !req.source.is_empty() {
-                self_constraints.push(Requirement {
-                    name: req.name.clone(),
-                    selection: RequirementSelection::Groups(req.groups().into()),
-                    source: req.source.clone(),
-                    scope: req.scope.clone(),
-                    origin: req.origin.clone(),
-                    marker: req.marker,
-                });
+                let mut constraint = req.clone();
+                constraint.selection.clear_extras();
+                self_constraints.push(constraint);
             }
         }
 
