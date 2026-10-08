@@ -34,8 +34,17 @@ impl LocalWheel {
 
     /// Read the [`ResolutionMetadata`] from a wheel.
     pub(crate) fn metadata(&self) -> Result<ResolutionMetadata, Error> {
-        read_flat_wheel_metadata(&self.filename, &self.archive)
-            .map_err(|err| Error::WheelMetadata(self.archive.to_path_buf(), Box::new(err)))
+        let metadata = read_flat_wheel_metadata(&self.filename, &self.archive)
+            .map_err(|err| Error::WheelMetadata(self.archive.to_path_buf(), Box::new(err)))?;
+        if !uv_flags::contains(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK)
+            && !metadata.matches_wheel_version(&self.filename.version)
+        {
+            return Err(Error::WheelFilenameVersionMismatch {
+                filename: self.filename.version.clone(),
+                metadata: metadata.version,
+            });
+        }
+        Ok(metadata)
     }
 }
 
