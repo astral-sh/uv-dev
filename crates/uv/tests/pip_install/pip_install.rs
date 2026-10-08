@@ -8457,35 +8457,30 @@ async fn find_links_uppercase_http_url_from_requirements_file() -> Result<()> {
 /// Install from an environment-expanded `--find-links` URL with control characters in its scheme.
 #[test]
 fn find_links_file_url_with_ignored_control_characters() -> Result<()> {
-    allow_duplicates! {
-        for control in ['\t', '\r', '\n'] {
-            let context = uv_test::test_context!("3.12");
-            let links_url = Url::from_directory_path(context.workspace_root.join("test/links"))
-                .map_err(|()| anyhow!("Failed to convert links directory to URL"))?;
-            let links_url = links_url.as_str().replacen("file:", &format!("fi{control}le:"), 1);
-            context
-                .temp_dir
-                .child("requirements.txt")
-                .write_str(indoc! {r"
-                    --no-index
-                    --find-links ${UV_TEST_FIND_LINKS}
-                    ok==1.0.0
-                "})?;
+    let context = uv_test::test_context!("3.12");
+    let links_url = Url::from_directory_path(context.workspace_root.join("test/links"))
+        .map_err(|()| anyhow!("Failed to convert links directory to URL"))?;
+    let links_url = links_url.as_str().replacen("file:", "f\ti\rl\ne:", 1);
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+            --no-index
+            --find-links ${UV_TEST_FIND_LINKS}
+            ok==1.0.0
+        "})?;
 
-            uv_snapshot!(context.filters(), context.pip_install()
-                .arg("-r")
-                .arg("requirements.txt")
-                .env("UV_TEST_FIND_LINKS", links_url), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Installed 1 package in [TIME]
-             + ok==1.0.0
-            ");
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .env("UV_TEST_FIND_LINKS", links_url), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
 
     Ok(())
 }
@@ -8540,29 +8535,24 @@ async fn find_links_http_url_with_tab() -> Result<()> {
 /// Report malformed URLs after ignoring control characters in their schemes.
 #[test]
 fn find_links_invalid_url_with_ignored_control_characters() -> Result<()> {
-    allow_duplicates! {
-        for control in ['\t', '\r', '\n'] {
-            let context = uv_test::test_context!("3.12");
-            context
-                .temp_dir
-                .child("requirements.txt")
-                .write_str(indoc! {r"
-                    --find-links ${UV_TEST_FIND_LINKS}
-                    ok==1.0.0
-                "})?;
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+            --find-links ${UV_TEST_FIND_LINKS}
+            ok==1.0.0
+        "})?;
 
-            uv_snapshot!(context.filters(), context.pip_install()
-                .arg("-r")
-                .arg("requirements.txt")
-                .env("UV_TEST_FIND_LINKS", format!("ht{control}tp://[invalid")), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: Invalid URL in `requirements.txt` at position 0: ${UV_TEST_FIND_LINKS}
-              cause: invalid IPv6 address
-            ");
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .env("UV_TEST_FIND_LINKS", "h\tt\rt\np://[invalid"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid URL in `requirements.txt` at position 0: ${UV_TEST_FIND_LINKS}
+      cause: invalid IPv6 address
+    ");
 
     Ok(())
 }
