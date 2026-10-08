@@ -43,6 +43,8 @@ use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache, WorkspaceErrorKind,
 };
 
+use crate::edit::ProjectEdit;
+
 /// Add one or more packages to the project requirements.
 #[expect(clippy::single_match_else, clippy::fn_params_excessive_bools)]
 pub async fn init(
@@ -175,14 +177,6 @@ pub async fn init(
                 printer,
             ))
             .await?;
-
-            // Create the `README.md` if it does not already exist.
-            if !no_readme && !bare {
-                let readme = path.join("README.md");
-                if !readme.exists() {
-                    fs_err::write(readme, String::new())?;
-                }
-            }
 
             match explicit_path {
                 // Initialized a project in the current directory.
@@ -412,7 +406,7 @@ async fn init_project(
     )
     .await?;
 
-    init_project_kind(
+    let mut plan = init_project_kind(
         project_kind,
         name,
         path,
@@ -426,23 +420,22 @@ async fn init_project(
         no_readme,
     )?;
 
+    let mut workspace_message = None;
     if let Some(workspace) = workspace {
         if workspace.excludes(path)? {
             // If the member is excluded by the workspace, ignore it.
-            writeln!(
-                printer.stderr(),
+            workspace_message = Some(format!(
                 "Project `{}` is excluded by workspace `{}`",
                 name.cyan(),
                 workspace.install_path().simplified_display().cyan()
-            )?;
+            ));
         } else if workspace.includes(path)? {
             // If the member is already included in the workspace, skip the `members` addition.
-            writeln!(
-                printer.stderr(),
+            workspace_message = Some(format!(
                 "Project `{}` is already a member of workspace `{}`",
                 name.cyan(),
                 workspace.install_path().simplified_display().cyan()
-            )?;
+            ));
         } else {
             // Add the package to the workspace.
             let mut pyproject = PyProjectTomlMut::from_toml(
@@ -451,18 +444,17 @@ async fn init_project(
             )?;
             pyproject.add_workspace(path.strip_prefix(workspace.install_path())?)?;
 
-            // Save the modified `pyproject.toml`.
-            fs_err::write(
-                workspace.install_path().join("pyproject.toml"),
-                pyproject.to_string(),
-            )?;
+            plan.files.push(InitProjectFile {
+                path: workspace.install_path().join("pyproject.toml"),
+                contents: pyproject.to_string(),
+                original: Some(workspace.pyproject_toml().raw.as_bytes().to_vec()),
+            });
 
-            writeln!(
-                printer.stderr(),
+            workspace_message = Some(format!(
                 "Adding `{}` as member of workspace `{}`",
                 name.cyan(),
                 workspace.install_path().simplified_display().cyan()
-            )?;
+            ));
         }
         // Write .python-version if it doesn't exist in the workspace or if the version differs
         if let Some(python_request) = python_pin {
@@ -477,10 +469,7 @@ async fn init_project(
                         })
                 })
             {
-                PythonVersionFile::new(path.join(".python-version"))
-                    .with_versions(vec![python_request.clone()])
-                    .write()
-                    .await?;
+                plan.pin_python(path, &python_request)?;
             }
         }
     } else {
@@ -492,14 +481,22 @@ async fn init_project(
                 .as_ref()
                 .is_none_or(|file| file.path().parent().is_none_or(|parent| parent != path))
             {
-                PythonVersionFile::new(path.join(".python-version"))
-                    .with_versions(vec![python_request.clone()])
-                    .write()
-                    .await?;
+                plan.pin_python(path, &python_request)?;
             }
         }
     }
 
+    if !no_readme && !bare {
+        let readme = path.join("README.md");
+        if !readme.try_exists()? {
+            plan.create(readme, String::new());
+        }
+    }
+
+    plan.commit()?;
+    if let Some(message) = workspace_message {
+        writeln!(printer.stderr(), "{message}")?;
+    }
     Ok(())
 }
 
@@ -725,7 +722,71 @@ async fn determine_requires_python(
     }
 }
 
-/// Initialize this project kind at the target path.
+/// The files to publish together during project initialization.
+#[derive(Default)]
+struct InitProjectPlan {
+    files: Vec<InitProjectFile>,
+}
+
+struct InitProjectFile {
+    path: PathBuf,
+    contents: String,
+    original: Option<Vec<u8>>,
+}
+
+impl InitProjectPlan {
+    fn create(&mut self, path: PathBuf, contents: impl Into<String>) {
+        self.files.push(InitProjectFile {
+            path,
+            contents: contents.into(),
+            original: None,
+        });
+    }
+
+    fn pin_python(&mut self, path: &Path, request: &PythonRequest) -> std::io::Result<()> {
+        let path = path.join(".python-version");
+        let original = match fs_err::read(&path) {
+            Ok(contents) => Some(contents),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err),
+        };
+        self.files.push(InitProjectFile {
+            path,
+            contents: format!("{}\n", request.to_canonical_string()),
+            original,
+        });
+        Ok(())
+    }
+
+    fn commit(self) -> Result<()> {
+        let edit = ProjectEdit::new(self.files.iter().map(|file| file.path.clone()))?;
+        // Check the inputs after the rollback guard captures them. A subsequent change is
+        // rejected by the tracked writer instead of becoming part of this initialization.
+        for file in &self.files {
+            let current = match fs_err::read(&file.path) {
+                Ok(contents) => Some(contents),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+                Err(err) => return Err(err.into()),
+            };
+            if current != file.original {
+                bail!(
+                    "File `{}` changed during project initialization; retry the command",
+                    file.path.user_display()
+                );
+            }
+        }
+        for file in self.files {
+            edit.write_file(&file.path, file.contents.as_bytes())?;
+        }
+        edit.commit();
+        Ok(())
+    }
+}
+
+/// Prepare this project kind at the target path.
+///
+/// Directory creation and VCS initialization remain outside the file transaction. Neither is
+/// recursively removed on failure, since it may already contain user files or repository state.
 fn init_project_kind(
     project_kind: InitProjectKind,
     name: &PackageName,
@@ -738,8 +799,9 @@ fn init_project_kind(
     build_backend: Option<ProjectBuildBackend>,
     author_from: Option<AuthorFrom>,
     no_readme: bool,
-) -> Result<()> {
+) -> Result<InitProjectPlan> {
     fs_err::create_dir_all(path)?;
+    let mut plan = InitProjectPlan::default();
 
     // Initialize the version control system first so that Git configuration can properly
     // read conditional includes that depend on the repository path.
@@ -783,10 +845,10 @@ fn init_project_kind(
             let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
             pyproject.push('\n');
             pyproject.push_str(&pyproject_build_system(name, build_backend));
-            pyproject_build_backend_prerequisites(name, path, build_backend)?;
+            pyproject_build_backend_prerequisites(name, path, build_backend, &mut plan)?;
 
             // Generate `src` files with app-style `main()` in `__init__.py`
-            generate_package_scripts(name, path, build_backend, false)?;
+            generate_package_scripts(name, path, build_backend, false, &mut plan)?;
         }
         InitProjectKind::Application => {
             let main_contents = indoc::formatdoc! {r#"
@@ -803,21 +865,21 @@ fn init_project_kind(
             // TODO(zanieb): Only create `main.py` if there are no other Python files?
             let main_py = path.join("main.py");
             if !main_py.try_exists()? && !bare {
-                fs_err::write(path.join("main.py"), main_contents)?;
+                plan.create(main_py, main_contents);
             }
         }
         InitProjectKind::Library => {
             let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
             pyproject.push('\n');
             pyproject.push_str(&pyproject_build_system(name, build_backend));
-            pyproject_build_backend_prerequisites(name, path, build_backend)?;
+            pyproject_build_backend_prerequisites(name, path, build_backend, &mut plan)?;
 
             // Generate `src` files
-            generate_package_scripts(name, path, build_backend, true)?;
+            generate_package_scripts(name, path, build_backend, true, &mut plan)?;
         }
     }
-    fs_err::write(path.join("pyproject.toml"), pyproject)?;
-    Ok(())
+    plan.create(path.join("pyproject.toml"), pyproject);
+    Ok(plan)
 }
 
 #[derive(Debug)]
@@ -975,6 +1037,7 @@ fn pyproject_build_backend_prerequisites(
     package: &PackageName,
     path: &Path,
     build_backend: ProjectBuildBackend,
+    plan: &mut InitProjectPlan,
 ) -> Result<()> {
     let module_name = package.as_dist_info_name();
     match build_backend {
@@ -982,7 +1045,7 @@ fn pyproject_build_backend_prerequisites(
             // Generate Cargo.toml
             let build_file = path.join("Cargo.toml");
             if !build_file.try_exists()? {
-                fs_err::write(
+                plan.create(
                     build_file,
                     indoc::formatdoc! {r#"
                     [package]
@@ -1000,14 +1063,14 @@ fn pyproject_build_backend_prerequisites(
                     # "abi3-py39" tells pyo3 (and maturin) to build using the stable ABI with minimum Python version 3.9
                     pyo3 = {{ version = "0.28.2", features = ["extension-module", "abi3-py39"] }}
                 "#},
-                )?;
+                );
             }
         }
         ProjectBuildBackend::Scikit => {
             // Generate CMakeLists.txt
             let build_file = path.join("CMakeLists.txt");
             if !build_file.try_exists()? {
-                fs_err::write(
+                plan.create(
                     build_file,
                     indoc::formatdoc! {r"
                     cmake_minimum_required(VERSION 3.15...4.0)
@@ -1018,7 +1081,7 @@ fn pyproject_build_backend_prerequisites(
                     pybind11_add_module(_core MODULE src/main.cpp)
                     install(TARGETS _core DESTINATION ${{SKBUILD_PROJECT_NAME}})
                 "},
-                )?;
+                );
             }
         }
         _ => {}
@@ -1032,6 +1095,7 @@ fn generate_package_scripts(
     path: &Path,
     build_backend: ProjectBuildBackend,
     is_lib: bool,
+    plan: &mut InitProjectPlan,
 ) -> Result<()> {
     let module_name = package.as_dist_info_name();
 
@@ -1080,7 +1144,7 @@ fn generate_package_scripts(
             // Generate lib.rs
             let native_src = src_dir.join("lib.rs");
             if !native_src.try_exists()? {
-                fs_err::write(
+                plan.create(
                     native_src,
                     indoc::formatdoc! {r#"
                     use pyo3::prelude::*;
@@ -1098,12 +1162,12 @@ fn generate_package_scripts(
                         }}
                     }}
                 "#},
-                )?;
+                );
             }
             // Generate .pyi file
             let pyi_file = pkg_dir.join("_core.pyi");
             if !pyi_file.try_exists()? {
-                fs_err::write(pyi_file, pyi_contents)?;
+                plan.create(pyi_file, pyi_contents);
             }
             // Return python script calling binary
             binary_call_script
@@ -1112,7 +1176,7 @@ fn generate_package_scripts(
             // Generate main.cpp
             let native_src = src_dir.join("main.cpp");
             if !native_src.try_exists()? {
-                fs_err::write(
+                plan.create(
                     native_src,
                     indoc::formatdoc! {r#"
                     #include <pybind11/pybind11.h>
@@ -1129,12 +1193,12 @@ fn generate_package_scripts(
                       )pbdoc");
                     }}
                 "#},
-                )?;
+                );
             }
             // Generate .pyi file
             let pyi_file = pkg_dir.join("_core.pyi");
             if !pyi_file.try_exists()? {
-                fs_err::write(pyi_file, pyi_contents)?;
+                plan.create(pyi_file, pyi_contents);
             }
             // Return python script calling binary
             binary_call_script
@@ -1145,14 +1209,14 @@ fn generate_package_scripts(
     // Create `src/{name}/__init__.py`, if it doesn't exist already.
     let init_py = pkg_dir.join("__init__.py");
     if !init_py.try_exists()? {
-        fs_err::write(init_py, package_script)?;
+        plan.create(init_py, package_script);
     }
 
     // Create `src/{name}/py.typed`, if it doesn't exist already.
     if is_lib {
         let py_typed = pkg_dir.join("py.typed");
         if !py_typed.try_exists()? {
-            fs_err::write(py_typed, "")?;
+            plan.create(py_typed, "");
         }
     }
 
