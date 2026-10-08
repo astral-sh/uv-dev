@@ -8703,12 +8703,12 @@ fn edit_interrupt_reverts_project() -> Result<()> {
             context.temp_dir.child("backend.py").write_str(indoc! {r#"
                 import os
                 import signal
-                import time
+                import socket
 
                 def build_editable(*args, **kwargs):
-                    os.kill(os.getppid(), signal.SIGINT)
-                    time.sleep(1)
-                    raise RuntimeError("build interrupted")
+                    with socket.create_connection(("127.0.0.1", int(os.environ["UV_TEST_INTERRUPT_PORT"]))) as ready:
+                        ready.sendall(b"R")
+                        signal.pause()
             "#})?;
             if locked {
                 context.lock().assert().success();
@@ -8716,7 +8716,73 @@ fn edit_interrupt_reverts_project() -> Result<()> {
             let pyproject = context.read("pyproject.toml");
             let lock = locked.then(|| context.read("uv.lock"));
 
-            context.command().args(args).assert().code(130);
+            context
+                .python_command()
+                .arg("-c")
+                .arg(indoc! {r#"
+                    import ctypes
+                    import os
+                    import signal
+                    import socket
+                    import subprocess
+                    import sys
+                    import time
+
+                    # Reap orphaned backend children on Linux, including when PID 1 is not an init process.
+                    if sys.platform == "linux":
+                        libc = ctypes.CDLL(None, use_errno=True)
+                        libc.prctl.argtypes = [ctypes.c_int] + [ctypes.c_ulong] * 4
+                        libc.prctl.restype = ctypes.c_int
+                        PR_SET_CHILD_SUBREAPER = 36
+                        if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+                            raise OSError(ctypes.get_errno(), "Could not become a child subreaper")
+
+                    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+
+                    with socket.socket() as listener:
+                        listener.bind(("127.0.0.1", 0))
+                        listener.listen(1)
+                        listener.settimeout(30)
+                        env = os.environ.copy()
+                        env["UV_TEST_INTERRUPT_PORT"] = str(listener.getsockname()[1])
+                        process = subprocess.Popen(sys.argv[1:], env=env, start_new_session=True)
+                        try:
+                            with listener.accept()[0] as backend:
+                                backend.settimeout(30)
+                                assert backend.recv(1) == b"R", "Backend did not signal readiness"
+                                process.send_signal(signal.SIGINT)
+                                assert process.wait(timeout=30) == 130, "uv did not handle the interrupt"
+                        finally:
+                            # The backend shares the owned process group and can outlive `process::exit`.
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            process.wait(timeout=10)
+                            deadline = time.monotonic() + 10
+                            while True:
+                                try:
+                                    while os.waitpid(-process.pid, os.WNOHANG)[0]:
+                                        pass
+                                except ChildProcessError:
+                                    pass
+                                try:
+                                    os.killpg(process.pid, 0)
+                                except ProcessLookupError:
+                                    break
+                                except PermissionError:
+                                    # macOS can report EPERM while the group contains only zombies.
+                                    if sys.platform != "darwin":
+                                        raise
+                                assert time.monotonic() < deadline, "The backend process group survived cleanup"
+                                time.sleep(0.01)
+                "#})
+                .arg(uv_test::get_bin!())
+                .arg("--cache-dir")
+                .arg(context.cache_dir.path())
+                .args(args)
+                .assert()
+                .success();
             assert_eq!(context.read("pyproject.toml"), pyproject, "{args:?}");
             assert_eq!(
                 fs_err::read_to_string(context.temp_dir.join("uv.lock")).ok(),
