@@ -1,11 +1,13 @@
 //! Failures specific to project metadata and editing.
 
+use std::path::PathBuf;
 use std::{fmt, io};
 
 use owo_colors::OwoColorize;
 use uv_command_support::UvError;
 use uv_environment_operations::EnvironmentError;
 use uv_errors::{Hinted, Hints};
+use uv_fs::Simplified;
 use uv_workspace::WorkspaceError;
 
 /// A failure from project metadata, editing, or a shared workflow.
@@ -35,6 +37,19 @@ pub enum ProjectError {
     #[error(transparent)]
     MissingProjectVersion(WorkspaceError),
 
+    #[error("We cannot get or set dynamic project versions in: {}", _0.user_display())]
+    DynamicProjectVersion(PathBuf),
+
+    #[error("There is no 'project.version' field in: {}", _0.user_display())]
+    MissingProjectVersionField(PathBuf),
+
+    #[error("Failed to read project version in: {}", path.user_display())]
+    ReadProjectVersion {
+        path: PathBuf,
+        #[source]
+        source: uv_project_edit::Error,
+    },
+
     #[error(transparent)]
     Fmt(#[from] fmt::Error),
 
@@ -56,6 +71,9 @@ impl From<ProjectError> for UvError {
             | ProjectError::PyprojectMut(_)
             | ProjectError::Workspace(_)
             | ProjectError::MissingProjectVersion(_)
+            | ProjectError::DynamicProjectVersion(_)
+            | ProjectError::MissingProjectVersionField(_)
+            | ProjectError::ReadProjectVersion { .. }
             | ProjectError::Fmt(_)
             | ProjectError::Io(_)
             | ProjectError::Anyhow(_)) => Self::unexpected(error.into()),
@@ -77,6 +95,9 @@ impl Hinted for ProjectError {
             | Self::Pep723ScriptTomlParse(_)
             | Self::PyprojectMut(_)
             | Self::Workspace(_)
+            | Self::DynamicProjectVersion(_)
+            | Self::MissingProjectVersionField(_)
+            | Self::ReadProjectVersion { .. }
             | Self::Fmt(_)
             | Self::Io(_)
             | Self::Anyhow(_) => Hints::none(),
