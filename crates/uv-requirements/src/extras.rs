@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures::{TryStreamExt, stream::FuturesOrdered};
 
 use uv_distribution::{DistributionDatabase, Reporter};
-use uv_distribution_types::{Identifier, Requirement};
+use uv_distribution_types::{Identifier, Requirement, RequirementSelection};
 use uv_resolver::{InMemoryIndex, MetadataResponse};
 use uv_types::{BuildContext, HashStrategy};
 
@@ -75,6 +75,11 @@ impl<'a, Context: BuildContext> ExtrasResolver<'a, Context> {
         index: &InMemoryIndex,
         database: &DistributionDatabase<'a, Context>,
     ) -> Result<Requirement, Error> {
+        // Group requirements select their dependencies independently from package extras.
+        if !requirement.groups().is_empty() {
+            return Ok(requirement);
+        }
+
         // Determine whether the requirement represents a local distribution and convert to a
         // buildable distribution.
         let Some(dist) = required_dist(&requirement)? else {
@@ -126,7 +131,7 @@ impl<'a, Context: BuildContext> ExtrasResolver<'a, Context> {
         };
 
         Ok(Requirement {
-            extras: extras.into_boxed_slice(),
+            selection: RequirementSelection::Extras(extras.into_boxed_slice()),
             ..requirement
         })
     }

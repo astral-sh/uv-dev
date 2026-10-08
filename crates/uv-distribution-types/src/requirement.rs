@@ -15,7 +15,7 @@ use uv_pep508::{
 };
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 
-use crate::{IndexMetadata, IndexUrl};
+use crate::{IndexMetadata, IndexUrl, RequirementSelection};
 
 use uv_pypi_types::{
     ConflictItem, HashError, Hashes, ParsedArchiveUrl, ParsedDirectoryUrl, ParsedGitDirectoryUrl,
@@ -42,15 +42,12 @@ enum RequirementError {
 /// [`VersionOrUrl`], which collapses all URL sources into a single stringly type.
 ///
 /// Additionally, this requirement type makes room for dependency groups, which lack a standardized
-/// representation in PEP 508. In the context of this type, extras and groups are assumed to be
-/// mutually exclusive, in that if `extras` is non-empty, `groups` must be empty and vice versa.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// representation in PEP 508. A requirement selects either extras or dependency groups, never both.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Requirement {
     pub name: PackageName,
-    #[serde(skip_serializing_if = "<[ExtraName]>::is_empty", default)]
-    pub extras: Box<[ExtraName]>,
-    #[serde(skip_serializing_if = "<[GroupName]>::is_empty", default)]
-    pub groups: Box<[GroupName]>,
+    #[serde(flatten)]
+    pub selection: RequirementSelection,
     #[serde(
         skip_serializing_if = "marker::ser::is_empty",
         serialize_with = "marker::ser::serialize",
@@ -89,6 +86,16 @@ impl RequirementScope {
 }
 
 impl Requirement {
+    /// The extras requested for this dependency.
+    pub fn extras(&self) -> &[ExtraName] {
+        self.selection.extras()
+    }
+
+    /// The dependency groups requested for this dependency.
+    pub fn groups(&self) -> &[GroupName] {
+        self.selection.groups()
+    }
+
     /// Returns whether the markers apply for the given environment.
     ///
     /// When `env` is `None`, this specifically evaluates all marker
@@ -150,20 +157,33 @@ impl Requirement {
     }
 }
 
+impl std::fmt::Debug for Requirement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Requirement")
+            .field("name", &self.name)
+            .field("extras", &self.selection.extras())
+            .field("groups", &self.selection.groups())
+            .field("marker", &self.marker)
+            .field("source", &self.source)
+            .field("scope", &self.scope)
+            .field("origin", &self.origin)
+            .finish()
+    }
+}
+
 impl std::hash::Hash for Requirement {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let Self {
             name,
-            extras,
-            groups,
+            selection,
             marker,
             source,
             scope,
             origin: _,
         } = self;
         name.hash(state);
-        extras.hash(state);
-        groups.hash(state);
+        selection.extras().hash(state);
+        selection.groups().hash(state);
         marker.hash(state);
         source.hash(state);
         scope.hash(state);
@@ -174,8 +194,7 @@ impl PartialEq for Requirement {
     fn eq(&self, other: &Self) -> bool {
         let Self {
             name,
-            extras,
-            groups,
+            selection,
             marker,
             source,
             scope,
@@ -183,16 +202,15 @@ impl PartialEq for Requirement {
         } = self;
         let Self {
             name: other_name,
-            extras: other_extras,
-            groups: other_groups,
+            selection: other_selection,
             marker: other_marker,
             source: other_source,
             scope: other_scope,
             origin: _,
         } = other;
         name == other_name
-            && extras == other_extras
-            && groups == other_groups
+            && selection.extras() == other_selection.extras()
+            && selection.groups() == other_selection.groups()
             && marker == other_marker
             && source == other_source
             && scope == other_scope
@@ -205,8 +223,7 @@ impl Ord for Requirement {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         let Self {
             name,
-            extras,
-            groups,
+            selection,
             marker,
             source,
             scope,
@@ -214,16 +231,15 @@ impl Ord for Requirement {
         } = self;
         let Self {
             name: other_name,
-            extras: other_extras,
-            groups: other_groups,
+            selection: other_selection,
             marker: other_marker,
             source: other_source,
             scope: other_scope,
             origin: _,
         } = other;
         name.cmp(other_name)
-            .then_with(|| extras.cmp(other_extras))
-            .then_with(|| groups.cmp(other_groups))
+            .then_with(|| selection.extras().cmp(other_selection.extras()))
+            .then_with(|| selection.groups().cmp(other_selection.groups()))
             .then_with(|| marker.cmp(other_marker))
             .then_with(|| source.cmp(other_source))
             .then_with(|| scope.cmp(other_scope))
@@ -241,7 +257,7 @@ impl From<Requirement> for uv_pep508::Requirement<VerbatimUrl> {
     fn from(requirement: Requirement) -> Self {
         Self {
             name: requirement.name,
-            extras: requirement.extras,
+            extras: requirement.selection.into_extras(),
             marker: requirement.marker,
             origin: requirement.origin,
             version_or_url: match requirement.source {
@@ -263,7 +279,7 @@ impl From<Requirement> for uv_pep508::Requirement<VerbatimParsedUrl> {
     fn from(requirement: Requirement) -> Self {
         Self {
             name: requirement.name,
-            extras: requirement.extras,
+            extras: requirement.selection.into_extras(),
             marker: requirement.marker,
             origin: requirement.origin,
             version_or_url: match requirement.source {
@@ -359,8 +375,7 @@ impl From<uv_pep508::Requirement<VerbatimParsedUrl>> for Requirement {
         };
         Self {
             name: requirement.name,
-            groups: Box::new([]),
-            extras: requirement.extras,
+            selection: RequirementSelection::Extras(requirement.extras),
             marker: requirement.marker,
             source,
             scope: RequirementScope::Global,
@@ -374,11 +389,11 @@ impl Display for Requirement {
     /// than for inclusion in a `requirements.txt` file.
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)?;
-        if !self.extras.is_empty() {
+        if !self.extras().is_empty() {
             write!(
                 f,
                 "[{}]",
-                self.extras
+                self.extras()
                     .iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
@@ -451,13 +466,13 @@ impl CacheKey for Requirement {
     fn cache_key(&self, state: &mut CacheKeyHasher) {
         self.name.as_str().cache_key(state);
 
-        self.groups.len().cache_key(state);
-        for group in &self.groups {
+        self.groups().len().cache_key(state);
+        for group in self.groups() {
             group.as_str().cache_key(state);
         }
 
-        self.extras.len().cache_key(state);
-        for extra in &self.extras {
+        self.extras().len().cache_key(state);
+        for extra in self.extras() {
             extra.as_str().cache_key(state);
         }
 
@@ -1263,14 +1278,13 @@ mod tests {
 
     use uv_pep508::{MarkerTree, VerbatimUrl};
 
-    use crate::{Requirement, RequirementScope, RequirementSource};
+    use crate::{Requirement, RequirementScope, RequirementSelection, RequirementSource};
 
     #[test]
     fn roundtrip() {
         let requirement = Requirement {
             name: "foo".parse().unwrap(),
-            extras: Box::new([]),
-            groups: Box::new([]),
+            selection: RequirementSelection::Extras(Box::new([])),
             marker: MarkerTree::TRUE,
             source: RequirementSource::Registry {
                 specifier: ">1,<2".parse().unwrap(),
@@ -1292,8 +1306,7 @@ mod tests {
         };
         let requirement = Requirement {
             name: "foo".parse().unwrap(),
-            extras: Box::new([]),
-            groups: Box::new([]),
+            selection: RequirementSelection::Extras(Box::new([])),
             marker: MarkerTree::TRUE,
             source: RequirementSource::Directory {
                 install_path: PathBuf::from(path).into_boxed_path(),
@@ -1324,8 +1337,7 @@ mod tests {
 
         let requirement = Requirement {
             name: "iniconfig".parse().unwrap(),
-            extras: Box::new([]),
-            groups: Box::new([]),
+            selection: RequirementSelection::Extras(Box::new([])),
             marker: MarkerTree::TRUE,
             source,
             scope: RequirementScope::Global,

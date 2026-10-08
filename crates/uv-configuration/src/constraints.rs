@@ -4,7 +4,8 @@ use either::Either;
 use rustc_hash::FxHashMap;
 
 use uv_distribution_types::{
-    NameRequirementSpecification, Requirement, RequirementSource, ResolutionRecorder,
+    NameRequirementSpecification, Requirement, RequirementSelection, RequirementSource,
+    ResolutionRecorder,
 };
 use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
@@ -52,7 +53,7 @@ impl Constraints {
                 .or_default()
                 .push(Requirement {
                     // We add and apply constraints independent of their extras.
-                    extras: Box::new([]),
+                    selection: RequirementSelection::Groups(requirement.groups().into()),
                     ..requirement.clone()
                 });
         }

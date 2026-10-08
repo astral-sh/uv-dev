@@ -3,7 +3,9 @@ use std::iter;
 
 use either::Either;
 
-use uv_distribution_types::{IndexMetadata, Requirement, RequirementScope, RequirementSource};
+use uv_distribution_types::{
+    IndexMetadata, Requirement, RequirementScope, RequirementSelection, RequirementSource,
+};
 use uv_normalize::{GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pypi_types::{ConflictItemRef, Conflicts, VerbatimParsedUrl};
@@ -139,50 +141,52 @@ impl PubGrubDependency {
         let parent_name = parent_package.and_then(|package| package.name_no_root());
         let is_normal_parent = parent_package
             .is_some_and(|parent| parent.extra().is_none() && parent.group().is_none());
-        let iter = if !requirement.extras.is_empty() {
-            // This is crazy subtle, but if any of the extras in the
-            // requirement are part of a declared conflict, then we
-            // specifically need (at time of writing) to include the
-            // base package as a dependency. This results in both
-            // the base package and the extra package being sibling
-            // dependencies at the point in which forks are created
-            // base on conflicting extras. If the base package isn't
-            // present at that point, then it's impossible for the
-            // fork that excludes all conflicting extras to reach
-            // the non-extra dependency, which may be necessary for
-            // correctness.
-            //
-            // But why do we not include the base package in the first
-            // place? Well, that's part of an optimization[1].
-            //
-            // [1]: https://github.com/astral-sh/uv/pull/9540
-            let base = if requirement
-                .extras
-                .iter()
-                .any(|extra| conflicts.contains(&requirement.name, extra))
-            {
-                Either::Left(iter::once(PackageNodeKind::Base))
-            } else {
-                Either::Right(iter::empty())
-            };
-            Either::Left(Either::Left(base.chain(
-                Box::into_iter(requirement.extras.clone()).map(PackageNodeKind::Extra),
-            )))
-        } else if !requirement.groups.is_empty() {
-            let base = if requirement
-                .groups
-                .iter()
-                .any(|group| conflicts.contains(&requirement.name, group))
-            {
-                Either::Left(iter::once(PackageNodeKind::Base))
-            } else {
-                Either::Right(iter::empty())
-            };
-            Either::Left(Either::Right(base.chain(
-                Box::into_iter(requirement.groups.clone()).map(PackageNodeKind::Group),
-            )))
-        } else {
-            Either::Right(iter::once(PackageNodeKind::Base))
+        let iter = match requirement.selection.clone() {
+            RequirementSelection::Extras(extras) if !extras.is_empty() => {
+                // This is crazy subtle, but if any of the extras in the
+                // requirement are part of a declared conflict, then we
+                // specifically need (at time of writing) to include the
+                // base package as a dependency. This results in both
+                // the base package and the extra package being sibling
+                // dependencies at the point in which forks are created
+                // base on conflicting extras. If the base package isn't
+                // present at that point, then it's impossible for the
+                // fork that excludes all conflicting extras to reach
+                // the non-extra dependency, which may be necessary for
+                // correctness.
+                //
+                // But why do we not include the base package in the first
+                // place? Well, that's part of an optimization[1].
+                //
+                // [1]: https://github.com/astral-sh/uv/pull/9540
+                let base = if extras
+                    .iter()
+                    .any(|extra| conflicts.contains(&requirement.name, extra))
+                {
+                    Either::Left(iter::once(PackageNodeKind::Base))
+                } else {
+                    Either::Right(iter::empty())
+                };
+                Either::Left(Either::Left(
+                    base.chain(Box::into_iter(extras).map(PackageNodeKind::Extra)),
+                ))
+            }
+            RequirementSelection::Groups(groups) if !groups.is_empty() => {
+                let base = if groups
+                    .iter()
+                    .any(|group| conflicts.contains(&requirement.name, group))
+                {
+                    Either::Left(iter::once(PackageNodeKind::Base))
+                } else {
+                    Either::Right(iter::empty())
+                };
+                Either::Left(Either::Right(
+                    base.chain(Box::into_iter(groups).map(PackageNodeKind::Group)),
+                ))
+            }
+            RequirementSelection::Extras(_) | RequirementSelection::Groups(_) => {
+                Either::Right(iter::once(PackageNodeKind::Base))
+            }
         };
 
         // Add the package, plus any extra variants.

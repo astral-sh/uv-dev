@@ -9,7 +9,7 @@ use std::ops::Deref;
 use std::{iter, mem, vec};
 
 use indexmap::IndexMap;
-use uv_distribution_types::{Requirement, RequirementSource};
+use uv_distribution_types::{Requirement, RequirementSelection, RequirementSource};
 use uv_pep440::{
     Operator, Version, VersionSpecifier, VersionSpecifiers, canonicalize_version_ranges,
 };
@@ -95,7 +95,7 @@ impl From<Vec<Requirement>> for NormalizedConstraints {
             {
                 return false;
             }
-            requirement.extras = Box::new([]);
+            requirement.selection.clear_extras();
             !requirement.marker.is_false()
         });
         Self(NormalizedRequirements::from(constraints))
@@ -284,11 +284,15 @@ fn intersect_ranges(ranges: impl IntoIterator<Item = Ranges<Version>>) -> Ranges
 /// False requirements and overrides remain because overrides can replace their markers.
 fn normalize(mut requirements: Vec<Requirement>) -> Vec<Requirement> {
     for requirement in &mut requirements {
-        let mut extras = mem::take(&mut requirement.extras).into_vec();
-        extras.sort();
-        extras.dedup();
-        requirement.extras = extras.into_boxed_slice();
-        requirement.groups.sort();
+        match &mut requirement.selection {
+            RequirementSelection::Extras(extras) => {
+                let mut sorted = mem::take(extras).into_vec();
+                sorted.sort();
+                sorted.dedup();
+                *extras = sorted.into_boxed_slice();
+            }
+            RequirementSelection::Groups(groups) => groups.sort(),
+        }
     }
     requirements.sort_by(compare_requirements);
 
@@ -323,7 +327,7 @@ fn normalize_package_requirements(
     let mut sources = BTreeMap::<Requirement, Vec<Requirement>>::new();
     for requirement in requirements {
         let mut key = requirement.clone();
-        key.extras = Box::new([]);
+        key.selection.clear_extras();
         // Overrides retain a dependency's top-level extra condition. Combining different extra
         // markers can change that condition, so only merge declarations with identical markers
         // when they mention extras.
@@ -360,11 +364,13 @@ fn normalize_package_requirements(
                 }
                 let mut combined = region;
                 combined.marker = overlap;
-                let mut extras = combined.extras.into_vec();
-                extras.extend_from_slice(&requirement.extras);
-                extras.sort();
-                extras.dedup();
-                combined.extras = extras.into_boxed_slice();
+                if !requirement.extras().is_empty() {
+                    let mut extras = combined.selection.into_extras().into_vec();
+                    extras.extend_from_slice(requirement.extras());
+                    extras.sort();
+                    extras.dedup();
+                    combined.selection = RequirementSelection::Extras(extras.into_boxed_slice());
+                }
                 if let (
                     RequirementSource::Registry { specifier, .. },
                     RequirementSource::Registry {
@@ -901,7 +907,10 @@ mod tests {
                 requirements
                     .iter()
                     .filter(|requirement| {
-                        requirement.extras.iter().any(|name| name.as_str() == extra)
+                        requirement
+                            .extras()
+                            .iter()
+                            .any(|name| name.as_str() == extra)
                     })
                     .fold(MarkerTree::FALSE, |marker, requirement| {
                         marker.or(requirement.marker)

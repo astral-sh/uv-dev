@@ -589,7 +589,7 @@ impl SitePackages {
                         DependencyModifierScope::Package(name, distribution.version()),
                         &dependencies,
                     ) {
-                        if dependency.evaluate_markers(Some(markers), &requirement.extras) {
+                        if dependency.evaluate_markers(Some(markers), requirement.extras()) {
                             let dependency = dependency.into_owned();
                             if seen.insert(dependency.clone()) {
                                 stack.push(dependency);
