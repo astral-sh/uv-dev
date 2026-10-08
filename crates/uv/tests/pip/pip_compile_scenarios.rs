@@ -14,20 +14,19 @@ use predicates::prelude::predicate;
 
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
-use uv_test::{TestContext, get_bin, python_path_with_versions, uv_snapshot};
+use uv_test::{TestContext, python_path_with_versions, uv_snapshot};
 
 /// Provision python binaries and return a `pip compile` command with options shared across all scenarios.
 fn command(context: &TestContext, python_versions: &[&str], server: &PackseServer) -> Command {
     let python_path = python_path_with_versions(&context.temp_dir, python_versions)
         .expect("Failed to create Python test path");
-    let mut command = Command::new(get_bin!());
+    let mut command = context.command();
     command
         .arg("pip")
         .arg("compile")
         .arg("requirements.in")
         .arg("--index-url")
         .arg(server.index_url());
-    context.add_shared_options(&mut command, true);
     command.env_remove(EnvVars::UV_DEFAULT_INDEX);
     command.env_remove(EnvVars::UV_EXCLUDE_NEWER);
     command.env(EnvVars::UV_PYTHON_SEARCH_PATH, python_path);

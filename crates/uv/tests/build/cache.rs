@@ -1,6 +1,5 @@
 use std::fmt::Write;
 use std::path::PathBuf;
-use std::process::Command;
 
 use anyhow::{Context, Result};
 use assert_fs::prelude::*;
@@ -99,14 +98,13 @@ fn build_warns_symlinked_cache_inside_source() -> Result<()> {
     let cache_link = context.temp_dir.child("cache-link");
     create_symlink(cache_dir.path(), cache_link.path())?;
 
-    let mut command = Command::new(get_bin!());
+    let mut command = context.external_command(get_bin!());
     command
         .arg("build")
         .arg("--sdist")
         .arg("project")
         .arg("--cache-dir")
         .arg(cache_link.path());
-    context.add_shared_env(&mut command, false);
     command.current_dir(context.temp_dir.path());
 
     uv_snapshot!(context.filters(), command, @"
@@ -212,13 +210,12 @@ fn cache_current_dir_inside_symlinked_cache() -> Result<()> {
     let child = context.cache_dir.child("child");
     child.create_dir_all()?;
 
-    let mut command = Command::new(get_bin!());
+    let mut command = context.external_command(get_bin!());
     command
         .arg("cache")
         .arg("dir")
         .arg("--cache-dir")
         .arg(cache_link.path());
-    context.add_shared_env(&mut command, false);
     command.current_dir(child.path());
 
     uv_snapshot!(context.filters(), command, @"
@@ -281,9 +278,8 @@ fn cache_project_inside_relative_parent_cache() -> Result<()> {
         "#,
     )?;
 
-    let mut command = Command::new(get_bin!());
+    let mut command = context.external_command(get_bin!());
     command.arg("lock").arg("--cache-dir").arg("..");
-    context.add_shared_env(&mut command, false);
     command.current_dir(project.path());
 
     uv_snapshot!(context.filters(), command, @"

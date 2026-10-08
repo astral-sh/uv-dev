@@ -387,23 +387,20 @@ fn render_compile(output: &mut String, cases: &[&ScenarioCase]) -> Result<()> {
     output.push_str("use predicates::prelude::predicate;\n\n");
     output.push_str("use uv_static::EnvVars;\n");
     output.push_str("use uv_test::packse::PackseServer;\n");
-    output.push_str(
-        "use uv_test::{TestContext, get_bin, python_path_with_versions, uv_snapshot};\n\n",
-    );
+    output.push_str("use uv_test::{TestContext, python_path_with_versions, uv_snapshot};\n\n");
     output.push_str("/// Provision python binaries and return a `pip compile` command with options shared across all scenarios.\n");
     output.push_str("fn command(context: &TestContext, python_versions: &[&str], server: &PackseServer) -> Command {\n");
     output.push_str(
         "    let python_path = python_path_with_versions(&context.temp_dir, python_versions)\n",
     );
     output.push_str("        .expect(\"Failed to create Python test path\");\n");
-    output.push_str("    let mut command = Command::new(get_bin!());\n");
+    output.push_str("    let mut command = context.command();\n");
     output.push_str("    command\n");
     output.push_str("        .arg(\"pip\")\n");
     output.push_str("        .arg(\"compile\")\n");
     output.push_str("        .arg(\"requirements.in\")\n");
     output.push_str("        .arg(\"--index-url\")\n");
     output.push_str("        .arg(server.index_url());\n");
-    output.push_str("    context.add_shared_options(&mut command, true);\n");
     output.push_str("    command.env_remove(EnvVars::UV_DEFAULT_INDEX);\n");
     output.push_str("    command.env_remove(EnvVars::UV_EXCLUDE_NEWER);\n");
     output.push_str("    command.env(EnvVars::UV_PYTHON_SEARCH_PATH, python_path);\n\n");

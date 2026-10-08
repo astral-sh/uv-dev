@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use anyhow::{Result, bail};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
@@ -189,7 +187,7 @@ fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
         .expect("failed to run uv tool install");
     assert!(status.success());
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -199,7 +197,7 @@ fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
         .child("__init__.py")
         .write_str("MESSAGE = 'PRE-UPGRADE'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -213,7 +211,7 @@ fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
         .expect("failed to run uv tool upgrade");
     assert!(status.success());
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -223,7 +221,7 @@ fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
         .child("__init__.py")
         .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -319,7 +317,7 @@ fn tool_upgrade_preserves_mixed_workspace_member_editability() -> Result<()> {
         .expect("failed to run uv tool install");
     assert!(status.success());
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.0 OK
@@ -347,7 +345,7 @@ fn tool_upgrade_preserves_mixed_workspace_member_editability() -> Result<()> {
         .expect("failed to run uv tool upgrade");
     assert!(status.success());
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.1 OK
@@ -357,7 +355,7 @@ fn tool_upgrade_preserves_mixed_workspace_member_editability() -> Result<()> {
         .child("__init__.py")
         .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.1 POST-UPGRADE
@@ -454,7 +452,7 @@ fn tool_upgrade_preserves_mixed_workspace_member_non_editability() -> Result<()>
         .expect("failed to run uv tool install");
     assert!(status.success());
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.0 OK
@@ -482,7 +480,7 @@ fn tool_upgrade_preserves_mixed_workspace_member_non_editability() -> Result<()>
         .expect("failed to run uv tool upgrade");
     assert!(status.success());
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.1 OK
@@ -492,7 +490,7 @@ fn tool_upgrade_preserves_mixed_workspace_member_non_editability() -> Result<()>
         .child("__init__.py")
         .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.1 OK

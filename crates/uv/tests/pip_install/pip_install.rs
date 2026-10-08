@@ -4517,7 +4517,11 @@ fn install_executable() {
         .venv
         .join(if cfg!(windows) { "Scripts" } else { "bin" })
         .join(format!("pylint{}", std::env::consts::EXE_SUFFIX));
-    Command::new(executable).arg("--version").assert().success();
+    context
+        .external_command(executable)
+        .arg("--version")
+        .assert()
+        .success();
 }
 
 /// Install a package into a virtual environment using copy semantics, and ensure that the
@@ -4550,7 +4554,11 @@ fn install_executable_copy() {
         .venv
         .join(if cfg!(windows) { "Scripts" } else { "bin" })
         .join(format!("pylint{}", std::env::consts::EXE_SUFFIX));
-    Command::new(executable).arg("--version").assert().success();
+    context
+        .external_command(executable)
+        .arg("--version")
+        .assert()
+        .success();
 }
 
 /// With `LongPathsEnabled=0`, `uv pip install jupyterlab-widgets==3.0.16` can fail when its nested
@@ -4661,7 +4669,11 @@ fn install_executable_hardlink() {
         .venv
         .join(if cfg!(windows) { "Scripts" } else { "bin" })
         .join(format!("pylint{}", std::env::consts::EXE_SUFFIX));
-    Command::new(executable).arg("--version").assert().success();
+    context
+        .external_command(executable)
+        .arg("--version")
+        .assert()
+        .success();
 }
 
 /// Install a package into a virtual environment using clone semantics, and ensure that the
@@ -5902,7 +5914,7 @@ fn launcher() -> Result<()> {
 
     let bin_path = if cfg!(windows) { "Scripts" } else { "bin" };
 
-    uv_snapshot!(Command::new(
+    uv_snapshot!(context.external_command(
         context.venv.join(bin_path).join("simple_launcher")
     ), @"
     exit_code: 0 (success)
@@ -5963,7 +5975,7 @@ fn launcher_with_symlink() -> Result<()> {
     #[cfg(not(any(windows, unix)))]
     return Ok(());
 
-    uv_snapshot!(Command::new(
+    uv_snapshot!(context.external_command(
         context.temp_dir.join("simple_launcher")
     ), @"
     exit_code: 0 (success)
@@ -11264,21 +11276,23 @@ fn install_relocatable() -> Result<()> {
     } else {
         context.venv.child("bin/black")
     };
-    Command::new(script_path.as_os_str())
+    context
+        .external_command(script_path.as_os_str())
         .assert()
         .success()
         .stdout(predicate::str::contains("Hello world!"));
 
     // Relocate the venv, and see if it still works.
     let new_venv_path = context.venv.with_file_name("relocated");
-    fs::rename(context.venv, new_venv_path.clone())?;
+    fs::rename(&context.venv, new_venv_path.clone())?;
 
     let script_path = if cfg!(windows) {
         new_venv_path.join(r"Scripts\black.exe")
     } else {
         new_venv_path.join("bin/black")
     };
-    Command::new(script_path.as_os_str())
+    context
+        .external_command(script_path.as_os_str())
         .assert()
         .success()
         .stdout(predicate::str::contains("Hello world!"));
@@ -11289,7 +11303,8 @@ fn install_relocatable() -> Result<()> {
     {
         let script_symlink_path = context.temp_dir.join("black");
         fs_err::os::unix::fs::symlink(script_path, script_symlink_path.clone())?;
-        Command::new(script_symlink_path.as_os_str())
+        context
+            .external_command(script_symlink_path.as_os_str())
             .assert()
             .success()
             .stdout(predicate::str::contains("Hello world!"));
@@ -16085,7 +16100,7 @@ fn reject_reserved_wheel_data_script_name() -> Result<()> {
           cause: Scripts must not use the reserved name `python`, got: `python`
             ");
 
-            Command::new(venv_bin_path(&context.venv).join(interpreter))
+            context.external_command(venv_bin_path(&context.venv).join(interpreter))
                 .arg("--version")
                 .assert()
                 .success();
