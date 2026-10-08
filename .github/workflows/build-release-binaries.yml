@@ -16,8 +16,10 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Release dispatches are coordinated by the caller for their full lifetime.
+  # Only CI builds may supersede an earlier build of the same ref.
+  group: build-release-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   ACTIONS_CACHE_MODE: none
