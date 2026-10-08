@@ -1915,6 +1915,17 @@ mod test {
             .iter()
             .fold(MarkerTree::TRUE, |marker, term| marker.and(m(term)));
         assert_eq!(m(&conjunction.join(" and ")), expected);
+
+        for (operator, prefix, expected) in [
+            ("or", "extra == 'a' or extra != 'a'", MarkerTree::TRUE),
+            ("and", "extra == 'a' and extra != 'a'", MarkerTree::FALSE),
+        ] {
+            let input = format!("({prefix}) {operator} ({})", clauses.join(" or "));
+            assert_eq!(m(&input), expected);
+            assert!(
+                MarkerTree::from_str(&format!("{input} {operator} (python_version <)")).is_err()
+            );
+        }
     }
 
     #[test]

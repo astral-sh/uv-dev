@@ -629,21 +629,25 @@ fn parse_marker_op<T: Pep508Url, R: Reporter>(
     parse_inner: fn(&mut Cursor, &mut R) -> Result<Option<MarkerTree>, Pep508Error<T>>,
     reporter: &mut R,
 ) -> Result<Option<MarkerTree>, Pep508Error<T>> {
+    let first = parse_inner(cursor, reporter)?;
+    cursor.eat_whitespace();
+    let (start, len) = cursor.peek_while(|c| !c.is_whitespace());
+    if cursor.slice(start, len) != op {
+        return Ok(first);
+    }
+
     let mut expressions = SmallVec::<[MarkerTree; 4]>::new();
-    expressions.extend(parse_inner(cursor, reporter)?);
+    expressions.extend(first);
 
     loop {
+        cursor.take_while(|c| !c.is_whitespace());
+        expressions.extend(parse_inner(cursor, reporter)?);
+
         // wsp*
         cursor.eat_whitespace();
-        // ('or' marker_and) or ('and' marker_or)
         let (start, len) = cursor.peek_while(|c| !c.is_whitespace());
-        match cursor.slice(start, len) {
-            value if value == op => {
-                cursor.take_while(|c| !c.is_whitespace());
-
-                expressions.extend(parse_inner(cursor, reporter)?);
-            }
-            _ => break,
+        if cursor.slice(start, len) != op {
+            break;
         }
     }
 
@@ -657,6 +661,12 @@ fn parse_marker_op<T: Pep508Url, R: Reporter>(
             } else {
                 expressions[index]
             };
+            // All terms have been parsed, so this cannot suppress syntax errors or warnings.
+            if (expressions[output].is_true() && op == "or")
+                || (expressions[output].is_false() && op == "and")
+            {
+                return Ok(Some(expressions[output]));
+            }
         }
         expressions.truncate(length.div_ceil(2));
     }
