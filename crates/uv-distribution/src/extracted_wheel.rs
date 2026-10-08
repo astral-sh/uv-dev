@@ -10,6 +10,7 @@ use rustc_hash::FxHashMap;
 use tempfile::TempDir;
 use tokio::io::AsyncRead;
 use tokio::task::JoinHandle;
+use tracing::Span;
 
 use uv_cache::{ArchiveFileId, ArchiveId, Cache};
 use uv_extract::dirhash::{DirectoryDigest, DirhashTree, HashedFile, UnhashedFile, dirhash_path};
@@ -104,7 +105,9 @@ impl ExtractedWheel {
         cache: Cache,
         dist: String,
     ) -> JoinHandle<Result<(TempDir, ArchiveId), Error>> {
+        let span = Span::current();
         tokio::task::spawn_blocking(move || {
+            let _entered = span.enter();
             self.validate_and_heal_record(dist)?;
             let (temp_dir, hashed_wheel) = self.into_parts();
             let id = if let Some(HashedWheel { files, tree }) = hashed_wheel {
