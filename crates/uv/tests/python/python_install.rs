@@ -3992,7 +3992,8 @@ fn python_install_compile_bytecode_existing() {
      + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
     ");
 
-    uv_snapshot!(context.filters(), context.python_install().arg("--compile-bytecode").arg("3.14"), @"
+    uv_snapshot!(context.filters(), context.python_install().arg("--compile-bytecode").arg("3.14")
+        .env(EnvVars::RUST_LOG, "uv_client::base_client=debug"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Python 3.14 is already installed
