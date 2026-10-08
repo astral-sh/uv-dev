@@ -1,4 +1,3 @@
-use std::cmp::Reverse;
 use std::future::Future;
 use std::io;
 use std::path::Path;
@@ -8,16 +7,13 @@ use std::task::{Context, Poll};
 
 use futures::{FutureExt, TryStreamExt};
 use http_content_range::{ContentRange, ContentRangeBytes, ContentRangeUnbound};
-use rayon::in_place_scope;
-use rayon::prelude::*;
-use rustc_hash::FxHashMap;
 use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWriteExt, ReadBuf};
 use tokio::sync::Semaphore;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{Instrument, debug, info_span, instrument, warn};
 use url::Url;
 
-use uv_cache::{ArchiveFileId, ArchiveId, Cache, CacheBucket, CacheEntry, WheelCache};
+use uv_cache::{ArchiveId, CacheBucket, CacheEntry, WheelCache};
 use uv_cache_info::{CacheInfo, Timestamp};
 use uv_client::{
     CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, RegistryClient,
@@ -29,7 +25,6 @@ use uv_distribution_types::{
     HashValidation, Hashed, IndexUrl, InstalledDist, MetadataHashPolicy, Name, ResolutionRecorder,
     SourceDist, SourceUrl, parse_url_hashes,
 };
-use uv_extract::dirhash::{DirectoryDigest, HashedFile};
 use uv_extract::hash::Hasher;
 use uv_fs::{LockedFile, write_atomic};
 use uv_git::{GIT_LFS, GitError};
@@ -40,12 +35,11 @@ use uv_preview::PreviewFeature;
 use uv_pypi_types::{HashDigest, HashDigests, PyProjectToml, ResolutionMetadata};
 use uv_python_types::PythonVariant;
 use uv_redacted::DisplaySafeUrl;
-use uv_threads::initialize_rayon_once;
 use uv_types::{BuildContext, BuildStack};
 
 use crate::archive::Archive;
 use crate::error::PythonVersion;
-use crate::extracted_wheel::{ExtractedWheel, HashedWheel, WheelExtractor};
+use crate::extracted_wheel::{ExtractedWheel, WheelExtractor};
 use crate::hash::http_hash_algorithms;
 use crate::metadata::{ArchiveMetadata, Metadata};
 use crate::source::SourceDistributionBuilder;
@@ -829,7 +823,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 )
                 .map_err(Error::CacheWrite)?;
 
-                let mut extracted = match progress {
+                let extracted = match progress {
                     Some((reporter, progress)) => {
                         let mut reader = ProgressReader::new(&mut hasher, progress, &**reporter);
                         extractor
@@ -857,13 +851,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 let computed_hashes = Self::validate_hashes(dist, hashes, hashers)?;
 
-                // Before we make the wheel accessible by persisting it, ensure that the RECORD is
-                // valid.
-                extracted.validate_and_heal_record(dist)?;
-
                 // Persist the temporary directory to the directory store.
                 let id = self
-                    .persist_extracted_wheel(extracted, wheel_entry.path())
+                    .persist_extracted_wheel(extracted, wheel_entry.path(), dist.to_string())
                     .await?;
 
                 if let Some((reporter, progress)) = progress {
@@ -1361,18 +1351,14 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             .map_err(Error::CacheWrite)?;
 
         let file = file.into_std().await;
-        let mut extracted = tokio::task::spawn_blocking(move || extractor.extract_seekable(file))
+        let extracted = tokio::task::spawn_blocking(move || extractor.extract_seekable(file))
             .await?
             .map_err(|err| Error::Extract(filename.to_string(), err))?;
         let computed_hashes = Self::validate_hashes(dist, hashes, hashers)?;
 
-        // Before we make the wheel accessible by persisting it, ensure that the RECORD is
-        // valid.
-        extracted.validate_and_heal_record(dist)?;
-
         // Persist the temporary directory to the directory store.
         let id = self
-            .persist_extracted_wheel(extracted, wheel_entry.path())
+            .persist_extracted_wheel(extracted, wheel_entry.path(), dist.to_string())
             .await?;
 
         if let Some((reporter, progress)) = progress {
@@ -1483,7 +1469,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             let mut hasher = uv_extract::hash::HashReader::new(file, &mut hashers);
 
             // Unzip the wheel to a temporary directory.
-            let mut extracted = extractor
+            let extracted = extractor
                 .extract_streaming(&mut hasher)
                 .await
                 .map_err(|err| Error::Extract(filename.to_string(), err))?;
@@ -1493,13 +1479,9 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
             let computed_hashes = Self::validate_hashes(dist, hashes, hashers)?;
 
-            // Before we make the wheel accessible by persisting it, ensure that the RECORD is
-            // valid.
-            extracted.validate_and_heal_record(dist)?;
-
             // Persist the temporary directory to the directory store.
             let id = self
-                .persist_extracted_wheel(extracted, wheel_entry.path())
+                .persist_extracted_wheel(extracted, wheel_entry.path(), dist.to_string())
                 .await?;
 
             // Create an archive.
@@ -1536,7 +1518,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
     ) -> Result<ArchiveId, Error> {
         let content_addressed_cache = self.content_addressed_cache;
 
-        let mut extracted = tokio::task::spawn_blocking({
+        let extracted = tokio::task::spawn_blocking({
             let path = path.to_owned();
             let root = self.build_context.cache().root().to_path_buf();
             move || -> Result<_, Error> {
@@ -1551,41 +1533,26 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         })
         .await??;
 
-        // Before we make the wheel accessible by persisting it, ensure that the RECORD is valid.
-        extracted.validate_and_heal_record(dist)?;
-
         // Persist the temporary directory to the directory store.
-        let id = self.persist_extracted_wheel(extracted, target).await?;
+        let id = self
+            .persist_extracted_wheel(extracted, target, dist.to_string())
+            .await?;
 
         Ok(id)
     }
 
-    /// Persist an extracted wheel into the archive store.
+    /// Validate an extracted wheel, then persist it into the archive store.
     ///
     /// A hash tree makes identical extracted trees converge on one archive entry. Without one,
-    /// persistence retains the existing behavior of assigning a unique archive ID.
+    /// persistence assigns a unique archive ID.
     async fn persist_extracted_wheel(
         &self,
         extracted: ExtractedWheel,
         target: &Path,
+        dist: String,
     ) -> Result<ArchiveId, Error> {
-        let (temp_dir, hashed_wheel) = extracted.into_parts();
         let cache = self.build_context.cache();
-        let (temp_dir, id) = if let Some(HashedWheel { files, tree }) = hashed_wheel {
-            let digest = DirectoryDigest::from(tree.hash());
-            let id = ArchiveId::from_digest(digest.into());
-            let cache = cache.clone();
-            let temp_dir = tokio::task::spawn_blocking(move || {
-                persist_archive_files(&cache, temp_dir.path(), &files)
-                    .map_err(Error::CacheWrite)?;
-                Ok::<_, Error>(temp_dir)
-            })
-            .await??;
-            (temp_dir, id)
-        } else {
-            (temp_dir, ArchiveId::default())
-        };
-
+        let (temp_dir, id) = extracted.spawn_finalize(cache.clone(), dist).await??;
         cache
             .persist_with_id(temp_dir, target, id)
             .await
@@ -1627,76 +1594,6 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
     pub fn client(&self) -> &ManagedClient<'a> {
         &self.client
     }
-}
-
-/// Share extracted files other than `RECORD` while keeping the unpublished archive complete.
-fn persist_archive_files(cache: &Cache, archive: &Path, files: &[HashedFile]) -> io::Result<()> {
-    initialize_rayon_once();
-    let targets = files
-        .par_iter()
-        // Keep RECORD private, since it may have been healed after hashing.
-        .filter(|file| !file.path().ends_with("RECORD"))
-        .map(|file| {
-            let id = ArchiveFileId::from_digest(&file.object_digest_hex());
-            (archive.join(file.path()), cache.archive_file(&id))
-        })
-        .collect::<Vec<_>>();
-
-    // Group files by shard so its directory is created once and its files are linked by the
-    // same worker, avoiding contention between workers on each shard directory.
-    let mut shards: FxHashMap<&Path, Vec<_>> = FxHashMap::default();
-    for (source, target) in &targets {
-        let Some(parent) = target.parent() else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "archive file path must have a parent directory",
-            ));
-        };
-        shards.entry(parent).or_default().push((source, target));
-    }
-
-    let mut shards = shards
-        .into_iter()
-        .map(|(parent, files)| (parent, files, Ok(())))
-        .collect::<Vec<_>>();
-    // Start larger shards first so their work can overlap the remaining directory creation.
-    shards.sort_unstable_by_key(|(_, files, _)| Reverse(files.len()));
-
-    // Creating shards concurrently contends on their shared parent. Keep creation on this
-    // thread, while workers link files in the shards that are already available.
-    in_place_scope(|scope| -> io::Result<()> {
-        for (parent, files, result) in &mut shards {
-            fs_err::create_dir_all(parent)?;
-            scope.spawn(move |_| {
-                *result = files
-                    .iter()
-                    .try_for_each(|(source, target)| persist_archive_file(source, target));
-            });
-        }
-        Ok(())
-    })?;
-
-    shards.into_iter().try_for_each(|(_, _, result)| result)
-}
-
-/// Publish a shared object and retain a hardlink in the archive, with a copy fallback.
-fn persist_archive_file(src: &Path, dst: &Path) -> io::Result<()> {
-    // The shard already exists, and most objects are new, so try linking before checking for an
-    // existing object. This avoids an extra filesystem lookup for every new object.
-    match fs_err::hard_link(src, dst) {
-        Ok(()) => return Ok(()),
-        Err(_) if dst.try_exists()? => {}
-        Err(_) => return uv_fs::copy_atomic_sync(src, dst),
-    }
-
-    // This archive is still private, so it is safe to replace its extracted copy before publication.
-    if let Err(err) = fs_err::remove_file(src)
-        && err.kind() != io::ErrorKind::NotFound
-    {
-        return Err(err);
-    }
-
-    fs_err::hard_link(dst, src).or_else(|_| uv_fs::copy_atomic_sync(dst, src))
 }
 
 /// A wrapper around `RegistryClient` that manages a concurrency limit.

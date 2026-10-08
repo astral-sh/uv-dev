@@ -18495,6 +18495,24 @@ fn handle_record_mismatches() -> Result<()> {
         .join("foo-0.1.0.dist-info/RECORD");
     assert_eq!(fs_err::read(cached_record)?, fs_err::read(healed_record)?);
 
+    // Repeat finalization without content-addressing or a previously cached archive.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--find-links")
+        .arg(context.temp_dir.as_ref())
+        .arg("--offline")
+        .arg("--no-cache")
+        .arg("--reinstall")
+        .args(["--link-mode", "hardlink"])
+        .arg("foo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ foo==0.1.0
+    ");
+
     // Read the healed RECORD.
     let installed_record =
         fs_err::read_to_string(context.site_packages().join("foo-0.1.0.dist-info/RECORD"))?;
