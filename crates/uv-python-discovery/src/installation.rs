@@ -1,6 +1,8 @@
+use std::io;
+
 use reqwest_retry::policies::ExponentialBackoff;
-use tracing::{debug, info};
-use uv_fs::Simplified;
+use tracing::{Span, debug, info};
+use uv_fs::{LockedFile, Simplified};
 use uv_warnings::warn_user;
 
 use uv_cache::Cache;
@@ -323,7 +325,7 @@ impl PythonInstallation {
         let installations = ManagedPythonInstallations::from_settings(None)?.init()?;
         let installations_dir = installations.root();
         let scratch_dir = installations.scratch();
-        let _lock = installations.lock().await?;
+        let lock = installations.lock().await?;
 
         info!("Fetching requested Python...");
         let result = download
@@ -344,33 +346,50 @@ impl PythonInstallation {
         };
 
         let installed = ManagedPythonInstallation::new(path, download)?;
-        installed.ensure_externally_managed()?;
-        installed.ensure_sysconfig_patched()?;
-        installed.ensure_canonical_executables()?;
-        installed.ensure_build_file()?;
+        Self::finish_installation(installed, installations, cache.clone(), lock).await
+    }
 
-        let minor_version = installed.minor_version_key();
-        let highest_patch = installations
-            .find_all()?
-            .filter(|installation| installation.minor_version_key() == minor_version)
-            .filter_map(|installation| installation.version().patch())
-            .fold(0, std::cmp::max);
-        if installed
-            .version()
-            .patch()
-            .is_some_and(|p| p >= highest_patch)
-        {
-            installed.ensure_minor_version_link()?;
-        }
+    /// Complete a managed installation while owning its directory lock in the blocking worker.
+    async fn finish_installation(
+        installed: ManagedPythonInstallation,
+        installations: ManagedPythonInstallations,
+        cache: Cache,
+        lock: LockedFile,
+    ) -> Result<Self, Error> {
+        let span = Span::current();
+        tokio::task::spawn_blocking(move || {
+            let _lock = lock;
+            let _entered = span.enter();
+            installed.ensure_externally_managed()?;
+            installed.ensure_sysconfig_patched()?;
+            installed.ensure_canonical_executables()?;
+            installed.ensure_build_file()?;
 
-        if let Err(e) = installed.ensure_dylib_patched() {
-            e.warn_user(&installed);
-        }
+            let minor_version = installed.minor_version_key();
+            let highest_patch = installations
+                .find_all()?
+                .filter(|installation| installation.minor_version_key() == minor_version)
+                .filter_map(|installation| installation.version().patch())
+                .fold(0, std::cmp::max);
+            if installed
+                .version()
+                .patch()
+                .is_some_and(|p| p >= highest_patch)
+            {
+                installed.ensure_minor_version_link()?;
+            }
 
-        Ok(Self {
-            source: PythonSource::Managed,
-            interpreter: Interpreter::query(installed.executable(false), cache)?,
+            if let Err(e) = installed.ensure_dylib_patched() {
+                e.warn_user(&installed);
+            }
+
+            Ok(Self {
+                source: PythonSource::Managed,
+                interpreter: Interpreter::query(installed.executable(false), &cache)?,
+            })
         })
+        .await
+        .map_err(io::Error::other)?
     }
 
     /// Return the [`PythonSource`] of the Python installation, indicating where it was found.
@@ -693,4 +712,88 @@ pub fn find_environment(
     Ok(PythonEnvironment::from_interpreter(
         installation.into_interpreter(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::pin::pin;
+    use std::sync::mpsc;
+    use std::task::{Context, Poll, Waker};
+    use std::time::Duration;
+
+    use tokio::runtime::Builder;
+    use tokio::sync::oneshot;
+    use uv_cache::Cache;
+    use uv_fs::{LockedFile, LockedFileMode};
+    use uv_python_managed::downloads::ManagedPythonDownloadList;
+    use uv_python_managed::{ManagedPythonInstallation, ManagedPythonInstallations};
+    use uv_python_types::PythonDownloadRequest;
+
+    use super::PythonInstallation;
+
+    fn poll_once<F: Future>(future: F) -> Poll<F::Output> {
+        pin!(future).poll(&mut Context::from_waker(Waker::noop()))
+    }
+
+    #[test]
+    fn cancelled_automatic_finalization_retains_installation_lock()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()?;
+        let cache = Cache::temp()?;
+        let installations =
+            ManagedPythonInstallations::from_settings(Some(cache.root().join("python")))?.init()?;
+        let lock_path = installations.root().join(".lock");
+        let downloads = ManagedPythonDownloadList::new_only_embedded()?;
+        let download = downloads.find(&PythonDownloadRequest::default())?;
+        let installed =
+            ManagedPythonInstallation::new(installations.root().join("missing"), download)?;
+        runtime.block_on(async {
+            let lock = installations.lock().await?;
+            let (started, start) = oneshot::channel();
+            let (release, finish) = mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                let _ = started.send(());
+                finish.recv()
+            });
+            start.await?;
+            assert!(
+                poll_once(PythonInstallation::finish_installation(
+                    installed,
+                    installations,
+                    cache.clone(),
+                    lock
+                ))
+                .is_pending()
+            );
+            assert!(
+                LockedFile::acquire_no_wait(
+                    &lock_path,
+                    LockedFileMode::Exclusive,
+                    "test installation"
+                )
+                .is_none()
+            );
+            tokio::task::yield_now().await;
+            release.send(())?;
+            blocker.await??;
+            let _reacquired = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if let Some(lock) = LockedFile::acquire_no_wait(
+                        &lock_path,
+                        LockedFileMode::Exclusive,
+                        "test installation",
+                    ) {
+                        break lock;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await?;
+            Ok(())
+        })
+    }
 }
