@@ -2458,7 +2458,8 @@ pub struct ToolOptionsWire {
 }
 
 impl From<ResolverInstallerOptions> for ToolOptions {
-    fn from(value: ResolverInstallerOptions) -> Self {
+    fn from(mut value: ResolverInstallerOptions) -> Self {
+        value.indexes = value.indexes.normalize();
         Self {
             index: value.indexes.index.map(|indexes| {
                 indexes
@@ -2498,7 +2499,12 @@ impl From<ResolverInstallerOptions> for ToolOptions {
 }
 
 impl From<ToolOptionsWire> for ToolOptions {
-    fn from(value: ToolOptionsWire) -> Self {
+    fn from(mut value: ToolOptionsWire) -> Self {
+        normalize_indexes(
+            &mut value.index,
+            &mut value.index_url,
+            &mut value.extra_index_url,
+        );
         let exclude_newer = value
             .exclude_newer
             .map(|exclude_newer| match exclude_newer {

@@ -5517,7 +5517,7 @@ fn tool_install_with_executables_from() -> Result<()> {
         ]
 
         [tool.options]
-        index-url = "http://[LOCALHOST]/simple/"
+        index = [{ url = "http://[LOCALHOST]/simple/", explicit = false, default = true, format = "simple", authenticate = "auto" }]
         exclude-newer = "2024-03-25T00:00:00Z"
         "#);
     });

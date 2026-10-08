@@ -19591,84 +19591,94 @@ async fn index_precedence_across_configuration_files() -> Result<()> {
         .await;
     let preferred_url = preferred.index_url();
     let fallback_url = fallback.index_url();
-    for (project, user, system) in [
-        (
-            format!("index-url = {preferred_url:?}"),
-            format!("[[index]]\nurl = {fallback_url:?}\ndefault = true"),
-            String::new(),
-        ),
-        (
-            format!("[[index]]\nurl = {preferred_url:?}\ndefault = true"),
-            format!("index-url = {fallback_url:?}"),
-            String::new(),
-        ),
-        (
-            format!("extra-index-url = [{preferred_url:?}]"),
-            format!("[[index]]\nurl = {fallback_url:?}"),
-            String::new(),
-        ),
-        (
-            format!("[[index]]\nurl = {preferred_url:?}"),
-            format!("extra-index-url = [{fallback_url:?}]"),
-            String::new(),
-        ),
-        (
-            String::new(),
-            format!("index-url = {preferred_url:?}"),
-            format!("[[index]]\nurl = {fallback_url:?}\ndefault = true"),
-        ),
-        (
-            String::new(),
-            format!("[[index]]\nurl = {preferred_url:?}\ndefault = true"),
-            format!("index-url = {fallback_url:?}"),
-        ),
-    ] {
-        let context = uv_test::test_context!("3.12");
-        context
-            .temp_dir
-            .child("pyproject.toml")
-            .write_str(indoc! {r#"
+    for project_file in ["uv.toml", "pyproject.toml"] {
+        for (project, user, system) in [
+            (
+                format!("index-url = {preferred_url:?}"),
+                format!("[[index]]\nurl = {fallback_url:?}\ndefault = true"),
+                String::new(),
+            ),
+            (
+                format!("[[index]]\nurl = {preferred_url:?}\ndefault = true"),
+                format!("index-url = {fallback_url:?}"),
+                String::new(),
+            ),
+            (
+                format!("extra-index-url = [{preferred_url:?}]"),
+                format!("[[index]]\nurl = {fallback_url:?}"),
+                String::new(),
+            ),
+            (
+                format!("[[index]]\nurl = {preferred_url:?}"),
+                format!("extra-index-url = [{fallback_url:?}]"),
+                String::new(),
+            ),
+            (
+                String::new(),
+                format!("index-url = {preferred_url:?}"),
+                format!("[[index]]\nurl = {fallback_url:?}\ndefault = true"),
+            ),
+            (
+                String::new(),
+                format!("[[index]]\nurl = {preferred_url:?}\ndefault = true"),
+                format!("index-url = {fallback_url:?}"),
+            ),
+        ] {
+            let context = uv_test::test_context!("3.12");
+            context
+                .temp_dir
+                .child("pyproject.toml")
+                .write_str(indoc! {r#"
             [project]
             name = "project"
             version = "0.1.0"
             requires-python = ">=3.12"
             dependencies = ["ok"]
         "#})?;
-        context.temp_dir.child("uv.toml").write_str(&project)?;
-        let user_dir = context.temp_dir.child("user");
-        let system_dir = context.temp_dir.child("system");
-        user_dir.child("uv/uv.toml").write_str(&user)?;
-        system_dir.child("uv/uv.toml").write_str(&system)?;
-        for mut command in [context.lock(), context.sync()] {
-            for variable in [
-                EnvVars::UV_INDEX,
-                EnvVars::UV_DEFAULT_INDEX,
-                EnvVars::UV_INDEX_URL,
-                EnvVars::UV_EXTRA_INDEX_URL,
-            ] {
-                command.env_remove(variable);
+            if project_file == "pyproject.toml" {
+                context.temp_dir.child(project_file).write_str(&format!(
+                    "{}\n[tool.uv]\n{}",
+                    context.read(project_file),
+                    project.replace("[[index]]", "[[tool.uv.index]]")
+                ))?;
+            } else {
+                context.temp_dir.child(project_file).write_str(&project)?;
             }
-            command
-                .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
-                .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
-                .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
-                .assert()
-                .success();
+            let user_dir = context.temp_dir.child("user");
+            let system_dir = context.temp_dir.child("system");
+            user_dir.child("uv/uv.toml").write_str(&user)?;
+            system_dir.child("uv/uv.toml").write_str(&system)?;
+            for mut command in [context.lock(), context.sync()] {
+                for variable in [
+                    EnvVars::UV_INDEX,
+                    EnvVars::UV_DEFAULT_INDEX,
+                    EnvVars::UV_INDEX_URL,
+                    EnvVars::UV_EXTRA_INDEX_URL,
+                ] {
+                    command.env_remove(variable);
+                }
+                command
+                    .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+                    .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+                    .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+                    .assert()
+                    .success();
+            }
+            context.assert_installed("ok", "1.0.0");
+            let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+            let package = lock["package"]
+                .as_array()
+                .and_then(|packages| {
+                    packages
+                        .iter()
+                        .find(|package| package["name"].as_str() == Some("ok"))
+                })
+                .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+            assert_eq!(
+                package["source"]["registry"].as_str(),
+                Some(preferred_url.as_str())
+            );
         }
-        context.assert_installed("ok", "1.0.0");
-        let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
-        let package = lock["package"]
-            .as_array()
-            .and_then(|packages| {
-                packages
-                    .iter()
-                    .find(|package| package["name"].as_str() == Some("ok"))
-            })
-            .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
-        assert_eq!(
-            package["source"]["registry"].as_str(),
-            Some(preferred_url.as_str())
-        );
     }
     Ok(())
 }
