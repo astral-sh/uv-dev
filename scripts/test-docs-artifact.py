@@ -96,13 +96,17 @@ class DocsArtifact(unittest.TestCase):
                     self.archive.unlink()
 
                 def extra(entries, kind=kind):
-                    member = tarfile.TarInfo(
-                        "unexpected" if kind == "extra" else entries[0][0].name
-                    )
-                    return [*entries, (member, b"extra")]
+                    if kind == "duplicate":
+                        return [*entries, entries[0]]
+                    return [*entries, (tarfile.TarInfo("unexpected"), b"extra")]
 
                 self.rewrite(extra)
-                with self.assertRaises(ValueError):
+                diagnostic = (
+                    "duplicate documentation archive entries"
+                    if kind == "duplicate"
+                    else "differs from its file inventory"
+                )
+                with self.assertRaisesRegex(ValueError, diagnostic):
                     self.unpack()
                 self.assertFalse(self.output.exists())
 
