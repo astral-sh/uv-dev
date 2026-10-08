@@ -25,13 +25,15 @@ env:
   UV_LOCKED: 1
 
 jobs:
-  mkdocs:
-    environment:
-      name: release
+  build-docs:
     permissions:
       contents: read
-      id-token: write # for the credential broker
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+      source-commit: ${{ steps.metadata.outputs.source-commit }}
+      version: ${{ steps.metadata.outputs.version }}
+      display-name: ${{ steps.metadata.outputs.display-name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,6 +54,7 @@ jobs:
           cargo dev generate-preview-features-reference
 
       - name: "Set docs version"
+        id: metadata
         env:
           version: ${{ (inputs.plan != '' && fromJson(inputs.plan).announcement_tag) || inputs.ref }}
         run: |
@@ -66,18 +69,13 @@ jobs:
 
           echo "version=$version" >> "$GITHUB_ENV"
           echo "display_name=$display_name" >> "$GITHUB_ENV"
-
-      - name: "Set branch name"
-        run: |
-          timestamp="$(date +%s)"
-
-          # create branch_display_name from display_name by replacing all
-          # characters disallowed in git branch names with hyphens
-          branch_display_name="$(echo "${display_name}" | tr -c '[:alnum:]._' '-' | tr -s '-')"
-
-          echo "branch_name=update-docs-$branch_display_name-$timestamp" >> "$GITHUB_ENV"
-          echo "timestamp=$timestamp" >> "$GITHUB_ENV"
-          echo "source_commit=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          source_commit="$(git rev-parse HEAD)"
+          echo "source_commit=$source_commit" >> "$GITHUB_ENV"
+          {
+            echo "version=$version"
+            echo "display-name=$display_name"
+            echo "source-commit=$source_commit"
+          } >> "$GITHUB_OUTPUT"
 
       - name: "Install uv"
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -90,7 +88,40 @@ jobs:
       - name: "Build docs"
         run: uv run --only-group docs mkdocs build --strict -f mkdocs.yml
 
-      # The selected documentation source may predate the publication helper.
+      # Packaging comes from the workflow revision even when generating older docs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .docs-workflow
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: "Package generated docs"
+        run: |
+          python3 .docs-workflow/scripts/docs-artifact.py pack site/uv docs-publication.tar \
+            --source-commit "$source_commit" --version "$version"
+
+      - name: "Upload generated docs"
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docs-site-${{ github.run_id }}-${{ github.run_attempt }}
+          path: docs-publication.tar
+          if-no-files-found: error
+
+  mkdocs:
+    needs: build-docs
+    environment:
+      name: release
+    permissions:
+      contents: read
+      id-token: write # for the credential broker
+    runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
+    env:
+      version: ${{ needs.build-docs.outputs.version }}
+      display_name: ${{ needs.build-docs.outputs.display-name }}
+      source_commit: ${{ needs.build-docs.outputs.source-commit }}
+    steps:
       - name: "Load publication tools"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,6 +129,29 @@ jobs:
           path: .docs-workflow
           sparse-checkout: scripts
           persist-credentials: false
+
+      - name: "Download generated docs"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build-docs.outputs.artifact }}
+          path: docs-artifact
+          merge-multiple: true
+
+      - name: "Verify generated docs"
+        run: |
+          python3 .docs-workflow/scripts/docs-artifact.py unpack docs-artifact/docs-publication.tar docs-site \
+            --source-commit "$source_commit" --version "$version"
+
+      - name: "Set branch name"
+        run: |
+          timestamp="$(date +%s)"
+
+          # create branch_display_name from display_name by replacing all
+          # characters disallowed in git branch names with hyphens
+          branch_display_name="$(echo "${display_name}" | tr -c '[:alnum:]._' '-' | tr -s '-')"
+
+          echo "branch_name=update-docs-$branch_display_name-$timestamp" >> "$GITHUB_ENV"
+          echo "timestamp=$timestamp" >> "$GITHUB_ENV"
 
       - name: "Get docs token"
         id: token
@@ -120,7 +174,7 @@ jobs:
           persist-credentials: false
 
       - name: "Copy docs"
-        run: rm -rf astral-docs/site/uv && mkdir -p astral-docs/site && cp -r site/uv astral-docs/site/
+        run: rm -rf astral-docs/site/uv && mkdir -p astral-docs/site && cp -r docs-site astral-docs/site/uv
 
       - name: "Commit docs"
         id: commit
