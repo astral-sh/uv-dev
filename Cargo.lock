@@ -6973,6 +6973,7 @@ dependencies = [
  "rayon",
  "rustc-hash",
  "same-file",
+ "smallvec",
  "tempfile",
  "thiserror",
  "tokio",
