@@ -122,7 +122,7 @@ fn resolve_extras(criterion: &mut Criterion<WallTime>) {
 }
 
 fn visit_extras(criterion: &mut Criterion<WallTime>) {
-    for width in [16, 64, 256] {
+    for width in [1, 7, 8, 16, 64, 256] {
         let conditions = (0..width)
             .map(|index| format!("platform_machine == 'machine-{index:08}'"))
             .collect::<Vec<_>>()
