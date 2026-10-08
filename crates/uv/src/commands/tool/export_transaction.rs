@@ -24,7 +24,9 @@ use uv_tool::{InstalledTools, ToolEntrypoint, ToolEntrypointLocks, entrypoint_pa
 use uv_warnings::warn_user;
 
 use crate::commands::tool::common::{NoExecutablesError, matching_packages};
-use crate::commands::tool::recovery::{same_entrypoint_location, same_planned_entrypoint_location};
+use crate::commands::tool::recovery::{
+    same_entrypoint_location, same_existing_entrypoint_location,
+};
 use crate::printer::Printer;
 
 const JOURNAL_PREFIX: &str = ".uv-tool-exports-";
@@ -335,7 +337,20 @@ impl JournalRecord {
         let file = fs_err::File::from_parts(file, &self.path);
         let identity = ExportIdentity::from_file(&file)?;
         self.check_current()?;
+        #[cfg(unix)]
         temporary.persist(&self.path).map_err(|error| error.error)?;
+        #[cfg(windows)]
+        {
+            // MoveFileEx cannot replace the journal while its identity handle is retained.
+            // Clear the temporary attributes, then use the standard library's POSIX rename.
+            let path = temporary.keep().map_err(|error| error.error)?;
+            let mut temporary = tempfile::TempPath::try_from_path(path)?;
+            let destination = uv_fs::verbatim_path(&self.path);
+            uv_fs::with_retry_sync(&temporary, &destination, "rename", || {
+                fs_err::rename(&temporary, &destination)
+            })?;
+            temporary.disable_cleanup(true);
+        }
         self.identity = identity;
         self._file = file;
         self.bytes = bytes;
@@ -547,7 +562,9 @@ impl FreshToolExportPlan {
                 }
                 let mut previous_target = None;
                 for previous in planned.keys() {
-                    if same_planned_entrypoint_location(previous, &target)? {
+                    // Fresh names make no historical short-name claim. Recheck each actual
+                    // destination at publication, when the filesystem has assigned any aliases.
+                    if same_existing_entrypoint_location(previous, &target)? {
                         previous_target = Some(previous.clone());
                         break;
                     }
@@ -574,7 +591,7 @@ impl FreshToolExportPlan {
     }
 
     /// Directory admission belongs between preparation and the authoritative publication checks.
-    pub(super) fn canonical_directory(&self) -> &Path {
+    fn canonical_directory(&self) -> &Path {
         &self.canonical_directory
     }
 
@@ -1074,9 +1091,11 @@ mod tests {
     use uv_settings::ToolOptions;
     use uv_tool::{InstalledTools, PreparedToolReceipt, Tool, ToolEntrypoint, ToolEntrypointLocks};
 
+    #[cfg(unix)]
+    use super::publish_export;
     use super::{
         ExportVersion, FreshToolExportPlan, JournalRecord, PreparedExport, ToolExportTransaction,
-        journal_path, publish_export, publish_export_data, recover_tool_exports,
+        journal_path, publish_export_data, recover_tool_exports,
     };
     use crate::printer::Printer;
 
@@ -1357,7 +1376,10 @@ mod tests {
             .staging_directory()?
             .join("leave-alone");
         fs_err::write(&obstruction, "external recovery-directory entry")?;
+        let previous_journal = fs_err::File::open(&transaction.record.path)?;
         transaction.commit()?;
+        let previous: super::ExportJournal = serde_json::from_reader(previous_journal)?;
+        assert_eq!(previous.phase, super::JournalPhase::Publishing);
         assert_eq!(
             fs_err::read(&obstruction)?,
             b"external recovery-directory entry"

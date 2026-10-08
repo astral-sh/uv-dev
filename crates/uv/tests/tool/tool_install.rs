@@ -3306,6 +3306,38 @@ fn tool_install_recovery_handles_bin_directory_aliases() -> Result<()> {
     Ok(())
 }
 
+/// Fresh short executable names are distinct even when neither destination exists yet.
+#[test]
+fn tool_install_fresh_multiple_short_executables() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    write_recovery_wheel(
+        links.path(),
+        "short-exports",
+        "1.0.0",
+        &[],
+        &[("alpha", "first"), ("beta", "second")],
+    )?;
+    context
+        .tool_install()
+        .args(["short-exports", "--no-index", "--find-links"])
+        .arg(links.path())
+        .assert()
+        .success();
+    for (name, expected) in [("alpha", "first\n"), ("beta", "second\n")] {
+        Command::new(
+            context
+                .temp_dir
+                .join(format!("bin/{name}{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .assert()
+        .success()
+        .stdout(expected);
+    }
+    Ok(())
+}
+
 /// Final metadata failure restores authorized replacements and removes unreceipted commands.
 #[test]
 #[cfg(unix)]
