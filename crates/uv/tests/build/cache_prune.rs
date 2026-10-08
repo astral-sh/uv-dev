@@ -584,8 +584,8 @@ fn prune_stale_revision_content_addressed_cache() -> Result<()> {
 }
 
 /// `cache prune` should remove any temporary build environments left in the cache.
-#[tokio::test]
-async fn prune_temporary_build_environment() -> Result<()> {
+#[test]
+fn prune_temporary_build_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_counts()
         .with_filtered_sizes_and_units()
@@ -594,20 +594,40 @@ async fn prune_temporary_build_environment() -> Result<()> {
             "[CACHE_DIR]/$2/[ENTRY]",
         ));
 
-    // On Unix, leave a real backend running after killing only its uv parent.
-    #[cfg(unix)]
-    let mut backend = {
-        let (mut child, backend) = start_build_backend(&context).await?;
-        child.kill().await?;
-        backend
-    };
-    #[cfg(not(unix))]
+    // Populate the cache with a temporary build environment.
     let builds = context.cache_dir.child("builds-v0").child(".tmp123456");
-    #[cfg(not(unix))]
-    {
-        builds.create_dir_all()?;
-        builds.child("pyvenv.cfg").write_str("home = /usr/bin")?;
-    }
+    builds.create_dir_all()?;
+    builds.child("pyvenv.cfg").write_str("home = /usr/bin")?;
+
+    uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
+    DEBUG uv [VERSION] ([COMMIT] DATE)
+    Pruning cache at: [CACHE_DIR]/
+    DEBUG Removing temporary build environment: [CACHE_DIR]/builds-v0/[ENTRY]
+    Removed [N] files ([SIZE])
+    ");
+
+    assert!(!builds.exists());
+
+    Ok(())
+}
+
+/// Pruning can remove a build environment still used by a backend that outlives uv.
+#[cfg(unix)]
+#[tokio::test]
+async fn prune_live_build_environment_after_parent_exit() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_sizes_and_units()
+        .with_filter((
+            r"\[CACHE_DIR\](\\|\/)(.*?)(\\|\/).*",
+            "[CACHE_DIR]/$2/[ENTRY]",
+        ));
+
+    let (mut child, mut backend) = start_build_backend(&context).await?;
+    child.kill().await?;
 
     uv_snapshot!(context.filters(), context.prune().arg("--verbose").env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
     exit_code: 0 (success)
@@ -619,25 +639,18 @@ async fn prune_temporary_build_environment() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
 
-    #[cfg(not(unix))]
-    assert!(!builds.exists());
-
-    #[cfg(unix)]
-    {
-        backend.write_all(b"R").await?;
-        let mut observations = String::new();
-        timeout(
-            Duration::from_secs(30),
-            backend.read_to_string(&mut observations),
-        )
-        .await??;
-        // Pruning also breaks a backend that outlives uv: astral-sh/uv#22338.
-        assert_snapshot!(observations, @"
-        environment exists: False
-        write: FileNotFoundError
-        import: ModuleNotFoundError
-        ");
-    }
-
+    backend.write_all(b"R").await?;
+    let mut observations = String::new();
+    timeout(
+        Duration::from_secs(30),
+        backend.read_to_string(&mut observations),
+    )
+    .await??;
+    // Pruning also breaks a backend that outlives uv: astral-sh/uv#22338.
+    assert_snapshot!(observations, @"
+    environment exists: False
+    write: FileNotFoundError
+    import: ModuleNotFoundError
+    ");
     Ok(())
 }
