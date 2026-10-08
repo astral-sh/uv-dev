@@ -6,12 +6,13 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use uv_cache_key::cache_digest;
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_static::EnvVars;
 use uv_test::TestContext;
+use uv_test::packse::PackseServer;
 
 async fn hold_metadata(path: &Path, kind: &str) -> Result<LockedFile> {
     let path = fs_err::canonicalize(path)?;
@@ -551,5 +552,195 @@ async fn queued_script_initialization_preserves_competing_creator() -> Result<()
         .failure()
         .stderr(predicates::str::contains("is already a PEP 723 script"));
     assert_eq!(fs_err::read_to_string(script.path())?, committed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_add_reads_updated_default_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let old_index = PackseServer::empty();
+    let current_index = PackseServer::new("simple/single-package.toml");
+    let manifest = context.temp_dir.child("pyproject.toml");
+    manifest.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        url = "{}"
+        default = true
+    "#, old_index.index_url()})?;
+    let guard = hold_metadata(context.temp_dir.path(), "workspace").await?;
+    let mut command = context.add();
+    command.args(["a==1.0.0", "--no-sync"]);
+    let (child, stderr) = queued_command(command).await?;
+
+    manifest.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        url = "{}"
+        default = true
+    "#, current_index.index_url()})?;
+    drop(guard);
+    finish_command(child, stderr).await?;
+    insta::assert_debug_snapshot!(dependencies(&context)?, @r#"
+    [
+        "a==1.0.0",
+    ]
+    "#);
+    let lock: toml::Value =
+        toml::from_str(&fs_err::read_to_string(context.temp_dir.join("uv.lock"))?)?;
+    assert_eq!(
+        lock["package"][0]["source"]["registry"]
+            .as_str()
+            .map(|url| url.trim_end_matches('/')),
+        Some(current_index.index_url().trim_end_matches('/'))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_add_keeps_cli_index_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let cli_index = PackseServer::new("simple/single-package.toml");
+    let other_index = PackseServer::empty();
+    let manifest = context.temp_dir.child("pyproject.toml");
+    manifest.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let guard = hold_metadata(context.temp_dir.path(), "workspace").await?;
+    let mut command = context.add();
+    command
+        .args([
+            "a==1.0.0",
+            "--no-sync",
+            "--default-index",
+            &cli_index.index_url(),
+        ])
+        .env(EnvVars::UV_DEFAULT_INDEX, other_index.index_url());
+    let (child, stderr) = queued_command(command).await?;
+
+    manifest.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        url = "{}"
+        default = true
+    "#, other_index.index_url()})?;
+    drop(guard);
+    finish_command(child, stderr).await?;
+    insta::assert_debug_snapshot!(dependencies(&context)?, @r#"
+    [
+        "a==1.0.0",
+    ]
+    "#);
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_add_keeps_environment_index_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let environment_index = PackseServer::new("simple/single-package.toml");
+    let filesystem_index = PackseServer::empty();
+    let manifest = context.temp_dir.child("pyproject.toml");
+    manifest.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let guard = hold_metadata(context.temp_dir.path(), "workspace").await?;
+    let mut command = context.add();
+    command
+        .args(["a==1.0.0", "--no-sync"])
+        .env(EnvVars::UV_DEFAULT_INDEX, environment_index.index_url());
+    let (child, stderr) = queued_command(command).await?;
+
+    manifest.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        url = "{}"
+        default = true
+    "#, filesystem_index.index_url()})?;
+    drop(guard);
+    finish_command(child, stderr).await?;
+    insta::assert_debug_snapshot!(dependencies(&context)?, @r#"
+    [
+        "a==1.0.0",
+    ]
+    "#);
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_script_add_reads_updated_default_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let old_index = PackseServer::empty();
+    let current_index = PackseServer::new("simple/single-package.toml");
+    let script = context.temp_dir.child("main.py");
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # [[tool.uv.index]]
+        # url = "{}"
+        # default = true
+        # ///
+        print("script body")
+    "#, old_index.index_url()})?;
+    let guard = hold_metadata(script.path(), "script").await?;
+    let mut command = context.add();
+    command.args(["--script", "main.py", "a==1.0.0"]);
+    let (child, stderr) = queued_command(command).await?;
+
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # [[tool.uv.index]]
+        # url = "{}"
+        # default = true
+        # ///
+        print("updated script body")
+    "#, current_index.index_url()})?;
+    drop(guard);
+    finish_command(child, stderr).await?;
+    let contents = fs_err::read_to_string(script.path())?;
+    let index_filter = regex::escape(&current_index.index_url());
+    insta::with_settings!({filters => [(index_filter.as_str(), "[INDEX]")]}, {
+        insta::assert_snapshot!(contents, @r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = [
+        #     "a==1.0.0",
+        # ]
+        # [[tool.uv.index]]
+        # url = "[INDEX]"
+        # default = true
+        # ///
+        print("updated script body")
+        "#);
+    });
     Ok(())
 }

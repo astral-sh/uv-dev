@@ -31,6 +31,7 @@ use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
 pub async fn audit(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     extras: ExtrasSpecification,
     groups: DependencyGroups,
@@ -83,7 +84,7 @@ pub async fn audit(
     let mut workspace_cache = workspace_cache;
     let script = if writable {
         if let Some(script) = script {
-            let (script, lock) = MetadataLock::read_script(&script.path).await?;
+            let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
             metadata_lock = Some(lock);
             Some(script.context("Script metadata was removed while waiting for its lock")?)
         } else {
@@ -105,13 +106,8 @@ pub async fn audit(
         )
         .await?;
         workspace = if writable {
-            let (workspace, lock, fresh_cache) = MetadataLock::reload_workspace(
-                discovered,
-                project_dir,
-                &DiscoveryOptions::default(),
-                &cache,
-            )
-            .await?;
+            let (workspace, lock, fresh_cache) =
+                MetadataLock::admitted_workspace(admission.take(), workspace_cache, discovered)?;
             metadata_lock = Some(lock);
             metadata_workspace_cache = fresh_cache;
             workspace_cache = &metadata_workspace_cache;

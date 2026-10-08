@@ -95,6 +95,7 @@ impl uv_errors::Hinted for AddDependencyError {
 /// Add one or more packages to the project requirements.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn add(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -135,6 +136,7 @@ pub async fn add(
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
+    workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
@@ -224,7 +226,7 @@ pub async fn add(
             ScriptPath::Script(script) => script.path,
             ScriptPath::Path(path) => path,
         };
-        let (script, lock) = MetadataLock::read_script(&path).await?;
+        let (script, lock) = MetadataLock::read_script(admission.take(), &path).await?;
         _metadata_lock = lock;
         let script = if let Some(script) = script {
             script
@@ -273,13 +275,13 @@ pub async fn add(
         )
     } else {
         // Find the project in the workspace.
-        // No workspace caching since `uv add` changes the workspace definition.
+        // Reuse the admitted discovery until the first metadata edit.
         let project = if let Some(package) = package.as_ref() {
             VirtualProject::discover_with_package(
                 project_dir,
                 &DiscoveryOptions::default(),
                 cache,
-                &WorkspaceCache::default(),
+                workspace_cache,
                 package.clone(),
             )
             .await?
@@ -288,19 +290,13 @@ pub async fn add(
                 project_dir,
                 &DiscoveryOptions::default(),
                 cache,
-                &WorkspaceCache::default(),
+                workspace_cache,
             )
             .await?
         };
 
-        let (project, lock, _) = MetadataLock::project(
-            project,
-            project_dir,
-            package.as_ref(),
-            &DiscoveryOptions::default(),
-            cache,
-        )
-        .await?;
+        let (project, lock, _) =
+            MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
         _metadata_lock = lock;
 
         // For non-project workspace roots, allow dev dependencies, but nothing else.
@@ -531,7 +527,7 @@ pub async fn add(
                 settings.resolver.exclude_newer.clone(),
                 sources,
                 SourceTreeEditablePolicy::Project,
-                // No workspace caching since `uv add` changes the workspace definition.
+                // Reuse the admitted discovery until the first metadata edit.
                 WorkspaceCache::default(),
                 concurrency.clone(),
                 preview,
@@ -799,7 +795,7 @@ pub async fn add(
     };
 
     // Update the `pypackage.toml` in-memory.
-    let target = target.update(&content, &WorkspaceCache::default())?;
+    let target = target.update(&content, workspace_cache)?;
 
     // Use separate state for locking and syncing.
     let lock_state = state.fork();

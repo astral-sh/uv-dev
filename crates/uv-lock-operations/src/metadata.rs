@@ -2,20 +2,76 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 
 use uv_cache::Cache;
 use uv_cache_key::cache_digest;
 use uv_fs::{LockedFile, LockedFileMode, Simplified};
-use uv_normalize::PackageName;
 use uv_scripts::Pep723Script;
-use uv_workspace::{DiscoveryOptions, VirtualProject, Workspace, WorkspaceCache};
+use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache};
 
 /// Own the metadata resource independently of the interpreter or environment used to resolve it.
 #[must_use]
-pub struct MetadataLock(Arc<LockedFile>);
+#[derive(Clone)]
+pub struct MetadataLock {
+    file: Arc<LockedFile>,
+    resource: PathBuf,
+    kind: &'static str,
+}
 
 impl MetadataLock {
+    /// Claim the workspace before reading configuration or discovering all of its members.
+    pub async fn discover(
+        directory: &Path,
+        cache: &Cache,
+        workspace_cache: &mut WorkspaceCache,
+        members: MemberDiscovery,
+    ) -> Result<Option<Self>> {
+        let options = DiscoveryOptions {
+            members: MemberDiscovery::None,
+            ..DiscoveryOptions::default()
+        };
+        loop {
+            let Ok(workspace) =
+                Workspace::discover(directory, &options, cache, &WorkspaceCache::default()).await
+            else {
+                return Ok(None);
+            };
+            let root = fs_err::canonicalize(workspace.install_path())?;
+            let lock = Self::workspace(&root).await?;
+            let fresh_cache = WorkspaceCache::default();
+            let discovered = Workspace::discover(
+                directory,
+                &DiscoveryOptions {
+                    members: members.clone(),
+                    ..DiscoveryOptions::default()
+                },
+                cache,
+                &fresh_cache,
+            )
+            .await;
+            match discovered {
+                Ok(workspace) if fs_err::canonicalize(workspace.install_path())? != root => {
+                    // Drop this guard before retrying admission for the new workspace root.
+                }
+                Ok(_) | Err(_) => {
+                    // Configuration and command discovery share the admitted result, including
+                    // discovery errors. Invalid workspaces are reported by the command itself.
+                    *workspace_cache = fresh_cache;
+                    return Ok(Some(lock));
+                }
+            }
+        }
+    }
+
+    fn check_resource(&self, path: &Path, kind: &str) -> Result<()> {
+        ensure!(
+            self.kind == kind && self.resource == fs_err::canonicalize(path)?,
+            "Metadata destination changed after settings were read; run the command again"
+        );
+        Ok(())
+    }
+
     async fn workspace(root: &Path) -> Result<Self> {
         Self::acquire(&fs_err::canonicalize(root)?, "workspace").await
     }
@@ -39,69 +95,52 @@ impl MetadataLock {
         Self::acquire(&path, "script").await
     }
 
-    async fn acquire(path: &Path, kind: &str) -> Result<Self> {
+    async fn acquire(path: &Path, kind: &'static str) -> Result<Self> {
         let lock = LockedFile::acquire(
             std::env::temp_dir().join(format!("uv-{kind}-metadata-{}.lock", cache_digest(&path))),
             LockedFileMode::Exclusive,
             path.simplified_display(),
         )
         .await?;
-        Ok(Self(Arc::new(lock)))
+        Ok(Self {
+            file: Arc::new(lock),
+            resource: path.to_path_buf(),
+            kind,
+        })
     }
 
-    /// Reload a discovered project after admission, without reusing a pre-admission workspace cache.
-    pub async fn project(
-        mut project: VirtualProject,
-        project_dir: &Path,
-        package: Option<&PackageName>,
-        options: &DiscoveryOptions,
-        cache: &Cache,
+    /// Reuse the project discovered while holding its metadata resource.
+    pub fn admitted_project(
+        admission: Option<Self>,
+        workspace_cache: &WorkspaceCache,
+        project: VirtualProject,
     ) -> Result<(VirtualProject, Self, WorkspaceCache)> {
-        loop {
-            let root = fs_err::canonicalize(project.workspace().install_path())?;
-            let lock = Self::workspace(&root).await?;
-            let workspace_cache = WorkspaceCache::default();
-            project = if let Some(package) = package {
-                VirtualProject::discover_with_package(
-                    project_dir,
-                    options,
-                    cache,
-                    &workspace_cache,
-                    package.clone(),
-                )
-                .await?
-            } else {
-                VirtualProject::discover(project_dir, options, cache, &workspace_cache).await?
-            };
-            if fs_err::canonicalize(project.workspace().install_path())? == root {
-                return Ok((project, lock, workspace_cache));
-            }
-            // Membership may have changed while waiting. Release this workspace before claiming
-            // the newly discovered one, rather than nesting resource locks in an arbitrary order.
-        }
+        let lock = admission
+            .context("Workspace changed before metadata admission; run the command again")?;
+        lock.check_resource(project.workspace().install_path(), "workspace")?;
+        Ok((project, lock, workspace_cache.clone()))
     }
 
-    /// Reload a workspace from the original directory while holding its metadata resource.
-    pub async fn reload_workspace(
-        mut workspace: Arc<Workspace>,
-        directory: &Path,
-        options: &DiscoveryOptions,
-        cache: &Cache,
+    /// Reuse the workspace discovered while holding its metadata resource.
+    pub fn admitted_workspace(
+        admission: Option<Self>,
+        workspace_cache: &WorkspaceCache,
+        workspace: Arc<Workspace>,
     ) -> Result<(Arc<Workspace>, Self, WorkspaceCache)> {
-        loop {
-            let root = fs_err::canonicalize(workspace.install_path())?;
-            let lock = Self::workspace(&root).await?;
-            let workspace_cache = WorkspaceCache::default();
-            workspace = Workspace::discover(directory, options, cache, &workspace_cache).await?;
-            if fs_err::canonicalize(workspace.install_path())? == root {
-                return Ok((workspace, lock, workspace_cache));
-            }
-        }
+        let lock = admission
+            .context("Workspace changed before metadata admission; run the command again")?;
+        lock.check_resource(workspace.install_path(), "workspace")?;
+        Ok((workspace, lock, workspace_cache.clone()))
     }
 
     /// Read a script's current metadata after claiming the script, including an absent metadata tag.
-    pub async fn read_script(path: &Path) -> Result<(Option<Pep723Script>, Self)> {
-        let lock = Self::script(path).await?;
+    pub async fn read_script(
+        admission: Option<Self>,
+        path: &Path,
+    ) -> Result<(Option<Pep723Script>, Self)> {
+        let lock =
+            admission.context("Script changed before metadata admission; run the command again")?;
+        lock.check_resource(path, "script")?;
         Ok((Pep723Script::read(path).await?, lock))
     }
 
@@ -120,14 +159,20 @@ impl MetadataLock {
 
     /// Write metadata while keeping the resource locked until the worker finishes.
     pub async fn write_file(&self, path: PathBuf, contents: String) -> io::Result<()> {
-        Self(Arc::clone(&self.0))
-            .write_owned(move || fs_err::write(path, contents))
+        self.clone()
+            .write_owned(move || {
+                // Report open and write failures with the lockfile publication's write context.
+                #[expect(clippy::disallowed_methods)]
+                std::fs::write(&path, contents).map_err(|cause| {
+                    io::Error::new(cause.kind(), MetadataWriteError { path, cause })
+                })
+            })
             .await
     }
 
     /// Create metadata without overwriting a file published by another creator.
     pub async fn create_file(&self, path: PathBuf, contents: String) -> io::Result<()> {
-        Self(Arc::clone(&self.0))
+        self.clone()
             .write_owned(move || {
                 fs_err::OpenOptions::new()
                     .write(true)
@@ -142,7 +187,7 @@ impl MetadataLock {
         self,
         write: impl FnOnce() -> io::Result<()> + Send + 'static,
     ) -> io::Result<()> {
-        let lock = self.0;
+        let lock = self.file;
         tokio::task::spawn_blocking(move || {
             let _lock = lock;
             write()
@@ -152,10 +197,17 @@ impl MetadataLock {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("failed to write to file `{}`: {cause}", path.display())]
+struct MetadataWriteError {
+    path: PathBuf,
+    cause: io::Error,
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
-    use std::sync::{Arc, mpsc};
+    use std::sync::mpsc;
     use std::time::Duration;
 
     use uv_cache_key::cache_digest;
@@ -173,7 +225,7 @@ mod tests {
         let (release, release_receiver) = mpsc::channel();
         let (finished, finished_receiver) = tokio::sync::oneshot::channel();
         let write_path = path.clone();
-        let task = tokio::spawn(MetadataLock(Arc::clone(&lock.0)).write_owned(move || {
+        let task = tokio::spawn(lock.clone().write_owned(move || {
             started
                 .send(())
                 .map_err(|()| io::Error::other("write observer closed"))?;

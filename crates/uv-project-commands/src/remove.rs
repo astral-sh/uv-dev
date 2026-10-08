@@ -42,6 +42,7 @@ use crate::edit::{EditTarget, ProjectEdit, PythonTarget};
 
 /// Remove one or more packages from the project requirements.
 pub async fn remove(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -62,6 +63,7 @@ pub async fn remove(
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
+    workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
     malware_settings: MalwareCheckSettings,
@@ -89,7 +91,7 @@ pub async fn remove(
                 "`--no-sync` is a no-op for Python scripts with inline metadata, which always run in isolation"
             );
         }
-        let (script, lock) = MetadataLock::read_script(&script.path).await?;
+        let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
         _metadata_lock = lock;
         EditTarget::Script(
             script.context("Script metadata was removed while waiting for its lock")?,
@@ -102,7 +104,7 @@ pub async fn remove(
                 project_dir,
                 &DiscoveryOptions::default(),
                 cache,
-                &WorkspaceCache::default(),
+                workspace_cache,
                 package.clone(),
             )
             .await?
@@ -111,19 +113,13 @@ pub async fn remove(
                 project_dir,
                 &DiscoveryOptions::default(),
                 cache,
-                &WorkspaceCache::default(),
+                workspace_cache,
             )
             .await?
         };
 
-        let (project, lock, _) = MetadataLock::project(
-            project,
-            project_dir,
-            package.as_ref(),
-            &DiscoveryOptions::default(),
-            cache,
-        )
-        .await?;
+        let (project, lock, _) =
+            MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
         _metadata_lock = lock;
         EditTarget::Project(project)
     };
@@ -242,7 +238,7 @@ pub async fn remove(
     }
 
     // Update the `pypackage.toml` in-memory.
-    let target = target.update(&content, &WorkspaceCache::default())?;
+    let target = target.update(&content, workspace_cache)?;
 
     // Determine enabled groups and extras
     let default_groups = match &target {

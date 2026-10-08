@@ -58,7 +58,7 @@ fn audit_invalid_service_url() {
 
 /// Writable audit reloads workspace declarations before publishing its lockfile.
 #[test]
-fn audit_reloads_workspace_before_lockfile_publication() -> Result<()> {
+fn audit_reuses_admitted_workspace_discovery() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -89,8 +89,7 @@ fn audit_reloads_workspace_before_lockfile_publication() -> Result<()> {
     DEBUG Found workspace root: [TEMP_DIR]/
     TRACE Discovering workspace members for: [TEMP_DIR]/
     DEBUG Adding root workspace member: [TEMP_DIR]/
-    TRACE Processing workspace member: member
-    DEBUG Adding discovered workspace member: [TEMP_DIR]/member
+    DEBUG Ignoring workspace member: [TEMP_DIR]/member
     DEBUG Found workspace root: [TEMP_DIR]/
     TRACE Discovering workspace members for: [TEMP_DIR]/
     DEBUG Adding root workspace member: [TEMP_DIR]/

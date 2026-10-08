@@ -48,6 +48,7 @@ mod ty;
 /// Run project checks.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn check(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     ty_path: Option<PathBuf>,
     fix: bool,
@@ -95,7 +96,7 @@ pub async fn check(
     let mut workspace_cache = workspace_cache;
     let script = if writable {
         if let Some(script) = script {
-            let (script, lock) = MetadataLock::read_script(&script.path).await?;
+            let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
             metadata_lock = Some(lock);
             Some(script.context("Script metadata was removed while waiting for its lock")?)
         } else {
@@ -160,18 +161,8 @@ pub async fn check(
 
     let project = if writable {
         if let Some(project) = project {
-            let (project, lock, fresh_cache) = MetadataLock::project(
-                project,
-                project_dir,
-                if let [name] = package.as_slice() {
-                    Some(name)
-                } else {
-                    None
-                },
-                &DiscoveryOptions::default(),
-                cache,
-            )
-            .await?;
+            let (project, lock, fresh_cache) =
+                MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
             metadata_lock = Some(lock);
             metadata_workspace_cache = fresh_cache;
             workspace_cache = &metadata_workspace_cache;
@@ -754,6 +745,7 @@ pub async fn check(
     };
 
     drop(metadata_lock);
+    drop(admission);
 
     // Forward the user's explicit Python request so ty can apply its own version selection rules.
     let python_version = if let Some(python) = python {

@@ -47,6 +47,7 @@ use uv_workspace::{
 /// Add one or more packages to the project requirements.
 #[expect(clippy::single_match_else, clippy::fn_params_excessive_bools)]
 pub async fn init(
+    admission: Option<MetadataLock>,
     project_dir: &Path,
     explicit_path: Option<PathBuf>,
     name: Option<PackageName>,
@@ -77,6 +78,7 @@ pub async fn init(
             };
 
             init_script(
+                admission,
                 path,
                 bare,
                 python,
@@ -153,6 +155,7 @@ pub async fn init(
             };
 
             Box::pin(init_project(
+                admission,
                 &path,
                 &name,
                 project_kind,
@@ -210,6 +213,7 @@ pub async fn init(
 
 #[expect(clippy::fn_params_excessive_bools)]
 async fn init_script(
+    admission: Option<MetadataLock>,
     script_path: &Path,
     bare: bool,
     python: Option<String>,
@@ -282,7 +286,11 @@ async fn init_script(
         fs_err::tokio::create_dir_all(parent).await?;
     }
 
-    let metadata_lock = MetadataLock::script(script_path).await?;
+    let metadata_lock = if let Some(lock) = admission {
+        lock
+    } else {
+        MetadataLock::script(script_path).await?
+    };
     let content = read_content().await?;
     let existed = content.is_some();
     Pep723Script::create(
@@ -306,6 +314,7 @@ async fn init_script(
 /// Initialize a project (and, implicitly, a workspace root) at the given path.
 #[expect(clippy::fn_params_excessive_bools)]
 async fn init_project(
+    admission: Option<MetadataLock>,
     path: &Path,
     name: &PackageName,
     project_kind: InitProjectKind,
@@ -392,16 +401,8 @@ async fn init_project(
 
     let _metadata_lock;
     let workspace = if let Some(workspace) = workspace {
-        let (workspace, lock, _) = MetadataLock::reload_workspace(
-            workspace,
-            path.parent().unwrap_or(path),
-            &DiscoveryOptions {
-                members: MemberDiscovery::Ignore(std::iter::once(path.to_path_buf()).collect()),
-                ..DiscoveryOptions::default()
-            },
-            cache,
-        )
-        .await?;
+        let (workspace, lock, _) =
+            MetadataLock::admitted_workspace(admission, &workspace_cache, workspace)?;
         _metadata_lock = Some(lock);
         Some(workspace)
     } else {
@@ -830,6 +831,7 @@ fn init_project_kind(
                     def main():
                         print("Hello from {name}!")
 
+
                     if __name__ == "__main__":
                         main()
                 "#};
@@ -1092,12 +1094,14 @@ fn generate_package_scripts(
         indoc::formatdoc! {r"
         from {module_name}._core import hello_from_bin
 
+
         def hello() -> str:
             return hello_from_bin()
         "}
     } else {
         indoc::formatdoc! {r"
         from {module_name}._core import hello_from_bin
+
 
         def main() -> None:
             print(hello_from_bin())

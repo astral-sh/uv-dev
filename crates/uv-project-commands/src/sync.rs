@@ -52,6 +52,7 @@ use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace,
 
 /// Sync the project environment.
 pub async fn sync(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -97,7 +98,7 @@ pub async fn sync(
     let mut workspace_cache = workspace_cache;
     let script = if writable {
         if let Some(script) = script {
-            let (script, lock) = MetadataLock::read_script(&script.path).await?;
+            let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
             metadata_lock = Some(lock);
             Some(script.context("Script metadata was removed while waiting for its lock")?)
         } else {
@@ -142,14 +143,8 @@ pub async fn sync(
         {
             DiscoveredProject::Manifest(project) => {
                 let project = if writable {
-                    let (project, lock, fresh_cache) = MetadataLock::project(
-                        project,
-                        project_dir,
-                        selected_package,
-                        &options,
-                        cache,
-                    )
-                    .await?;
+                    let (project, lock, fresh_cache) =
+                        MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
                     metadata_lock = Some(lock);
                     metadata_workspace_cache = fresh_cache;
                     workspace_cache = &metadata_workspace_cache;

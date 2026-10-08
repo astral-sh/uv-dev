@@ -37,6 +37,7 @@ use crate::ScriptPath;
 
 /// Resolve the project requirements into a lockfile.
 pub async fn lock(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -68,7 +69,7 @@ pub async fn lock(
                 ScriptPath::Script(script) => script.path,
                 ScriptPath::Path(path) => path,
             };
-            let (script, lock) = MetadataLock::read_script(&path).await?;
+            let (script, lock) = MetadataLock::read_script(admission.take(), &path).await?;
             metadata_lock = Some(lock);
             Some(script.map_or_else(|| ScriptPath::Path(path), ScriptPath::Script))
         } else {
@@ -115,14 +116,8 @@ pub async fn lock(
         )
         .await?;
         workspace = if writable {
-            let (project, lock, fresh_cache) = MetadataLock::project(
-                project,
-                project_dir,
-                None,
-                &DiscoveryOptions::default(),
-                cache,
-            )
-            .await?;
+            let (project, lock, fresh_cache) =
+                MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
             metadata_lock = Some(lock);
             metadata_workspace_cache = fresh_cache;
             workspace_cache = &metadata_workspace_cache;

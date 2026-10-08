@@ -43,6 +43,7 @@ use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
+use uv_lock_operations::MetadataLock;
 #[cfg(feature = "self-update")]
 use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
@@ -57,7 +58,7 @@ use uv_settings::{Combine, EnvironmentOptions, FilesystemOptions, Options};
 use uv_static::EnvVars;
 use uv_threads::{RAYON_PARALLELISM, min_stack_size};
 use uv_warnings::{warn_user, warn_user_once};
-use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
+use uv_workspace::{DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache};
 
 use crate::commands::{ParsedRunCommand, RunCommand, ScriptPath};
 
@@ -309,42 +310,52 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         cli.top_level.cache_args.no_cache,
         cli.top_level.cache_args.cache_dir.clone(),
     )?;
-    let workspace_cache = WorkspaceCache::default();
-    let filesystem = if let Some(config_file) = cli.top_level.config_file.as_ref() {
-        if config_file
+    let mut workspace_cache = WorkspaceCache::default();
+    if let Some(config_file) = cli.top_level.config_file.as_ref()
+        && config_file
             .file_name()
             .is_some_and(|file_name| file_name == "pyproject.toml")
-        {
-            warn_user!(
-                "The `--config-file` argument expects to receive a `uv.toml` file, not a `pyproject.toml`. If you're trying to run a command from another project, use the `--project` argument instead."
-            );
-        }
-        Some(FilesystemOptions::from_file(config_file).map_err(map_settings_error)?)
-    } else if deprecated_isolated || !config_discovery.enabled() {
-        None
-    } else if matches!(&*cli.command, Commands::Tool(_) | Commands::Self_(_)) {
-        // For commands that operate at the user-level, ignore local configuration.
-        FilesystemOptions::user()
-            .map_err(map_settings_error)?
-            .combine(FilesystemOptions::system().map_err(map_settings_error)?)
-    } else if let Ok(workspace) = Workspace::discover(
-        &project_dir,
-        &DiscoveryOptions::default(),
-        &discovery_cache,
-        &workspace_cache,
-    )
-    .await
     {
-        let project =
-            FilesystemOptions::find(workspace.install_path()).map_err(map_settings_error)?;
-        let system = FilesystemOptions::system().map_err(map_settings_error)?;
-        let user = FilesystemOptions::user().map_err(map_settings_error)?;
-        project.combine(user).combine(system)
+        warn_user!(
+            "The `--config-file` argument expects to receive a `uv.toml` file, not a `pyproject.toml`. If you're trying to run a command from another project, use the `--project` argument instead."
+        );
+    }
+    // A local script can be rewritten by another metadata command, so claim its path before
+    // deciding whether it contains inline metadata. Ordinary scripts release this claim below.
+    let preliminary_target = if cli.top_level.global_args.show_settings {
+        None
+    } else if matches!(&*cli.command, Commands::Project(command) if matches!(&**command, ProjectCommand::Run(_)))
+    {
+        match parsed_run_command.as_ref() {
+            Some(ParsedRunCommand::Ready(
+                RunCommand::PythonScript(path, _) | RunCommand::PythonGuiScript(path, _),
+            )) => settings::metadata_target(&cli.command, &environment, true, Some(path)),
+            _ => None,
+        }
     } else {
-        let project = FilesystemOptions::find(&project_dir).map_err(map_settings_error)?;
-        let system = FilesystemOptions::system().map_err(map_settings_error)?;
-        let user = FilesystemOptions::user().map_err(map_settings_error)?;
-        project.combine(user).combine(system)
+        settings::metadata_target(&cli.command, &environment, false, None)
+    };
+    let mut metadata_admission = claim_metadata(
+        preliminary_target,
+        &project_dir,
+        &discovery_cache,
+        &mut workspace_cache,
+    )
+    .await?;
+    // Downloading a remote script requires configuration before its metadata target is known.
+    let filesystem = if matches!(parsed_run_command, Some(ParsedRunCommand::PendingRemote(_))) {
+        filesystem_options(
+            &cli.top_level,
+            &cli.command,
+            &project_dir,
+            !deprecated_isolated && config_discovery.enabled(),
+            &discovery_cache,
+            &WorkspaceCache::default(),
+            MemberDiscovery::All,
+        )
+        .await?
+    } else {
+        None
     };
 
     // If the target is a remote script, download it.
@@ -479,6 +490,38 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     } else {
         None
     };
+
+    // Settings and command discovery must observe the same admitted metadata version.
+    let target = if cli.top_level.global_args.show_settings {
+        None
+    } else {
+        settings::metadata_target(
+            &cli.command,
+            &environment,
+            script.is_some(),
+            script.as_ref().and_then(|script| match script {
+                Pep723Item::Script(script) => Some(script.path.as_path()),
+                Pep723Item::Remote(..) | Pep723Item::Stdin(..) => None,
+            }),
+        )
+    };
+    if run_command.is_some() && script.is_none() {
+        drop(metadata_admission.take());
+    }
+    if metadata_admission.is_none() {
+        metadata_admission =
+            claim_metadata(target, &project_dir, &discovery_cache, &mut workspace_cache).await?;
+    }
+    let filesystem = filesystem_options(
+        &cli.top_level,
+        &cli.command,
+        &project_dir,
+        !deprecated_isolated && config_discovery.enabled(),
+        &discovery_cache,
+        &workspace_cache,
+        MemberDiscovery::All,
+    )
+    .await?;
 
     // If the target is a PEP 723 script, merge the metadata into the filesystem metadata.
     let script_filesystem = script
@@ -1455,6 +1498,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         Commands::Project(project) => {
             Box::pin(run_project(
                 project,
+                metadata_admission,
                 &project_dir,
                 run_command,
                 script,
@@ -2112,6 +2156,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 });
 
                 Box::pin(commands::metadata(
+                    metadata_admission,
                     &project_dir,
                     args.lock_check,
                     args.frozen,
@@ -2247,9 +2292,91 @@ fn required_version_error(
     )
 }
 
+/// Claim the selected writable resource before resolving filesystem settings.
+async fn claim_metadata(
+    target: Option<settings::MetadataTarget<'_>>,
+    project_dir: &Path,
+    cache: &Cache,
+    workspace_cache: &mut WorkspaceCache,
+) -> Result<Option<MetadataLock>> {
+    match target {
+        Some(settings::MetadataTarget::Workspace) => {
+            MetadataLock::discover(project_dir, cache, workspace_cache, MemberDiscovery::All).await
+        }
+        Some(settings::MetadataTarget::Script(path)) => Ok(Some(MetadataLock::script(path).await?)),
+        Some(settings::MetadataTarget::ParentWorkspace(path)) => {
+            let path = path.map_or_else(|| Ok(project_dir.to_path_buf()), std::path::absolute)?;
+            MetadataLock::discover(
+                path.parent().unwrap_or(&path),
+                cache,
+                workspace_cache,
+                MemberDiscovery::None,
+            )
+            .await
+        }
+        Some(settings::MetadataTarget::InitializeScript(path)) => {
+            let parent = path
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            // Initialization creates a missing parent before claiming the prospective script.
+            if parent.is_dir() {
+                Ok(Some(MetadataLock::script(path).await?))
+            } else {
+                Ok(None)
+            }
+        }
+        None => Ok(None),
+    }
+}
+
+/// Load filesystem settings after metadata admission, except for a remote-script bootstrap.
+async fn filesystem_options(
+    top_level: &TopLevelArgs,
+    command: &Commands,
+    project_dir: &Path,
+    discovery_enabled: bool,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    members: MemberDiscovery,
+) -> Result<Option<FilesystemOptions>> {
+    Ok(if let Some(config_file) = top_level.config_file.as_ref() {
+        Some(FilesystemOptions::from_file(config_file).map_err(map_settings_error)?)
+    } else if !discovery_enabled {
+        None
+    } else if matches!(command, Commands::Tool(_) | Commands::Self_(_)) {
+        // For commands that operate at the user-level, ignore local configuration.
+        FilesystemOptions::user()
+            .map_err(map_settings_error)?
+            .combine(FilesystemOptions::system().map_err(map_settings_error)?)
+    } else if let Ok(workspace) = Workspace::discover(
+        project_dir,
+        &DiscoveryOptions {
+            members,
+            ..DiscoveryOptions::default()
+        },
+        cache,
+        workspace_cache,
+    )
+    .await
+    {
+        let project =
+            FilesystemOptions::find(workspace.install_path()).map_err(map_settings_error)?;
+        let system = FilesystemOptions::system().map_err(map_settings_error)?;
+        let user = FilesystemOptions::user().map_err(map_settings_error)?;
+        project.combine(user).combine(system)
+    } else {
+        let project = FilesystemOptions::find(project_dir).map_err(map_settings_error)?;
+        let system = FilesystemOptions::system().map_err(map_settings_error)?;
+        let user = FilesystemOptions::user().map_err(map_settings_error)?;
+        project.combine(user).combine(system)
+    })
+}
+
 /// Run a [`ProjectCommand`].
 async fn run_project(
     project_command: Box<ProjectCommand>,
+    metadata_admission: Option<MetadataLock>,
     project_dir: &Path,
     command: Option<RunCommand>,
     script: Option<Pep723Item>,
@@ -2297,6 +2424,7 @@ async fn run_project(
             let cache = cache.init().await?;
 
             Box::pin(commands::init(
+                metadata_admission,
                 project_dir,
                 args.path,
                 args.name,
@@ -2356,6 +2484,7 @@ async fn run_project(
             );
 
             Box::pin(commands::run(
+                metadata_admission,
                 project_dir,
                 script,
                 command,
@@ -2421,6 +2550,7 @@ async fn run_project(
             });
 
             Box::pin(commands::sync(
+                metadata_admission,
                 project_dir,
                 args.lock_check,
                 args.frozen,
@@ -2485,6 +2615,7 @@ async fn run_project(
                 .or(args.script.map(ScriptPath::Path));
 
             Box::pin(commands::lock(
+                metadata_admission,
                 project_dir,
                 args.lock_check,
                 args.frozen,
@@ -2519,6 +2650,7 @@ async fn run_project(
                 .with_refresh(Refresh::from(args.settings.upgrade.clone()));
 
             Box::pin(commands::upgrade(
+                metadata_admission,
                 project_dir,
                 args.packages,
                 args.exclude,
@@ -2627,6 +2759,7 @@ async fn run_project(
                 .collect::<Result<Vec<_>, _>>()?;
 
             Box::pin(commands::add(
+                metadata_admission,
                 project_dir,
                 args.lock_check,
                 args.frozen,
@@ -2667,6 +2800,7 @@ async fn run_project(
                 globals.concurrency,
                 config_discovery,
                 &cache,
+                workspace_cache,
                 printer,
                 globals.preview,
                 &args.malware_settings,
@@ -2698,6 +2832,7 @@ async fn run_project(
             });
 
             Box::pin(commands::remove(
+                metadata_admission,
                 project_dir,
                 args.lock_check,
                 args.frozen,
@@ -2718,6 +2853,7 @@ async fn run_project(
                 globals.concurrency,
                 config_discovery,
                 &cache,
+                workspace_cache,
                 printer,
                 globals.preview,
                 args.malware_settings,
@@ -2747,6 +2883,7 @@ async fn run_project(
             );
 
             Box::pin(commands::project_version(
+                metadata_admission,
                 args.value,
                 args.bump,
                 args.short,
@@ -2793,6 +2930,7 @@ async fn run_project(
             });
 
             Box::pin(commands::tree(
+                metadata_admission,
                 project_dir,
                 args.groups,
                 args.lock_check,
@@ -2841,6 +2979,7 @@ async fn run_project(
             });
 
             commands::export(
+                metadata_admission,
                 project_dir,
                 args.format,
                 args.all_packages,
@@ -2927,6 +3066,7 @@ async fn run_project(
             });
 
             Box::pin(commands::check(
+                metadata_admission,
                 project_dir,
                 args.ty_path,
                 args.fix,
@@ -2978,6 +3118,7 @@ async fn run_project(
             });
 
             Box::pin(commands::audit(
+                metadata_admission,
                 project_dir,
                 args.extras,
                 args.groups,

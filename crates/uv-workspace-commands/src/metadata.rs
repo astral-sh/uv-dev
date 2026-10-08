@@ -43,6 +43,7 @@ enum MetadataSource<'a> {
 
 /// Display metadata about the workspace.
 pub async fn metadata(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -78,7 +79,7 @@ pub async fn metadata(
     let mut workspace_cache = workspace_cache;
     let script = if writable {
         if let Some(script) = script {
-            let (script, lock) = MetadataLock::read_script(&script.path).await?;
+            let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
             metadata_lock = Some(lock);
             Some(script.context("Script metadata was removed while waiting for its lock")?)
         } else {
@@ -104,14 +105,8 @@ pub async fn metadata(
         .await?;
         project = match discovered {
             DiscoveredProject::Manifest(project) if writable => {
-                let (project, lock, fresh_cache) = MetadataLock::project(
-                    project,
-                    project_dir,
-                    None,
-                    &DiscoveryOptions::default(),
-                    cache,
-                )
-                .await?;
+                let (project, lock, fresh_cache) =
+                    MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
                 metadata_lock = Some(lock);
                 metadata_workspace_cache = fresh_cache;
                 workspace_cache = &metadata_workspace_cache;

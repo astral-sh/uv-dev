@@ -155,6 +155,7 @@ fn resolve_lockfile_groups(
 /// Export the project's `uv.lock` in an alternate format.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn export(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     format: Option<ExportFormat>,
     all_packages: bool,
@@ -207,7 +208,7 @@ pub async fn export(
     let mut workspace_cache = workspace_cache;
     let script = if writable {
         if let Some(script) = script {
-            let (script, lock) = MetadataLock::read_script(&script.path).await?;
+            let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
             metadata_lock = Some(lock);
             Some(script.context("Script metadata was removed while waiting for its lock")?)
         } else {
@@ -257,14 +258,8 @@ pub async fn export(
         {
             DiscoveredProject::Manifest(project) => {
                 let project = if writable {
-                    let (project, lock, fresh_cache) = MetadataLock::project(
-                        project,
-                        project_dir,
-                        selected_package,
-                        &options,
-                        cache,
-                    )
-                    .await?;
+                    let (project, lock, fresh_cache) =
+                        MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
                     metadata_lock = Some(lock);
                     metadata_workspace_cache = fresh_cache;
                     workspace_cache = &metadata_workspace_cache;

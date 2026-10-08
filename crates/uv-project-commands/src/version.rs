@@ -74,6 +74,7 @@ impl std::fmt::Display for ProjectVersionInfo {
 /// Read or update project version (`uv version`)
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn project_version(
+    mut admission: Option<MetadataLock>,
     value: Option<String>,
     mut bump: Vec<VersionBumpSpec>,
     short: bool,
@@ -115,14 +116,8 @@ pub async fn project_version(
     let _metadata_lock;
     let metadata_workspace_cache;
     let (project, workspace_cache) = if !dry_run && (value.is_some() || !bump.is_empty()) {
-        let (project, lock, fresh_cache) = MetadataLock::project(
-            project,
-            project_dir,
-            package.as_ref(),
-            &DiscoveryOptions::default(),
-            cache,
-        )
-        .await?;
+        let (project, lock, fresh_cache) =
+            MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
         _metadata_lock = Some(lock);
         metadata_workspace_cache = fresh_cache;
         (project, &metadata_workspace_cache)

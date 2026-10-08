@@ -88,6 +88,7 @@ struct GistFile {
 /// Run a command.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn run(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     script: Option<Pep723Item>,
     command: Option<RunCommand>,
@@ -187,7 +188,8 @@ pub async fn run(
         let script = if frozen.is_none() && matches!(lock_check, LockCheck::Disabled) {
             match script {
                 Pep723Item::Script(script) => {
-                    let (script, lock) = MetadataLock::read_script(&script.path).await?;
+                    let (script, lock) =
+                        MetadataLock::read_script(admission.take(), &script.path).await?;
                     metadata_lock = Some(lock);
                     Pep723Item::Script(
                         script.context("Script metadata was removed while waiting for its lock")?,
@@ -630,14 +632,8 @@ pub async fn run(
             && matches!(lock_check, LockCheck::Disabled)
         {
             if let Some(project) = project {
-                let (project, lock, fresh_cache) = MetadataLock::project(
-                    project,
-                    project_dir,
-                    package.as_ref(),
-                    &DiscoveryOptions::default(),
-                    &cache,
-                )
-                .await?;
+                let (project, lock, fresh_cache) =
+                    MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
                 metadata_lock = Some(lock);
                 metadata_workspace_cache = fresh_cache;
                 (Some(project), &metadata_workspace_cache)
@@ -1284,6 +1280,7 @@ pub async fn run(
         return Ok(ExitStatus::Error);
     };
 
+    drop(admission);
     debug!("Running `{command}`");
     let mut process = command.as_command(interpreter);
     process.envs(env_file_environment);

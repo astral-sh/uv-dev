@@ -163,6 +163,7 @@ impl UpgradableRequirement {
 }
 
 pub async fn upgrade(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     packages: Vec<PackageName>,
     exclude: Vec<PackageName>,
@@ -201,14 +202,11 @@ pub async fn upgrade(
         }
         Err(err) => return Err(err.into()),
     };
-    let (project, _metadata_lock, metadata_workspace_cache) = MetadataLock::project(
+    let (project, _metadata_lock, metadata_workspace_cache) = MetadataLock::admitted_project(
+        admission.take(),
+        workspace_cache,
         VirtualProject::Project(project),
-        project_dir,
-        None,
-        &DiscoveryOptions::default(),
-        cache,
-    )
-    .await?;
+    )?;
     let VirtualProject::Project(project) = project else {
         bail!("`uv upgrade` requires a project with a `[project]` table");
     };
