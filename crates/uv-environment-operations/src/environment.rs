@@ -11,7 +11,7 @@ use uv_install_operations::loggers::InstallLogger;
 use uv_resolve_operations::loggers::ResolveLogger;
 use uv_settings::ResolverInstallerSettings;
 
-use uv_cache::{Cache, CacheBucket};
+use uv_cache::{Cache, CacheBucket, CacheEntry};
 use uv_cache_info::CacheInfo;
 use uv_cache_key::{cache_digest, hash_digest};
 use uv_client::BaseClientBuilder;
@@ -237,10 +237,16 @@ impl CachedEnvironment {
         // Search in the content-addressed cache.
         let cache_entry = cache.entry(CacheBucket::Environments, interpreter_hash, resolution_hash);
 
-        if let Ok(root) = cache.resolve_link(cache_entry.path()) {
-            if let Ok(environment) = PythonEnvironment::from_root(root, cache) {
-                return Ok(Self(environment));
-            }
+        if let Some(environment) = Self::from_cache_entry(&cache_entry, cache) {
+            return Ok(environment);
+        }
+
+        // Coordinate only misses for this interpreter and resolution. The separate lock file
+        // remains stable when publication replaces the cache entry's pointer.
+        let lock_entry = CacheEntry::from_path(cache_entry.path().with_extension("lock"));
+        let _lock = lock_entry.lock().await?;
+        if let Some(environment) = Self::from_cache_entry(&cache_entry, cache) {
+            return Ok(environment);
         }
 
         // Create the environment in the cache, then relocate it to its content-addressed location.
@@ -279,6 +285,12 @@ impl CachedEnvironment {
         let root = cache.archive(&id);
 
         Ok(Self(PythonEnvironment::from_root(root, cache)?))
+    }
+
+    /// Read a completed environment, treating missing or invalid entries as cache misses.
+    fn from_cache_entry(entry: &CacheEntry, cache: &Cache) -> Option<Self> {
+        let root = cache.resolve_link(entry.path()).ok()?;
+        PythonEnvironment::from_root(root, cache).ok().map(Self)
     }
 
     /// Return any mutable cache info that should invalidate a cached environment for a given
