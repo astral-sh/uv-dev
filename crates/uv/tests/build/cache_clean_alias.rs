@@ -62,3 +62,33 @@ fn clean_cache_directory_link() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn force_clean_cache_link_to_file() -> Result<()> {
+    for relative in [false, true] {
+        let context = uv_test::test_context_with_versions!(&[]).with_cache_dir("cache-link");
+        let target = context.temp_dir.child("cache-file");
+        target.write_str("retained contents")?;
+        let link_target = if relative {
+            Path::new("cache-file")
+        } else {
+            target.path()
+        };
+        uv_fs::create_symlink(link_target, &context.cache_dir)?;
+
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), context.clean().arg("--force"), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            Clearing cache at: cache-link
+            error: Failed to clear cache at: cache-link
+              cause: Cache link target is not a directory: [TEMP_DIR]/cache-file
+            ");
+        }
+
+        assert!(fs_err::symlink_metadata(&context.cache_dir)?.is_symlink());
+        assert_eq!(fs_err::read(target)?, b"retained contents");
+    }
+    Ok(())
+}
