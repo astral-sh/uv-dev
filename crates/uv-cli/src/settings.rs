@@ -1,6 +1,7 @@
 //! Resolve command settings from CLI arguments, environment variables, and configuration files.
 
 use std::env::VarError;
+use std::error::Error as StdError;
 use std::ffi::OsString;
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -9,7 +10,7 @@ use std::process;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use rustc_hash::FxHashSet;
 
 use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
@@ -28,13 +29,13 @@ use uv_configuration::{
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
-    IndexLocations, IndexUrl, MinimumLibcVersion, NameRequirementSpecification,
+    IndexLocations, IndexUrl, IndexUrlError, MinimumLibcVersion, NameRequirementSpecification,
     PackageConfigSettings, Requirement,
 };
 use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
-use uv_pep508::{MarkerTree, RequirementOrigin};
+use uv_pep508::{MarkerTree, RequirementOrigin, VerbatimUrlError};
 use uv_preview::Preview;
 use uv_pypi_types::SupportedEnvironments;
 use uv_python_types::{
@@ -5010,11 +5011,22 @@ impl PublishSettings {
         }
         if !index_mode {
             args.publish_url = publish_env(args.publish_url, EnvVars::UV_PUBLISH_URL, "a URL")?;
-            args.check_url = publish_env(
-                args.check_url,
-                EnvVars::UV_PUBLISH_CHECK_URL,
-                "an index URL",
-            )?;
+            if args.check_url.is_none() {
+                args.check_url =
+                    publish_env::<String>(None, EnvVars::UV_PUBLISH_CHECK_URL, "a string")?
+                        .map(|value| {
+                            value
+                                .parse::<IndexUrl>()
+                                .map_err(publish_index_error)
+                                .with_context(|| {
+                                    format!(
+                                        "Invalid value for `{}`: expected an index URL",
+                                        EnvVars::UV_PUBLISH_CHECK_URL
+                                    )
+                                })
+                        })
+                        .transpose()?;
+            }
         }
         if args.index.is_some() && (args.publish_url.is_some() || args.check_url.is_some()) {
             bail!(
@@ -5083,7 +5095,11 @@ impl PublishSettings {
 }
 
 /// Read a publish environment value only when its command-line value is absent.
-fn publish_env<T: FromStr>(value: Option<T>, name: &str, expected: &str) -> Result<Option<T>> {
+fn publish_env<T>(value: Option<T>, name: &str, expected: &str) -> Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: StdError + Send + Sync + 'static,
+{
     if value.is_some() {
         return Ok(value);
     }
@@ -5095,7 +5111,30 @@ fn publish_env<T: FromStr>(value: Option<T>, name: &str, expected: &str) -> Resu
     value
         .parse()
         .map(Some)
-        .map_err(|_| anyhow!("Invalid value for `{name}`: expected {expected}"))
+        .with_context(|| format!("Invalid value for `{name}`: expected {expected}"))
+}
+
+/// Keep typed URL causes while excluding unparsed path text from environment diagnostics.
+fn publish_index_error(error: IndexUrlError) -> anyhow::Error {
+    match error {
+        error @ (IndexUrlError::Io(_)
+        | IndexUrlError::Url(_)
+        | IndexUrlError::VerbatimUrl(
+            VerbatimUrlError::Url(_) | VerbatimUrlError::PathConversion(_),
+        )) => error.into(),
+        IndexUrlError::VerbatimUrl(VerbatimUrlError::WorkingDirectory(_)) => {
+            anyhow!("relative path without a working directory")
+        }
+        IndexUrlError::VerbatimUrl(VerbatimUrlError::UrlConversion(_)) => {
+            anyhow!("path could not be converted to a URL")
+        }
+        IndexUrlError::VerbatimUrl(VerbatimUrlError::Normalization(_, error)) => {
+            anyhow!(error).context("path could not be normalized")
+        }
+        IndexUrlError::VerbatimUrl(VerbatimUrlError::Absolute(_, error)) => {
+            anyhow!(error).context("path could not be converted to an absolute path")
+        }
+    }
 }
 
 /// The resolved settings to use for an invocation of the `uv auth logout` CLI.

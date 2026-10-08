@@ -1025,7 +1025,31 @@ fn publish_modes_reject_same_source_conflicts() {
 
     ----- stderr -----
     error: Invalid value for `UV_PUBLISH_URL`: expected a URL
+      cause: relative URL without a base
     "#);
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn publish_environment_url_errors_retain_redacted_causes() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), context.publish()
+        .env(EnvVars::UV_PUBLISH_URL, "https://user/name:fake-secret@publish.example.org/legacy/"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_URL`: expected a URL
+      cause: ambiguous user/pass authority in URL (not percent-encoded?): https:***@publish.example.org/legacy/
+    ");
+    uv_snapshot!(context.filters(), context.publish()
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://user/name:fake-secret@check.example.org/simple/"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_CHECK_URL`: expected an index URL
+      cause: ambiguous user/pass authority in URL (not percent-encoded?): https:***@check.example.org/simple/
+    ");
 }
 
 #[test]
