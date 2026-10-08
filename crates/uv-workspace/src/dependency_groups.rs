@@ -142,20 +142,16 @@ impl FlatDependencyGroups {
             visiting.insert(name);
             stack.push(Frame::new(name, specifiers));
 
-            while !stack.is_empty() {
-                let specifier = stack.last_mut().and_then(|frame| frame.specifiers.next());
-                match specifier {
+            while let Some(frame) = stack.last_mut() {
+                match frame.specifiers.next() {
                     Some(DependencyGroupSpecifier::Requirement(requirement)) => {
                         match uv_pep508::Requirement::<VerbatimParsedUrl>::from_str(requirement) {
                             Ok(requirement) => {
-                                if let Some(frame) = stack.last_mut() {
-                                    frame.requirements.push(requirement);
-                                }
+                                frame.requirements.push(requirement);
                             }
                             Err(err) => {
-                                let name = stack.last().expect("stack is not empty").name;
                                 return Err(DependencyGroupErrorInner::GroupParseError(
-                                    name.clone(),
+                                    frame.name.clone(),
                                     requirement.clone(),
                                     Box::new(err),
                                 ));
@@ -164,9 +160,7 @@ impl FlatDependencyGroups {
                     }
                     Some(DependencyGroupSpecifier::IncludeGroup { include_group }) => {
                         if let Some(included) = resolved.get(include_group) {
-                            if let Some(frame) = stack.last_mut() {
-                                frame.include(included);
-                            }
+                            frame.include(included);
                             continue;
                         }
 
@@ -178,10 +172,9 @@ impl FlatDependencyGroups {
                         }
 
                         let Some(specifiers) = groups.get(include_group) else {
-                            let parent = stack.last().expect("stack is not empty").name;
                             return Err(DependencyGroupErrorInner::GroupNotFound(
                                 include_group.clone(),
-                                parent.clone(),
+                                frame.name.clone(),
                             ));
                         };
 
@@ -189,10 +182,9 @@ impl FlatDependencyGroups {
                         stack.push(Frame::new(include_group, specifiers));
                     }
                     Some(DependencyGroupSpecifier::Object(map)) => {
-                        let name = stack.last().expect("stack is not empty").name;
                         return Err(
                             DependencyGroupErrorInner::DependencyObjectSpecifierNotSupported(
-                                name.clone(),
+                                frame.name.clone(),
                                 map.clone(),
                             ),
                         );
