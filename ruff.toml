@@ -1,6 +1,7 @@
 target-version = "py312"
 per-file-target-version = {
   "scripts/check_system_python.py" = "py37",
+  "scripts/package_fixtures.py" = "py37",
   "scripts/create-python-mirror.py" = "py38",
 }
 exclude = [
