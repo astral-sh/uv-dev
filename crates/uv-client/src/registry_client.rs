@@ -3,7 +3,6 @@ use std::fmt::{self, Debug, Formatter};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use async_http_range_reader::AsyncHttpRangeReader;
@@ -13,7 +12,7 @@ use itertools::Either;
 use reqwest::{Proxy, Response};
 use rustc_hash::FxHashMap;
 use tokio::sync::{Mutex, Semaphore};
-use tracing::{Instrument, Span, debug, info_span, instrument, trace, warn};
+use tracing::{Instrument, debug, info_span, instrument, trace, warn};
 use url::Url;
 
 use uv_auth::{CredentialsCache, Indexes};
@@ -43,6 +42,7 @@ use crate::base_client::{BaseClientBuilder, ClientBuildError, ExtraMiddleware, R
 use crate::cached_client::CacheControl;
 use crate::flat_index::FlatIndexEntry;
 use crate::html::SimpleDetailHTML;
+use crate::index_parser::IndexParser;
 use crate::remote_metadata::wheel_metadata_from_remote_zip;
 use crate::rkyvutil::OwnedArchive;
 use crate::{
@@ -209,10 +209,7 @@ impl<'a> RegistryClientBuilder<'a> {
             client,
             read_timeout,
             flat_indexes: Arc::default(),
-            parse_concurrency: Arc::new(Semaphore::new(
-                thread::available_parallelism().map_or(1, |parallelism| parallelism.get().min(4)),
-            )),
-            parse_memory: Arc::new(Semaphore::new(8 * 1024 * 1024)),
+            index_parser: IndexParser::default(),
             metadata_range_request: self.metadata_range_request,
         })
     }
@@ -237,10 +234,8 @@ pub struct RegistryClient {
     read_timeout: Duration,
     /// The flat index entries for each `--find-links`-style index URL, with one slot per index.
     flat_indexes: Arc<Mutex<FlatIndexCache>>,
-    /// Bound CPU work for large remote index responses independently of network requests.
-    parse_concurrency: Arc<Semaphore>,
-    /// Limit decoded input bytes held by offloaded parsers, independently of parsed output size.
-    parse_memory: Arc<Semaphore>,
+    /// Bound parsing work and decoded input bytes across index responses.
+    index_parser: IndexParser,
     /// The behavior when metadata range requests are unsupported.
     metadata_range_request: MetadataRangeRequest,
 }
@@ -501,7 +496,12 @@ impl RegistryClient {
             return Ok(entries.get(package_name).cloned().unwrap_or_default());
         }
 
-        let client = FlatIndexClient::new(self.cached_client(), self.connectivity, &self.cache);
+        let client = FlatIndexClient::new_with_parser(
+            self.cached_client(),
+            self.connectivity,
+            &self.cache,
+            self.index_parser.clone(),
+        );
 
         // Fetch the entries for the index.
         let (entries, _) = client
@@ -667,18 +667,19 @@ impl RegistryClient {
                             )
                         })?;
 
-                        self.parse_simple_body(bytes.len(), move || {
-                            let data: PypiSimpleDetail = serde_json::from_slice(bytes.as_ref())
-                                .map_err(|err| Error::from_json_err(err, url.clone()))?;
-                            let unarchived = SimpleDetailMetadata::from_pypi_files(
-                                data.files,
-                                &package_name,
-                                data.project_status,
-                                &url,
-                            );
-                            OwnedArchive::from_unarchived(&unarchived)
-                        })
-                        .await
+                        self.index_parser
+                            .parse(bytes.len(), move || {
+                                let data: PypiSimpleDetail = serde_json::from_slice(bytes.as_ref())
+                                    .map_err(|err| Error::from_json_err(err, url.clone()))?;
+                                let unarchived = SimpleDetailMetadata::from_pypi_files(
+                                    data.files,
+                                    &package_name,
+                                    data.project_status,
+                                    &url,
+                                );
+                                OwnedArchive::from_unarchived(&unarchived)
+                            })
+                            .await
                     }
                     MediaType::PypiV1Html | MediaType::TextHtml => {
                         let text = response.text().await.map_err(|err| {
@@ -688,12 +689,13 @@ impl RegistryClient {
                                 self.client.certificate_source(),
                             )
                         })?;
-                        self.parse_simple_body(text.len(), move || {
-                            let unarchived =
-                                SimpleDetailMetadata::from_html(&text, &package_name, &url)?;
-                            OwnedArchive::from_unarchived(&unarchived)
-                        })
-                        .await
+                        self.index_parser
+                            .parse(text.len(), move || {
+                                let unarchived =
+                                    SimpleDetailMetadata::from_html(&text, &package_name, &url)?;
+                                OwnedArchive::from_unarchived(&unarchived)
+                            })
+                            .await
                     }
                 }
             }
@@ -710,44 +712,6 @@ impl RegistryClient {
             )
             .await?;
         Ok(simple)
-    }
-
-    /// Offload large remote index parsing so sibling HTTP futures can make progress.
-    ///
-    /// `body_size` counts decoded input bytes, excluding allocations produced by parsing. Small
-    /// bodies or bodies that cannot fit the shared worker and byte budgets are parsed inline
-    /// without waiting. Offloaded work retains both permits until its result is collected or
-    /// dropped, even if the caller is cancelled.
-    async fn parse_simple_body(
-        &self,
-        body_size: usize,
-        parse: impl FnOnce() -> Result<OwnedArchive<SimpleDetailMetadata>, Error> + Send + 'static,
-    ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
-        // Small responses are cheaper to parse inline than to dispatch to another thread.
-        if body_size < 512 * 1024 {
-            return parse();
-        }
-        // Oversized permit requests are invalid on 32-bit platforms.
-        if body_size > Semaphore::MAX_PERMITS {
-            return parse();
-        }
-        let Ok(body_size) = u32::try_from(body_size) else {
-            return parse();
-        };
-        // Fall back to inline parsing instead of retaining completed response bodies in a queue.
-        let Ok(permit) = self.parse_concurrency.clone().try_acquire_owned() else {
-            return parse();
-        };
-        let Ok(memory) = self.parse_memory.clone().try_acquire_many_owned(body_size) else {
-            drop(permit);
-            return parse();
-        };
-        let span = Span::current();
-        let (result, _permits) =
-            tokio::task::spawn_blocking(move || (span.in_scope(parse), (permit, memory)))
-                .await
-                .expect("The task executor is broken, did some other task panic?");
-        result
     }
 
     /// Fetch the [`SimpleDetailMetadata`] from a local file, using a PEP 503-compatible directory
@@ -772,8 +736,14 @@ impl RegistryClient {
                 return Err(Error::from(ErrorKind::Io(err)));
             }
         };
-        let metadata = SimpleDetailMetadata::from_html(&text, package_name, url)?;
-        OwnedArchive::from_unarchived(&metadata)
+        let package_name = package_name.clone();
+        let url = url.clone();
+        self.index_parser
+            .parse(text.len(), move || {
+                let metadata = SimpleDetailMetadata::from_html(&text, &package_name, &url)?;
+                OwnedArchive::from_unarchived(&metadata)
+            })
+            .await
     }
 
     /// Fetch the list of projects from a Simple API index at a remote URL.
@@ -848,7 +818,7 @@ impl RegistryClient {
                     ))
                 })?;
 
-                let metadata = match media_type {
+                match media_type {
                     MediaType::PypiV1Json => {
                         let bytes = response.bytes().await.map_err(|err| {
                             ErrorKind::from_reqwest(
@@ -857,9 +827,14 @@ impl RegistryClient {
                                 self.client.certificate_source(),
                             )
                         })?;
-                        let data: PypiSimpleIndex = serde_json::from_slice(bytes.as_ref())
-                            .map_err(|err| Error::from_json_err(err, url.clone()))?;
-                        SimpleIndexMetadata::from_pypi_index(data)
+                        self.index_parser
+                            .parse(bytes.len(), move || {
+                                let data: PypiSimpleIndex = serde_json::from_slice(bytes.as_ref())
+                                    .map_err(|err| Error::from_json_err(err, url.clone()))?;
+                                let metadata = SimpleIndexMetadata::from_pypi_index(data);
+                                OwnedArchive::from_unarchived(&metadata)
+                            })
+                            .await
                     }
                     MediaType::PypiV1Html | MediaType::TextHtml => {
                         let text = response.text().await.map_err(|err| {
@@ -869,11 +844,14 @@ impl RegistryClient {
                                 self.client.certificate_source(),
                             )
                         })?;
-                        SimpleIndexMetadata::from_html(&text, &url)?
+                        self.index_parser
+                            .parse(text.len(), move || {
+                                let metadata = SimpleIndexMetadata::from_html(&text, &url)?;
+                                OwnedArchive::from_unarchived(&metadata)
+                            })
+                            .await
                     }
-                };
-
-                OwnedArchive::from_unarchived(&metadata)
+                }
             }
         };
 
@@ -918,8 +896,13 @@ impl RegistryClient {
                 return Err(Error::from(ErrorKind::Io(err)));
             }
         };
-        let metadata = SimpleIndexMetadata::from_html(&text, url)?;
-        OwnedArchive::from_unarchived(&metadata)
+        let url = url.clone();
+        self.index_parser
+            .parse(text.len(), move || {
+                let metadata = SimpleIndexMetadata::from_html(&text, &url)?;
+                OwnedArchive::from_unarchived(&metadata)
+            })
+            .await
     }
 
     /// Fetch the metadata for a remote wheel file.
@@ -1863,6 +1846,46 @@ mod tests {
                 .index_locations(IndexLocations::new(vec![], flat_indexes, true))
                 .build()?,
         )
+    }
+
+    #[tokio::test]
+    async fn large_local_simple_pages() -> Result<(), Error> {
+        let client = no_index_client(vec![])?;
+        let directory = tempfile::tempdir()?;
+        let url = DisplaySafeUrl::from_url(
+            Url::from_directory_path(directory.path()).map_err(|()| "invalid fixture URL")?,
+        );
+        let package = PackageName::from_str("demo")?;
+        for padding in [0, 512 * 1024] {
+            fs_err::write(
+                directory.path().join("index.html"),
+                format!(
+                    "<!--{}--><a href=\"demo-1.0.tar.gz\">demo</a>",
+                    " ".repeat(padding)
+                ),
+            )?;
+            let metadata = client.fetch_local_simple_detail(&package, &url).await?;
+            let metadata = crate::OwnedArchive::deserialize(&metadata);
+            assert_eq!(metadata.versions.len(), 1);
+            let files = &metadata.versions[0].files.source_dists;
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].filename(), "demo-1.0.tar.gz");
+
+            fs_err::write(
+                directory.path().join("index.html"),
+                format!("<!--{}--><a href=\"demo/\">demo</a>", " ".repeat(padding)),
+            )?;
+            let metadata = client.fetch_local_simple_index(&url).await?;
+            let metadata = crate::OwnedArchive::deserialize(&metadata);
+            assert_eq!(metadata.projects, vec![package.clone()]);
+        }
+        fs_err::remove_file(directory.path().join("index.html"))?;
+        let error = client
+            .fetch_local_simple_detail(&package, &url)
+            .await
+            .expect_err("missing package page");
+        assert_matches!(error.kind(), crate::ErrorKind::LocalPackageNotFound(name) if name == &package);
+        Ok(())
     }
 
     async fn assert_no_index(
