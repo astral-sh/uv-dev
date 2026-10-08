@@ -30338,11 +30338,21 @@ fn lock_environment_implied_by_requires_python() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
-    let value: toml::Value = toml::from_str(&lock)?;
-    insta::assert_json_snapshot!(value["supported-markers"], @r#"
-    [
-      "python_version >= '0'"
+    assert_snapshot!(lock, @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.9"
+    supported-markers = [
+        "python_version >= '0'",
     ]
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
     "#);
 
     uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--locked"), @"
@@ -30385,11 +30395,21 @@ fn lock_environment_unconditional() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
-    let value: toml::Value = toml::from_str(&lock)?;
-    insta::assert_json_snapshot!(value["supported-markers"], @r#"
-    [
-      "python_version >= '0'"
+    assert_snapshot!(lock, @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.9"
+    supported-markers = [
+        "python_version >= '0'",
     ]
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
     "#);
 
     uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--locked"), @"
@@ -30432,11 +30452,21 @@ fn lock_required_environment_implied_by_requires_python() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
-    let value: toml::Value = toml::from_str(&lock)?;
-    insta::assert_json_snapshot!(value["required-markers"], @r#"
-    [
-      "python_version >= '0'"
+    assert_snapshot!(lock, @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.9"
+    required-markers = [
+        "python_version >= '0'",
     ]
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
     "#);
 
     uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--locked"), @"
@@ -30479,11 +30509,21 @@ fn lock_required_environment_unconditional() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
-    let value: toml::Value = toml::from_str(&lock)?;
-    insta::assert_json_snapshot!(value["required-markers"], @r#"
-    [
-      "python_version >= '0'"
+    assert_snapshot!(lock, @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.9"
+    required-markers = [
+        "python_version >= '0'",
     ]
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
     "#);
 
     uv_snapshot!(context.filters(), context.lock().arg("--offline").arg("--locked"), @"
