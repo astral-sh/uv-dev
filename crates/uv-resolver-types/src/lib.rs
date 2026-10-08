@@ -11,6 +11,6 @@ pub use distribution::{AnnotatedDist, PackageNodeKind, PackageRole};
 pub use metadata::{
     DistributionMetadataIndex, MetadataResponse, MetadataUnavailable, VariantsJsonMetadataError,
 };
-pub use options::{Flexibility, Options, OptionsBuilder};
+pub use options::{Flexibility, Options};
 pub use output::{ConflictingDistributionError, ResolutionGraphNode, ResolverOutput};
 pub use universal_marker::{ConflictMarker, ConflictMarkerError, UniversalMarker};

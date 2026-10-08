@@ -27,9 +27,7 @@ use uv_resolve_operations::Error as ResolveError;
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
 use uv_resolve_operations::loggers::{ResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::reporters::ResolverReporter;
-use uv_resolver::{
-    FlatIndex, OptionsBuilder, PythonRequirement, ResolverEnvironment, UniversalMarker,
-};
+use uv_resolver::{FlatIndex, Options, PythonRequirement, ResolverEnvironment, UniversalMarker};
 use uv_settings::{LockedSource, ResolverSettings};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
@@ -645,16 +643,17 @@ async fn do_lock(
             .collect(),
     );
 
-    let options = OptionsBuilder::new()
-        .resolution_mode(*resolution)
-        .prerelease(prerelease.clone())
-        .fork_strategy(*fork_strategy)
-        .exclude_newer(exclude_newer.clone())
-        .index_strategy(*index_strategy)
-        .build_options(build_options.clone())
-        .artifact_environments(artifact_environments.clone())
-        .minimum_libc_version(minimum_libc_version)
-        .build();
+    let options = Options {
+        resolution_mode: *resolution,
+        prerelease: prerelease.clone(),
+        fork_strategy: *fork_strategy,
+        exclude_newer: exclude_newer.clone(),
+        index_strategy: *index_strategy,
+        build_options: build_options.clone(),
+        artifact_environments: artifact_environments.clone(),
+        minimum_libc_version,
+        ..Options::default()
+    };
     // Checking an existing lockfile may build metadata and install build dependencies. Verify any
     // artifacts recorded in that lockfile, including for an ordinary unlocked command.
     let (locked_hasher, locked_build_hasher) = if let Some(existing_lock) = existing_lock.as_ref() {
