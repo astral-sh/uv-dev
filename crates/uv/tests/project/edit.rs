@@ -12,7 +12,7 @@ use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
-use insta::assert_snapshot;
+use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use std::path::Path;
 #[cfg(unix)]
@@ -7629,6 +7629,38 @@ fn remove_repeated() -> Result<()> {
         "#
         );
     });
+
+    // Each inline table must retain the source without another declaration masking it.
+    for (groups, extras) in [
+        ("dependency-groups = { test = [\"anyio\"] }\n\n", ""),
+        ("", "\noptional-dependencies = { foo = [\"anyio\"] }\n"),
+    ] {
+        let pyproject_toml = formatdoc! {r#"
+            {groups}[project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["anyio"]
+            {extras}
+            [tool.uv.sources]
+            anyio = {{ path = "{anyio_local}" }}
+        "#,
+            anyio_local = anyio_local.portable_display(),
+        };
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(&pyproject_toml)?;
+
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), context.remove().arg("anyio").arg("--frozen"), @"exit_code: 0 (success)");
+        }
+
+        assert_eq!(
+            context.read("pyproject.toml"),
+            pyproject_toml.replace("dependencies = [\"anyio\"]", "dependencies = []")
+        );
+    }
     Ok(())
 }
 
