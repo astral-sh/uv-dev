@@ -1310,9 +1310,10 @@ mod tests {
                 "https://github.com/example/python/releases/download/v1/python.tar.gz",
             ),
         ] {
+            let mut download = cpython_download_for_url(first_url);
+            download.sha256 = None;
             let first_url = DisplaySafeUrl::parse(first_url).expect("URL should parse");
             let second_url = DisplaySafeUrl::parse(second_url).expect("URL should parse");
-            let download = cpython_download_for_url(first_url.as_str());
             assert_ne!(
                 download.cache_filename(&first_url, "python.tar.gz"),
                 download.cache_filename(&second_url, "python.tar.gz"),
