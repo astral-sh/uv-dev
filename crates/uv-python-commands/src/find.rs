@@ -5,7 +5,6 @@ use std::path::Path;
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults};
-use uv_errors::ErrorWithHints;
 use uv_fs::Simplified;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
@@ -19,6 +18,7 @@ use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceEr
 
 use uv_command_support::ExitStatus;
 use uv_command_support::Printer;
+use uv_command_support::UvError;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
 
@@ -154,17 +154,10 @@ pub async fn find_script(
         printer,
     )
     .await
+    .map_err(UvError::user)?
     {
-        Err(error) => {
-            writeln!(
-                printer.stderr(),
-                "{}",
-                ErrorWithHints::new(&error, uv_errors::Hinted::hints(&error))
-            )?;
-            return Ok(ExitStatus::Failure);
-        }
-        Ok(ScriptInterpreter::Interpreter(selection)) => selection.into_interpreter(),
-        Ok(ScriptInterpreter::Environment(environment)) => environment.into_interpreter(),
+        ScriptInterpreter::Interpreter(selection) => selection.into_interpreter(),
+        ScriptInterpreter::Environment(environment) => environment.into_interpreter(),
     };
 
     if show_version {
