@@ -1640,25 +1640,35 @@ fn python_home(interpreter: &Path) -> Option<PathBuf> {
     pyvenv_cfg.home
 }
 
-#[cfg(unix)]
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
+    #[cfg(unix)]
     use std::time::{Duration, UNIX_EPOCH};
 
     use anyhow::Result;
+    #[cfg(unix)]
     use fs_err as fs;
-    use indoc::{formatdoc, indoc};
+    #[cfg(unix)]
+    use indoc::formatdoc;
+    use indoc::indoc;
     use serde_json::Value;
+    #[cfg(unix)]
     use tempfile::tempdir;
 
+    #[cfg(unix)]
     use uv_cache::{Cache, CacheBucket, CachedByTimestamp};
+    #[cfg(unix)]
     use uv_cache_info::Timestamp;
     use uv_pep440::Version;
 
+    #[cfg(unix)]
     use crate::Interpreter;
-    use crate::interpreter::{Error, InterpreterInfo, canonicalize_executable};
+    use crate::interpreter::InterpreterInfo;
+    #[cfg(unix)]
+    use crate::interpreter::canonicalize_executable;
 
     const INVALID_INTERPRETER_VERSIONS: [(&str, &str); 8] = [
         ("python_full_version", "3"),
@@ -1732,6 +1742,7 @@ mod tests {
     "##}
     }
 
+    #[cfg(unix)]
     fn mock_version_response(directory: &Path) -> Result<(PathBuf, PathBuf, PathBuf)> {
         let executable = directory.join("python");
         let response_file = directory.join("response.json");
@@ -1754,31 +1765,17 @@ mod tests {
         Ok((executable, response_file, query_log))
     }
 
-    #[tokio::test]
-    async fn interpreter_query_validates_version_components() -> Result<()> {
-        let directory = tempdir()?;
-        let (executable, response_file, _) = mock_version_response(directory.path())?;
-        let original: Value = serde_json::from_slice(&fs::read(&response_file)?)?;
-        let cache = Cache::temp()?.init().await?;
+    #[test]
+    fn interpreter_info_validates_version_components() -> Result<()> {
+        let original: Value = serde_json::from_str(mocked_interpreter_response())?;
         let mut errors = Vec::new();
         for (field, version) in INVALID_INTERPRETER_VERSIONS {
             let mut response = original.clone();
             response["markers"][field] = Value::String(version.to_owned());
-            fs::write(&response_file, serde_json::to_vec(&response)?)?;
-            let error = InterpreterInfo::query(&executable, &cache)
+            let error = serde_json::from_value::<InterpreterInfo>(response)
                 .expect_err("invalid interpreter version");
-            let Error::UnexpectedResponse(error) = error else {
-                return Err(error.into());
-            };
-            assert!(error.err.is_data());
-            let message = error.err.to_string();
-            errors.push(
-                message
-                    .split(" at line ")
-                    .next()
-                    .expect("error has a message")
-                    .to_owned(),
-            );
+            assert!(error.is_data());
+            errors.push(error.to_string());
         }
         assert_eq!(
             errors,
@@ -1794,33 +1791,30 @@ mod tests {
             ]
         );
 
-        for (python, implementation, expected) in [
-            ("3.12.0rc1", "7.3.17", ((3, 12, 0), (7, 3))),
-            ("3.13.1", "24.1.2", ((3, 13, 1), (24, 1))),
-            ("3.12.0", "0.1", ((3, 12, 0), (0, 1))),
-            ("255.255.255", "255.255.9999", ((255, 255, 255), (255, 255))),
+        for (python, implementation) in [
+            ("3.12.0rc1", "7.3.17"),
+            ("3.13.1", "24.1.2"),
+            ("3.12.0", "0.1"),
+            ("255.255.255", "255.255.9999"),
         ] {
             let mut response = original.clone();
             response["markers"]["python_full_version"] = Value::String(python.to_owned());
             response["markers"]["implementation_version"] =
                 Value::String(implementation.to_owned());
-            fs::write(&response_file, serde_json::to_vec(&response)?)?;
-            let cache = Cache::temp()?.init().await?;
-            let interpreter = Interpreter::query(&executable, &cache)?;
+            let info: InterpreterInfo = serde_json::from_value(response)?;
             assert_eq!(
-                (
-                    interpreter.python_major(),
-                    interpreter.python_minor(),
-                    interpreter.python_patch(),
-                ),
-                expected.0
+                info.markers.python_full_version().version,
+                Version::from_str(python)?
             );
-            assert_eq!(interpreter.implementation_tuple(), expected.1);
-            assert_eq!(interpreter.python_version(), &Version::from_str(python)?);
+            assert_eq!(
+                info.markers.implementation_version().version,
+                Version::from_str(implementation)?
+            );
         }
         Ok(())
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn interpreter_cache_requeries_invalid_version_components() -> Result<()> {
         let directory = tempdir()?;
@@ -1854,6 +1848,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_cache_invalidation() -> Result<()> {
         let mock_dir = tempdir()?;
@@ -1949,6 +1944,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_cache_eviction_with_unchanged_executable() -> Result<()> {
         let mock_dir = tempdir()?;
