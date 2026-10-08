@@ -548,6 +548,7 @@ impl Cache {
             Err(err) => return Err(err.into()),
         };
 
+        // A cleaner may have removed the scaffold while this initializer waited.
         Self::create_base_files(root).map_err(|err| Error::Init(root.clone(), err))?;
         Ok(Self {
             root: std::path::absolute(root).map_err(Error::Absolute)?,
@@ -578,10 +579,11 @@ impl Cache {
         }))
     }
 
-    /// Clear the cache, removing all entries.
+    /// Clear the cache, removing all entries but retaining the root coordination lock.
     pub fn clear(self, reporter: Box<dyn CleanReporter>) -> Result<Removal, io::Error> {
-        // Waiters may have already opened the lock. Retain its path and directory so they acquire
-        // the same lock as new uv processes. Resolve only the root: never follow links inside it.
+        // Waiters may have already opened `.lock`. Keep its inode and parent directory in place
+        // so later users and cleaners acquire the same lock, including after this guard drops.
+        // Resolve only the root so a directory symlink remains while links inside it aren't followed.
         let root = fs_err::canonicalize(&self.root)?;
         Remover::new(reporter)
             .with_removal_accounting(self.removal_accounting)
