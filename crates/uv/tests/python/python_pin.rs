@@ -276,24 +276,26 @@ async fn python_pin_rejects_incompatible_version_before_download_discovery() -> 
         .mount(&server)
         .await;
 
-    for resolved in [false, true] {
-        let mut command = context.python_pin();
-        command
-            .arg("3.10")
-            .arg("--python-downloads-json-url")
-            .arg(server.uri())
-            .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic");
-        if resolved {
-            command.arg("--resolved");
-        }
-        insta::allow_duplicates! {
-        uv_snapshot!(context.filters(), command, @"
-        exit_code: 2 (failure)
-        ----- stderr -----
-        error: The requested Python version `3.10` is incompatible with the project `requires-python` value of `>=3.12`.
-        ");
-        }
-    }
+    uv_snapshot!(context.filters(), context.python_pin()
+        .arg("3.10")
+        .arg("--python-downloads-json-url")
+        .arg(server.uri())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The requested Python version `3.10` is incompatible with the project `requires-python` value of `>=3.12`.
+    ");
+
+    uv_snapshot!(context.filters(), context.python_pin()
+        .arg("3.10")
+        .arg("--python-downloads-json-url")
+        .arg(server.uri())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic")
+        .arg("--resolved"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The requested Python version `3.10` is incompatible with the project `requires-python` value of `>=3.12`.
+    ");
     assert!(!context.temp_dir.child(PYTHON_VERSION_FILENAME).exists());
     server.verify().await;
     Ok(())
@@ -308,15 +310,22 @@ async fn python_pin_reuses_workspace_requirement_for_multiple_pins() -> Result<(
         members = ["a", "b"]
         "#,
     )?;
-    for name in ["a", "b"] {
-        context
-            .temp_dir
-            .child(name)
-            .child("pyproject.toml")
-            .write_str(&format!(
-                "[project]\nname = \"{name}\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n"
-            ))?;
-    }
+    context.temp_dir.child("a/pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "a"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        "#,
+    )?;
+    context.temp_dir.child("b/pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "b"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        "#,
+    )?;
     context
         .temp_dir
         .child(PYTHON_VERSION_FILENAME)
