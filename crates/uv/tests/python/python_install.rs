@@ -1,5 +1,3 @@
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 #[cfg(windows)]
 use std::path::PathBuf;
 
@@ -16,6 +14,8 @@ use assert_fs::{
 use indoc::indoc;
 use predicates::prelude::predicate;
 use tracing::debug;
+#[cfg(unix)]
+use uv_test::ReadOnlyDirectoryGuard;
 use uv_test::{LATEST_PYTHON_3_12, uv_snapshot};
 
 use uv_fs::Simplified;
@@ -24,6 +24,7 @@ use uv_static::EnvVars;
 use walkdir::WalkDir;
 
 #[test]
+#[cfg(unix)]
 fn python_uninstall_no_matches() {
     let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
 
@@ -68,9 +69,10 @@ fn python_uninstall_error_batches() -> Result<()> {
         let managed = context.temp_dir.child("managed");
         let failures = ["3.11.1", "3.12.1"]
             .map(|version| managed.child(format!("cpython-{version}-{platform_key}")));
+        let mut permissions = Vec::new();
         for installation in &failures {
             installation.child("blocked").write_str("installed data")?;
-            fs_err::set_permissions(installation, std::fs::Permissions::from_mode(0o500))?;
+            permissions.push(ReadOnlyDirectoryGuard::new(installation.path())?);
         }
         let removable = managed.child(format!("cpython-3.13.1-{platform_key}"));
         removable.child("installed").write_str("installed data")?;
@@ -80,24 +82,8 @@ fn python_uninstall_error_batches() -> Result<()> {
         if !quiet.is_empty() {
             command.arg(quiet);
         }
-        let (snapshot, _) = uv_test::run_and_format(
-            command,
-            context.filters(),
-            "python_uninstall_error_batches",
-            Some(uv_test::WindowsFilters::Platform),
-            None,
-        );
-        // Restore write access before assertions so failed snapshots do not strand the fixture.
-        for installation in &failures {
-            fs_err::set_permissions(installation, std::fs::Permissions::from_mode(0o700))?;
-        }
-
-        removable.assert(predicate::path::missing());
-        for installation in &failures {
-            installation.child("blocked").assert("installed data");
-        }
         if quiet.is_empty() {
-            insta::assert_snapshot!(snapshot, @"
+            uv_snapshot!(context.filters(), command, @"
             exit_code: 1 (failure)
             ----- stderr -----
             Searching for Python installations
@@ -109,7 +95,7 @@ fn python_uninstall_error_batches() -> Result<()> {
               cause: failed to remove directory `[TEMP_DIR]/managed/cpython-3.12.1-[PLATFORM]`: Permission denied (os error 13)
             ");
         } else if quiet == "-q" {
-            insta::assert_snapshot!(snapshot, @"
+            uv_snapshot!(context.filters(), command, @"
             exit_code: 1 (failure)
             ----- stderr -----
             error: Failed to uninstall cpython-3.11.1-[PLATFORM]
@@ -118,11 +104,16 @@ fn python_uninstall_error_batches() -> Result<()> {
               cause: failed to remove directory `[TEMP_DIR]/managed/cpython-3.12.1-[PLATFORM]`: Permission denied (os error 13)
             ");
         } else {
-            insta::assert_snapshot!(snapshot, @"
+            uv_snapshot!(context.filters(), command, @"
             exit_code: 1 (failure)
             ");
         }
 
+        removable.assert(predicate::path::missing());
+        for installation in &failures {
+            installation.child("blocked").assert("installed data");
+        }
+        drop(permissions);
         context.python_uninstall().arg("--all").assert().success();
         for installation in &failures {
             installation.assert(predicate::path::missing());
