@@ -2378,6 +2378,19 @@ pub struct ToolOptions {
     torch_backend: Option<TorchMode>,
 }
 
+impl ToolOptions {
+    /// Use the fallback indexes if no index options are configured.
+    #[must_use]
+    pub fn with_default_indexes(mut self, fallback: &Self) -> Self {
+        if self.index.is_none() && self.index_url.is_none() && self.extra_index_url.is_none() {
+            self.index.clone_from(&fallback.index);
+            self.index_url.clone_from(&fallback.index_url);
+            self.extra_index_url.clone_from(&fallback.extra_index_url);
+        }
+        self
+    }
+}
+
 /// The on-disk representation of [`ToolOptions`] in a tool receipt.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
