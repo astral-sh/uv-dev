@@ -10,7 +10,7 @@ use anyhow::Result;
 use same_file::Handle;
 use tracing::debug;
 
-use uv_fs::Simplified;
+use uv_fs::{FilePublication, Simplified};
 use uv_lock_operations::LockTarget;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_scripts::{Pep723Metadata, Pep723Script};
@@ -273,17 +273,30 @@ impl FileSnapshot {
                 self.path.user_display()
             )));
         }
-        // Identify the opened file before truncating it. A newly discovered path must not replace
-        // a file another writer created after the original absent snapshot.
-        let file = fs_err::OpenOptions::new()
-            .write(true)
-            .create_new(expected.is_none())
-            .truncate(false)
-            .open(&self.path)?;
-        self.write_opened(file, contents)
+        let mut publication = FilePublication::new(&self.path)?;
+        let identity = publication
+            .original()
+            .map(|file| Handle::from_file(file.file().try_clone()?))
+            .transpose()?;
+        if identity.as_ref() != expected.map(|file| &file.identity) {
+            return Err(io::Error::other("file was replaced before publication"));
+        }
+        if publication.is_staged() {
+            publication.writer().write_all(contents)?;
+            let identity = Handle::from_file(publication.writer().file().try_clone()?)?;
+            let contents = contents.to_vec();
+            if read_file(&self.path)?.as_ref() != expected {
+                return Err(io::Error::other("file changed before publication"));
+            }
+            publication.publish()?;
+            self.written = Some(FileContents { identity, contents });
+            Ok(())
+        } else {
+            self.write_opened(publication.writer(), contents)
+        }
     }
 
-    fn write_opened(&mut self, mut file: fs_err::File, contents: &[u8]) -> io::Result<()> {
+    fn write_opened(&mut self, file: &mut fs_err::File, contents: &[u8]) -> io::Result<()> {
         let identity = Handle::from_file(file.file().try_clone()?)?;
         if let Some(expected) = self.written.as_ref().or(self.original.as_ref())
             && identity != expected.identity
@@ -359,7 +372,7 @@ impl FileSnapshot {
         // can still race the final comparison and restoration.
         debug!("Reverting changes to `{}`", self.path.user_display());
         if let Some(original) = &self.original {
-            fs_err::write(&self.path, &original.contents)
+            uv_fs::write_file(&self.path, &original.contents)
         } else {
             fs_err::remove_file(&self.path)
         }
@@ -451,8 +464,8 @@ mod tests {
         let replacement = directory.path().join("replacement");
         fs_err::write(&replacement, "external")?;
         fs_err::rename(replacement, &path)?;
-        let opened = fs_err::OpenOptions::new().write(true).open(&path)?;
-        assert!(snapshot.write_opened(opened, b"edited").is_err());
+        let mut opened = fs_err::OpenOptions::new().write(true).open(&path)?;
+        assert!(snapshot.write_opened(&mut opened, b"edited").is_err());
         assert_eq!(fs_err::read_to_string(&path)?, "external");
         assert!(snapshot.written.is_none());
         Ok(())
