@@ -627,7 +627,7 @@ impl PyProjectToml {
             .project
             .optional_dependencies
             .iter()
-            .flat_map(OptionalDependencies::keys)
+            .flat_map(|dependencies| dependencies.keys())
             .collect::<Vec<_>>();
 
         let requires_dist =

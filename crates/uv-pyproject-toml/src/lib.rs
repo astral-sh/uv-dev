@@ -159,69 +159,13 @@ pub struct Project {
 /// internal representations. It is an implementation detail of the generic table wrappers.
 #[doc(hidden)]
 pub trait TableMap<K, V>: Default {
-    /// An iterator over key-value pairs.
-    type Iter<'a>: Iterator<Item = (&'a K, &'a V)>
-    where
-        Self: 'a,
-        K: 'a,
-        V: 'a;
-
-    /// An iterator over keys.
-    type Keys<'a>: Iterator<Item = &'a K>
-    where
-        Self: 'a,
-        K: 'a,
-        V: 'a;
-
     /// Insert a value, returning the previous value for the key, if present.
     fn insert(&mut self, key: K, value: V) -> Option<V>;
-
-    /// Return the value for a key.
-    fn get(&self, key: &K) -> Option<&V>;
-
-    /// Return whether the map contains a key.
-    fn contains_key(&self, key: &K) -> bool;
-
-    /// Iterate over key-value pairs.
-    fn iter(&self) -> Self::Iter<'_>;
-
-    /// Iterate over keys.
-    fn keys(&self) -> Self::Keys<'_>;
 }
 
-impl<K, V> TableMap<K, V> for BTreeMap<K, V>
-where
-    K: Ord,
-{
-    type Iter<'a>
-        = std::collections::btree_map::Iter<'a, K, V>
-    where
-        K: 'a,
-        V: 'a;
-    type Keys<'a>
-        = std::collections::btree_map::Keys<'a, K, V>
-    where
-        K: 'a,
-        V: 'a;
-
+impl<K: Ord, V> TableMap<K, V> for BTreeMap<K, V> {
     fn insert(&mut self, key: K, value: V) -> Option<V> {
         Self::insert(self, key, value)
-    }
-
-    fn get(&self, key: &K) -> Option<&V> {
-        Self::get(self, key)
-    }
-
-    fn contains_key(&self, key: &K) -> bool {
-        Self::contains_key(self, key)
-    }
-
-    fn iter(&self) -> Self::Iter<'_> {
-        Self::iter(self)
-    }
-
-    fn keys(&self) -> Self::Keys<'_> {
-        Self::keys(self)
     }
 }
 
@@ -230,37 +174,8 @@ where
     K: Eq + Hash,
     S: BuildHasher + Default,
 {
-    type Iter<'a>
-        = indexmap::map::Iter<'a, K, V>
-    where
-        K: 'a,
-        V: 'a,
-        S: 'a;
-    type Keys<'a>
-        = indexmap::map::Keys<'a, K, V>
-    where
-        K: 'a,
-        V: 'a,
-        S: 'a;
-
     fn insert(&mut self, key: K, value: V) -> Option<V> {
         Self::insert(self, key, value)
-    }
-
-    fn get(&self, key: &K) -> Option<&V> {
-        Self::get(self, key)
-    }
-
-    fn contains_key(&self, key: &K) -> bool {
-        Self::contains_key(self, key)
-    }
-
-    fn iter(&self) -> Self::Iter<'_> {
-        Self::iter(self)
-    }
-
-    fn keys(&self) -> Self::Keys<'_> {
-        Self::keys(self)
     }
 }
 
@@ -276,31 +191,6 @@ impl<Requirement, Map> OptionalDependencies<Requirement, Map> {
     /// Consume the wrapper and return the underlying map.
     pub fn into_inner(self) -> Map {
         self.0
-    }
-}
-
-impl<Requirement, Map> OptionalDependencies<Requirement, Map>
-where
-    Map: TableMap<ExtraName, Vec<Requirement>>,
-{
-    /// Return an iterator over optional dependency groups.
-    pub fn iter(&self) -> Map::Iter<'_> {
-        self.0.iter()
-    }
-
-    /// Return the requirements for an optional dependency group.
-    pub fn get(&self, extra: &ExtraName) -> Option<&Vec<Requirement>> {
-        self.0.get(extra)
-    }
-
-    /// Return whether an optional dependency group exists.
-    pub fn contains_key(&self, extra: &ExtraName) -> bool {
-        self.0.contains_key(extra)
-    }
-
-    /// Return an iterator over optional dependency group names.
-    pub fn keys(&self) -> Map::Keys<'_> {
-        self.0.keys()
     }
 }
 
@@ -323,13 +213,13 @@ impl<Requirement, Map> std::ops::Deref for OptionalDependencies<Requirement, Map
 
 impl<'a, Requirement: 'a, Map> IntoIterator for &'a OptionalDependencies<Requirement, Map>
 where
-    Map: TableMap<ExtraName, Vec<Requirement>>,
+    &'a Map: IntoIterator<Item = (&'a ExtraName, &'a Vec<Requirement>)>,
 {
     type Item = (&'a ExtraName, &'a Vec<Requirement>);
-    type IntoIter = Map::Iter<'a>;
+    type IntoIter = <&'a Map as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        (&self.0).into_iter()
     }
 }
 
@@ -499,34 +389,6 @@ impl<Requirement, Object, Map> DependencyGroups<Requirement, Object, Map> {
     }
 }
 
-impl<Requirement, Object, Map> DependencyGroups<Requirement, Object, Map>
-where
-    Map: TableMap<GroupName, Vec<DependencyGroupSpecifier<Requirement, Object>>>,
-{
-    /// Return an iterator over the dependency groups.
-    pub fn iter(&self) -> Map::Iter<'_> {
-        self.0.iter()
-    }
-
-    /// Return the specifiers for a dependency group.
-    pub fn get(
-        &self,
-        group: &GroupName,
-    ) -> Option<&Vec<DependencyGroupSpecifier<Requirement, Object>>> {
-        self.0.get(group)
-    }
-
-    /// Return whether a dependency group exists.
-    pub fn contains_key(&self, group: &GroupName) -> bool {
-        self.0.contains_key(group)
-    }
-
-    /// Return an iterator over dependency group names.
-    pub fn keys(&self) -> Map::Keys<'_> {
-        self.0.keys()
-    }
-}
-
 impl<Requirement, Object, Map> Default for DependencyGroups<Requirement, Object, Map>
 where
     Map: Default,
@@ -581,7 +443,7 @@ where
                 {
                     if groups.insert(name.clone(), specifiers).is_some() {
                         return Err(serde::de::Error::custom(format!(
-                            "duplicate normalized dependency group name `{name}`"
+                            "duplicate dependency group: `{name}`"
                         )));
                     }
                 }
@@ -596,16 +458,21 @@ where
 impl<'a, Requirement: 'a, Object: 'a, Map> IntoIterator
     for &'a DependencyGroups<Requirement, Object, Map>
 where
-    Map: TableMap<GroupName, Vec<DependencyGroupSpecifier<Requirement, Object>>>,
+    &'a Map: IntoIterator<
+        Item = (
+            &'a GroupName,
+            &'a Vec<DependencyGroupSpecifier<Requirement, Object>>,
+        ),
+    >,
 {
     type Item = (
         &'a GroupName,
         &'a Vec<DependencyGroupSpecifier<Requirement, Object>>,
     );
-    type IntoIter = Map::Iter<'a>;
+    type IntoIter = <&'a Map as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        (&self.0).into_iter()
     }
 }
 
@@ -835,11 +702,13 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("a table with 'name' and/or 'email' keys")
-        );
+        insta::assert_snapshot!(error.to_string(), @r#"
+        TOML parse error at line 4, column 23
+          |
+        4 |             authors = [{ name = "Ferris", email = 1 }]
+          |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        a table with 'name' and/or 'email' keys
+        "#);
     }
 
     #[test]
@@ -856,11 +725,13 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("duplicate normalized extra name `dev-test`")
-        );
+        insta::assert_snapshot!(error.to_string(), @r#"
+        TOML parse error at line 5, column 13
+          |
+        5 |             [project.optional-dependencies]
+          |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        duplicate normalized extra name `dev-test`
+        "#);
     }
 
     #[test]
@@ -940,11 +811,13 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("expected a requirement string or an `include-group` table")
-        );
+        insta::assert_snapshot!(error.to_string(), @r#"
+        TOML parse error at line 3, column 20
+          |
+        3 |             dev = [{ path = "." }]
+          |                    ^^^^^^^^^^^^^^
+        expected a requirement string or an `include-group` table
+        "#);
     }
 
     #[test]
@@ -958,10 +831,12 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("duplicate normalized dependency group name `dev-test`")
-        );
+        insta::assert_snapshot!(error.to_string(), @r#"
+        TOML parse error at line 2, column 13
+          |
+        2 |             [dependency-groups]
+          |             ^^^^^^^^^^^^^^^^^^^
+        duplicate dependency group: `dev-test`
+        "#);
     }
 }

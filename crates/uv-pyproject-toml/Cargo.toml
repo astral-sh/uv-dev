@@ -23,3 +23,6 @@ uv-pep508 = { version = "0.0.92", path = "../uv-pep508" }
 indexmap = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 toml = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
