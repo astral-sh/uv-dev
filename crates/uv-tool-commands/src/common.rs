@@ -290,26 +290,22 @@ pub(super) struct ToolLock {
 }
 
 /// A tool lock validated against the current resolution inputs.
-pub(super) struct ValidatedToolLock {
-    lock: ToolLock,
-    satisfied: bool,
-    usable: bool,
+pub(super) enum ValidatedToolLock {
+    /// The lock cannot provide resolution preferences.
+    Unusable,
+    /// The lock can provide version preferences, but requires resolution.
+    Preferable(ToolLock),
+    /// The lock satisfies the current inputs and can be installed directly.
+    Satisfies(ToolLock),
 }
 
 impl ValidatedToolLock {
-    /// Return whether the existing lock satisfies the current resolution inputs.
-    pub(super) fn is_satisfied(&self) -> bool {
-        self.satisfied
-    }
-
     /// Return the lock as a resolver preference if its versions remain usable.
     pub(super) fn preference(&self) -> Option<&ToolLock> {
-        self.usable.then_some(&self.lock)
-    }
-
-    /// Return the validated lock.
-    pub(super) fn into_lock(self) -> ToolLock {
-        self.lock
+        match self {
+            Self::Unusable => None,
+            Self::Preferable(lock) | Self::Satisfies(lock) => Some(lock),
+        }
     }
 }
 
@@ -556,16 +552,12 @@ impl ToolLock {
             printer,
         )
         .await?;
-        let satisfied = validated.is_satisfied();
-        let usable = validated.is_usable();
-
-        Ok(ValidatedToolLock {
-            lock: Self {
-                root,
-                lock: validated.into_lock(),
-            },
-            satisfied,
-            usable,
+        Ok(match validated {
+            ValidatedLock::Unusable(_) => ValidatedToolLock::Unusable,
+            ValidatedLock::Versions(lock) | ValidatedLock::Preferable(lock) => {
+                ValidatedToolLock::Preferable(Self { root, lock })
+            }
+            ValidatedLock::Satisfies(lock) => ValidatedToolLock::Satisfies(Self { root, lock }),
         })
     }
 
