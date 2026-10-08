@@ -9832,9 +9832,7 @@ fn no_binary() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--reinstall").env(EnvVars::UV_NO_BINARY, "iniconfig"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: invalid value 'iniconfig' for '--no-binary': value was not a boolean
-
-    For more information, try '--help'.
+    error: Failed to parse environment variable `UV_NO_BINARY` with invalid value `iniconfig`: expected a boolish value
     ");
 
     Ok(())
@@ -9993,9 +9991,7 @@ fn no_build_error() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--reinstall").env(EnvVars::UV_NO_BUILD, "a"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: invalid value 'a' for '--no-build': value was not a boolean
-
-    For more information, try '--help'.
+    error: Failed to parse environment variable `UV_NO_BUILD` with invalid value `a`: expected a boolish value
     ");
 
     assert!(context.temp_dir.child("uv.lock").exists());
