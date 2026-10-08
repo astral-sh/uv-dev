@@ -15,7 +15,7 @@ use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{Concurrency, IndexStrategy, KeyringProviderType};
 use uv_distribution_types::{
-    DependencyMetadata, Diagnostic, IndexCapabilities, IndexLocations, Name, RequiresPython,
+    DependencyMetadata, IndexCapabilities, IndexLocations, Name, RequiresPython,
 };
 use uv_installer::SitePackages;
 use uv_normalize::PackageName;
