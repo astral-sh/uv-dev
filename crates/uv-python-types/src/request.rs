@@ -825,7 +825,7 @@ impl EnvironmentPreference {
         match self {
             // For mutable operations, only allow discovery of the system with explicit selection.
             Self::Any => Self::ExplicitSystem,
-            preference => preference,
+            Self::OnlyVirtual | Self::ExplicitSystem | Self::OnlySystem => self,
         }
     }
 }
