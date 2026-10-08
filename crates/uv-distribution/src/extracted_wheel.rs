@@ -245,16 +245,19 @@ mod tests {
     use tokio::runtime::Builder;
     use tokio::sync::oneshot;
     use uv_cache::Cache;
+    use uv_fs::{LockedFile, LockedFileMode};
 
     use super::{ExtractedFiles, ExtractedWheel};
 
     #[test]
-    fn cancelled_finalization_owns_its_temporary_directory() -> Result<(), Box<dyn Error>> {
+    fn cancelled_finalization_owns_its_temporary_directory_and_cache() -> Result<(), Box<dyn Error>>
+    {
         let runtime = Builder::new_current_thread()
             .enable_all()
             .max_blocking_threads(1)
             .build()?;
-        let cache = Cache::temp()?;
+        let cache = runtime.block_on(Cache::temp()?.init())?;
+        let cache_root = cache.root().to_owned();
         let temp_dir = tempfile::tempdir_in(cache.root())?;
         let path = temp_dir.path().to_path_buf();
         fs_err::create_dir(path.join("demo-1.0.dist-info"))?;
@@ -276,7 +279,17 @@ mod tests {
             // Queue finalization behind another worker, then abandon its result.
             let finalization = extracted.spawn_finalize(cache.clone(), "demo".to_owned());
             drop(finalization);
+            drop(cache);
+            assert!(cache_root.is_dir());
             assert!(path.is_dir());
+            assert!(
+                LockedFile::acquire_no_wait(
+                    cache_root.join(".lock"),
+                    LockedFileMode::Exclusive,
+                    "test cache"
+                )
+                .is_none()
+            );
 
             // The async executor can keep making progress while the worker is queued.
             tokio::task::yield_now().await;
@@ -285,13 +298,13 @@ mod tests {
             blocker.await??;
 
             tokio::time::timeout(Duration::from_secs(10), async {
-                while path.try_exists()? {
+                while cache_root.try_exists()? {
                     tokio::task::yield_now().await;
                 }
                 Ok::<_, io::Error>(())
             })
             .await??;
-            assert!(cache.root().is_dir());
+            assert!(!path.exists());
             Ok(())
         })
     }
