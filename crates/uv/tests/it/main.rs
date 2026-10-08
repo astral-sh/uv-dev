@@ -29,6 +29,9 @@ mod resource_limits;
 #[cfg(feature = "self-update")]
 mod self_update;
 
+#[cfg(feature = "test-python")]
+mod test_context;
+
 #[cfg(not(windows))]
 mod update_shell;
 
