@@ -460,7 +460,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     .fetch(
                         &wheel.git,
                         self.client.unmanaged.git_http_settings(wheel.git.url()),
-                        self.build_context.cache().bucket(CacheBucket::Git),
+                        self.build_context.cache(),
                         self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
                     )
                     .await?;

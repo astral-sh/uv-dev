@@ -182,7 +182,7 @@ async fn fetch_git_source_tree(
     reporter: Option<Arc<dyn uv_git::Reporter>>,
 ) -> Result<Fetch, Error> {
     let fetch = git_resolver
-        .fetch(git, http_settings, cache.bucket(CacheBucket::Git), reporter)
+        .fetch(git, http_settings, cache, reporter)
         .await?;
 
     if let Some(subdirectory) = subdirectory
@@ -1892,7 +1892,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .fetch(
                 resource.git,
                 client.unmanaged.git_http_settings(resource.git.url()),
-                self.build_context.cache().bucket(CacheBucket::Git),
+                self.build_context.cache(),
                 self.reporter
                     .clone()
                     .map(|reporter| reporter.into_git_reporter()),
@@ -2002,7 +2002,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .fetch(
                 resource.git,
                 client.unmanaged.git_http_settings(resource.git.url()),
-                self.build_context.cache().bucket(CacheBucket::Git),
+                self.build_context.cache(),
                 self.reporter
                     .clone()
                     .map(|reporter| reporter.into_git_reporter()),
@@ -2618,7 +2618,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .fetch(
                 git,
                 client.unmanaged.git_http_settings(git.url()),
-                self.build_context.cache().bucket(CacheBucket::Git),
+                self.build_context.cache(),
                 self.reporter
                     .clone()
                     .map(|reporter| reporter.into_git_reporter()),
