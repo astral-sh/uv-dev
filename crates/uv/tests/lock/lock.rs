@@ -26,6 +26,10 @@ use wiremock::{
 #[cfg(feature = "test-universal")]
 use uv_fs::PythonExt;
 use uv_fs::{Simplified, create_symlink};
+#[cfg(feature = "test-universal")]
+use uv_lock::Lock;
+#[cfg(feature = "test-universal")]
+use uv_pep440::Version;
 use uv_static::EnvVars;
 #[cfg(feature = "test-universal")]
 use uv_test::archive::{generate_source_archive, write_tar_gz};
@@ -31135,6 +31139,394 @@ fn lock_unsupported_version() -> Result<()> {
       cause: Dependency `iniconfig` has missing `source` field but has more than one matching package
     ");
 
+    Ok(())
+}
+
+/// Changing a Python exclusion invalidates the lock even when the outer bounds are unchanged.
+#[cfg(feature = "test-universal")]
+#[test]
+fn project_python_exclusions_invalidate_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let write_project = |requires_python: &str| {
+        pyproject.write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = "{requires_python}"
+        "#})
+    };
+    write_project(">=3.9,<3.14")?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    // Exclude all Python 3.10 releases.
+    let before = context.read("uv.lock");
+    write_project(">=3.9,<3.14,!=3.10.*")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(before, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let updated = context.read("uv.lock");
+    let lock = Lock::from_toml(&updated)?;
+    assert!(!lock.requires_python().contains(&Version::new([3, 10, 0])));
+    assert!(!lock.requires_python().contains(&Version::new([3, 10, 5])));
+
+    // A redundant bound changes the spelling, but not the supported Python versions.
+    write_project(">=3.8,>=3.9,<3.14,!=3.10.*")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(updated, context.read("uv.lock"));
+
+    // Allow later Python 3.10 releases while excluding 3.10.0.
+    let before = context.read("uv.lock");
+    write_project(">=3.9,<3.14,!=3.10.0")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(before, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let updated = context.read("uv.lock");
+    let lock = Lock::from_toml(&updated)?;
+    assert!(!lock.requires_python().contains(&Version::new([3, 10, 0])));
+    assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
+
+    // A redundant bound changes the spelling, but not the supported Python versions.
+    write_project(">=3.8,>=3.9,<3.14,!=3.10.0")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(updated, context.read("uv.lock"));
+
+    // Remove the exclusion.
+    let before = context.read("uv.lock");
+    write_project(">=3.9,<3.14")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(before, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let updated = context.read("uv.lock");
+    let lock = Lock::from_toml(&updated)?;
+    assert!(lock.requires_python().contains(&Version::new([3, 10, 0])));
+    assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
+
+    // A redundant bound changes the spelling, but not the supported Python versions.
+    write_project(">=3.8,>=3.9,<3.14")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(updated, context.read("uv.lock"));
+    Ok(())
+}
+
+/// Interior Python exclusions leave compatible dependency forks and their selected versions intact.
+#[cfg(feature = "test-universal")]
+#[test]
+fn project_python_exclusions_retain_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("fork/preferences-dependent-forking.toml");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let write_project = |requires_python: &str| {
+        pyproject.write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = "{requires_python}"
+            dependencies = ["cleaver", "foo", "bar"]
+        "#})
+    };
+    write_project(">=3.12")?;
+    let mut command = context.lock();
+    command
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--index-url")
+        .arg(server.index_url());
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    let original = Lock::from_toml(&context.read("uv.lock"))?;
+    assert_eq!(original.fork_markers().len(), 2);
+
+    write_project(">=3.12,!=3.13.0")?;
+    uv_snapshot!(context.filters(), &mut command, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+    let updated = Lock::from_toml(&context.read("uv.lock"))?;
+    assert!(
+        !updated
+            .requires_python()
+            .contains(&Version::new([3, 13, 0]))
+    );
+
+    let summary = |lock: &Lock| {
+        let markers = lock
+            .fork_markers()
+            .iter()
+            .map(|marker| marker.combined().try_to_string())
+            .collect::<Vec<_>>();
+        let packages = lock
+            .packages()
+            .iter()
+            .map(|package| (package.name(), package.version()))
+            .collect::<Vec<_>>();
+        json!({
+            "markers": markers,
+            "packages": packages,
+        })
+    };
+    assert_eq!(summary(&original), summary(&updated));
+    insta::assert_json_snapshot!(summary(&updated), @r#"
+    {
+      "markers": [
+        "python_full_version >= '3.12' and sys_platform == 'linux'",
+        "python_full_version >= '3.12' and sys_platform != 'linux'"
+      ],
+      "packages": [
+        [
+          "bar",
+          "1.0.0"
+        ],
+        [
+          "bar",
+          "2.0.0"
+        ],
+        [
+          "cleaver",
+          "1.0.0"
+        ],
+        [
+          "foo",
+          "1.0.0"
+        ],
+        [
+          "project",
+          "0.1.0"
+        ]
+      ]
+    }
+    "#);
+    Ok(())
+}
+
+/// Script locks use the same complete Python requirement comparison as project locks.
+#[cfg(feature = "test-universal")]
+#[test]
+fn script_python_exclusions_invalidate_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    let write_script = |requires_python: &str| {
+        script.write_str(&formatdoc! {r#"
+            # /// script
+            # requires-python = "{requires_python}"
+            # dependencies = []
+            # ///
+        "#})
+    };
+    write_script(">=3.9")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    // Exclude all Python 3.10 releases.
+    let before = context.read("script.py.lock");
+    write_script(">=3.9,!=3.10.*")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(before, context.read("script.py.lock"));
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    let updated = context.read("script.py.lock");
+    let lock = Lock::from_toml(&updated)?;
+    assert!(!lock.requires_python().contains(&Version::new([3, 10, 0])));
+    assert!(!lock.requires_python().contains(&Version::new([3, 10, 5])));
+    write_script(">=3.8,>=3.9,!=3.10.*")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    assert_eq!(updated, context.read("script.py.lock"));
+
+    // Narrow the wildcard exclusion to Python 3.10.0.
+    let before = context.read("script.py.lock");
+    write_script(">=3.9,!=3.10.0.*")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(before, context.read("script.py.lock"));
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    let updated = context.read("script.py.lock");
+    let lock = Lock::from_toml(&updated)?;
+    assert!(!lock.requires_python().contains(&Version::new([3, 10, 0])));
+    assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
+    write_script(">=3.8,>=3.9,!=3.10.0.*")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    assert_eq!(updated, context.read("script.py.lock"));
+
+    // Remove the exclusion.
+    let before = context.read("script.py.lock");
+    write_script(">=3.9")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(before, context.read("script.py.lock"));
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    let updated = context.read("script.py.lock");
+    let lock = Lock::from_toml(&updated)?;
+    assert!(lock.requires_python().contains(&Version::new([3, 10, 0])));
+    assert!(lock.requires_python().contains(&Version::new([3, 10, 5])));
+    write_script(">=3.8,>=3.9")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--offline", "--locked"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    assert_eq!(updated, context.read("script.py.lock"));
+    Ok(())
+}
+
+/// A member's interior exclusion is recorded in the intersection used by frozen Python selection.
+#[cfg(feature = "test-universal")]
+#[test]
+fn workspace_python_exclusion_reaches_frozen_lock() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root"
+        version = "0.1.0"
+        requires-python = ">=3.9"
+
+        [tool.uv.workspace]
+        members = ["member"]
+    "#})?;
+    let member = context.temp_dir.child("member/pyproject.toml");
+    let write_member = |requires_python: &str| {
+        member.write_str(&formatdoc! {r#"
+            [project]
+            name = "member"
+            version = "0.1.0"
+            requires-python = "{requires_python}"
+        "#})
+    };
+    write_member(">=3.10")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--python", "3.13"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Resolved 2 packages in [TIME]
+    ");
+    let before = context.read("uv.lock");
+    write_member(">=3.10,!=3.12.*")?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--python", "3.13", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(before, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--python", "3.13"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Resolved 2 packages in [TIME]
+    ");
+    let updated = context.read("uv.lock");
+    let lock = Lock::from_toml(&updated)?;
+    assert!(!lock.requires_python().contains(&Version::new([3, 12, 1])));
+    assert!(lock.requires_python().contains(&Version::new([3, 13, 1])));
+
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--frozen", "--preview-features", "frozen-lockfile",
+        "--no-default-groups", "--python", "3.12",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.10, !=3.12.*` (from `requires-python` in `uv.lock`).
+    ");
+    assert_eq!(updated, context.read("uv.lock"));
     Ok(())
 }
 
