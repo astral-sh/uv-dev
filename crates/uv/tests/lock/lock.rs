@@ -11577,7 +11577,7 @@ fn lock_relative_inactive_dependency_metadata_paths() -> Result<()> {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -14,17 +14,44 @@
+        @@ -15,17 +15,44 @@
          [[manifest.dependency-metadata]]
          name = "authored-parent"
          version = "0.1.0"
@@ -11622,7 +11622,7 @@ fn lock_relative_inactive_dependency_metadata_paths() -> Result<()> {
          [[package]]
          name = "project"
          version = "0.1.0"
-        @@ -39,3 +66,8 @@
+        @@ -40,3 +67,8 @@
              { name = "authored-parent", directory = "authored-parent" },
              { name = "member", editable = "member" },
          ]
@@ -11666,7 +11666,7 @@ fn lock_relative_inactive_dependency_metadata_paths() -> Result<()> {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -51,6 +51,16 @@
+        @@ -52,6 +52,16 @@
          name = "parent"
          version = "0.1.0"
          source = { directory = "[TEMP_DIR]/parent" }
@@ -30673,6 +30673,9 @@ fn lock_dependency_metadata_git() -> Result<()> {
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
 
+        [manifest]
+        dependency-metadata-ordered = true
+
         [[manifest.dependency-metadata]]
         name = "anyio"
         version = "4.6.0.post2"
@@ -48235,6 +48238,9 @@ fn lock_resolution_inputs_metadata_unknown_version() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+
+        [manifest]
+        dependency-metadata-ordered = true
 
         [[manifest.dependency-metadata]]
         name = "child"

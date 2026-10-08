@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::process::Command;
 
 use anyhow::Result;
+#[cfg(feature = "test-git")]
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::formatdoc;
 
@@ -281,6 +283,100 @@ fn static_metadata_distinct_keys_and_name_retention() -> Result<()> {
             Resolved 3 packages in [TIME]
             ");
             assert_eq!(context.read("uv.lock"), original);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "test-git")]
+#[test]
+fn legacy_static_metadata_singleton_can_hide_git_duplicates() -> Result<()> {
+    insta::allow_duplicates! {
+        for resolution_inputs in [false, true] {
+            let context = uv_test::test_context!("3.12");
+            wheelhouse(&context)?;
+            let repository = context.temp_dir.child("repository");
+            repository.child("pyproject.toml").write_str(&formatdoc! {r#"
+                [project]
+                name = "parent"
+                version = "1.0.0"
+                requires-python = ">=3.12"
+                dependencies = ["b"]
+            "#})?;
+            repository.child("PKG-INFO").write_str("Metadata-Version: 2.2\nName: parent\nVersion: 1.0.0\nRequires-Python: >=3.12\nRequires-Dist: b\n")?;
+            let hooks = context.temp_dir.child("empty-hooks");
+            hooks.create_dir_all()?;
+            let config = context.temp_dir.child("empty-gitconfig");
+            config.touch()?;
+            for arguments in [vec!["init"], vec!["add", "."], vec!["commit", "-m", "fixture"]] {
+                context.external_command("git")
+                    .current_dir(&repository)
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .env("GIT_CONFIG_GLOBAL", config.path())
+                    .env_remove("GIT_DIR")
+                    .env_remove("GIT_WORK_TREE")
+                    .args(["-c", "user.name=Example", "-c", "user.email=example@example.invalid", "-c", "commit.gpgsign=false", "-c"])
+                    .arg(format!("core.hooksPath={}", hooks.path().display()))
+                    .args(arguments)
+                    .assert()
+                    .success();
+            }
+            let repository_url = url::Url::from_directory_path(repository.path())
+                .map_err(|()| anyhow::anyhow!("repository path is not absolute"))?;
+            let sources = formatdoc! {r#"
+
+                [tool.uv.sources]
+                parent = {{ git = "{repository_url}" }}
+            "#};
+            let configure_git = |dependencies: &[&str]| -> Result<()> {
+                configure(&context, resolution_inputs, true, dependencies)?;
+                let project = context.read("pyproject.toml");
+                context.temp_dir.child("pyproject.toml").write_str(&format!("{project}{sources}"))?;
+                Ok(())
+            };
+            let git_lock = || {
+                let mut command = context.lock();
+                command.args(["--no-index", "--find-links", "links"]);
+                command
+            };
+
+            configure_git(&["a", "a"])?;
+            git_lock().assert().success();
+            assert_eq!(package_names(&context)?, ["b", "parent", "project"]);
+            let mut legacy: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+            let manifest = legacy["manifest"].as_table_mut().expect("manifest");
+            manifest.remove("dependency-metadata-ordered");
+            manifest.get_mut("dependency-metadata").expect("metadata").as_array_mut().expect("entries").dedup();
+            let legacy = toml::to_string(&legacy)?;
+            context.temp_dir.child("uv.lock").write_str(&legacy)?;
+
+            configure_git(&["a"])?;
+            uv_snapshot!(context.filters(), git_lock().arg("--locked"), @"
+            exit_code: 1 (failure)
+            ----- stderr -----
+            Resolved 3 packages in [TIME]
+            error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+            hint: To update the lockfile, run `uv lock`.
+            ");
+            assert_eq!(context.read("uv.lock"), legacy);
+            uv_snapshot!(context.filters(), git_lock(), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 3 packages in [TIME]
+            Added a v1.0.0
+            Removed b v1.0.0
+            ");
+            assert_eq!(package_names(&context)?, ["a", "parent", "project"]);
+            let updated = context.read("uv.lock");
+            let parsed: toml::Value = toml::from_str(&updated)?;
+            assert_eq!(parsed["manifest"]["dependency-metadata-ordered"].as_bool(), Some(true));
+            uv_snapshot!(context.filters(), git_lock().arg("--locked"), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Resolved 3 packages in [TIME]
+            ");
+            assert_eq!(context.read("uv.lock"), updated);
         }
         Ok(())
     }

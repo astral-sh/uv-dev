@@ -2637,7 +2637,7 @@ impl Lock {
         // that canonical form rather than the raw resolver output.
         let fork_markers =
             canonicalize_universal_markers(&resolution.fork_markers, &requires_python);
-        let lock = Self::new(
+        let mut lock = Self::new(
             VERSION,
             REVISION,
             packages,
@@ -2649,6 +2649,7 @@ impl Lock {
             vec![],
             fork_markers,
         )?;
+        lock.manifest.dependency_metadata_ordered |= lock.static_metadata_needs_provenance();
         let lock = if uv_preview::is_enabled(PreviewFeature::ResolutionInputs) {
             lock.prune_constraints()
         } else {
@@ -4496,10 +4497,9 @@ impl Lock {
             if expected != *actual {
                 return Ok(SatisfiesResult::MismatchedStaticMetadata(expected, actual));
             }
-            if !self.manifest.dependency_metadata_ordered
-                && has_duplicate_static_metadata_keys(actual)
+            if !self.manifest.dependency_metadata_ordered && self.static_metadata_needs_provenance()
             {
-                return Ok(SatisfiesResult::MissingStaticMetadataOrder);
+                return Ok(SatisfiesResult::MissingStaticMetadataProvenance);
             }
         }
 
@@ -6165,8 +6165,8 @@ pub enum SatisfiesResult<'lock> {
     ),
     /// The lockfile uses different static metadata.
     MismatchedStaticMetadata(Vec<StaticMetadata>, &'lock [StaticMetadata]),
-    /// The lockfile does not record declaration precedence for repeated static metadata keys.
-    MissingStaticMetadataOrder,
+    /// The lockfile does not record the declaration order or count needed for static metadata selection.
+    MissingStaticMetadataProvenance,
     /// The lockfile is missing a workspace member.
     MissingRoot(PackageName),
     /// The lockfile referenced a remote index that was not provided
@@ -6342,7 +6342,7 @@ pub struct ResolverManifest {
     /// The static metadata provided to the resolver, retaining repeated-key precedence and counts.
     #[serde(default, deserialize_with = "deserialize_static_metadata")]
     dependency_metadata: Vec<StaticMetadata>,
-    /// Whether repeated keys record declaration order, which cannot be recovered from a sorted set.
+    /// Whether declaration order and cardinality are known, rather than inferred from a sorted set.
     #[serde(default)]
     dependency_metadata_ordered: bool,
 }
@@ -6372,6 +6372,33 @@ fn has_duplicate_static_metadata_keys(entries: &[StaticMetadata]) -> bool {
         .iter()
         .tuple_windows()
         .any(|(left, right)| left.name == right.name && left.version == right.version)
+}
+
+impl Lock {
+    /// Unversioned source lookups only use metadata when exactly one declaration exists.
+    /// A legacy singleton may therefore represent identical declarations that were deduplicated.
+    fn static_metadata_needs_provenance(&self) -> bool {
+        has_duplicate_static_metadata_keys(&self.manifest.dependency_metadata)
+            || self.manifest.dependency_metadata.iter().any(|metadata| {
+                metadata.version.is_some()
+                    && self
+                        .packages_for_name(&metadata.name)
+                        .iter()
+                        .any(|package| match &package.id.source {
+                            Source::Registry(_) => false,
+                            Source::Direct(..) | Source::Path(..) => !package.id.source.is_wheel(),
+                            Source::Git(_, source) => source.path.as_deref().is_none_or(|path| {
+                                match DistExtension::from_path(path) {
+                                    Ok(DistExtension::Wheel) => false,
+                                    Ok(DistExtension::Source(_)) | Err(_) => true,
+                                }
+                            }),
+                            Source::Directory(..) | Source::Editable(..) | Source::Virtual(..) => {
+                                true
+                            }
+                        })
+            })
+    }
 }
 
 /// Omit entries equivalent to the implicit `dev` default.
@@ -10623,12 +10650,73 @@ pub(crate) fn is_wheel_unreachable(
 
 #[cfg(test)]
 mod tests {
-    use uv_distribution_types::HashCollection;
+    use uv_distribution_types::{HashCollection, ResolutionLookups};
     use uv_pep440::VersionSpecifiers;
     use uv_pep508::MarkerEnvironmentBuilder;
     use uv_warnings::anstream;
 
     use super::*;
+
+    #[test]
+    fn legacy_static_metadata_cardinality_sources() -> Result<(), Box<dyn Error>> {
+        for (source, needs_provenance) in [
+            (r#"registry = "https://example.invalid/simple""#, false),
+            (
+                r#"git = "https://example.invalid/repository#0123456789abcdef0123456789abcdef01234567""#,
+                true,
+            ),
+            (
+                r#"git = "https://example.invalid/repository?path=parent-1.0-py3-none-any.whl#0123456789abcdef0123456789abcdef01234567""#,
+                false,
+            ),
+            (
+                r#"git = "https://example.invalid/repository?path=parent-1.0.tar.gz#0123456789abcdef0123456789abcdef01234567""#,
+                true,
+            ),
+            (r#"url = "https://example.invalid/parent-1.0.tar.gz""#, true),
+            (
+                r#"url = "https://example.invalid/parent-1.0-py3-none-any.whl""#,
+                false,
+            ),
+            (r#"path = "parent-1.0.tar.gz""#, true),
+            (r#"path = "parent-1.0-py3-none-any.whl""#, false),
+            (r#"directory = "parent""#, true),
+            (r#"editable = "parent""#, true),
+            (r#"virtual = "parent""#, true),
+        ] {
+            let input = format!(
+                r#"
+                version = 1
+                revision = 5
+                requires-python = ">=3.12"
+
+                [[manifest.dependency-metadata]]
+                name = "parent"
+                version = "1.0"
+                requires-dist = ["a"]
+
+                [[package]]
+                name = "parent"
+                version = "1.0"
+                source = {{ {source} }}
+            "#
+            );
+            let mut lock = Lock::from_toml(&input)?;
+            assert_eq!(
+                lock.static_metadata_needs_provenance(),
+                needs_provenance,
+                "{source}"
+            );
+            assert!(!lock.manifest.dependency_metadata_ordered);
+            lock.manifest.dependency_metadata_ordered = true;
+            let retained = lock.prune_unused(ResolutionLookups::default());
+            assert_eq!(
+                retained.manifest.dependency_metadata_ordered, needs_provenance,
+                "{source}"
+            );
+        }
+        Ok(())
+    }
 
     /// Assert a given display snapshot, stripping ANSI color codes.
     macro_rules! assert_stripped_snapshot {
