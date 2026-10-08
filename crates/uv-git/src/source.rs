@@ -14,7 +14,7 @@ use uv_git_types::{GitOid, GitUrl};
 use uv_redacted::SafeUrl;
 
 use crate::credentials::GIT_STORE;
-use crate::git::{GitDatabase, GitRemote};
+use crate::git::{GitDatabase, GitRemote, LfsState};
 
 /// A remote Git source that can be checked out locally.
 pub(crate) struct GitSource {
@@ -89,9 +89,11 @@ impl GitSource {
                 if db.contains(rev) && (!lfs_requested || db.contains_lfs_artifacts(rev)) {
                     debug!("Using existing Git source `{}`", self.git.url());
                     return Ok((
-                        maybe_db
-                            .unwrap()
-                            .with_lfs_ready(lfs_requested.then_some(true)),
+                        maybe_db.unwrap().with_lfs_state(if lfs_requested {
+                            LfsState::Ready
+                        } else {
+                            LfsState::NotRequested
+                        }),
                         rev,
                         None,
                     ));
@@ -158,7 +160,7 @@ impl GitSource {
         Ok(Fetch {
             git,
             path: checkout_path,
-            lfs_ready: checkout.lfs_ready().unwrap_or(false),
+            lfs_ready: checkout.lfs_state().is_ready(),
         })
     }
 }
