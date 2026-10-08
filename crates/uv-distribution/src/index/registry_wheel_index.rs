@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -334,11 +333,8 @@ impl<'a> RegistryWheelIndex<'a> {
                         Self::extra_build_requires_for(package, extra_build_requires);
                     let extra_build_vars =
                         Self::extra_build_variables_for(package, extra_build_variables);
-                    let config_settings = Self::config_settings_for(
-                        package,
-                        config_settings,
-                        config_settings_package,
-                    );
+                    let config_settings =
+                        config_settings_package.for_package(Some(package), config_settings);
                     let build_info = BuildInfo::from_settings(
                         config_settings.into_owned(),
                         extra_build_deps.to_vec(),
@@ -403,19 +399,6 @@ impl<'a> RegistryWheelIndex<'a> {
         });
 
         entries
-    }
-
-    /// Determine the [`ConfigSettings`] for the given package name.
-    fn config_settings_for<'settings>(
-        name: &PackageName,
-        config_settings: &'settings ConfigSettings,
-        config_settings_package: &PackageConfigSettings,
-    ) -> Cow<'settings, ConfigSettings> {
-        if let Some(package_settings) = config_settings_package.get(name) {
-            Cow::Owned(package_settings.clone().merge(config_settings.clone()))
-        } else {
-            Cow::Borrowed(config_settings)
-        }
     }
 
     /// Determine the extra build requirements for the given package name.

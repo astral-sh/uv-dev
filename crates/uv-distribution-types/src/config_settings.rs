@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::{
     collections::{BTreeMap, btree_map::Entry},
     str::FromStr,
@@ -260,6 +261,21 @@ impl FromIterator<ConfigSettingPackageEntry> for PackageConfigSettings {
 }
 
 impl PackageConfigSettings {
+    /// Resolve build configuration for a package, with package values before global values.
+    ///
+    /// An unknown package or a package without overrides uses the global settings directly.
+    pub fn for_package<'settings>(
+        &self,
+        name: Option<&PackageName>,
+        global: &'settings ConfigSettings,
+    ) -> Cow<'settings, ConfigSettings> {
+        if let Some(settings) = name.and_then(|name| self.get(name)) {
+            Cow::Owned(settings.clone().merge(global.clone()))
+        } else {
+            Cow::Borrowed(global)
+        }
+    }
+
     /// Returns the config settings for a specific package, if any.
     pub fn get(&self, package: &PackageName) -> Option<&ConfigSettings> {
         self.0.get(package)

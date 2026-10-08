@@ -614,19 +614,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
     /// Determine the [`ConfigSettings`] for the given package name.
     fn config_settings_for(&self, name: Option<&PackageName>) -> Cow<'_, ConfigSettings> {
-        if let Some(name) = name {
-            if let Some(package_settings) = self.build_context.config_settings_package().get(name) {
-                Cow::Owned(
-                    package_settings
-                        .clone()
-                        .merge(self.build_context.config_settings().clone()),
-                )
-            } else {
-                Cow::Borrowed(self.build_context.config_settings())
-            }
-        } else {
-            Cow::Borrowed(self.build_context.config_settings())
-        }
+        self.build_context
+            .config_settings_package()
+            .for_package(name, self.build_context.config_settings())
     }
 
     /// Determine the extra build dependencies for the given package name.

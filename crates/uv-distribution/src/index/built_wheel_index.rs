@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use uv_cache::{Cache, CacheBucket, CacheShard, WheelCache};
 use uv_cache_info::CacheInfo;
 use uv_distribution_types::{
@@ -83,7 +81,9 @@ impl<'a> BuiltWheelIndex<'a> {
         let cache_shard = cache_shard.shard(revision.id());
 
         // If there are build settings, we need to scope to a cache shard.
-        let config_settings = self.config_settings_for(&source_dist.name);
+        let config_settings = self
+            .config_settings_package
+            .for_package(Some(&source_dist.name), self.config_settings);
         let extra_build_deps = self.extra_build_requires_for(&source_dist.name);
         let extra_build_vars = self.extra_build_variables_for(&source_dist.name);
         let build_info = BuildInfo::from_settings(
@@ -135,7 +135,9 @@ impl<'a> BuiltWheelIndex<'a> {
         let cache_shard = cache_shard.shard(revision.id());
 
         // If there are build settings, we need to scope to a cache shard.
-        let config_settings = self.config_settings_for(&source_dist.name);
+        let config_settings = self
+            .config_settings_package
+            .for_package(Some(&source_dist.name), self.config_settings);
         let extra_build_deps = self.extra_build_requires_for(&source_dist.name);
         let extra_build_vars = self.extra_build_variables_for(&source_dist.name);
         let build_info = BuildInfo::from_settings(
@@ -189,7 +191,9 @@ impl<'a> BuiltWheelIndex<'a> {
         let cache_shard = cache_shard.shard(revision.id());
 
         // If there are build settings, we need to scope to a cache shard.
-        let config_settings = self.config_settings_for(&source_dist.name);
+        let config_settings = self
+            .config_settings_package
+            .for_package(Some(&source_dist.name), self.config_settings);
         let extra_build_deps = self.extra_build_requires_for(&source_dist.name);
         let extra_build_vars = self.extra_build_variables_for(&source_dist.name);
         let build_info = BuildInfo::from_settings(
@@ -226,7 +230,9 @@ impl<'a> BuiltWheelIndex<'a> {
         );
 
         // If there are build settings, we need to scope to a cache shard.
-        let config_settings = self.config_settings_for(&source_dist.name);
+        let config_settings = self
+            .config_settings_package
+            .for_package(Some(&source_dist.name), self.config_settings);
         let extra_build_deps = self.extra_build_requires_for(&source_dist.name);
         let extra_build_vars = self.extra_build_variables_for(&source_dist.name);
         let build_info = BuildInfo::from_settings(
@@ -271,7 +277,9 @@ impl<'a> BuiltWheelIndex<'a> {
         }
 
         // If there are build settings, we need to scope to a cache shard.
-        let config_settings = self.config_settings_for(&source_dist.name);
+        let config_settings = self
+            .config_settings_package
+            .for_package(Some(&source_dist.name), self.config_settings);
         let extra_build_deps = self.extra_build_requires_for(&source_dist.name);
         let extra_build_vars = self.extra_build_variables_for(&source_dist.name);
         let build_info = BuildInfo::from_settings(
@@ -349,15 +357,6 @@ impl<'a> BuiltWheelIndex<'a> {
         }
 
         candidate
-    }
-
-    /// Determine the [`ConfigSettings`] for the given package name.
-    fn config_settings_for(&self, name: &PackageName) -> Cow<'_, ConfigSettings> {
-        if let Some(package_settings) = self.config_settings_package.get(name) {
-            Cow::Owned(package_settings.clone().merge(self.config_settings.clone()))
-        } else {
-            Cow::Borrowed(self.config_settings)
-        }
     }
 
     /// Determine the extra build requirements for the given package name.
