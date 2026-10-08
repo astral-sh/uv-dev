@@ -381,7 +381,7 @@ fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
             return true;
         };
 
-        !dist.r#virtual.unwrap_or(false)
+        !dist.mode.virtual_project().unwrap_or(false)
     })
 }
 
