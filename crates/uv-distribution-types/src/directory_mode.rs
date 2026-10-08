@@ -28,7 +28,7 @@ pub enum DirectorySourceMode {
 }
 
 impl DirectorySourceMode {
-    pub fn from_flags(
+    pub(crate) fn from_flags(
         editable: Option<bool>,
         virtual_project: Option<bool>,
     ) -> Result<Self, Error> {
