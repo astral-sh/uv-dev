@@ -16,6 +16,10 @@ use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
 use uv_test::packse::generate_wheel;
 use uv_test::{DEFAULT_PYTHON_VERSION, apply_filters, get_bin, uv_snapshot};
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 fn zip_file_names(path: &Path) -> Result<Vec<String>> {
     block_on(async {
@@ -794,6 +798,86 @@ fn build_fail() -> Result<()> {
     hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn build_workspace_reads_shared_constraints_once() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["a", "b"]
+    "#})?;
+    for (name, python) in [("a", "3.11"), ("b", "3.12")] {
+        let member = context.temp_dir.child(name);
+        member.child("pyproject.toml").write_str(&formatdoc! {r#"
+            [project]
+            name = "{name}"
+            version = "1.0.0"
+            requires-python = ">=3.11"
+
+            [build-system]
+            requires = ["uv_build"]
+            build-backend = "uv_build"
+        "#})?;
+        member.child(".python-version").write_str(python)?;
+        member
+            .child("src")
+            .child(name)
+            .child("__init__.py")
+            .touch()?;
+    }
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/constraints.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("-c nested.txt\n"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/nested.txt"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("uv_build>=0 ; python_version >= '3.11'\n"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    context
+        .build()
+        .arg("--all-packages")
+        .arg("--wheel")
+        .arg("--build-constraint")
+        .arg(format!("{}/constraints.txt", server.uri()))
+        .assert()
+        .success();
+    for name in ["a", "b"] {
+        context
+            .temp_dir
+            .child("dist")
+            .child(format!("{name}-1.0.0-py3-none-any.whl"))
+            .assert(predicate::path::is_file());
+    }
+    Mock::given(method("GET"))
+        .and(path("/invalid.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("invalid requirement ???\n"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = context
+        .build()
+        .arg("--all-packages")
+        .arg("--wheel")
+        .arg("--build-constraint")
+        .arg(format!("{}/invalid.txt", server.uri()))
+        .assert()
+        .code(2);
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    assert_eq!(stderr.matches("Failed to build").count(), 2);
+    server.verify().await;
     Ok(())
 }
 
