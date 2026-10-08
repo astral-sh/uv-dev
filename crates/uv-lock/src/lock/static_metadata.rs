@@ -128,10 +128,11 @@ mod tests {
         let normalized = normalize_static_metadata(left);
         assert_eq!(normalized.requires_dist.len(), 2);
         assert_eq!(normalized.provides_extra.len(), 2);
-        assert!(same_static_metadata(
-            std::slice::from_ref(&normalized),
-            &[normalize_static_metadata(normalized.clone())],
-        ));
+        assert_eq!(
+            serde_json::to_string(&normalized).expect("serialize metadata"),
+            serde_json::to_string(&normalize_static_metadata(normalized.clone()))
+                .expect("serialize metadata"),
+        );
     }
 
     #[test]
