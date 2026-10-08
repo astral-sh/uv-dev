@@ -5,9 +5,6 @@ mod python_dir;
 #[cfg(feature = "test-python")]
 mod python_find;
 
-#[cfg(all(unix, feature = "test-python"))]
-mod python_find_versions;
-
 #[cfg(feature = "test-python-managed")]
 mod python_install;
 
