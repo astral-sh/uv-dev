@@ -4,6 +4,7 @@ use std::env::VarError;
 use std::error::Error as StdError;
 use std::ffi::OsString;
 use std::fmt;
+use std::io;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -5117,8 +5118,8 @@ where
 /// Keep typed URL causes while excluding unparsed path text from environment diagnostics.
 fn publish_index_error(error: IndexUrlError) -> anyhow::Error {
     match error {
-        error @ (IndexUrlError::Io(_)
-        | IndexUrlError::Url(_)
+        IndexUrlError::Io(error) => io::Error::from(error.kind()).into(),
+        error @ (IndexUrlError::Url(_)
         | IndexUrlError::VerbatimUrl(
             VerbatimUrlError::Url(_) | VerbatimUrlError::PathConversion(_),
         )) => error.into(),
@@ -5129,10 +5130,11 @@ fn publish_index_error(error: IndexUrlError) -> anyhow::Error {
             anyhow!("path could not be converted to a URL")
         }
         IndexUrlError::VerbatimUrl(VerbatimUrlError::Normalization(_, error)) => {
-            anyhow!(error).context("path could not be normalized")
+            anyhow!(io::Error::from(error.kind())).context("path could not be normalized")
         }
         IndexUrlError::VerbatimUrl(VerbatimUrlError::Absolute(_, error)) => {
-            anyhow!(error).context("path could not be converted to an absolute path")
+            anyhow!(io::Error::from(error.kind()))
+                .context("path could not be converted to an absolute path")
         }
     }
 }

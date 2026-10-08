@@ -1050,6 +1050,14 @@ fn publish_environment_url_errors_retain_redacted_causes() {
     error: Invalid value for `UV_PUBLISH_CHECK_URL`: expected an index URL
       cause: ambiguous user/pass authority in URL (not percent-encoded?): https:***@check.example.org/simple/
     ");
+    uv_snapshot!(context.filters(), context.publish()
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, format!("{}fake-private-check-url", "../".repeat(64))), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_CHECK_URL`: expected an index URL
+      cause: path could not be normalized
+      cause: invalid input parameter
+    ");
 }
 
 #[test]
