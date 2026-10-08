@@ -47,6 +47,7 @@ use uv_lock::{TreeDedupe, TreeDirection, TreeOptions};
 #[cfg(feature = "self-update")]
 use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
+use uv_pip_commands::tree::PipTreeOptions;
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
 use uv_python::{ConfigDiscovery, PythonRequest};
@@ -1228,12 +1229,14 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 globals.python_arch,
                 &args.prune,
                 &args.package,
-                TreeOptions {
-                    depth: args.depth.into(),
-                    dedupe: TreeDedupe::from_args(args.no_dedupe),
-                    direction: TreeDirection::from_args(args.invert),
+                PipTreeOptions {
+                    tree: TreeOptions {
+                        depth: args.depth.into(),
+                        dedupe: TreeDedupe::from_args(args.no_dedupe),
+                        direction: TreeDirection::from_args(args.invert),
+                    },
+                    show_version_specifiers: args.show_version_specifiers,
                 },
-                args.show_version_specifiers,
                 args.outdated,
                 args.settings.prerelease,
                 args.settings.index_locations,

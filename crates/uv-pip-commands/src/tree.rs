@@ -34,13 +34,19 @@ use uv_command_support::Printer;
 use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::reporters::LatestVersionReporter;
 
+/// Display options for the installed dependency tree.
+#[derive(Debug, Clone, Copy)]
+pub struct PipTreeOptions {
+    pub tree: TreeOptions,
+    pub show_version_specifiers: bool,
+}
+
 /// Display the installed packages in the current environment as a dependency tree.
 pub async fn pip_tree(
     python_arch: Option<PythonArchitecture>,
     prune: &[PackageName],
     package: &[PackageName],
-    tree: TreeOptions,
-    show_version_specifiers: bool,
+    tree: PipTreeOptions,
     outdated: bool,
     prerelease: Prerelease,
     index_locations: IndexLocations,
@@ -155,8 +161,8 @@ pub async fn pip_tree(
     let rendered_tree = DisplayDependencyGraph::new(
         prune,
         package,
-        tree,
-        show_version_specifiers,
+        tree.tree,
+        tree.show_version_specifiers,
         &markers,
         &packages,
         &latest,
@@ -169,7 +175,7 @@ pub async fn pip_tree(
     }
 
     if rendered_tree.contains("(*)") {
-        let message = if tree.dedupe == TreeDedupe::Disabled {
+        let message = if tree.tree.dedupe == TreeDedupe::Disabled {
             "(*) Package tree is a cycle and cannot be shown".italic()
         } else {
             "(*) Package tree already displayed".italic()
