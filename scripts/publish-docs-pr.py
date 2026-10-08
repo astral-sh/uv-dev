@@ -32,7 +32,7 @@ def publish(branch: str, display_name: str, source_commit: str) -> None:
     head = run("git", "rev-parse", f"refs/heads/{branch}")
     run("gh", "auth", "setup-git")
     run("git", "push", "origin", f"{head}:refs/heads/{branch}")
-    run(
+    created_url = run(
         "gh",
         "pr",
         "create",
@@ -49,6 +49,7 @@ def publish(branch: str, display_name: str, source_commit: str) -> None:
         "--label",
         "documentation",
     )
+    print(created_url, flush=True)
     replacement = json.loads(
         run(
             "gh",

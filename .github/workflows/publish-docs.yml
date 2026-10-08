@@ -90,6 +90,15 @@ jobs:
       - name: "Build docs"
         run: uv run --only-group docs mkdocs build --strict -f mkdocs.yml
 
+      # The selected documentation source may predate the publication helper.
+      - name: "Load publication tools"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .docs-workflow
+          sparse-checkout: scripts
+          persist-credentials: false
+
       - name: "Get docs token"
         id: token
         uses: open-security-tools/ost-simple-sts@88f85462c7e9c9e2fb2745bd5ce4ee163aec0420 # v0.0.5
@@ -134,7 +143,7 @@ jobs:
         working-directory: astral-docs
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: python3 ../scripts/publish-docs-pr.py "$branch_name" "$display_name" "$source_commit"
+        run: python3 ../.docs-workflow/scripts/publish-docs-pr.py "$branch_name" "$display_name" "$source_commit"
 
       - name: "Merge Pull Request"
         if: ${{ steps.commit.outputs.changed == 'true' && inputs.plan != '' && !fromJson(inputs.plan).announcement_tag_is_implicit }}

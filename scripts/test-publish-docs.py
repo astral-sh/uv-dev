@@ -1,12 +1,14 @@
 """Offline regression coverage for documentation publication."""
 
 import importlib.util
+import io
 import json
 import os
 import subprocess
 import tempfile
 import textwrap
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +23,7 @@ BRANCH = "update-docs-0.12.23-200"
 HEAD = "a" * 40
 SOURCE = "b" * 40
 TITLE = "Update uv documentation for 0.12.23"
+CREATED_URL = "https://github.com/astral-sh/docs/pull/91"
 
 
 def pull(number=11, **changes):
@@ -43,6 +46,7 @@ class PublishDocs(unittest.TestCase):
         self.predecessors = [pull()]
         self.replacement = pull(91, headRefName=BRANCH)
         self.failure = None
+        self.output = io.StringIO()
 
     def run_command(self, *arguments):
         self.commands.append(arguments)
@@ -50,14 +54,25 @@ class PublishDocs(unittest.TestCase):
             raise subprocess.CalledProcessError(1, arguments)
         if arguments[:2] == ("git", "rev-parse"):
             return HEAD
-        if arguments[1:3] == ("pr", "view"):
-            return json.dumps(self.replacement)
-        if arguments[1:3] == ("pr", "list"):
-            return json.dumps(self.predecessors)
+        if arguments[1:3] == ("pr", "create"):
+            return CREATED_URL
+        if arguments[1:3] in (("pr", "view"), ("pr", "list")):
+            fields = arguments[arguments.index("--json") + 1].split(",")
+            if arguments[1:3] == ("pr", "view"):
+                return json.dumps({key: self.replacement[key] for key in fields})
+            return json.dumps(
+                [
+                    {key: predecessor[key] for key in fields}
+                    for predecessor in self.predecessors
+                ]
+            )
         return ""
 
     def publish(self):
-        with patch.object(PUBLISHER, "run", self.run_command):
+        with (
+            patch.object(PUBLISHER, "run", self.run_command),
+            redirect_stdout(self.output),
+        ):
             PUBLISHER.publish(BRANCH, "0.12.23", SOURCE)
 
     def closed(self):
@@ -73,6 +88,45 @@ class PublishDocs(unittest.TestCase):
         self.assertIn(
             ("git", "push", "origin", f"{HEAD}:refs/heads/{BRANCH}"), self.commands
         )
+
+    def test_created_pull_request_link_is_logged(self):
+        self.publish()
+        self.assertEqual(self.output.getvalue(), CREATED_URL + "\n")
+
+    def test_old_documentation_source_uses_workflow_tools(self):
+        workflow = (ROOT / ".github/workflows/publish-docs.yml").read_text()
+        publishing = workflow.split("  mkdocs:\n", 1)[1]
+        tools = publishing.split('      - name: "Load publication tools"\n', 1)[
+            1
+        ].split("      - ", 1)[0]
+        self.assertIn("ref: ${{ github.workflow_sha }}", tools)
+        self.assertIn("path: .docs-workflow", tools)
+        step = publishing.split('      - name: "Create Pull Request"\n', 1)[1].split(
+            "      - name:", 1
+        )[0]
+        command = step.split("        run: ", 1)[1].strip()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "astral-docs").mkdir()
+            # Older selected sources have no publisher; only workflow tools do.
+            (root / ".docs-workflow/scripts").mkdir(parents=True)
+            (root / ".docs-workflow/scripts/publish-docs-pr.py").write_text(
+                "import json, sys\nprint(json.dumps(sys.argv[1:]))\n"
+            )
+            result = subprocess.run(
+                ["bash", "-e", "-c", command],
+                cwd=root / "astral-docs",
+                env={
+                    **os.environ,
+                    "branch_name": BRANCH,
+                    "display_name": "0.12.23",
+                    "source_commit": SOURCE,
+                },
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(json.loads(result.stdout), [BRANCH, "0.12.23", SOURCE])
 
     def test_failed_publication_keeps_predecessors(self):
         for failure in (
