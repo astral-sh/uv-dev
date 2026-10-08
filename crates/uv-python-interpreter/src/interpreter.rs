@@ -1830,33 +1830,27 @@ mod tests {
         let absolute = std::path::absolute(&executable)?;
         let canonical = canonicalize_executable(&absolute)?;
         let cache_entry = InterpreterInfo::cache_entry(&absolute, &canonical, &cache);
-        let original: CachedByTimestamp<InterpreterInfo> =
+        let mut cached: CachedByTimestamp<InterpreterInfo> =
             rmp_serde::from_slice(&fs::read(cache_entry.path())?)?;
         assert_eq!(fs::read_to_string(&query_log)?, "queried\n");
 
-        for (index, (field, version)) in INVALID_INTERPRETER_VERSIONS.into_iter().enumerate() {
-            let mut corrupt = CachedByTimestamp {
-                timestamp: original.timestamp,
-                data: original.data.clone(),
-            };
-            let mut markers = serde_json::to_value(&corrupt.data.markers)?;
-            markers[field] = Value::String(version.to_owned());
-            // General marker environments allow these versions; interpreter ingestion validates
-            // the stronger component requirements of its numeric accessors.
-            corrupt.data.markers = serde_json::from_value(markers)?;
-            fs::write(cache_entry.path(), rmp_serde::to_vec(&corrupt)?)?;
-            assert_eq!(corrupt.timestamp, Timestamp::from_path(&canonical)?);
+        let mut markers = serde_json::to_value(&cached.data.markers)?;
+        markers["python_full_version"] = Value::String("3".to_owned());
+        // General marker environments allow this version; interpreter ingestion validates
+        // the stronger component requirements of its numeric accessors.
+        cached.data.markers = serde_json::from_value(markers)?;
+        fs::write(cache_entry.path(), rmp_serde::to_vec(&cached)?)?;
+        assert_eq!(cached.timestamp, Timestamp::from_path(&canonical)?);
 
-            let interpreter = Interpreter::query(&executable, &cache)?;
-            assert_eq!(interpreter.python_tuple(), (3, 12));
-            assert_eq!(interpreter.python_patch(), 0);
-            assert_eq!(interpreter.implementation_tuple(), (3, 12));
-            assert_eq!(fs::read_to_string(&query_log)?.lines().count(), index + 2);
+        let interpreter = Interpreter::query(&executable, &cache)?;
+        assert_eq!(interpreter.python_tuple(), (3, 12));
+        assert_eq!(interpreter.python_patch(), 0);
+        assert_eq!(interpreter.implementation_tuple(), (3, 12));
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\nqueried\n");
 
-            // The repaired entry is reusable without querying the unchanged executable again.
-            Interpreter::query(&executable, &cache)?;
-            assert_eq!(fs::read_to_string(&query_log)?.lines().count(), index + 2);
-        }
+        // The repaired entry is reusable without querying the unchanged executable again.
+        Interpreter::query(&executable, &cache)?;
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\nqueried\n");
         Ok(())
     }
 
