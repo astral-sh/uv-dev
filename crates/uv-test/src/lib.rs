@@ -8,6 +8,7 @@ pub mod package_server;
 pub mod packse;
 pub mod pypi_proxy;
 mod vendor;
+mod windows_snapshot;
 
 use std::borrow::BorrowMut;
 use std::ffi::OsString;
@@ -2425,51 +2426,8 @@ pub fn run_and_format_silent<T: AsRef<str>>(
     }
     let mut snapshot = apply_filters(snapshot, filters);
 
-    // This is a heuristic filter meant to try and make *most* of our tests
-    // pass whether it's on Windows or Unix. In particular, there are some very
-    // common Windows-only dependencies that, when removed from a resolution,
-    // cause the set of dependencies to be the same across platforms.
     if cfg!(windows) {
-        if let Some(windows_filters) = windows_filters {
-            // The optional leading +/-/~ is for install logs, the optional next line is for lockfiles
-            let windows_only_deps = [
-                (r"( ?[-+~] ?)?colorama==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"),
-                (r"( ?[-+~] ?)?colorama==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
-                (r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+( [\\]\n\s+--hash=.*)?\n(\s+# via .*\n)?"),
-                (r"( ?[-+~] ?)?tzdata==\d+(\.\d+)+(\s+[-+~]?\s+# via .*)?\n"),
-            ];
-            let mut removed_packages = 0;
-            for windows_only_dep in windows_only_deps {
-                // TODO(konstin): Cache regex compilation
-                let re = Regex::new(windows_only_dep).unwrap();
-                if re.is_match(&snapshot) {
-                    snapshot = re.replace(&snapshot, "").to_string();
-                    removed_packages += 1;
-                }
-            }
-            if removed_packages > 0 {
-                for i in 1..20 {
-                    for verb in match windows_filters {
-                        WindowsFilters::Platform => [
-                            "Resolved",
-                            "Prepared",
-                            "Installed",
-                            "Checked",
-                            "Uninstalled",
-                        ]
-                        .iter(),
-                        WindowsFilters::Universal => {
-                            ["Prepared", "Installed", "Checked", "Uninstalled"].iter()
-                        }
-                    } {
-                        snapshot = snapshot.replace(
-                            &format!("{verb} {} packages", i + removed_packages),
-                            &format!("{verb} {} package{}", i, if i > 1 { "s" } else { "" }),
-                        );
-                    }
-                }
-            }
-        }
+        snapshot = windows_snapshot::normalize(snapshot, windows_filters);
     }
 
     (snapshot, output)
