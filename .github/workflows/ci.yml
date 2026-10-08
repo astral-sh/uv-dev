@@ -181,6 +181,10 @@ jobs:
     uses: $/.github/workflows/build-release-binaries.yml
     secrets: inherit
 
+  test-release-artifacts:
+    needs: build-release-artifacts
+    uses: $/.github/workflows/test-release-artifacts.yml
+
   build-docker:
     needs: plan
     if: ${{ needs.plan.outputs.build-docker == 'true' }}
