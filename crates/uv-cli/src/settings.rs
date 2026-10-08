@@ -2448,11 +2448,24 @@ impl AddSettings {
             no_editable_package,
         );
         let refresh = Refresh::try_from(refresh)?;
-        let indexes = installer
-            .index_args
-            .explicit_indexes(configured_indexes(filesystem.as_ref()))?;
+        let explicit_index = installer.index_args.explicit_index;
+        let explicit_default_index = installer.index_args.explicit_default_index;
         let options =
             resolver_installer_options(installer, build, configured_indexes(filesystem.as_ref()))?;
+        let indexes = options
+            .indexes
+            .index
+            .iter()
+            .flatten()
+            .filter(|index| {
+                if index.default {
+                    explicit_default_index
+                } else {
+                    explicit_index
+                }
+            })
+            .cloned()
+            .collect();
 
         Ok(Self {
             lock_check: locked,

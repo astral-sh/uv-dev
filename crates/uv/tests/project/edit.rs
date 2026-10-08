@@ -13,7 +13,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
-use predicates::prelude::predicate;
+use predicates::prelude::{PredicateStrExt, predicate};
 use serde_json::json;
 use std::path::Path;
 #[cfg(unix)]
@@ -15766,7 +15766,7 @@ async fn add_script_index_persistence_tracks_source() -> Result<()> {
                 .env(variable, &index)
                 .assert()
                 .success()
-                .stdout("1.0.0\n");
+                .stdout(predicates::str::diff("1.0.0").trim());
 
             script.write_str(contents)?;
             let mut command = context.add();
@@ -15837,7 +15837,69 @@ async fn add_script_index_persistence_tracks_source() -> Result<()> {
                 command.arg(flag).arg(&index);
             }
             command.arg("--script").arg(script.path());
-            command.assert().success().stdout("1.0.0\n");
+            command
+                .assert()
+                .success()
+                .stdout(predicates::str::diff("1.0.0").trim());
+        }
+    }
+    Ok(())
+}
+
+/// Index persistence follows the selecting flag's source for configured names.
+#[test]
+fn add_named_index_persistence_follows_selecting_flag() -> Result<()> {
+    for (flag, variable, configured_default) in [
+        ("--index", EnvVars::UV_DEFAULT_INDEX, true),
+        ("--default-index", EnvVars::UV_INDEX, false),
+    ] {
+        let context = uv_test::test_context!("3.12");
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+
+            [[tool.uv.index]]
+            name = "local"
+            url = "https://explicit.example.org/simple"
+            default = {configured_default}
+        "#})?;
+        context
+            .add()
+            .args([
+                "ok",
+                "--frozen",
+                "--preview-features",
+                "index-by-name",
+                flag,
+                "local",
+            ])
+            .env(variable, "ambient=https://ambient.example.org/simple")
+            .assert()
+            .success();
+        insta::allow_duplicates! {
+            assert_snapshot!(context.read("pyproject.toml"), @r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = [
+                "ok",
+            ]
+
+            [[tool.uv.index]]
+            name = "local"
+            url = "https://explicit.example.org/simple"
+            default = true
+
+            [tool.uv.sources]
+            ok = { index = "local" }
+            "#);
         }
     }
     Ok(())

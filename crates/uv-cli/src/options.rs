@@ -566,25 +566,6 @@ impl FromArgMatches for IndexArgs {
 }
 
 impl IndexArgs {
-    /// Resolve only modern indexes explicitly selected on the command line for persistence.
-    pub(crate) fn explicit_indexes(
-        &self,
-        configured_indexes: &[Index],
-    ) -> anyhow::Result<Vec<Index>> {
-        let mut options = self.options.clone();
-        if !self.explicit_index {
-            options.index = None;
-        }
-        if !self.explicit_default_index {
-            options.default_index = None;
-        }
-        Ok(options
-            .resolve(configured_indexes)?
-            .relative_to(&env::current_dir()?)?
-            .index
-            .unwrap_or_default())
-    }
-
     fn resolve(self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
         self.options.resolve(configured_indexes)
     }
