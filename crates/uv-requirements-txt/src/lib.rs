@@ -642,6 +642,8 @@ fn eat_option(s: &mut Scanner, option: &str) -> bool {
         .chars()
         .next()
         .is_none_or(|char| char.is_whitespace() || matches!(char, '=' | '#'))
+        || remainder.starts_with("\\\n")
+        || remainder.starts_with("\\\r")
     {
         s.eat_if(option)
     } else {
@@ -2862,40 +2864,6 @@ mod test {
     }
 
     #[tokio::test]
-    async fn unknown_option_prefix() -> Result<()> {
-        let temp_dir = assert_fs::TempDir::new()?;
-        let requirements_txt = temp_dir.child("requirements.txt");
-        let mut errors = Vec::new();
-
-        for option in [
-            "--prefixed-option=value",
-            "--no-indexed",
-            "--require-hashes-extra",
-        ] {
-            requirements_txt.write_str(option)?;
-            let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
-                .await
-                .unwrap_err();
-            errors.push(anyhow::Error::new(error).chain().join("\n"));
-        }
-        let errors = errors.join("\n");
-
-        let requirement_txt = regex::escape(&requirements_txt.path().user_display().to_string());
-        let filters = vec![(requirement_txt.as_str(), "<REQUIREMENTS_TXT>")];
-        insta::with_settings!({
-            filters => filters
-        }, {
-            insta::assert_snapshot!(errors, @"
-            Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1
-            Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1
-            Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1
-            ");
-        });
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn malformed_hash_option() -> Result<()> {
         let temp_dir = assert_fs::TempDir::new()?;
         let requirements_txt = temp_dir.child("requirements.txt");
@@ -2917,6 +2885,9 @@ mod test {
         Ok(())
     }
 
+    #[test_case("--prefixed-option=value"; "pre prefix with value")]
+    #[test_case("--no-indexed"; "no index prefix")]
+    #[test_case("--require-hashes-extra"; "require hashes prefix")]
     #[test_case("--no-indexx"; "no index")]
     #[test_case("--prefoo"; "pre")]
     #[test_case("--trusted-hostile"; "trusted host")]
@@ -2938,6 +2909,23 @@ mod test {
         }, {
             insta::assert_snapshot!(errors, @"Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1");
         });
+
+        Ok(())
+    }
+
+    #[test_case("--require-hashes\\\n"; "LF")]
+    #[test_case("--require-hashes\\\r\n"; "CRLF")]
+    #[test_case("--require-hashes\\\r"; "CR")]
+    #[test_case("--require-hashes\\\n    # comment\n"; "continued comment")]
+    #[tokio::test]
+    async fn require_hashes_line_continuation(content: &str) -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+        requirements_txt.write_str(content)?;
+
+        let parsed = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path()).await?;
+        assert!(parsed.require_hashes);
+        assert!(parsed.requirements.is_empty());
 
         Ok(())
     }
