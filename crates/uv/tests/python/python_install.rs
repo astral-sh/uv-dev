@@ -220,6 +220,7 @@ fn python_reinstall() {
 }
 
 #[test]
+#[cfg(any(not(windows), feature = "test-windows-registry"))]
 fn python_uninstall_unmatched() {
     let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
 
@@ -233,6 +234,7 @@ fn python_uninstall_unmatched() {
 }
 
 #[test]
+#[cfg(any(not(windows), feature = "test-windows-registry"))]
 fn python_uninstall_all_empty() {
     let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
 
