@@ -10,6 +10,8 @@ use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
+#[cfg(target_os = "linux")]
+use rustix::fs::{CWD, Mode, OFlags, ResolveFlags, openat2};
 #[cfg(not(unix))]
 use same_file::Handle;
 use tempfile::TempPath;
@@ -40,7 +42,7 @@ impl FilePublication {
     /// truncating it. A missing destination is staged with ordinary file-creation permissions.
     pub fn new(path: &Path) -> io::Result<Self> {
         let original = match fs_err::OpenOptions::new().write(true).open(path) {
-            Ok(file) if can_replace(&file) => Some(file),
+            Ok(file) if can_replace(&file) && can_replace_path(path) => Some(file),
             Ok(file) => {
                 return Ok(Self {
                     path: path.to_owned(),
@@ -85,7 +87,7 @@ impl FilePublication {
                 }
                 return Err(io::Error::new(
                     err.kind(),
-                    StagingError {
+                    PublicationError {
                         path: path.to_owned(),
                         source: err,
                     },
@@ -159,6 +161,7 @@ impl FilePublication {
                 same_identity(original, &staging.target)?;
                 // A newly added ACL or hard link must not be discarded by inode replacement.
                 if !can_replace(original)
+                    || !can_replace_path(&self.path)
                     || !shares_parent_mount(original, &staging.target)
                     || !prepare_permissions(original, &self.writer)
                 {
@@ -172,7 +175,15 @@ impl FilePublication {
                     .temporary
                     .persist_noclobber(verbatim_path(&staging.target))
             }
-            .map_err(|err| err.error)?;
+            .map_err(|err| {
+                io::Error::new(
+                    err.error.kind(),
+                    PublicationError {
+                        path: self.path.clone(),
+                        source: err.error,
+                    },
+                )
+            })?;
         }
         Ok(self.writer)
     }
@@ -180,7 +191,7 @@ impl FilePublication {
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to write to file `{}`", path.display())]
-struct StagingError {
+struct PublicationError {
     path: PathBuf,
     #[source]
     source: io::Error,
@@ -283,6 +294,26 @@ fn can_replace(file: &fs_err::File) -> bool {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn can_replace(_file: &fs_err::File) -> bool {
     false
+}
+
+#[cfg(target_os = "linux")]
+fn can_replace_path(path: &Path) -> bool {
+    // Descriptor-backed links refer to an inode, not the pathname reported by read_link.
+    // Replacing that pathname would leave the requested link reading the previous bytes.
+    // An unavailable or denied query keeps the authorized in-place write path.
+    openat2(
+        CWD,
+        path,
+        OFlags::PATH | OFlags::CLOEXEC,
+        Mode::empty(),
+        ResolveFlags::NO_MAGICLINKS,
+    )
+    .is_ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn can_replace_path(_path: &Path) -> bool {
+    true
 }
 
 #[cfg(target_os = "linux")]
@@ -399,6 +430,8 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::io::Read;
     use std::io::{self, Write};
+    #[cfg(target_os = "linux")]
+    use std::os::fd::AsRawFd;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
@@ -477,7 +510,18 @@ mod tests {
         let mut publication = FilePublication::new(&path)?;
         publication.writer().write_all(b"edited")?;
         fs_err::write(&path, "external")?;
-        assert!(publication.publish().is_err());
+        let error = publication.publish().expect_err("competing creator wins");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            error.to_string(),
+            format!("failed to write to file `{}`", path.display())
+        );
+        let source = error
+            .get_ref()
+            .and_then(|error| error.source())
+            .and_then(|error| error.downcast_ref::<io::Error>())
+            .expect("the original I/O error is retained");
+        assert_eq!(source.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs_err::read(&path)?, b"external");
         assert_eq!(fs_err::read_dir(directory.path())?.count(), 1);
         Ok(())
@@ -573,6 +617,28 @@ mod tests {
         write_file(&path, b"replacement")?;
         assert_eq!(fs_err::read(&alias)?, b"replacement");
         assert!(same_file::is_same_file(&path, &alias)?);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn descriptor_links_are_written_in_place() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let target = directory.path().join("target");
+        fs_err::write(&target, "original")?;
+        assert!(FilePublication::new(&target)?.is_staged());
+        let mut descriptor = fs_err::File::open(&target)?;
+        let link = format!("/proc/self/fd/{}", descriptor.as_raw_fd());
+        fs_err::os::unix::fs::symlink(&link, &path)?;
+
+        write_file(&path, b"replacement")?;
+        assert_eq!(fs_err::read(&path)?, b"replacement");
+        assert_eq!(fs_err::read(&target)?, b"replacement");
+        assert_eq!(fs_err::read_link(&path)?, Path::new(&link));
+        let mut contents = String::new();
+        descriptor.read_to_string(&mut contents)?;
+        assert_eq!(contents, "replacement");
         Ok(())
     }
 
@@ -720,6 +786,7 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
+    #[expect(clippy::print_stderr, reason = "report unavailable namespace fixtures")]
     fn linux_file_mountpoints_use_in_place_publication() -> io::Result<()> {
         const CHILD: &str = "UV_TEST_FILE_MOUNTPOINT";
         if let Some(root) = std::env::var_os(CHILD) {
@@ -773,7 +840,6 @@ mod tests {
         {
             Ok(output) => output,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                #[expect(clippy::print_stderr)]
                 eprintln!("skipping file-mount regression: unshare is unavailable");
                 return Ok(());
             }
@@ -784,7 +850,6 @@ mod tests {
             && stderr.starts_with("unshare:")
             && (stderr.contains("Operation not permitted") || stderr.contains("Permission denied"))
         {
-            #[expect(clippy::print_stderr)]
             eprintln!("skipping file-mount regression: private user namespaces are unavailable");
             return Ok(());
         }
