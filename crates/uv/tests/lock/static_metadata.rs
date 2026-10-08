@@ -5,7 +5,7 @@ use anyhow::Result;
 #[cfg(feature = "test-git")]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
-use indoc::formatdoc;
+use indoc::{formatdoc, indoc};
 
 use uv_test::packse::generate_wheel;
 use uv_test::{TestContext, uv_snapshot};
@@ -175,6 +175,139 @@ fn equivalent_static_metadata_payloads_keep_the_lock() -> Result<()> {
         }
         Ok(())
     }
+}
+
+#[test]
+fn equivalent_static_path_wheel_metadata_keeps_the_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    wheelhouse(&context)?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv.sources]
+        parent = { path = "links/parent-1.0.0-py3-none-any.whl" }
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["b", "a>=0", "a>=1"]
+        requires-python = ">=3.9,>=3.10"
+        provides-extra = ["gpu", "cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), lock(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(original, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[manifest.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["b", "a>=0", "a>=1"]
+        requires-python = ">=3.9, >=3.10"
+        provides-extras = ["gpu", "cpu", "gpu"]
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "links" }
+        wheels = [
+            { path = "a-1.0.0-py3-none-any.whl" },
+        ]
+
+        [[package]]
+        name = "b"
+        version = "1.0.0"
+        source = { registry = "links" }
+        wheels = [
+            { path = "b-1.0.0-py3-none-any.whl" },
+        ]
+
+        [[package]]
+        name = "parent"
+        version = "1.0.0"
+        source = { path = "links/parent-1.0.0-py3-none-any.whl" }
+        dependencies = [
+            { name = "a" },
+            { name = "b" },
+        ]
+        wheels = [
+            { filename = "parent-1.0.0-py3-none-any.whl", hash = "sha256:a4aea21704ea482b671a53998378d2365acd69b5c497aa3bc9c5d4bd97cd8683" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "a", specifier = ">=0" },
+            { name = "a", specifier = ">=1" },
+            { name = "b" },
+        ]
+        provides-extras = ["gpu", "cpu", "gpu"]
+
+        [[package]]
+        name = "project"
+        version = "1.0.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "parent" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "parent", path = "links/parent-1.0.0-py3-none-any.whl" }]
+        "#);
+    });
+
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1.0.0"]
+
+        [tool.uv.sources]
+        parent = { path = "links/parent-1.0.0-py3-none-any.whl" }
+
+        [[tool.uv.dependency-metadata]]
+        name = "parent"
+        version = "1.0.0"
+        requires-dist = ["a>=1", "b"]
+        requires-python = ">=3.10"
+        provides-extra = ["cpu", "gpu"]
+    "#})?;
+    uv_snapshot!(context.filters(), lock(&context).arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--no-index", "--find-links", "links", "--refresh", "--locked",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--no-index", "--find-links", "links", "--refresh",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+    Ok(())
 }
 
 #[test]

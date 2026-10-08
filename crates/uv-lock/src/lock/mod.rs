@@ -7563,7 +7563,8 @@ impl PartialEq for PackageMetadata {
             provides_extra,
             dependency_groups,
         } = self;
-        requires_dist == &other.requires_dist
+        NormalizedRequirements::from(requires_dist.iter().cloned().collect::<Vec<_>>())
+            == NormalizedRequirements::from(other.requires_dist.iter().cloned().collect::<Vec<_>>())
             && dependency_groups == &other.dependency_groups
             && provides_extra.iter().collect::<BTreeSet<_>>()
                 == other.provides_extra.iter().collect::<BTreeSet<_>>()
