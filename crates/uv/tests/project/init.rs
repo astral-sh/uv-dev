@@ -2737,6 +2737,206 @@ fn init_non_ascii_directory() -> Result<()> {
     Ok(())
 }
 
+/// A failed workspace registration removes only generated files so initialization can be retried.
+#[test]
+#[cfg(unix)]
+fn init_workspace_write_failure_allows_retry() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let context = uv_test::test_context!("3.12");
+    let workspace = context.temp_dir.child("pyproject.toml");
+    let original = "[tool.uv.workspace]\nmembers = []\n";
+    workspace.write_str(original)?;
+    context
+        .temp_dir
+        .child("child/src/demo/__init__.py")
+        .write_str("# user source\n")?;
+    context
+        .temp_dir
+        .child("child/README.md")
+        .write_str("User documentation\n")?;
+    context
+        .temp_dir
+        .child("child/.git/keep")
+        .write_str("repository state\n")?;
+    let initialize = || {
+        let mut command = context.init();
+        command.args([
+            "child",
+            "--name",
+            "demo",
+            "--lib",
+            "--build-backend",
+            "maturin",
+            "--vcs",
+            "none",
+            "--python",
+            "3.12",
+        ]);
+        command
+    };
+    fs_err::set_permissions(&workspace, std::fs::Permissions::from_mode(0o444))?;
+    uv_snapshot!(context.filters(), initialize(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: failed to open file `[TEMP_DIR]/pyproject.toml`: Permission denied (os error 13)
+    ");
+    fs_err::set_permissions(&workspace, std::fs::Permissions::from_mode(0o644))?;
+
+    assert_eq!(context.read("pyproject.toml"), original);
+    assert_eq!(
+        context.read("child/src/demo/__init__.py"),
+        "# user source\n"
+    );
+    assert_eq!(context.read("child/README.md"), "User documentation\n");
+    assert_eq!(context.read("child/.git/keep"), "repository state\n");
+    for path in [
+        "child/pyproject.toml",
+        "child/Cargo.toml",
+        "child/src/lib.rs",
+        "child/src/demo/_core.pyi",
+        "child/src/demo/py.typed",
+        "child/.python-version",
+    ] {
+        assert!(!context.temp_dir.join(path).exists(), "{path}");
+    }
+
+    uv_snapshot!(context.filters(), initialize(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Adding `demo` as member of workspace `[TEMP_DIR]/`
+    Initialized project `demo` at `[TEMP_DIR]/child`
+    ");
+    assert!(context.temp_dir.join("child/pyproject.toml").is_file());
+    assert!(context.temp_dir.join("child/src/lib.rs").is_file());
+    assert_eq!(
+        context.read("child/src/demo/__init__.py"),
+        "# user source\n"
+    );
+    assert_eq!(context.read("child/README.md"), "User documentation\n");
+    assert_eq!(context.read("child/.git/keep"), "repository state\n");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [tool.uv.workspace]
+    members = [
+        "child",
+    ]
+    "#);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn init_pin_write_failure_restores_workspace() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let context = uv_test::test_context!("3.12");
+    let original = "[tool.uv.workspace]\nmembers = []\n";
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(original)?;
+    let pin = context.temp_dir.child("child/.python-version");
+    pin.write_str("")?;
+    fs_err::set_permissions(&pin, std::fs::Permissions::from_mode(0o444))?;
+    let initialize = || {
+        let mut command = context.init();
+        command.args([
+            "child",
+            "--app",
+            "--no-package",
+            "--vcs",
+            "none",
+            "--python",
+            "3.12",
+        ]);
+        command
+    };
+    uv_snapshot!(context.filters(), initialize(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: failed to open file `[TEMP_DIR]/child/.python-version`: Permission denied (os error 13)
+    ");
+    fs_err::set_permissions(&pin, std::fs::Permissions::from_mode(0o644))?;
+
+    assert_eq!(context.read("pyproject.toml"), original);
+    assert_eq!(context.read("child/.python-version"), "");
+    for path in ["child/pyproject.toml", "child/main.py", "child/README.md"] {
+        assert!(!context.temp_dir.join(path).exists(), "{path}");
+    }
+    uv_snapshot!(context.filters(), initialize(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Adding `child` as member of workspace `[TEMP_DIR]/`
+    Initialized project `child` at `[TEMP_DIR]/child`
+    ");
+    assert_eq!(context.read("child/.python-version"), "3.12\n");
+    assert!(context.temp_dir.join("child/main.py").is_file());
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [tool.uv.workspace]
+    members = [
+        "child",
+    ]
+    "#);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn init_readme_write_failure_restores_files() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = "[tool.uv.workspace]\nmembers = []\n";
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(original)?;
+    context.temp_dir.child("child").create_dir_all()?;
+    let readme = context.temp_dir.join("child/README.md");
+    fs_err::os::unix::fs::symlink("../outside.md", &readme)?;
+    let initialize = || {
+        let mut command = context.init();
+        command.args([
+            "child",
+            "--app",
+            "--no-package",
+            "--vcs",
+            "none",
+            "--python",
+            "3.12",
+        ]);
+        command
+    };
+    uv_snapshot!(context.filters(), initialize(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: failed to open file `[TEMP_DIR]/child/README.md`: File exists (os error 17)
+    ");
+
+    assert_eq!(context.read("pyproject.toml"), original);
+    assert_eq!(
+        fs_err::read_link(&readme)?,
+        std::path::Path::new("../outside.md")
+    );
+    for path in [
+        "outside.md",
+        "child/pyproject.toml",
+        "child/main.py",
+        "child/.python-version",
+    ] {
+        assert!(!context.temp_dir.join(path).exists(), "{path}");
+    }
+    fs_err::remove_file(readme)?;
+    uv_snapshot!(context.filters(), initialize(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Adding `child` as member of workspace `[TEMP_DIR]/`
+    Initialized project `child` at `[TEMP_DIR]/child`
+    ");
+    assert_eq!(context.read("child/.python-version"), "3.12\n");
+    assert!(context.temp_dir.join("child/main.py").is_file());
+    assert!(context.temp_dir.join("child/README.md").is_file());
+    Ok(())
+}
+
 /// Run `uv init` with an invalid `pyproject.toml` in a parent directory.
 #[test]
 fn init_failure() -> Result<()> {
