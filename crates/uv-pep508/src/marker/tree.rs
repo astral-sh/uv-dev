@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use arcstr::ArcStr;
 use itertools::Itertools;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use version_ranges::Ranges;
 
@@ -1392,6 +1393,25 @@ impl MarkerTree {
         self.simplify_not_extras_with_impl(&is_extra)
     }
 
+    /// Simultaneously replaces the named extras with their given markers.
+    ///
+    /// Extras absent from `replacements` are unchanged. Replacement markers are not themselves
+    /// substituted, and may contain any marker variables.
+    #[must_use]
+    pub fn substitute_extras(
+        self,
+        replacements: impl IntoIterator<Item = (ExtraName, Self)>,
+    ) -> Self {
+        let replacements: FxHashMap<_, _> = replacements
+            .into_iter()
+            .map(|(extra, marker)| (extra, marker.0))
+            .collect();
+        if replacements.is_empty() || self.is_true() || self.is_false() {
+            return self;
+        }
+        Self(INTERNER.lock().substitute_extras(self.0, &replacements))
+    }
+
     /// Returns a new `MarkerTree` where all `extra` expressions are removed.
     ///
     /// If the marker only consisted of `extra` expressions, then a marker that
@@ -2641,6 +2661,57 @@ mod test {
             }
             assert_eq!(transformed, expected);
         }
+    }
+
+    #[test]
+    fn substitute_extras_matches_sequential_restrictions() {
+        let left = ExtraName::from_str("left").expect("valid extra name");
+        let right = ExtraName::from_str("right").expect("valid extra name");
+        let replacements = [
+            (left, m("python_full_version >= '3.12'")),
+            (right, m("sys_platform == 'darwin'")),
+        ];
+
+        for source in [
+            "python_full_version < '3.13' and (extra == 'left' or extra != 'right')",
+            "platform_release >= '10' and extra == 'left'",
+            "os_name >= 'linux' and extra != 'right'",
+            "sys_platform in 'linux darwin' and extra == 'left'",
+            "'linux' in sys_platform or extra != 'right'",
+            "'docs' in extras and extra == 'left'",
+            "'dev' in dependency_groups or extra == 'right'",
+            "extra == 'left' and extra == 'untouched'",
+        ] {
+            let marker = m(source);
+            let mut expected = marker;
+            for (extra, activation) in &replacements {
+                let high = expected.simplify_extras_with(|candidate| candidate == extra);
+                let low = expected.simplify_not_extras_with(|candidate| candidate == extra);
+                expected = high.and(*activation).or(low.and(activation.negate()));
+            }
+            assert_eq!(
+                marker.substitute_extras(replacements.clone()),
+                expected,
+                "{source}"
+            );
+            assert_eq!(
+                marker.negate().substitute_extras(replacements.clone()),
+                expected.negate(),
+                "negated {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn substitute_extras_is_simultaneous() {
+        let left = ExtraName::from_str("left").expect("valid extra name");
+        let right = ExtraName::from_str("right").expect("valid extra name");
+        let marker = m("extra == 'left' and extra == 'right'");
+        assert_eq!(
+            marker
+                .substitute_extras([(left, m("extra == 'right'")), (right, m("extra != 'left'")),]),
+            m("extra != 'left' and extra == 'right'")
+        );
     }
 
     #[test]
