@@ -122,6 +122,27 @@ fn create_venv_caches_interpreter() -> Result<()> {
     Ok(())
 }
 
+/// Python can use the root configuration even when the adjacent configuration cannot be read.
+#[test]
+#[cfg(unix)]
+fn create_venv_skips_inferred_cache_for_unreadable_configuration() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let unreadable_configuration = context.venv.child("bin/pyvenv.cfg");
+    unreadable_configuration.create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--allow-existing")
+        .arg("--python").arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+    assert!(unreadable_configuration.is_dir());
+    Ok(())
+}
+
 /// Changing `pyvenv.cfg` invalidates metadata inferred when the venv was created.
 #[test]
 fn create_venv_invalidates_cached_interpreter_on_configuration_change() -> Result<()> {

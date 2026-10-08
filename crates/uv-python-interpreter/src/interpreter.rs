@@ -1223,7 +1223,13 @@ impl InterpreterInfo {
         // The lookup must use the original path, which may differ from Python's `sys.executable`.
         let absolute = std::path::absolute(executable)?;
         let canonical = canonicalize_executable(&absolute)?;
-        let cache_entry = Self::cache_entry(&absolute, &canonical, cache)?;
+        let cache_entry = match Self::cache_entry(&absolute, &canonical, cache) {
+            Ok(cache_entry) => cache_entry,
+            Err(err) => {
+                trace!("Could not identify interpreter cache entry: {err}");
+                return Ok(());
+            }
+        };
         let modified = Timestamp::from_path(&canonical)?;
         self.write_cache(&cache_entry, modified)
     }
