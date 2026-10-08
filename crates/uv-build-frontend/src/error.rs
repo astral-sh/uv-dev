@@ -558,6 +558,7 @@ mod test {
     use uv_errors::{ErrorOptions, ErrorWithHints, Hinted, write_error_chain_with_options};
     use uv_normalize::PackageName;
     use uv_pep440::Version;
+    use uv_static::EnvVars;
 
     fn format_error_with_hints(err: &Error) -> String {
         // Unix uses exit status, Windows uses exit code.
@@ -625,11 +626,13 @@ mod test {
                     .expect("JSON source should survive backend context");
             assert_eq!(source.classify(), serde_json::error::Category::Data);
             let mut rendered = String::new();
-            write_error_chain_with_options(
-                &error,
-                &error.hints(),
-                ErrorOptions::default().with_stream(&mut rendered),
-            )?;
+            temp_env::with_var(EnvVars::UV_NO_WRAP, Some("1"), || {
+                write_error_chain_with_options(
+                    &error,
+                    &error.hints(),
+                    ErrorOptions::default().with_stream(&mut rendered),
+                )
+            })?;
             let rendered = anstream::adapter::strip_str(&rendered)
                 .to_string()
                 .replace("exit status: ", "exit code: ");
