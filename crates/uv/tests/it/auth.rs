@@ -1294,7 +1294,7 @@ async fn logout_text_store() {
 
 #[tokio::test]
 async fn auth_disabled_provider_uses_text_store() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
 
     // Login with disabled provider should use text store
