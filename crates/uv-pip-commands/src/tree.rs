@@ -135,7 +135,7 @@ pub async fn pip_tree(
                 };
                 Ok::<Option<_>, uv_client::Error>(Some((*name, filename.into_version())))
             })
-            .buffer_unordered(concurrency.downloads);
+            .buffer_unordered(concurrency.downloads.get());
 
         let mut map = FxHashMap::default();
         while let Some(entry) = fetches.next().await.transpose()? {

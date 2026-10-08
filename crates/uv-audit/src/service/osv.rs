@@ -367,7 +367,7 @@ impl Osv {
                 let vuln = self.fetch_vuln(id.as_str()).await?;
                 Ok::<(VulnerabilityID, Vulnerability), Error>((id, vuln))
             })
-            .buffer_unordered(self.concurrency.downloads)
+            .buffer_unordered(self.concurrency.downloads.get())
             .try_collect::<FxHashMap<VulnerabilityID, Vulnerability>>()
             .await?;
 
