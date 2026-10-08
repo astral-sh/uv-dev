@@ -28,7 +28,7 @@ use uv_python::{
 };
 use uv_requirements::{RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
-use uv_tool::{InstalledTools, Tool, ToolEnvironment};
+use uv_tool::{InstalledTools, Tool, ToolEntrypointLocks, ToolEnvironment};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
@@ -654,6 +654,8 @@ pub(crate) async fn install(
                     Ok(SatisfiesResult::Fresh { .. })
                 );
                 if already_installed {
+                    let _entrypoint_locks =
+                        ToolEntrypointLocks::for_repair(tool_receipt.entrypoints()).await?;
                     let repaired = repair_tool_entrypoints(
                         environment.environment(),
                         package_name,
@@ -821,6 +823,8 @@ pub(crate) async fn install(
                 let Some(existing_tool_receipt) = existing_tool_receipt.as_ref() else {
                     bail!("Expected an existing tool receipt");
                 };
+                let _entrypoint_locks =
+                    ToolEntrypointLocks::for_repair(existing_tool_receipt.entrypoints()).await?;
                 let repaired = repair_tool_entrypoints(
                     &environment,
                     package_name,
@@ -1107,7 +1111,8 @@ pub(crate) async fn install(
         receipt_build_constraints,
         tool_lock.as_ref(),
         printer,
-    )?;
+    )
+    .await?;
 
     Ok(ExitStatus::Success)
 }

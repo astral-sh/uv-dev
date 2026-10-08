@@ -1,5 +1,8 @@
 //! Integration tests for `uv tool`.
 
+#[cfg(feature = "test-python")]
+mod tool_concurrency;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 use uv_test::pypi_proxy;
 
