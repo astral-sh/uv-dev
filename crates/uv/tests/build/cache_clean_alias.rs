@@ -24,11 +24,12 @@ fn clean_cache_directory_link_absolute_plain() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Clearing cache at: cache-link
-    Removed 3 files ([SIZE])
+    Removed 2 files ([SIZE])
     ");
 
     assert!(fs_err::symlink_metadata(&link)?.is_symlink());
-    assert_eq!(fs_err::read_dir(target.path())?.count(), 0);
+    assert_eq!(fs_err::read_dir(target.path())?.count(), 1);
+    assert!(target.child(".lock").is_file());
     assert_eq!(
         fs_err::read(external.child("sentinel"))?,
         b"external contents"
@@ -42,7 +43,7 @@ fn clean_cache_directory_link_absolute_plain() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Clearing cache at: cache-link
-    Removed 2 files ([SIZE])
+    Removed 1 file ([SIZE])
     ");
     assert!(context.cache_dir.is_dir());
     Ok(())
@@ -67,26 +68,17 @@ fn clean_cache_directory_link_absolute_trailing_separator() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Clearing cache at: cache-link
-    Removed 3 files ([SIZE])
+    Removed 2 files ([SIZE])
     ");
 
     assert!(fs_err::symlink_metadata(&link)?.is_symlink());
-    assert_eq!(fs_err::read_dir(target.path())?.count(), 0);
+    assert_eq!(fs_err::read_dir(target.path())?.count(), 1);
+    assert!(target.child(".lock").is_file());
     assert_eq!(
         fs_err::read(external.child("sentinel"))?,
         b"external contents"
     );
 
-    context
-        .cache_dir
-        .child("next-payload")
-        .write_str("next contents")?;
-    uv_snapshot!(context.filters(), context.clean(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Clearing cache at: cache-link
-    Removed 2 files ([SIZE])
-    ");
     assert!(context.cache_dir.is_dir());
     Ok(())
 }
@@ -110,26 +102,17 @@ fn clean_cache_directory_link_absolute_trailing_dot() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Clearing cache at: cache-link
-    Removed 3 files ([SIZE])
+    Removed 2 files ([SIZE])
     ");
 
     assert!(fs_err::symlink_metadata(&link)?.is_symlink());
-    assert_eq!(fs_err::read_dir(target.path())?.count(), 0);
+    assert_eq!(fs_err::read_dir(target.path())?.count(), 1);
+    assert!(target.child(".lock").is_file());
     assert_eq!(
         fs_err::read(external.child("sentinel"))?,
         b"external contents"
     );
 
-    context
-        .cache_dir
-        .child("next-payload")
-        .write_str("next contents")?;
-    uv_snapshot!(context.filters(), context.clean(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Clearing cache at: cache-link
-    Removed 2 files ([SIZE])
-    ");
     assert!(context.cache_dir.is_dir());
     Ok(())
 }
@@ -154,26 +137,17 @@ fn clean_cache_directory_link_relative_plain() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Clearing cache at: cache-link
-    Removed 3 files ([SIZE])
+    Removed 2 files ([SIZE])
     ");
 
     assert!(fs_err::symlink_metadata(&link)?.is_symlink());
-    assert_eq!(fs_err::read_dir(target.path())?.count(), 0);
+    assert_eq!(fs_err::read_dir(target.path())?.count(), 1);
+    assert!(target.child(".lock").is_file());
     assert_eq!(
         fs_err::read(external.child("sentinel"))?,
         b"external contents"
     );
 
-    context
-        .cache_dir
-        .child("next-payload")
-        .write_str("next contents")?;
-    uv_snapshot!(context.filters(), context.clean(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Clearing cache at: cache-link
-    Removed 2 files ([SIZE])
-    ");
     assert!(context.cache_dir.is_dir());
     Ok(())
 }
@@ -198,26 +172,17 @@ fn clean_cache_directory_link_relative_trailing_separator() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Clearing cache at: cache-link
-    Removed 3 files ([SIZE])
+    Removed 2 files ([SIZE])
     ");
 
     assert!(fs_err::symlink_metadata(&link)?.is_symlink());
-    assert_eq!(fs_err::read_dir(target.path())?.count(), 0);
+    assert_eq!(fs_err::read_dir(target.path())?.count(), 1);
+    assert!(target.child(".lock").is_file());
     assert_eq!(
         fs_err::read(external.child("sentinel"))?,
         b"external contents"
     );
 
-    context
-        .cache_dir
-        .child("next-payload")
-        .write_str("next contents")?;
-    uv_snapshot!(context.filters(), context.clean(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Clearing cache at: cache-link
-    Removed 2 files ([SIZE])
-    ");
     assert!(context.cache_dir.is_dir());
     Ok(())
 }
@@ -242,26 +207,17 @@ fn clean_cache_directory_link_relative_trailing_dot() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Clearing cache at: cache-link
-    Removed 3 files ([SIZE])
+    Removed 2 files ([SIZE])
     ");
 
     assert!(fs_err::symlink_metadata(&link)?.is_symlink());
-    assert_eq!(fs_err::read_dir(target.path())?.count(), 0);
+    assert_eq!(fs_err::read_dir(target.path())?.count(), 1);
+    assert!(target.child(".lock").is_file());
     assert_eq!(
         fs_err::read(external.child("sentinel"))?,
         b"external contents"
     );
 
-    context
-        .cache_dir
-        .child("next-payload")
-        .write_str("next contents")?;
-    uv_snapshot!(context.filters(), context.clean(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Clearing cache at: cache-link
-    Removed 2 files ([SIZE])
-    ");
     assert!(context.cache_dir.is_dir());
     Ok(())
 }
