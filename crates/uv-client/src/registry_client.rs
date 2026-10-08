@@ -50,6 +50,13 @@ use crate::{
     RetryState,
 };
 
+/// Whether wheel metadata is advertised by the index or probed without an advertisement.
+#[derive(Debug, Clone, Copy)]
+enum SidecarMetadata<'a> {
+    Advertised(&'a HashDigests),
+    Unadvertised,
+}
+
 /// A builder for an [`RegistryClient`].
 #[derive(Debug, Clone)]
 pub struct RegistryClientBuilder<'a> {
@@ -1096,14 +1103,19 @@ impl RegistryClient {
         match &file.dist_info_metadata {
             DistInfoMetadata::Available(hashes) => {
                 return self
-                    .wheel_metadata_pep658(filename, url, index, Some(hashes), false)
+                    .wheel_metadata_pep658(
+                        filename,
+                        url,
+                        index,
+                        SidecarMetadata::Advertised(hashes),
+                    )
                     .await;
             }
             DistInfoMetadata::Unadvertised if url.origin() == index.url().origin() => {
                 let key = (index.clone(), url.clone());
                 if !self.unavailable_metadata.lock().await.contains(&key) {
                     match self
-                        .wheel_metadata_pep658(filename, url, index, None, true)
+                        .wheel_metadata_pep658(filename, url, index, SidecarMetadata::Unadvertised)
                         .await
                     {
                         Ok(metadata) => return Ok(metadata),
@@ -1135,8 +1147,7 @@ impl RegistryClient {
         filename: &WheelFilename,
         url: &DisplaySafeUrl,
         index: &IndexUrl,
-        hashes: Option<&HashDigests>,
-        unadvertised: bool,
+        sidecar: SidecarMetadata<'_>,
     ) -> Result<ResolutionMetadata, Error> {
         let mut url = url.clone();
         let path = format!("{}.metadata", url.path());
@@ -1175,19 +1186,22 @@ impl RegistryClient {
             })?;
 
             // Verify the downloaded bytes before parsing or caching the metadata.
-            if let Some(hashes) = hashes {
-                for expected in hashes.iter() {
-                    let mut hasher = Hasher::from(expected.algorithm());
-                    hasher.update(&bytes);
-                    let actual = HashDigest::from(hasher);
-                    if &actual != expected {
-                        return Err(Error::from(ErrorKind::MetadataHashMismatch {
-                            url: url.clone(),
-                            expected: expected.clone(),
-                            actual,
-                        }));
+            match sidecar {
+                SidecarMetadata::Advertised(hashes) => {
+                    for expected in hashes.iter() {
+                        let mut hasher = Hasher::from(expected.algorithm());
+                        hasher.update(&bytes);
+                        let actual = HashDigest::from(hasher);
+                        if &actual != expected {
+                            return Err(Error::from(ErrorKind::MetadataHashMismatch {
+                                url: url.clone(),
+                                expected: expected.clone(),
+                                actual,
+                            }));
+                        }
                     }
                 }
+                SidecarMetadata::Unadvertised => {}
             }
 
             let metadata = info_span!("parse_metadata21")
@@ -1199,8 +1213,9 @@ impl RegistryClient {
                         Box::new(err),
                     ))
                 })?;
-            if unadvertised {
-                validate_sidecar_metadata(filename, &metadata)?;
+            match sidecar {
+                SidecarMetadata::Advertised(_) => {}
+                SidecarMetadata::Unadvertised => validate_sidecar_metadata(filename, &metadata)?,
             }
             Ok::<_, Error>(metadata)
         };
@@ -1215,8 +1230,9 @@ impl RegistryClient {
             .cached_client()
             .get_serde_with_retry(req, &cache_entry, cache_control, response_callback)
             .await?;
-        if unadvertised {
-            validate_sidecar_metadata(filename, &metadata)?;
+        match sidecar {
+            SidecarMetadata::Advertised(_) => {}
+            SidecarMetadata::Unadvertised => validate_sidecar_metadata(filename, &metadata)?,
         }
         Ok(metadata)
     }
