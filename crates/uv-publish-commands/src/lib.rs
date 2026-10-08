@@ -17,7 +17,7 @@ use uv_client::{
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{KeyringProviderType, TrustedPublishing};
 use uv_distribution_types::{IndexLocations, IndexUrl};
-use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
+use uv_errors::{ErrorOptions, Hints, write_error_chain_buffered};
 use uv_publish::{
     PreparedDistribution, PublishFinalizeError, PublishOutcome, PublishSession,
     PublishingCredentials, TrustedPublishResult, UploadOutcome, check_trusted_publishing,
@@ -200,7 +200,7 @@ async fn publish_files(
                 if !dry_run {
                     return Err(err);
                 }
-                write_error_chain_with_options(
+                write_error_chain_buffered(
                     err.as_ref(),
                     &Hints::none(),
                     ErrorOptions::default().with_stream(printer.stderr()),
@@ -394,7 +394,7 @@ async fn gather_credentials(
         )?;
 
         trace!("Error trace: {err:?}");
-        write_error_chain_with_options(
+        write_error_chain_buffered(
             anyhow::Error::from(err)
                 .context("Trusted publishing failed")
                 .as_ref(),

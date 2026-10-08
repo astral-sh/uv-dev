@@ -11,7 +11,7 @@ pub use owo_colors;
 use rustc_hash::FxHashSet;
 #[doc(hidden)]
 pub use uv_errors::Hints;
-use uv_errors::{ErrorOptions, Stderr, write_error_chain_with_options};
+use uv_errors::{ErrorOptions, Stderr, write_error_chain_buffered, write_error_chain_with_options};
 
 /// Whether user-facing warnings are enabled.
 pub static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -28,7 +28,13 @@ pub fn disable() {
 
 /// Format a warning chain to standard error.
 pub fn write_warning_chain(err: &dyn Error, hints: &Hints<'_>) -> fmt::Result {
-    write_warning_chain_with_options(err, hints, ErrorOptions::default())
+    write_error_chain_buffered(
+        err,
+        hints,
+        ErrorOptions::default()
+            .with_level("warning")
+            .with_color(owo_colors::AnsiColors::Yellow),
+    )
 }
 
 /// Format a warning chain to standard error once, deduplicating the complete rendered chain and hints.
