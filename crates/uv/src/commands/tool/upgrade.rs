@@ -23,7 +23,7 @@ use uv_python::{
 };
 use uv_requirements::RequirementsSpecification;
 use uv_settings::{Combine, PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
-use uv_tool::{InstalledTools, Tool};
+use uv_tool::{InstalledTools, Tool, ToolEntrypointLocks};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
@@ -625,8 +625,11 @@ async fn upgrade_tool(
             existing_tool_receipt.build_constraints().to_vec(),
             tool_lock.as_ref(),
             printer,
-        )?;
+        )
+        .await?;
     } else {
+        let _entrypoint_locks =
+            ToolEntrypointLocks::for_repair(existing_tool_receipt.entrypoints()).await?;
         let repaired = repair_tool_entrypoints(
             &environment,
             name,

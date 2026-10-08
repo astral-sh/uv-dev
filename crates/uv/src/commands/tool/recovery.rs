@@ -24,6 +24,8 @@ use uv_python::PythonEnvironment;
 use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
 
 use crate::commands::tool::common::{NoExecutablesError, matching_packages};
+#[cfg(windows)]
+use crate::commands::tool::self_removal::remove_running_entrypoint;
 use crate::commands::tool::uninstall::owned_entrypoints_by;
 use crate::printer::Printer;
 
@@ -169,6 +171,10 @@ impl ToolEntrypointClaims {
 }
 
 impl ToolEntrypointSnapshot {
+    pub(super) fn entrypoints(&self) -> &[ToolEntrypoint] {
+        self.receipt.entrypoints()
+    }
+
     pub(super) fn capture(
         environment: Option<&PythonEnvironment>,
         name: &PackageName,
@@ -301,7 +307,8 @@ impl ToolEntrypointSnapshot {
                     std::path::absolute(&old.entrypoint.install_path)
                         .is_ok_and(|target| *itself == target)
                 }) {
-                    self_replace::self_delete().context("Failed to remove old executable")?;
+                    remove_running_entrypoint(&old.entrypoint.install_path)
+                        .context("Failed to remove old executable")?;
                     continue;
                 }
                 match fs_err::remove_file(&old.entrypoint.install_path) {
@@ -498,7 +505,7 @@ impl ToolEntrypointSnapshot {
             if itself.as_ref().is_some_and(|itself| {
                 std::path::absolute(old).is_ok_and(|target| *itself == target)
             }) {
-                self_replace::self_delete().context("Failed to remove old executable")?;
+                remove_running_entrypoint(old).context("Failed to remove old executable")?;
                 continue;
             }
             match fs_err::remove_file(old) {

@@ -13,6 +13,8 @@ pub(crate) mod install;
 pub(crate) mod list;
 mod recovery;
 pub(crate) mod run;
+#[cfg(windows)]
+mod self_removal;
 pub(crate) mod uninstall;
 pub(crate) mod update_shell;
 pub(crate) mod upgrade;
