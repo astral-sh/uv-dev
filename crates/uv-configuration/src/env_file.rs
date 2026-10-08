@@ -1,3 +1,8 @@
+use std::ffi::{OsStr, OsString};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(windows)]
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
 
 /// A collection of `.env` file paths.
@@ -8,7 +13,7 @@ impl EnvFile {
     /// Resolve the env file paths from command-line arguments or the environment.
     pub fn from_args(
         env_file: Vec<PathBuf>,
-        env_file_environment: Option<String>,
+        env_file_environment: Option<OsString>,
         no_env_file: bool,
     ) -> Self {
         if no_env_file {
@@ -27,36 +32,41 @@ impl EnvFile {
 
         // Split the environment variable on whitespace, while preserving literal backslashes in
         // paths and allowing whitespace or a backslash to be escaped.
-        let mut current = String::new();
+        let mut current = OsString::new();
         let mut escape = false;
-        let mut characters = env_file_environment.chars().peekable();
-        while let Some(c) = characters.next() {
+        let mut characters = native_characters(&env_file_environment).peekable();
+        while let Some(character) = characters.next() {
+            let whitespace = character.is_ok_and(char::is_whitespace);
             if escape {
-                if !c.is_whitespace() && c != '\\' {
-                    current.push('\\');
+                if !whitespace && character != Ok('\\') {
+                    current.push("\\");
                 }
-                current.push(c);
+                push_character(&mut current, character);
                 escape = false;
-            } else if c == '\\' {
-                if current.is_empty() && characters.peek() == Some(&'\\') {
-                    // Preserve the leading `\\` in UNC and extended-length Windows paths.
-                    current.push('\\');
-                    current.push('\\');
-                    characters.next();
+            } else if character == Ok('\\') {
+                if current.is_empty() && characters.peek() == Some(&Ok('\\')) {
+                    let mut count = 1;
+                    while characters.peek() == Some(&Ok('\\')) {
+                        characters.next();
+                        count += 1;
+                    }
+                    // UNC prefixes can be literal or already escaped. Four leading backslashes
+                    // encode two; two literal backslashes must also remain a UNC prefix.
+                    current.push("\\".repeat(if count < 4 { 2 } else { count / 2 }));
+                    escape = count % 2 != 0;
                 } else {
                     escape = true;
                 }
-            } else if c.is_whitespace() {
+            } else if whitespace {
                 if !current.is_empty() {
-                    paths.push(PathBuf::from(current));
-                    current = String::new();
+                    paths.push(PathBuf::from(std::mem::take(&mut current)));
                 }
             } else {
-                current.push(c);
+                push_character(&mut current, character);
             }
         }
         if escape {
-            current.push('\\');
+            current.push("\\");
         }
         if !current.is_empty() {
             paths.push(PathBuf::from(current));
@@ -71,9 +81,48 @@ impl EnvFile {
     }
 }
 
+#[cfg(unix)]
+type NativeCharacter = Result<char, u8>;
+#[cfg(windows)]
+type NativeCharacter = Result<char, u16>;
+
+#[cfg(unix)]
+fn native_characters(value: &OsStr) -> impl Iterator<Item = NativeCharacter> {
+    value.as_bytes().utf8_chunks().flat_map(|chunk| {
+        chunk
+            .valid()
+            .chars()
+            .map(Ok)
+            .chain(chunk.invalid().iter().copied().map(Err))
+    })
+}
+
+#[cfg(windows)]
+fn native_characters(value: &OsStr) -> impl Iterator<Item = NativeCharacter> {
+    char::decode_utf16(value.encode_wide())
+        .map(|character| character.map_err(|error| error.unpaired_surrogate()))
+}
+
+fn push_character(target: &mut OsString, character: NativeCharacter) {
+    match character {
+        Ok(character) => {
+            let mut buffer = [0; 4];
+            target.push(character.encode_utf8(&mut buffer));
+        }
+        Err(unit) => {
+            #[cfg(unix)]
+            target.push(OsStr::from_bytes(&[unit]));
+            #[cfg(windows)]
+            target.push(OsString::from_wide(&[unit]));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     #[test]
     fn test_from_args_default() {
@@ -83,31 +132,31 @@ mod tests {
 
     #[test]
     fn test_from_args_no_env_file() {
-        let env_file = EnvFile::from_args(vec![], Some("path1 path2".to_string()), true);
+        let env_file = EnvFile::from_args(vec![], Some("path1 path2".into()), true);
         assert_eq!(env_file, EnvFile::default());
     }
 
     #[test]
     fn test_from_args_empty_string() {
-        let env_file = EnvFile::from_args(vec![], Some(String::new()), false);
+        let env_file = EnvFile::from_args(vec![], Some(OsString::new()), false);
         assert_eq!(env_file, EnvFile::default());
     }
 
     #[test]
     fn test_from_args_whitespace_only() {
-        let env_file = EnvFile::from_args(vec![], Some("   ".to_string()), false);
+        let env_file = EnvFile::from_args(vec![], Some("   ".into()), false);
         assert_eq!(env_file, EnvFile::default());
     }
 
     #[test]
     fn test_from_args_single_path() {
-        let env_file = EnvFile::from_args(vec![], Some("path1".to_string()), false);
+        let env_file = EnvFile::from_args(vec![], Some("path1".into()), false);
         assert_eq!(env_file.0, vec![PathBuf::from("path1")]);
     }
 
     #[test]
     fn test_from_args_multiple_paths() {
-        let env_file = EnvFile::from_args(vec![], Some("path1 path2 path3".to_string()), false);
+        let env_file = EnvFile::from_args(vec![], Some("path1 path2 path3".into()), false);
         assert_eq!(
             env_file.0,
             vec![
@@ -120,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_from_args_escaped_spaces() {
-        let env_file = EnvFile::from_args(vec![], Some(r"path\ with\ spaces".to_string()), false);
+        let env_file = EnvFile::from_args(vec![], Some(r"path\ with\ spaces".into()), false);
         assert_eq!(env_file.0, vec![PathBuf::from("path with spaces")]);
     }
 
@@ -128,7 +177,7 @@ mod tests {
     fn test_from_args_mixed_escaped_and_normal() {
         let env_file = EnvFile::from_args(
             vec![],
-            Some(r"path1 path\ with\ spaces path2".to_string()),
+            Some(r"path1 path\ with\ spaces path2".into()),
             false,
         );
         assert_eq!(
@@ -143,18 +192,14 @@ mod tests {
 
     #[test]
     fn test_from_args_escaped_backslash() {
-        let env_file =
-            EnvFile::from_args(vec![], Some(r"path\\with\\backslashes".to_string()), false);
+        let env_file = EnvFile::from_args(vec![], Some(r"path\\with\\backslashes".into()), false);
         assert_eq!(env_file.0, vec![PathBuf::from(r"path\with\backslashes")]);
     }
 
     #[test]
     fn test_from_args_windows_paths() {
-        let env_file = EnvFile::from_args(
-            vec![],
-            Some(r"C:\work\.env D:\other\.env".to_string()),
-            false,
-        );
+        let env_file =
+            EnvFile::from_args(vec![], Some(r"C:\work\.env D:\other\.env".into()), false);
         assert_eq!(
             env_file.0,
             vec![
@@ -168,7 +213,7 @@ mod tests {
     fn test_from_args_windows_unc_and_extended_paths() {
         let env_file = EnvFile::from_args(
             vec![],
-            Some(r"\\server\share\.env \\?\C:\work\.env \\?\UNC\server\share\.env".to_string()),
+            Some(r"\\server\share\.env \\?\C:\work\.env \\?\UNC\server\share\.env".into()),
             false,
         );
         assert_eq!(
@@ -185,7 +230,7 @@ mod tests {
     fn test_from_args_windows_unc_and_extended_paths_with_escaped_spaces() {
         let env_file = EnvFile::from_args(
             vec![],
-            Some(r"\\server\share\path\ with\ spaces\.env \\?\C:\other\ path\.env".to_string()),
+            Some(r"\\server\share\path\ with\ spaces\.env \\?\C:\other\ path\.env".into()),
             false,
         );
         assert_eq!(
@@ -201,7 +246,7 @@ mod tests {
     fn test_from_args_cli_path_with_spaces() {
         let env_file = EnvFile::from_args(
             vec![PathBuf::from("path with spaces")],
-            Some("ignored".to_string()),
+            Some("ignored".into()),
             false,
         );
         assert_eq!(env_file.0, vec![PathBuf::from("path with spaces")]);
@@ -214,7 +259,7 @@ mod tests {
                 PathBuf::from(r"\\server\share\path with spaces\.env"),
                 PathBuf::from(r"\\?\C:\other path\.env"),
             ],
-            Some("ignored".to_string()),
+            Some("ignored".into()),
             false,
         );
         assert_eq!(
@@ -222,6 +267,51 @@ mod tests {
             vec![
                 PathBuf::from(r"\\server\share\path with spaces\.env"),
                 PathBuf::from(r"\\?\C:\other path\.env")
+            ]
+        );
+    }
+
+    #[test]
+    fn test_from_args_escaped_unc_prefixes() {
+        let env_file = EnvFile::from_args(
+            vec![],
+            Some(r"\\\\server\\share\\.env \\\\?\\C:\\work\\.env".into()),
+            false,
+        );
+        assert_eq!(
+            env_file.0,
+            [
+                PathBuf::from(r"\\server\share\.env"),
+                PathBuf::from(r"\\?\C:\work\.env")
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_from_args_non_unicode_paths() {
+        let paths =
+            OsString::from_vec(b"first-\xff.env\xc2\xa0path\\ with\\ spaces-\xfe.env".to_vec());
+        let env_file = EnvFile::from_args(vec![], Some(paths), false);
+        assert_eq!(
+            env_file.0,
+            [
+                PathBuf::from(OsString::from_vec(b"first-\xff.env".to_vec())),
+                PathBuf::from(OsString::from_vec(b"path with spaces-\xfe.env".to_vec())),
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_from_args_unpaired_surrogates() {
+        let paths = OsString::from_wide(&[0x61, 0xd800, 0x20, 0x62, 0xdc00]);
+        let env_file = EnvFile::from_args(vec![], Some(paths), false);
+        assert_eq!(
+            env_file.0,
+            [
+                PathBuf::from(OsString::from_wide(&[0x61, 0xd800])),
+                PathBuf::from(OsString::from_wide(&[0x62, 0xdc00])),
             ]
         );
     }
