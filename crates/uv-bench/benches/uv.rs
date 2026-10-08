@@ -161,12 +161,16 @@ fn hash_reader_stream(bytes: &[u8], chunk_size: usize) -> impl AsyncRead + Unpin
     .compat()
 }
 
-fn create_many_files_wheel() -> tempfile::NamedTempFile {
+fn create_many_files_wheel(data_files: usize) -> tempfile::NamedTempFile {
     let archive = tempfile::NamedTempFile::new().expect("Failed to create temporary archive");
     let mut writer = ZipFileWriter::new(Vec::new());
     let mut record = String::new();
     for index in 0..MANY_FILES_WHEEL_FILE_COUNT {
-        let path = format!("manyfiles/{index}.txt");
+        let path = if index >= MANY_FILES_WHEEL_FILE_COUNT - data_files {
+            format!("manyfiles-0.0.0.data/data/{index}.txt")
+        } else {
+            format!("manyfiles/{index}.txt")
+        };
         write_zip_entry(&mut writer, &path, b"");
         writeln!(record, "{path},,0").expect("Writing to a string cannot fail");
     }
@@ -280,7 +284,7 @@ fn unzip_wheel_many_files(c: &mut Criterion<WallTime>) {
         return;
     }
 
-    let archive = create_many_files_wheel();
+    let archive = create_many_files_wheel(0);
 
     c.bench_function("unzip_wheel_many_files", |b| {
         b.iter_batched(
@@ -305,7 +309,7 @@ fn prepare_wheel_many_files(c: &mut Criterion<WallTime>) {
         return;
     }
 
-    let archive = create_many_files_wheel();
+    let archive = create_many_files_wheel(0);
     let filename =
         WheelFilename::from_str(MANY_FILES_WHEEL_FILENAME).expect("Invalid wheel filename");
 
@@ -327,7 +331,29 @@ fn prepare_wheel_many_files(c: &mut Criterion<WallTime>) {
 }
 
 fn install_wheel_many_files(c: &mut Criterion<WallTime>) {
-    let archive = create_many_files_wheel();
+    install_wheel(c, "install_wheel_many_files", 0);
+}
+
+fn install_wheel_many_data_files(c: &mut Criterion<WallTime>) {
+    install_wheel(
+        c,
+        "install_wheel_many_data_files",
+        MANY_FILES_WHEEL_FILE_COUNT,
+    );
+}
+
+fn install_wheel_few_data_files(c: &mut Criterion<WallTime>) {
+    for data_files in [1, 7, 8, 16] {
+        install_wheel(
+            c,
+            &format!("install_wheel_few_data_files/{data_files}"),
+            data_files,
+        );
+    }
+}
+
+fn install_wheel(c: &mut Criterion<WallTime>, name: &str, data_files: usize) {
+    let archive = create_many_files_wheel(data_files);
     let filename =
         WheelFilename::from_str(MANY_FILES_WHEEL_FILENAME).expect("Invalid wheel filename");
     let extracted_wheel = tempfile::tempdir().expect("Failed to create wheel extraction directory");
@@ -337,7 +363,7 @@ fn install_wheel_many_files(c: &mut Criterion<WallTime>) {
         &filename,
     );
 
-    c.bench_function("install_wheel_many_files", |b| {
+    c.bench_function(name, |b| {
         b.iter_batched(
             || {
                 let environment =
@@ -474,6 +500,8 @@ criterion_group! {
         unzip_wheel_many_files,
         prepare_wheel_many_files,
         install_wheel_many_files,
+        install_wheel_many_data_files,
+        install_wheel_few_data_files,
         resolve_warm_jupyter,
         resolve_warm_jupyter_universal,
         resolve_warm_airflow
