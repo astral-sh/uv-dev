@@ -9,6 +9,7 @@
 name: "Build release binaries"
 
 on:
+  workflow_dispatch:
   workflow_call:
     inputs:
       plan:
