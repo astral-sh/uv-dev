@@ -812,8 +812,8 @@ pub async fn install(
                 } else {
                     existing_tool_receipt.python().clone()
                 };
-                ToolLock::write(&tool_dir, Some(&tool_lock))?;
-                installed_tools.add_tool_receipt(
+                let metadata = ToolLock::prepare_metadata(
+                    &installed_tools,
                     package_name,
                     Tool::new(
                         requirements.clone(),
@@ -825,7 +825,9 @@ pub async fn install(
                         existing_tool_receipt.entrypoints().iter().cloned(),
                         options.clone(),
                     ),
+                    Some(&tool_lock),
                 )?;
+                installed_tools.commit_tool_metadata(package_name, &metadata)?;
                 writeln!(
                     printer.stderr(),
                     "`{}` is already installed",

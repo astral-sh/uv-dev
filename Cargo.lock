@@ -8126,6 +8126,7 @@ dependencies = [
  "owo-colors",
  "pathdiff",
  "serde",
+ "tempfile",
  "thiserror",
  "toml",
  "toml_edit",

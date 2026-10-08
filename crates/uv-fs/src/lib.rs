@@ -24,7 +24,7 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
 
 pub use crate::locked_file::*;
-pub use crate::named_temp_file::{NamedTempFile, PersistError, tempfile_in};
+pub use crate::named_temp_file::{NamedTempFile, PersistError, tempfile_in, tempfile_in_private};
 pub use crate::path::*;
 pub use crate::read::ValidatedReader;
 pub use crate::space::{PhysicalSpaceError, physical_space, supports_fine_grained_accounting};
