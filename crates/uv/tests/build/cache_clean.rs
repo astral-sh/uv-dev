@@ -610,21 +610,31 @@ async fn wait_for_cache_message(
         .take()
         .context("captured cache command stderr")?;
     let mut reader = tokio::io::BufReader::new(stderr);
-    tokio::time::timeout(Duration::from_secs(30), async {
-        let mut line = String::new();
+    let mut output = Vec::new();
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            line.clear();
-            if reader.read_line(&mut line).await? == 0 {
+            let start = output.len();
+            if reader.read_until(b'\n', &mut output).await? == 0 {
                 anyhow::bail!("command exited without reporting {message}");
             }
-            if line.contains(message) {
+            if String::from_utf8_lossy(&output[start..]).contains(message) {
                 return Ok::<_, anyhow::Error>(());
             }
         }
     })
-    .await??;
+    .await;
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => anyhow::bail!(
+            "Failed while waiting for {message}: {err}\nCaptured stderr:\n{}",
+            String::from_utf8_lossy(&output)
+        ),
+        Err(err) => anyhow::bail!(
+            "Timed out waiting for {message}: {err}\nCaptured stderr:\n{}",
+            String::from_utf8_lossy(&output)
+        ),
+    }
     Ok(tokio::spawn(async move {
-        let mut output = Vec::new();
         reader.read_to_end(&mut output).await?;
         Ok(output)
     }))
