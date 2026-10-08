@@ -1,5 +1,7 @@
 use std::fs::Permissions;
 use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -114,9 +116,12 @@ impl Transaction {
             lock: lock.is_some(),
         };
         let record = toml::to_string(&record).map_err(io::Error::other)?;
-        let temporary = tempfile::Builder::new()
-            .prefix(".uv-metadata-")
-            .tempdir_in(directory)?;
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(".uv-metadata-");
+        // Restrict traversal at creation, before a backup can contain the previous metadata.
+        #[cfg(unix)]
+        builder.permissions(Permissions::from_mode(0o700));
+        let temporary = builder.tempdir_in(directory)?;
         if let Some(receipt) = receipt {
             receipt.backup(&temporary.path().join(RECEIPT))?;
         }
@@ -377,6 +382,30 @@ mod tests {
             Some(io::ErrorKind::Other)
         );
         assert_previous_pair(directory.path())?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn journal_backups_are_private() -> io::Result<()> {
+        let directory = previous_pair()?;
+        fs_err::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755))?;
+        let receipt = directory.path().join(RECEIPT);
+        fs_err::set_permissions(&receipt, std::fs::Permissions::from_mode(0o600))?;
+        let transaction = Transaction::begin(directory.path())?;
+        assert_eq!(
+            fs_err::metadata(&transaction.journal)?.permissions().mode() & 0o077,
+            0
+        );
+        assert_eq!(
+            fs_err::metadata(transaction.journal.join(RECEIPT))?
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        drop(transaction);
+        recover(directory.path())?;
         Ok(())
     }
 

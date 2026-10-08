@@ -184,6 +184,10 @@ impl InstalledTools {
                 );
                 continue;
             };
+            if let Err(err) = Self::recover_metadata(&directory) {
+                tools.push((name, Err(err)));
+                continue;
+            }
             let path = directory.join("uv-receipt.toml");
             let contents = match fs_err::read_to_string(&path) {
                 Ok(contents) => contents,
@@ -212,7 +216,9 @@ impl InstalledTools {
     ///
     /// Note it is generally incorrect to use this without [`Self::acquire_lock`].
     pub fn get_tool_receipt(&self, name: &PackageName) -> Result<Option<Tool>, Error> {
-        let path = self.tool_dir(name).join("uv-receipt.toml");
+        let directory = self.tool_dir(name);
+        Self::recover_metadata(&directory)?;
+        let path = directory.join("uv-receipt.toml");
         match ToolReceipt::from_path(&path) {
             Ok(tool_receipt) => Ok(Some(tool_receipt.tool)),
             Err(Error::Io(err)) if err.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -222,18 +228,34 @@ impl InstalledTools {
 
     /// Grab a file lock for the tools directory to prevent concurrent access across processes.
     pub async fn lock(&self) -> Result<LockedFile, Error> {
-        let lock = LockedFile::acquire(
+        let lock = self.acquire_lock().await?;
+        // Readers must see a complete metadata pair before interpreting any receipt or lock.
+        for directory in uv_fs::directories(self.root())? {
+            Self::recover_metadata(&directory)?;
+        }
+        Ok(lock)
+    }
+
+    /// Lock the store for removal even when a tool's metadata cannot be recovered.
+    ///
+    /// Receipt access still attempts recovery and reports the affected tool as broken. Removal
+    /// can discard that environment without using its inconsistent entrypoint metadata.
+    pub async fn lock_for_removal(&self) -> Result<LockedFile, Error> {
+        self.acquire_lock().await
+    }
+
+    async fn acquire_lock(&self) -> Result<LockedFile, Error> {
+        Ok(LockedFile::acquire(
             self.root.join(".lock"),
             LockedFileMode::Exclusive,
             self.root.user_display(),
         )
-        .await?;
-        // Readers must see a complete metadata pair before interpreting any receipt or lock.
-        for directory in uv_fs::directories(self.root())? {
-            metadata::recover(&directory)
-                .map_err(|err| Error::MetadataRecover(directory, Box::new(err)))?;
-        }
-        Ok(lock)
+        .await?)
+    }
+
+    fn recover_metadata(directory: &Path) -> Result<(), Error> {
+        metadata::recover(directory)
+            .map_err(|err| Error::MetadataRecover(directory.to_path_buf(), Box::new(err)))
     }
 
     /// Serialize a receipt and its optional lock before changing either metadata file.

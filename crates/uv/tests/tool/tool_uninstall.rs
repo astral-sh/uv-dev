@@ -1,9 +1,125 @@
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::PathChild;
+use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 
 use uv_static::EnvVars;
 
 use uv_test::uv_snapshot;
+
+#[test]
+fn tool_uninstall_healthy_with_unrecoverable_other_journal() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .arg(
+            context
+                .workspace_root
+                .join("test/links/simple_launcher-0.1.0-py3-none-any.whl"),
+        )
+        .arg("--offline")
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let journal = context.temp_dir.child("tools/broken/.uv-metadata");
+    journal.create_dir_all()?;
+    journal
+        .child("journal.toml")
+        .write_str("version = 1\nreceipt = false\nlock = true\n")?;
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 executable: simple_launcher
+    ");
+    assert!(!context.temp_dir.child("tools/simple-launcher").exists());
+    assert!(journal.child("journal.toml").exists());
+    Ok(())
+}
+
+#[test]
+fn tool_uninstall_unrecoverable_journal_keeps_untrusted_exports() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .arg(
+            context
+                .workspace_root
+                .join("test/links/simple_launcher-0.1.0-py3-none-any.whl"),
+        )
+        .arg("--offline")
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let directory = context.temp_dir.child("tools/simple-launcher");
+    let journal = directory.child(".uv-metadata");
+    journal.create_dir_all()?;
+    journal
+        .child("journal.toml")
+        .write_str("version = 1\nreceipt = false\nlock = true\n")?;
+
+    // The live receipt parses, but an unfinished pair cannot establish authority over its exports.
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed dangling environment for `simple-launcher`
+    ");
+    assert!(!directory.exists());
+    assert!(
+        fs_err::symlink_metadata(
+            bin.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+        )
+        .is_ok()
+    );
+    Ok(())
+}
+
+#[test]
+fn tool_uninstall_all_with_unrecoverable_journal() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .arg(
+            context
+                .workspace_root
+                .join("test/links/simple_launcher-0.1.0-py3-none-any.whl"),
+        )
+        .arg("--offline")
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let journal = context.temp_dir.child("tools/broken/.uv-metadata");
+    journal.create_dir_all()?;
+    journal
+        .child("journal.toml")
+        .write_str("version = 1\nreceipt = false\nlock = true\n")?;
+
+    let untrusted = bin.child("untrusted-export");
+    untrusted.write_str("retain this export")?;
+    let install_path = toml::Value::String(untrusted.path().to_string_lossy().into_owned());
+    context.temp_dir.child("tools/broken/uv-receipt.toml").write_str(&format!(
+        "[tool]\nentrypoints = [{{ name = \"untrusted-export\", install-path = {install_path} }}]\n"
+    ))?;
+
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("--all"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed dangling environment for `broken`
+    Uninstalled 1 executable: simple_launcher
+    ");
+    assert!(!context.temp_dir.child("tools/simple-launcher").exists());
+    assert!(!context.temp_dir.child("tools/broken").exists());
+    assert_eq!(fs_err::read_to_string(untrusted)?, "retain this export");
+    Ok(())
+}
 
 #[test]
 fn tool_uninstall() {
