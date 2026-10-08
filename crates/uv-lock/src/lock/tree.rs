@@ -528,6 +528,23 @@ impl<'env> TreeDisplay<'env> {
         }
     }
 
+    /// Iterate over packages retained by the tree's selection and filtering.
+    ///
+    /// This includes descendants beyond the display depth and repeated subtrees.
+    pub fn packages(&self) -> impl Iterator<Item = &'env Package> {
+        self.graph.node_weights().filter_map(|node| match node {
+            Node::Root => None,
+            Node::Package(index) => Some(self.lock.package(*index)),
+        })
+    }
+
+    /// Attach the latest versions to the selected graph.
+    #[must_use]
+    pub fn with_latest(mut self, latest: &'env PackageMap<Version>) -> Self {
+        self.latest = latest;
+        self
+    }
+
     /// Perform a depth-first traversal of the given package and its dependencies.
     fn visit(
         &'env self,
