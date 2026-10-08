@@ -3,6 +3,7 @@
 Keep this module compatible with Python 3.6 for the system-interpreter checks.
 """
 
+import contextlib
 import csv
 import hashlib
 import html
@@ -10,9 +11,11 @@ import http.server
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import socketserver
+import sys
 import tempfile
 import threading
 import urllib.parse
@@ -258,7 +261,8 @@ class FixtureIndex:
     def url(self):
         return f"http://127.0.0.1:{self._server.server_port}/simple"
 
-    def environment(self, original):
+    @staticmethod
+    def environment(original):
         """Keep the selected loopback index independent of host index configuration."""
         environment = dict(original)
         for name in list(environment):
@@ -303,3 +307,20 @@ class FixtureIndex:
             "artifacts": dict(sorted(self.used.items())),
             "requests": self.requests,
         }
+
+    @contextlib.contextmanager
+    def record_identity(self, destination):
+        """Record the interpreter and archives even when a package operation fails."""
+        try:
+            yield
+        finally:
+            identity = self.identity()
+            identity["python"] = sys.version
+            identity["implementation"] = sys.implementation.name
+            identity["platform"] = sys.platform
+            identity["architecture"] = platform.machine()
+            LOGGER.info("Workload identity: %s", json.dumps(identity, sort_keys=True))
+            if destination:
+                destination.write_text(
+                    json.dumps(identity, indent=2, sort_keys=True) + "\n"
+                )
