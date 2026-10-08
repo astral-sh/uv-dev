@@ -1642,8 +1642,6 @@ fn python_home(interpreter: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::path::{Path, PathBuf};
     use std::str::FromStr;
     #[cfg(unix)]
     use std::time::{Duration, UNIX_EPOCH};
@@ -1742,29 +1740,6 @@ mod tests {
     "##}
     }
 
-    #[cfg(unix)]
-    fn mock_version_response(directory: &Path) -> Result<(PathBuf, PathBuf, PathBuf)> {
-        let executable = directory.join("python");
-        let response_file = directory.join("response.json");
-        let query_log = directory.join("queries");
-        let mut response = serde_json::from_str::<Value>(mocked_interpreter_response())?;
-        response["sys_executable"] = serde_json::to_value(&executable)?;
-        fs::write(&response_file, serde_json::to_vec(&response)?)?;
-        fs::write(
-            &executable,
-            formatdoc! {r"
-                #!/bin/sh
-                echo queried >> '{}'
-                cat '{}'
-            ", query_log.display(), response_file.display()},
-        )?;
-        fs::set_permissions(
-            &executable,
-            std::os::unix::fs::PermissionsExt::from_mode(0o770),
-        )?;
-        Ok((executable, response_file, query_log))
-    }
-
     #[test]
     fn interpreter_info_validates_version_components() -> Result<()> {
         let original: Value = serde_json::from_str(mocked_interpreter_response())?;
@@ -1818,7 +1793,22 @@ mod tests {
     #[tokio::test]
     async fn interpreter_cache_requeries_invalid_version_components() -> Result<()> {
         let directory = tempdir()?;
-        let (executable, _, query_log) = mock_version_response(directory.path())?;
+        let executable = directory.path().join("python");
+        let query_log = directory.path().join("queries");
+        let json = mocked_interpreter_response()
+            .replace("{sys_executable}", &executable.display().to_string());
+        fs::write(
+            &executable,
+            formatdoc! {r"
+                #!/bin/sh
+                echo queried >> '{}'
+                echo '{json}'
+            ", query_log.display()},
+        )?;
+        fs::set_permissions(
+            &executable,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
         let cache = Cache::temp()?.init().await?;
         Interpreter::query(&executable, &cache)?;
         let absolute = std::path::absolute(&executable)?;
