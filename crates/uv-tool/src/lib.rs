@@ -224,22 +224,27 @@ impl InstalledTools {
         .await
         {
             Ok(lock) => Ok(lock),
-            // A missing lockfile target does not imply that the tools directory is missing.
-            Err(source)
-                if matches!(
-                    &source,
-                    LockedFileError::CreateTemporary(err)
-                        | LockedFileError::PersistTemporary { source: err, .. }
-                        | LockedFileError::Io(err)
-                        if err.kind() == io::ErrorKind::NotFound
-                ) && matches!(fs::metadata(&self.root), Err(err) if err.kind() == io::ErrorKind::NotFound) =>
-            {
-                Err(Error::ToolsDirectoryNotFound {
-                    path: self.root.clone(),
-                    source,
-                })
+            Err(source) => {
+                let missing_lockfile = match &source {
+                    LockedFileError::CreateTemporary(error)
+                    | LockedFileError::PersistTemporary { source: error, .. }
+                    | LockedFileError::Io(error) => error.kind() == io::ErrorKind::NotFound,
+                    LockedFileError::Lock { .. }
+                    | LockedFileError::Timeout { .. }
+                    | LockedFileError::JoinError(_) => false,
+                };
+                // A missing lockfile target does not imply that the tools directory is missing.
+                if missing_lockfile
+                    && matches!(fs::metadata(&self.root), Err(error) if error.kind() == io::ErrorKind::NotFound)
+                {
+                    Err(Error::ToolsDirectoryNotFound {
+                        path: self.root.clone(),
+                        source,
+                    })
+                } else {
+                    Err(source.into())
+                }
             }
-            Err(err) => Err(err.into()),
         }
     }
 
