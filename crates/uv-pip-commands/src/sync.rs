@@ -53,7 +53,7 @@ use uv_install_operations::Changelog;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::report_interpreter;
-use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::ResolveSummary;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
 /// Install a set of locked requirements into the current Python environment.
@@ -475,7 +475,7 @@ pub async fn pip_sync(
             &concurrency,
             options,
             None,
-            Box::new(DefaultResolveLogger),
+            ResolveSummary::Display,
             printer,
         )
         .await

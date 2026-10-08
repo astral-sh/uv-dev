@@ -33,7 +33,7 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_resolve_operations::loggers::SummaryResolveLogger;
+use uv_resolve_operations::ResolveSummary;
 use uv_scripts::Pep723Script;
 use uv_settings::{
     FrozenSource, LockCheck, MalwareCheckSettings, PythonInstallMirrors, ResolverInstallerSettings,
@@ -408,7 +408,7 @@ pub async fn check(
                 &settings.resolver,
                 &client_builder,
                 &state,
-                Box::new(SummaryResolveLogger),
+                ResolveSummary::Suppress,
                 &concurrency,
                 cache,
                 workspace_cache,
@@ -586,7 +586,7 @@ pub async fn check(
                 &settings.resolver,
                 &client_builder,
                 &state,
-                Box::new(SummaryResolveLogger),
+                ResolveSummary::Suppress,
                 &concurrency,
                 cache,
                 workspace_cache,

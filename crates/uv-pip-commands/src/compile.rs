@@ -59,10 +59,10 @@ use uv_workspace::pyproject::ExtraBuildDependencies;
 use uv_command_support::Printer;
 use uv_command_support::{ExitStatus, OutputWriter, UvError};
 use uv_python_discovery::PythonDownloadReporter;
+use uv_resolve_operations::ResolveSummary;
 use uv_resolve_operations::locked_requirements::{
     LockedRequirements, read_pylock_toml_requirements, read_requirements_txt,
 };
-use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
 /// Resolve a set of requirements into a set of pinned versions.
@@ -599,7 +599,7 @@ pub async fn pip_compile(
         &concurrency,
         options,
         None,
-        Box::new(DefaultResolveLogger),
+        ResolveSummary::Display,
         printer,
     )
     .await

@@ -28,8 +28,8 @@ use uv_python_discovery::ScriptInterpreter;
 use uv_python_types::{
     PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest, PythonVersion,
 };
+use uv_resolve_operations::ResolveSummary;
 use uv_resolve_operations::latest::LatestClient;
-use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolve_operations::resolution_markers;
 use uv_scripts::Pep723Script;
 use uv_settings::{FrozenSource, LockCheck, PythonInstallMirrors, ResolverSettings};
@@ -237,7 +237,7 @@ pub async fn tree(
                     &settings,
                     client_builder,
                     &state,
-                    Box::new(DefaultResolveLogger),
+                    ResolveSummary::Display,
                     &concurrency,
                     cache,
                     workspace_cache,
