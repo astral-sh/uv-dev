@@ -267,6 +267,7 @@ async fn remote_metadata_redirect_cross_origin() -> Result<()> {
 /// Models registries that issue method-specific signed redirects, such as Gemfury and pypicloud
 /// backed by Amazon S3 (astral-sh/uv#2025 and astral-sh/uv#3255) and the public Microsoft package
 /// feed backed by Azure Artifacts (astral-sh/uv#21347).
+/// The `GET` target uses password-only authentication, as supported by Artifactory (astral-sh/uv#17343).
 #[tokio::test]
 async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
     let source_server = MockServer::start().await;
@@ -293,12 +294,7 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
         "head-user",
         "head-password",
     )?;
-    let get_target = authenticated_url(
-        &target_server.uri(),
-        "/get-wheel",
-        "get-user",
-        "get-password",
-    )?;
+    let get_target = authenticated_url(&target_server.uri(), "/get-wheel", "", "get-password")?;
 
     // The initial authenticated probe should receive the signed `HEAD` target.
     Mock::given(method("HEAD"))
@@ -346,7 +342,7 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
     // The range request should not be sent to the signed `GET` target.
     Mock::given(method("GET"))
         .and(path("/get-wheel"))
-        .and(basic_auth("get-user", "get-password"))
+        .and(basic_auth("", "get-password"))
         .and(header_exists(RANGE.as_str()))
         .respond_with(move |request: &Request| wheel_range_response(request, &ranged_wheel))
         .expect(0)
@@ -356,7 +352,7 @@ async fn remote_metadata_redirect_method_specific_target() -> Result<()> {
     // The streaming retry should use the credentials embedded in the signed `GET` target.
     Mock::given(method("GET"))
         .and(path("/get-wheel"))
-        .and(basic_auth("get-user", "get-password"))
+        .and(basic_auth("", "get-password"))
         .and(header_missing(RANGE))
         .respond_with(ResponseTemplate::new(200).set_body_raw(wheel, "application/octet-stream"))
         .expect(1)
