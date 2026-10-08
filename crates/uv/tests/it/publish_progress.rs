@@ -1,50 +1,38 @@
-//! Publication status reporting with local, metadata-only wheels.
+//! Publication status reporting with local wheels.
 
+use std::collections::BTreeMap;
 use std::process::Command;
 
 use anyhow::Result;
 use assert_fs::prelude::*;
-use async_zip::base::write::ZipFileWriter;
-use async_zip::{Compression, ZipEntryBuilder};
-use indoc::indoc;
 use sha2::{Digest, Sha256};
 use wiremock::matchers::{basic_auth, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::{TestContext, uv_snapshot};
 
 const WHEEL_FILENAME: &str = "publish_progress-1.0.0-py3-none-any.whl";
-const DIST_INFO: &str = "publish_progress-1.0.0.dist-info";
-
-/// Generate a wheel containing only distribution metadata, without importable package code.
-async fn wheel(large: bool) -> Result<Vec<u8>> {
-    let mut metadata =
-        "Metadata-Version: 2.3\nName: publish-progress\nVersion: 1.0.0\n".to_string();
-    if large {
-        metadata.push('\n');
-        metadata.push_str(&"x".repeat(1024 * 1024));
-    }
-    let wheel = indoc! {"
-        Wheel-Version: 1.0
-        Generator: uv-test
-        Root-Is-Purelib: true
-        Tag: py3-none-any
-    "};
-    let record = format!("{DIST_INFO}/METADATA,,\n{DIST_INFO}/WHEEL,,\n{DIST_INFO}/RECORD,,\n");
-    let mut writer = ZipFileWriter::new(Vec::new());
-    for (filename, contents) in [
-        ("METADATA", metadata.as_str()),
-        ("WHEEL", wheel),
-        ("RECORD", record.as_str()),
-    ] {
-        let entry = ZipEntryBuilder::new(
-            format!("{DIST_INFO}/{filename}").into(),
-            Compression::Stored,
-        );
-        writer.write_entry_whole(entry, contents.as_bytes()).await?;
-    }
-    Ok(writer.close().await?)
+/// Generate a local wheel with optional padding above the progress-reporting threshold.
+fn wheel(large: bool) -> Result<Vec<u8>> {
+    let padding = "x".repeat(if large { 1024 * 1024 } else { 0 });
+    let files = if large {
+        vec![("padding.txt", padding.as_str())]
+    } else {
+        Vec::new()
+    };
+    let (filename, wheel) = generate_wheel_with_files(
+        &"publish-progress".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &files,
+    );
+    assert_eq!(filename, WHEEL_FILENAME);
+    Ok(wheel)
 }
 
 fn publish(context: &TestContext, server: &MockServer) -> Command {
@@ -76,7 +64,7 @@ fn index_response(wheel: &[u8]) -> ResponseTemplate {
 #[tokio::test]
 async fn large_publish_progress_success() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
-    let wheel = wheel(true).await?;
+    let wheel = wheel(true)?;
     assert!(wheel.len() > 1024 * 1024);
     context
         .temp_dir
@@ -117,7 +105,7 @@ async fn large_publish_progress_success() -> Result<()> {
 #[tokio::test]
 async fn large_publish_progress_rejected() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
-    let wheel = wheel(true).await?;
+    let wheel = wheel(true)?;
     assert!(wheel.len() > 1024 * 1024);
     context
         .temp_dir
@@ -149,7 +137,7 @@ async fn large_publish_progress_rejected() -> Result<()> {
 #[tokio::test]
 async fn publish_progress_already_exists() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
-    let wheel = wheel(false).await?;
+    let wheel = wheel(false)?;
     context
         .temp_dir
         .child(WHEEL_FILENAME)
@@ -184,8 +172,8 @@ async fn publish_progress_already_exists() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
-    Hashing publish_progress-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading publish_progress-1.0.0-py3-none-any.whl ([SIZE]B)
+    Hashing publish_progress-1.0.0-py3-none-any.whl ([SIZE]KiB)
+    Uploading publish_progress-1.0.0-py3-none-any.whl ([SIZE]KiB)
     File already exists, skipping
     ");
     Ok(())
@@ -194,7 +182,7 @@ async fn publish_progress_already_exists() -> Result<()> {
 #[tokio::test]
 async fn publish_progress_skipped() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
-    let wheel = wheel(false).await?;
+    let wheel = wheel(false)?;
     context
         .temp_dir
         .child(WHEEL_FILENAME)
@@ -227,7 +215,7 @@ async fn publish_progress_skipped() -> Result<()> {
 #[tokio::test]
 async fn publish_progress_dry_run() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
-    let wheel = wheel(false).await?;
+    let wheel = wheel(false)?;
     context
         .temp_dir
         .child(WHEEL_FILENAME)
@@ -244,7 +232,7 @@ async fn publish_progress_dry_run() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Checking 1 file against http://[LOCALHOST]/upload
-    Checking publish_progress-1.0.0-py3-none-any.whl ([SIZE]B)
+    Checking publish_progress-1.0.0-py3-none-any.whl ([SIZE]KiB)
     ");
     Ok(())
 }
