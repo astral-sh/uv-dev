@@ -4987,7 +4987,11 @@ impl fmt::Debug for PublishSettings {
 
 impl PublishSettings {
     /// Resolve the [`PublishSettings`] from the CLI, environment, and filesystem configuration.
-    pub fn resolve(mut args: PublishArgs, filesystem: Option<FilesystemOptions>) -> Result<Self> {
+    pub fn resolve(
+        mut args: PublishArgs,
+        filesystem: Option<FilesystemOptions>,
+        check_url_base: Option<&Path>,
+    ) -> Result<Self> {
         // An explicit credential flag selects which environment defaults can complete the mode.
         let token_mode = args.token.is_some();
         let password_mode = args.username.is_some() || args.password.is_some();
@@ -5016,8 +5020,7 @@ impl PublishSettings {
                 args.check_url =
                     publish_env::<String>(None, EnvVars::UV_PUBLISH_CHECK_URL, "a string")?
                         .map(|value| {
-                            value
-                                .parse::<IndexUrl>()
+                            IndexUrl::parse(&value, check_url_base)
                                 .map_err(publish_index_error)
                                 .with_context(|| {
                                     format!(

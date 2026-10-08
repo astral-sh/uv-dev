@@ -1065,6 +1065,39 @@ fn publish_environment_url_errors_retain_redacted_causes() {
     windows,
     ignore = "Configuration tests are not yet supported on Windows"
 )]
+fn publish_environment_check_url_keeps_invocation_directory() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("nested").create_dir_all()?;
+    let baseline = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.publish()).args(["--show-settings", "--check-url", "./simple"])
+    );
+    for working_directory_environment in [false, true] {
+        let command = || {
+            let mut command = add_shared_args(context.publish());
+            command.arg("--show-settings");
+            if working_directory_environment {
+                command.env(EnvVars::UV_WORKING_DIRECTORY, "nested");
+            } else {
+                command.args(["--directory", "nested"]);
+            }
+            command
+        };
+        allow_duplicates! {
+            diff_uv_snapshot!(context.filters(), &baseline, command()
+                .args(["--check-url", "./simple"]), @"");
+            diff_uv_snapshot!(context.filters(), &baseline, command()
+                .env(EnvVars::UV_PUBLISH_CHECK_URL, "./simple"), @"");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
 fn pip_install_baseline() {
     let context = uv_test::test_context!("3.12");
 

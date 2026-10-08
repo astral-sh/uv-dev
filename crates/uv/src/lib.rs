@@ -148,6 +148,18 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             std::env::var_os(EnvVars::UV_WORKING_DIRECTORY).map(std::path::PathBuf::from)
         });
 
+    // CLI check URLs are parsed before changing directories; environment paths use the same base.
+    let publish_check_url_base = if directory.is_some()
+        && let Commands::Publish(args) = &*cli.command
+        && args.check_url.is_none()
+        && args.index.is_none()
+        && std::env::var_os(EnvVars::UV_PUBLISH_CHECK_URL).is_some()
+    {
+        Some(std::env::current_dir()?)
+    } else {
+        None
+    };
+
     // Switch directories as early as possible.
     if let Some(directory) = directory.as_ref() {
         std::env::set_current_dir(directory)?;
@@ -2052,7 +2064,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             }
 
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args = PublishSettings::resolve(args, filesystem)?;
+            let args =
+                PublishSettings::resolve(args, filesystem, publish_check_url_base.as_deref())?;
             show_settings!(args);
 
             let PublishSettings {
