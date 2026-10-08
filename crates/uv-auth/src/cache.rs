@@ -18,11 +18,11 @@ type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
 
 /// Hash fields in the same order as the owned `(Realm, Username)` key.
 #[derive(Hash)]
-struct RealmKeyRef<'a>(RealmRef<'a>, Option<&'a str>);
+struct RealmKeyRef<'a>(RealmRef<'a>, &'a Username);
 
 impl Equivalent<(Realm, Username)> for RealmKeyRef<'_> {
     fn equivalent(&self, key: &(Realm, Username)) -> bool {
-        self.0 == key.0 && self.1 == key.1.as_deref()
+        self.0 == key.0 && self.1 == &key.1
     }
 }
 
@@ -101,7 +101,7 @@ impl CredentialsCache {
     ) -> Option<Arc<Authentication>> {
         let realms = self.realms.read().unwrap();
         let given_username = username.is_some();
-        let key = RealmKeyRef(realm, username.as_deref());
+        let key = RealmKeyRef(realm, username);
         let realm_username = fmt::from_fn(|f| {
             if let Some(username) = username.as_deref() {
                 write!(f, "{username}@{realm}")
@@ -321,7 +321,7 @@ mod tests {
         for url in &urls {
             for username in [None, Some(""), Some("alice"), Some("bob")] {
                 let owned = (Realm::from(url), Username::new(username.map(str::to_owned)));
-                let borrowed = RealmKeyRef(RealmRef::from(url), owned.1.as_deref());
+                let borrowed = RealmKeyRef(RealmRef::from(url), &owned.1);
                 assert!(borrowed.equivalent(&owned));
                 assert_eq!(hasher.hash_one(&borrowed), hasher.hash_one(&owned));
 
