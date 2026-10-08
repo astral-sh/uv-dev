@@ -54,4 +54,5 @@ self-update = []
 
 [build-dependencies]
 uv-static = { workspace = true }
-fs-err = { workspace = true }
+# Build scripts only need synchronous filesystem APIs.
+fs-err = { version = "3.2.2", default-features = false }
