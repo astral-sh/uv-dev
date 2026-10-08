@@ -286,15 +286,12 @@ fn nested_dependencies() -> Result<()> {
         .arg("joblib")
         .arg("--prune")
         .arg("numpy"), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
     └── scikit-learn v1.4.1.post1
         ├── scipy v1.12.0
         └── threadpoolctl v3.4.0
-
-    ----- stderr -----
     ");
 
     Ok(())
