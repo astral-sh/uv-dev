@@ -12,13 +12,13 @@ use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
-    ExtrasSpecification, Modifications, Reinstall, TargetTriple, Upgrade,
+    ActiveEnvironment, BuildOptions, Concurrency, Constraints, DependencyGroupsWithDefaults,
+    DryRun, ExtrasSpecification, Modifications, Reinstall, TargetTriple, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ExtraBuildRequires, HashCollection, Index, RequiresPython, Resolution,
+    ExtraBuildRequires, HashCollection, Index, IndexLocations, RequiresPython, Resolution,
 };
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
@@ -1365,7 +1365,11 @@ pub async fn resolve_environment(
     printer: Printer,
     preview: Preview,
 ) -> Result<ResolverOutput, EnvironmentError> {
-    warn_on_requirements_txt_setting(&spec.requirements, settings);
+    warn_on_requirements_txt_setting(
+        &spec.requirements,
+        &settings.index_locations,
+        &settings.build_options,
+    );
 
     let ResolverSettings {
         index_locations,
@@ -1760,7 +1764,11 @@ pub async fn update_environment(
     printer: Printer,
     preview: Preview,
 ) -> Result<EnvironmentUpdate, EnvironmentError> {
-    warn_on_requirements_txt_setting(&spec, &settings.resolver);
+    warn_on_requirements_txt_setting(
+        &spec,
+        &settings.resolver.index_locations,
+        &settings.resolver.build_options,
+    );
 
     let ResolverInstallerSettings {
         resolver:
@@ -2064,7 +2072,11 @@ pub fn detect_conflicts(
 }
 
 /// Warn if the user provides (e.g.) an `--index-url` in a requirements file.
-fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: &ResolverSettings) {
+fn warn_on_requirements_txt_setting(
+    spec: &RequirementsSpecification,
+    index_locations: &IndexLocations,
+    build_options: &BuildOptions,
+) {
     let RequirementsSpecification {
         index_url,
         extra_index_urls,
@@ -2075,7 +2087,7 @@ fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: 
         ..
     } = spec;
 
-    if settings.index_locations.no_index() {
+    if index_locations.no_index() {
         // Nothing to do, we're ignoring the URLs anyway.
     } else if *no_index {
         warn_user_once!(
@@ -2083,15 +2095,14 @@ fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: 
         );
     } else {
         if let Some(index_url) = index_url {
-            if settings.index_locations.default_index().map(Index::url) != Some(index_url) {
+            if index_locations.default_index().map(Index::url) != Some(index_url) {
                 warn_user_once!(
                     "Ignoring `--index-url` value `{index_url}` from requirements file. Instead, use the `--index-url` command-line argument, or set `index-url` in a `uv.toml` or `pyproject.toml` file."
                 );
             }
         }
         for extra_index_url in extra_index_urls {
-            if !settings
-                .index_locations
+            if !index_locations
                 .implicit_indexes()
                 .any(|index| index.url() == extra_index_url)
             {
@@ -2101,8 +2112,7 @@ fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: 
             }
         }
         for find_link in find_links {
-            if !settings
-                .index_locations
+            if !index_locations
                 .flat_indexes()
                 .any(|index| index.url() == find_link)
             {
@@ -2113,13 +2123,13 @@ fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: 
         }
     }
 
-    if !no_binary.is_none() && settings.build_options.no_binary() != no_binary {
+    if !no_binary.is_none() && build_options.no_binary() != no_binary {
         warn_user_once!(
             "Ignoring `--no-binary` setting from requirements file. Instead, use the `--no-binary` command-line argument, or set `no-binary` in a `uv.toml` or `pyproject.toml` file."
         );
     }
 
-    if !no_build.is_none() && settings.build_options.no_build() != no_build {
+    if !no_build.is_none() && build_options.no_build() != no_build {
         warn_user_once!(
             "Ignoring `--no-binary` setting from requirements file. Instead, use the `--no-build` command-line argument, or set `no-build` in a `uv.toml` or `pyproject.toml` file."
         );

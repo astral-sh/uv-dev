@@ -523,7 +523,7 @@ pub async fn install(
                     &interpreter,
                     package_name,
                     explicit_python_request,
-                    &settings,
+                    &settings.reinstall,
                     existing_tool_receipt.as_ref(),
                     printer,
                 )
@@ -1094,7 +1094,7 @@ fn existing_environment_usable(
     interpreter: &Interpreter,
     package_name: &PackageName,
     explicit_python_request: bool,
-    settings: &ResolverInstallerSettings,
+    reinstall: &Reinstall,
     existing_tool_receipt: Option<&uv_tool::Tool>,
     printer: Printer,
 ) -> bool {
@@ -1123,7 +1123,7 @@ fn existing_environment_usable(
     // previous receipt did not pin a Python request. In that case, the reinstall should
     // follow the newly selected interpreter instead of reusing the old environment.
     if let Some(tool_receipt) = existing_tool_receipt
-        && settings.reinstall.contains_package(package_name)
+        && reinstall.contains_package(package_name)
         && tool_receipt.python().is_none()
     {
         let _ = writeln!(
