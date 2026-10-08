@@ -42,7 +42,6 @@ use which::which;
 use windows::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_CANT_ACCESS_FILE, WIN32_ERROR};
 
 /// A Python executable and its associated platform markers.
-#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Interpreter {
     platform: Platform,
