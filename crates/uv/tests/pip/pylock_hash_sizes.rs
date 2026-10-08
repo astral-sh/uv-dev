@@ -56,60 +56,177 @@ fn set_recorded_wheel(lock: &mut DocumentMut, url: &str, size: u64) -> Result<()
 }
 
 #[tokio::test]
-async fn compile_hash_completion_refreshes_advisory_size() -> Result<()> {
-    for advertised_size in [None, Some(1)] {
-        let context = uv_test::test_context!("3.12");
-        let name = "demo".parse()?;
-        let server = PackageServer::new(&name).await;
-        let (filename, bytes) = generate_wheel(
-            &name,
-            &"1.0".parse()?,
-            &[],
-            &BTreeMap::new(),
-            None,
-            "py3-none-any",
-            &[],
-        );
-        serve_hashless_wheel(&server, &filename, &bytes, advertised_size).await;
-        context
-            .temp_dir
-            .child("requirements.in")
-            .write_str("demo==1.0")?;
-        context
-            .pip_compile()
-            .arg("requirements.in")
-            .arg("--index-url")
-            .arg(server.index_url())
-            .arg("-o")
-            .arg("pylock.toml")
-            .assert()
-            .success();
+async fn compile_hash_completion_without_advisory_size() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = "demo".parse()?;
+    let server = PackageServer::new(&name).await;
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    serve_hashless_wheel(&server, &filename, &bytes, None).await;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("demo==1.0")?;
+    context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("-o")
+        .arg("pylock.toml")
+        .assert()
+        .success();
 
-        let export: toml::Value = toml::from_str(&fs_err::read_to_string(
-            context.temp_dir.child("pylock.toml"),
-        )?)?;
-        let wheel = &export["packages"][0]["wheels"][0];
-        let digest = hex::encode(Sha256::digest(&bytes));
-        assert_eq!(wheel["hashes"]["sha256"].as_str(), Some(digest.as_str()));
-        assert_eq!(
-            wheel.get("size").and_then(toml::Value::as_integer),
-            advertised_size.map(|_| i64::try_from(bytes.len()).expect("fixture size fits i64")),
-        );
-        context
-            .pip_sync()
-            .arg("pylock.toml")
-            .arg("--preview-features")
-            .arg("pylock")
-            .arg("--no-index")
-            .assert()
-            .success();
-        context.assert_installed("demo", "1.0");
-    }
+    let export: toml::Value = toml::from_str(&context.read("pylock.toml"))?;
+    let wheel = &export["packages"][0]["wheels"][0];
+    let digest = hex::encode(Sha256::digest(&bytes));
+    assert_eq!(wheel["hashes"]["sha256"].as_str(), Some(digest.as_str()));
+    assert!(wheel.get("size").is_none());
+    context
+        .pip_sync()
+        .arg("pylock.toml")
+        .arg("--preview-features")
+        .arg("pylock")
+        .arg("--no-index")
+        .assert()
+        .success();
+    context.assert_installed("demo", "1.0");
+    Ok(())
+}
+
+#[tokio::test]
+async fn compile_hash_completion_refreshes_advisory_size() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = "demo".parse()?;
+    let server = PackageServer::new(&name).await;
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    serve_hashless_wheel(&server, &filename, &bytes, Some(1)).await;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("demo==1.0")?;
+    context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("-o")
+        .arg("pylock.toml")
+        .assert()
+        .success();
+
+    let export: toml::Value = toml::from_str(&context.read("pylock.toml"))?;
+    let wheel = &export["packages"][0]["wheels"][0];
+    let digest = hex::encode(Sha256::digest(&bytes));
+    assert_eq!(wheel["hashes"]["sha256"].as_str(), Some(digest.as_str()));
+    assert_eq!(
+        wheel.get("size").and_then(toml::Value::as_integer),
+        Some(i64::try_from(bytes.len())?),
+    );
+    context
+        .pip_sync()
+        .arg("pylock.toml")
+        .arg("--preview-features")
+        .arg("pylock")
+        .arg("--no-index")
+        .assert()
+        .success();
+    context.assert_installed("demo", "1.0");
     Ok(())
 }
 
 #[tokio::test]
 async fn export_hash_completion_checks_recorded_size() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = "demo".parse()?;
+    let server = PackageServer::new(&name).await;
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let actual_size = u64::try_from(bytes.len())?;
+    serve_hashless_wheel(&server, &filename, &bytes, Some(actual_size)).await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["demo"]
+    "#})?;
+    context
+        .lock()
+        .arg("--default-index")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let lock_path = context.temp_dir.child("uv.lock");
+    let mut lock = context.read("uv.lock").parse::<DocumentMut>()?;
+    let output_path = context.temp_dir.child("pylock.toml");
+
+    set_recorded_wheel(&mut lock, &server.file_url(&filename), actual_size)?;
+    lock_path.write_str(&lock.to_string())?;
+    context
+        .export()
+        .arg("--frozen")
+        .arg("--no-emit-project")
+        .arg("--format")
+        .arg("pylock.toml")
+        .arg("-o")
+        .arg(output_path.path())
+        .assert()
+        .success();
+    let export: toml::Value = toml::from_str(&context.read("pylock.toml"))?;
+    let wheel = &export["packages"][0]["wheels"][0];
+    assert_eq!(
+        wheel["size"].as_integer(),
+        Some(i64::try_from(actual_size)?)
+    );
+    let digest = hex::encode(Sha256::digest(&bytes));
+    assert_eq!(wheel["hashes"]["sha256"].as_str(), Some(digest.as_str()));
+
+    set_recorded_wheel(&mut lock, &server.file_url(&filename), actual_size + 1)?;
+    lock_path.write_str(&lock.to_string())?;
+    output_path.write_str("previous export\n")?;
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen")
+        .arg("--no-emit-project")
+        .arg("--format")
+        .arg("pylock.toml")
+        .arg("-o")
+        .arg(output_path.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Artifact `http://[LOCALHOST]/demo-1.0-py3-none-any.whl` has size 914, but the lockfile records 915
+    ");
+    assert_eq!(context.read("pylock.toml"), "previous export\n");
+    Ok(())
+}
+
+#[tokio::test]
+async fn export_local_hash_completion_checks_recorded_size() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let name = "demo".parse()?;
     let server = PackageServer::new(&name).await;
@@ -144,60 +261,44 @@ async fn export_hash_completion_checks_recorded_size() -> Result<()> {
         .assert()
         .success();
     let lock_path = context.temp_dir.child("uv.lock");
-    let mut lock = fs_err::read_to_string(&lock_path)?.parse::<DocumentMut>()?;
+    let mut lock = context.read("uv.lock").parse::<DocumentMut>()?;
     let output_path = context.temp_dir.child("pylock.toml");
 
-    for (local, url) in [
-        (false, server.file_url(&filename)),
-        (true, file_url.to_string()),
-    ] {
-        set_recorded_wheel(&mut lock, &url, actual_size)?;
-        lock_path.write_str(&lock.to_string())?;
-        context
-            .export()
-            .arg("--frozen")
-            .arg("--no-emit-project")
-            .arg("--format")
-            .arg("pylock.toml")
-            .arg("-o")
-            .arg(output_path.path())
-            .assert()
-            .success();
-        let export: toml::Value = toml::from_str(&fs_err::read_to_string(&output_path)?)?;
-        let wheel = &export["packages"][0]["wheels"][0];
-        assert_eq!(
-            wheel["size"].as_integer(),
-            Some(i64::try_from(actual_size)?)
-        );
-        let digest = hex::encode(Sha256::digest(&bytes));
-        assert_eq!(wheel["hashes"]["sha256"].as_str(), Some(digest.as_str()));
+    set_recorded_wheel(&mut lock, file_url.as_str(), actual_size)?;
+    lock_path.write_str(&lock.to_string())?;
+    context
+        .export()
+        .arg("--frozen")
+        .arg("--no-emit-project")
+        .arg("--format")
+        .arg("pylock.toml")
+        .arg("-o")
+        .arg(output_path.path())
+        .assert()
+        .success();
+    let export: toml::Value = toml::from_str(&context.read("pylock.toml"))?;
+    let wheel = &export["packages"][0]["wheels"][0];
+    assert_eq!(
+        wheel["size"].as_integer(),
+        Some(i64::try_from(actual_size)?)
+    );
+    let digest = hex::encode(Sha256::digest(&bytes));
+    assert_eq!(wheel["hashes"]["sha256"].as_str(), Some(digest.as_str()));
 
-        set_recorded_wheel(&mut lock, &url, actual_size + 1)?;
-        lock_path.write_str(&lock.to_string())?;
-        output_path.write_str("previous export\n")?;
-        let mut command = context.export();
-        command
-            .arg("--frozen")
-            .arg("--no-emit-project")
-            .arg("--format")
-            .arg("pylock.toml")
-            .arg("-o")
-            .arg(output_path.path());
-        let output = if local {
-            uv_snapshot!(context.filters(), command, @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: Artifact `file://[TEMP_DIR]/demo-1.0-py3-none-any.whl` has size 914, but the lockfile records 915
-            ")
-        } else {
-            uv_snapshot!(context.filters(), command, @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: Artifact `http://[LOCALHOST]/demo-1.0-py3-none-any.whl` has size 914, but the lockfile records 915
-            ")
-        };
-        assert!(!output.status.success());
-        assert_eq!(fs_err::read_to_string(&output_path)?, "previous export\n");
-    }
+    set_recorded_wheel(&mut lock, file_url.as_str(), actual_size + 1)?;
+    lock_path.write_str(&lock.to_string())?;
+    output_path.write_str("previous export\n")?;
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen")
+        .arg("--no-emit-project")
+        .arg("--format")
+        .arg("pylock.toml")
+        .arg("-o")
+        .arg(output_path.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Artifact `file://[TEMP_DIR]/demo-1.0-py3-none-any.whl` has size 914, but the lockfile records 915
+    ");
+    assert_eq!(context.read("pylock.toml"), "previous export\n");
     Ok(())
 }
