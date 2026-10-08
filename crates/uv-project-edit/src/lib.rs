@@ -181,7 +181,7 @@ impl PyProjectTomlMut {
     /// Adds a dependency to `project.dependencies`.
     ///
     /// Returns `true` if the dependency was added, `false` if it was updated.
-    pub(crate) fn add_dependency(
+    fn add_dependency(
         &mut self,
         req: &Requirement,
         source: Option<&Source>,
@@ -266,7 +266,7 @@ impl PyProjectTomlMut {
     /// Adds a development dependency to `tool.uv.dev-dependencies`.
     ///
     /// Returns `true` if the dependency was added, `false` if it was updated.
-    pub(crate) fn add_dev_dependency(
+    fn add_dev_dependency(
         &mut self,
         req: &Requirement,
         source: Option<&Source>,
@@ -505,7 +505,7 @@ impl PyProjectTomlMut {
     /// Adds a dependency to `project.optional-dependencies`.
     ///
     /// Returns `true` if the dependency was added, `false` if it was updated.
-    pub(crate) fn add_optional_dependency(
+    fn add_optional_dependency(
         &mut self,
         group: &ExtraName,
         req: &Requirement,
@@ -598,7 +598,7 @@ impl PyProjectTomlMut {
     /// Adds a dependency to `dependency-groups`.
     ///
     /// Returns `true` if the dependency was added, `false` if it was updated.
-    pub(crate) fn add_dependency_group_requirement(
+    fn add_dependency_group_requirement(
         &mut self,
         group: &GroupName,
         req: &Requirement,
@@ -1120,7 +1120,7 @@ impl PyProjectTomlMut {
     }
 
     /// Returns `true` if the `tool.uv.dev-dependencies` table is present.
-    pub(crate) fn has_dev_dependencies(&self) -> bool {
+    fn has_dev_dependencies(&self) -> bool {
         self.doc
             .get("tool")
             .and_then(Item::as_table)
@@ -1131,7 +1131,7 @@ impl PyProjectTomlMut {
     }
 
     /// Returns `true` if the `dependency-groups` table is present and contains the given group.
-    pub(crate) fn has_dependency_group(&self, group: &GroupName) -> bool {
+    fn has_dependency_group(&self, group: &GroupName) -> bool {
         self.doc
             .get("dependency-groups")
             .and_then(Item::as_table)
