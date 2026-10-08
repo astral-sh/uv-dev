@@ -13,12 +13,14 @@ use wiremock::matchers::{basic_auth, header_exists, header_regex, method, path};
 use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
 use uv_cache::Cache;
-use uv_client::{BaseClientBuilder, MetadataRangeRequest, RegistryClientBuilder};
+use uv_client::{MetadataRangeRequest, RegistryClientBuilder};
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{BuiltDist, DirectUrlBuiltDist, IndexCapabilities};
 use uv_git::GitResolver;
 use uv_pep508::VerbatimUrl;
 use uv_redacted::DisplaySafeUrl;
+
+use crate::http_util::local_client_builder;
 
 #[tokio::test]
 async fn remote_metadata_with_and_without_cache() -> Result<()> {
@@ -33,7 +35,7 @@ async fn remote_metadata_with_and_without_cache() -> Result<()> {
         .await;
 
     let cache = Cache::temp()?.init().await?;
-    let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
+    let client = RegistryClientBuilder::new(local_client_builder(), cache).build()?;
 
     // The first run is without cache (the tempdir is empty), the second has the cache from the
     // first run.
@@ -71,7 +73,7 @@ async fn remote_metadata_requires_range_requests() -> Result<()> {
 
     let cache = Cache::temp()?.init().await?;
     let client = RegistryClientBuilder::new(
-        BaseClientBuilder::default().metadata_range_request(MetadataRangeRequest::Require),
+        local_client_builder().metadata_range_request(MetadataRangeRequest::Require),
         cache,
     )
     .build()?;
@@ -598,7 +600,7 @@ fn wheel() -> Result<Vec<u8>> {
 /// Reads wheel metadata through the authenticated source URL shared by each redirect scenario.
 async fn assert_wheel_metadata_readable(source_server: &MockServer) -> Result<()> {
     let cache = Cache::temp()?.init().await?;
-    let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
+    let client = RegistryClientBuilder::new(local_client_builder(), cache).build()?;
     let url = authenticated_url(
         &source_server.uri(),
         "/artifact",

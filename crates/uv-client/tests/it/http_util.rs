@@ -15,6 +15,7 @@ use rcgen::{
     BasicConstraints, Certificate, CertificateParams, CustomExtension, DnType,
     ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, KeyUsagePurpose, SanType, date_time_ymd,
 };
+use reqwest::{Proxy, Url};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig};
@@ -22,7 +23,15 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
 
+use uv_client::BaseClientBuilder;
 use uv_fs::Simplified;
+
+/// Build clients for owned local servers without consulting ambient proxy settings.
+///
+/// An explicit, non-intercepting proxy disables reqwest's system proxy discovery.
+pub(crate) fn local_client_builder() -> BaseClientBuilder<'static> {
+    BaseClientBuilder::default().proxy(Proxy::custom(|_| None::<Url>))
+}
 
 /// An issued certificate, together with the subject keypair.
 #[derive(Debug)]
