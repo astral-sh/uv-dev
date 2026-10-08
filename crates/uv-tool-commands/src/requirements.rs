@@ -1,19 +1,26 @@
 use std::sync::Arc;
 
 use itertools::Itertools;
+use tokio::sync::Semaphore;
+use tracing::debug;
 
 use uv_cache::Cache;
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, ClientBuildError, RegistryClient, RegistryClientBuilder};
 use uv_command_support::Printer;
 use uv_configuration::{Concurrency, Constraints, GitLfsSetting, HashCheckingMode};
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    IndexCapabilities, Requirement, RequirementScope, RequirementSource, UnresolvedRequirement,
+    UnresolvedRequirementSpecification,
 };
+use uv_normalize::PackageName;
+use uv_pep440::{VersionSpecifier, VersionSpecifiers};
+use uv_pep508::MarkerTree;
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::NamedRequirementsResolver;
+use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::FlatIndex;
 use uv_settings::ResolverSettings;
@@ -180,4 +187,64 @@ pub(super) async fn resolve_names(
     );
 
     Ok(requirements)
+}
+
+/// Build the authenticated registry client used to resolve a tool's `@latest` request.
+pub(super) fn latest_registry_client(
+    interpreter: &Interpreter,
+    settings: &ResolverSettings,
+    client_builder: &BaseClientBuilder<'_>,
+    cache: &Cache,
+) -> Result<RegistryClient, ClientBuildError> {
+    RegistryClientBuilder::new(
+        client_builder.clone().keyring(settings.keyring_provider),
+        cache.clone(),
+    )
+    .index_locations(settings.index_locations.clone())
+    .index_strategy(settings.index_strategy)
+    .markers(interpreter.markers())
+    .platform(interpreter.platform())
+    .build()
+}
+
+/// Pin `@latest` before resolution so dependency conflicts cannot backtrack to an older tool.
+pub(super) async fn resolve_latest_constraint(
+    name: &PackageName,
+    client: &RegistryClient,
+    settings: &ResolverSettings,
+    download_concurrency: &Semaphore,
+) -> Result<Option<Requirement>, uv_client::Error> {
+    let capabilities = IndexCapabilities::default();
+    let latest_client = LatestClient {
+        client,
+        capabilities: &capabilities,
+        prerelease: &settings.prerelease,
+        exclude_newer: &settings.exclude_newer,
+        index_locations: &settings.index_locations,
+        // The latest release is selected independently of interpreter compatibility.
+        tags: None,
+        requires_python: None,
+    };
+    let Some(dist_filename) = latest_client
+        .find_latest(name, None, download_concurrency)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let version = dist_filename.version().clone();
+    debug!("Resolved `{name}@latest` to `{name}=={version}`");
+
+    Ok(Some(Requirement {
+        name: name.clone(),
+        extras: Box::new([]),
+        groups: Box::new([]),
+        marker: MarkerTree::default(),
+        source: RequirementSource::Registry {
+            specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
+            index: None,
+            conflict: None,
+        },
+        scope: RequirementScope::Global,
+        origin: None,
+    }))
 }
