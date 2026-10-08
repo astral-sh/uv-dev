@@ -26,7 +26,7 @@ pub use file_identity::{
     open_directory, open_file_entry,
 };
 #[cfg(feature = "std")]
-pub use file_replace::replace_file_with_backup;
+pub use file_replace::{remove_file_preserving_attributes, replace_file_with_backup};
 pub use job::{Job, JobError};
 #[cfg(feature = "std")]
 pub use spawn::spawn_child;

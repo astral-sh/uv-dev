@@ -281,7 +281,7 @@ async fn upgrade_tool(
     preview: Preview,
 ) -> Result<UpgradeReport> {
     let tool_locks = preview.is_enabled(PreviewFeature::ToolInstallLocks);
-    super::export_transaction::recover_tool_exports(installed_tools, name)?;
+    super::export_transaction::recover_tool_exports(installed_tools, name).await?;
     // Ensure the tool is installed.
     let existing_tool_receipt = match installed_tools.get_tool_receipt(name) {
         Ok(Some(receipt)) => receipt,

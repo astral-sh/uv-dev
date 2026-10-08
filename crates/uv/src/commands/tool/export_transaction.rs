@@ -20,7 +20,7 @@ use uv_fs::Simplified;
 use uv_installer::SitePackages;
 use uv_normalize::PackageName;
 use uv_python::PythonEnvironment;
-use uv_tool::{InstalledTools, ToolEntrypoint, entrypoint_paths};
+use uv_tool::{InstalledTools, ToolEntrypoint, ToolEntrypointLocks, entrypoint_paths};
 use uv_warnings::warn_user;
 
 use crate::commands::tool::common::{NoExecutablesError, matching_packages};
@@ -351,15 +351,12 @@ fn is_filename(path: &Path) -> bool {
 }
 
 /// Journals captured under the tool-root lock, before acquiring their destination locks.
-pub(super) struct PendingToolExportRecovery {
+struct PendingToolExportRecovery {
     records: Vec<JournalRecord>,
 }
 
 impl PendingToolExportRecovery {
-    pub(super) fn read(
-        installed_tools: &InstalledTools,
-        names: &[PackageName],
-    ) -> anyhow::Result<Self> {
+    fn read(installed_tools: &InstalledTools, names: &[PackageName]) -> anyhow::Result<Self> {
         let names = if names.is_empty() {
             pending_export_names(installed_tools)?
         } else {
@@ -374,13 +371,13 @@ impl PendingToolExportRecovery {
         Ok(Self { records })
     }
 
-    pub(super) fn directories(&self) -> impl Iterator<Item = &Path> {
+    fn directories(&self) -> impl Iterator<Item = &Path> {
         self.records
             .iter()
             .map(|record| record.journal.directory.as_path())
     }
 
-    pub(super) fn recover(self, installed_tools: &InstalledTools) -> anyhow::Result<()> {
+    fn recover(self, installed_tools: &InstalledTools) -> anyhow::Result<()> {
         for directory in self.directories() {
             if fs_err::canonicalize(directory)? != directory {
                 bail!(
@@ -400,6 +397,11 @@ impl PendingToolExportRecovery {
         }
         Ok(())
     }
+}
+
+/// Pending recovery records must outlive cleanup of an otherwise empty tool store.
+pub(super) fn has_pending_exports(installed_tools: &InstalledTools) -> anyhow::Result<bool> {
+    Ok(!pending_export_names(installed_tools)?.is_empty())
 }
 
 fn pending_export_names(installed_tools: &InstalledTools) -> anyhow::Result<Vec<PackageName>> {
@@ -572,7 +574,7 @@ impl FreshToolExportPlan {
     }
 
     /// Directory admission belongs between preparation and the authoritative publication checks.
-    pub(super) fn directory(&self) -> &Path {
+    pub(super) fn canonical_directory(&self) -> &Path {
         &self.canonical_directory
     }
 
@@ -652,17 +654,11 @@ impl FreshToolExportPlan {
             fs_err::os::unix::fs::symlink(&export.source, &prepared)?;
             #[cfg(windows)]
             {
-                let file = fs_err::OpenOptions::new()
-                    .read(true)
+                super::recovery::copy_executable(&export.source, &prepared)?;
+                fs_err::OpenOptions::new()
                     .write(true)
-                    .create_new(true)
-                    .open(&prepared)?;
-                let identity = ExportIdentity::from_file(&file)?;
-                fs_err::copy(&export.source, &prepared)?;
-                if ExportIdentity::at(&prepared)?.as_ref() != Some(&identity) {
-                    bail!("Prepared executable changed while being copied");
-                }
-                file.sync_all()?;
+                    .open(&prepared)?
+                    .sync_all()?;
             }
             let replacement = ExportVersion::capture(&prepared)?.ok_or_else(|| {
                 io::Error::other("Prepared executable disappeared during installation")
@@ -701,8 +697,8 @@ impl FreshToolExportPlan {
 }
 
 impl PreparedToolExports {
-    pub(super) fn directory(&self) -> &Path {
-        self.plan.directory()
+    pub(super) fn canonical_directory(&self) -> &Path {
+        self.plan.canonical_directory()
     }
 
     /// Recheck admission after locking the destination, then record intent before publishing.
@@ -902,19 +898,21 @@ fn sync_metadata(installed_tools: &InstalledTools, journal: &ExportJournal) -> i
 }
 
 /// Recover the selected tool before reading its receipt or replacing its environment.
-pub(super) fn recover_tool_exports(
+pub(super) async fn recover_tool_exports(
     installed_tools: &InstalledTools,
     name: &PackageName,
 ) -> anyhow::Result<()> {
-    PendingToolExportRecovery::read(installed_tools, std::slice::from_ref(name))?
-        .recover(installed_tools)
+    recover_selected_exports(installed_tools, std::slice::from_ref(name)).await
 }
 
-pub(super) fn recover_selected_exports(
+pub(super) async fn recover_selected_exports(
     installed_tools: &InstalledTools,
     names: &[PackageName],
 ) -> anyhow::Result<()> {
-    PendingToolExportRecovery::read(installed_tools, names)?.recover(installed_tools)
+    let pending = PendingToolExportRecovery::read(installed_tools, names)?;
+    let _entrypoint_locks =
+        ToolEntrypointLocks::for_directories(pending.directories().map(Path::to_path_buf)).await?;
+    pending.recover(installed_tools)
 }
 
 fn recover_record(
@@ -1029,7 +1027,10 @@ fn cleanup_anchors(journal: &ExportJournal) -> anyhow::Result<()> {
                     path.user_display()
                 );
             }
+            #[cfg(unix)]
             fs_err::remove_file(path)?;
+            #[cfg(windows)]
+            uv_windows::remove_file_preserving_attributes(&path)?;
         }
     }
     // Unknown entries prevent directory removal and keep the journal available for inspection.
@@ -1046,6 +1047,13 @@ fn new_anchor(directory: &Path, index: usize) -> PathBuf {
     directory.join(format!("new-{index}"))
 }
 
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "directory synchronization is fallible on Unix"
+    )
+)]
 fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     fs_err::File::open(path)?.sync_all()?;
@@ -1064,13 +1072,30 @@ mod tests {
     use anyhow::{Context, bail};
     use uv_normalize::PackageName;
     use uv_settings::ToolOptions;
-    use uv_tool::{InstalledTools, PreparedToolReceipt, Tool, ToolEntrypoint};
+    use uv_tool::{InstalledTools, PreparedToolReceipt, Tool, ToolEntrypoint, ToolEntrypointLocks};
 
     use super::{
         ExportVersion, FreshToolExportPlan, JournalRecord, PreparedExport, ToolExportTransaction,
         journal_path, publish_export, publish_export_data, recover_tool_exports,
     };
     use crate::printer::Printer;
+
+    fn isolated_root(test: &str) -> anyhow::Result<Option<PathBuf>> {
+        const ROOT: &str = "UV_TEST_TOOL_EXPORT_ROOT";
+        if let Some(root) = std::env::var_os(ROOT) {
+            return Ok(Some(root.into()));
+        }
+        let directory = tempfile::tempdir()?;
+        let test = format!("commands::tool::export_transaction::tests::{test}");
+        let output = Command::new(std::env::current_exe()?)
+            .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+            .env_remove("__RUST_TEST_INVOKE")
+            .env(ROOT, directory.path())
+            .env("UV_TOOL_DIR", directory.path().join("tools"))
+            .output()?;
+        anyhow::ensure!(output.status.success(), "{output:?}");
+        Ok(None)
+    }
 
     struct Installation {
         tools: InstalledTools,
@@ -1081,7 +1106,9 @@ mod tests {
 
     impl Installation {
         fn at(root: &Path) -> anyhow::Result<Self> {
-            let tools = InstalledTools::from_path(root.join("tools")).init()?;
+            let tools = InstalledTools::from_settings()?;
+            anyhow::ensure!(tools.root() == root.join("tools"));
+            let tools = tools.init()?;
             let name = "example".parse()?;
             fs_err::create_dir_all(tools.tool_dir(&name))?;
             let directory = root.join("bin");
@@ -1151,9 +1178,116 @@ mod tests {
     }
 
     #[test]
-    fn failed_install_restores_forced_command() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    fn unlink_readonly_backup_keeps_original_attributes() -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
-        let installation = Installation::at(directory.path())?;
+        let original = directory.path().join("command.exe");
+        let backup = directory.path().join("backup.exe");
+        fs_err::write(&original, "original command")?;
+        fs_err::hard_link(&original, &backup)?;
+        let permissions = fs_err::metadata(&original)?.permissions();
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        fs_err::set_permissions(&original, readonly)?;
+        let result = uv_windows::remove_file_preserving_attributes(&backup);
+        let retained = fs_err::metadata(&original)?.permissions().readonly();
+        fs_err::set_permissions(&original, permissions)?;
+        result?;
+        assert!(retained);
+        assert!(!backup.exists());
+        assert_eq!(fs_err::read(&original)?, b"original command");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn forced_replacement_retains_acl_and_old_alias() -> anyhow::Result<()> {
+        let Some(root) = isolated_root("forced_replacement_retains_acl_and_old_alias")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
+        let target = installation.target("alpha");
+        fs_err::write(&target, "original command")?;
+        let alias = root.as_path().join("original-alias.exe");
+        fs_err::hard_link(&target, &alias)?;
+        let protected = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; $acl = Get-Acl -LiteralPath $env:UV_TEST_ACL_PATH; $acl.SetAccessRuleProtection($true, $true); Set-Acl -LiteralPath $env:UV_TEST_ACL_PATH -AclObject $acl"])
+            .env("UV_TEST_ACL_PATH", &target)
+            .output()?;
+        assert!(protected.status.success(), "{protected:?}");
+        let descriptor = |path: &Path| -> anyhow::Result<Vec<u8>> {
+            let output = Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; (Get-Acl -LiteralPath $env:UV_TEST_ACL_PATH).Sddl"])
+                .env("UV_TEST_ACL_PATH", path)
+                .output()?;
+            anyhow::ensure!(output.status.success(), "{output:?}");
+            anyhow::ensure!(!output.stdout.is_empty());
+            Ok(output.stdout)
+        };
+        let original = descriptor(&target)?;
+        let (mut transaction, _) = installation.begin(true)?;
+        transaction.publish(Printer::Silent)?;
+        assert_eq!(descriptor(&target)?, original);
+        assert_eq!(descriptor(&alias)?, original);
+        assert_eq!(fs_err::read(&alias)?, b"original command");
+        drop(transaction);
+        assert_eq!(descriptor(&target)?, original);
+        assert_eq!(fs_err::read(&target)?, b"original command");
+        Ok(())
+    }
+
+    #[test]
+    fn staging_failure_keeps_existing_exports() -> anyhow::Result<()> {
+        let Some(root) = isolated_root("staging_failure_keeps_existing_exports")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
+        fs_err::write(installation.target("alpha"), "original command")?;
+        fs_err::create_dir(installation.target("beta"))?;
+        let original = ExportVersion::capture(&installation.target("alpha"))?;
+        assert!(installation.begin(true).is_err());
+        assert_eq!(
+            ExportVersion::capture(&installation.target("alpha"))?,
+            original
+        );
+        assert!(installation.target("beta").is_dir());
+        assert_eq!(fs_err::read_dir(&installation.directory)?.count(), 2);
+        assert!(!journal_path(&installation.tools, &installation.name).exists());
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn replacement_rejects_changed_integrity_label() -> anyhow::Result<()> {
+        let Some(root) = isolated_root("replacement_rejects_changed_integrity_label")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
+        fs_err::write(installation.target("alpha"), "original command")?;
+        let label = Command::new("icacls")
+            .arg(installation.target("alpha"))
+            .args(["/setintegritylevel", "L"])
+            .output()?;
+        assert!(label.status.success(), "{label:?}");
+        let original = ExportVersion::capture(&installation.target("alpha"))?;
+        let (mut transaction, _) = installation.begin(true)?;
+        assert!(transaction.publish(Printer::Silent).is_err());
+        drop(transaction);
+        assert_eq!(
+            ExportVersion::capture(&installation.target("alpha"))?,
+            original
+        );
+        assert!(!installation.target("beta").exists());
+        assert!(!journal_path(&installation.tools, &installation.name).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn failed_install_restores_forced_command() -> anyhow::Result<()> {
+        let Some(root) = isolated_root("failed_install_restores_forced_command")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
         fs_err::write(installation.target("alpha"), "original command")?;
         let original = ExportVersion::capture(&installation.target("alpha"))?;
         let (mut transaction, _) = installation.begin(true)?;
@@ -1170,8 +1304,10 @@ mod tests {
 
     #[test]
     fn identical_foreign_replacement_is_not_removed() -> anyhow::Result<()> {
-        let directory = tempfile::tempdir()?;
-        let installation = Installation::at(directory.path())?;
+        let Some(root) = isolated_root("identical_foreign_replacement_is_not_removed")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
         let (mut transaction, _) = installation.begin(false)?;
         transaction.publish(Printer::Silent)?;
         let foreign = installation.replace_alpha()?;
@@ -1185,8 +1321,11 @@ mod tests {
 
     #[test]
     fn complete_receipt_keeps_other_commands_after_foreign_edit() -> anyhow::Result<()> {
-        let directory = tempfile::tempdir()?;
-        let installation = Installation::at(directory.path())?;
+        let Some(root) = isolated_root("complete_receipt_keeps_other_commands_after_foreign_edit")?
+        else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
         let (mut transaction, receipt) = installation.begin(false)?;
         transaction.publish(Printer::Silent)?;
         installation
@@ -1200,10 +1339,12 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn committed_cleanup_survives_later_metadata_changes() -> anyhow::Result<()> {
-        let directory = tempfile::tempdir()?;
-        let installation = Installation::at(directory.path())?;
+    #[tokio::test]
+    async fn committed_cleanup_survives_later_metadata_changes() -> anyhow::Result<()> {
+        let Some(root) = isolated_root("committed_cleanup_survives_later_metadata_changes")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
         fs_err::write(installation.target("alpha"), "original command")?;
         let (mut transaction, receipt) = installation.begin(true)?;
         transaction.publish(Printer::Silent)?;
@@ -1233,7 +1374,7 @@ mod tests {
         fs_err::write(&receipt_path, "metadata from a later operation")?;
         let foreign = installation.replace_alpha()?;
         fs_err::remove_file(&obstruction)?;
-        recover_tool_exports(&installation.tools, &installation.name)?;
+        recover_tool_exports(&installation.tools, &installation.name).await?;
         assert!(foreign.matches(&installation.target("alpha"))?);
         assert_eq!(fs_err::read(installation.target("beta"))?, b"new beta");
         assert_eq!(
@@ -1246,8 +1387,10 @@ mod tests {
 
     #[test]
     fn receipt_publication_failure_restores_exports() -> anyhow::Result<()> {
-        let directory = tempfile::tempdir()?;
-        let installation = Installation::at(directory.path())?;
+        let Some(root) = isolated_root("receipt_publication_failure_restores_exports")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
         fs_err::write(installation.target("alpha"), "original command")?;
         let original = ExportVersion::capture(&installation.target("alpha"))?;
         let (mut transaction, receipt) = installation.begin(true)?;
@@ -1279,8 +1422,10 @@ mod tests {
     fn second_publication_io_failure_restores_first() -> anyhow::Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
-        let directory = tempfile::tempdir()?;
-        let installation = Installation::at(directory.path())?;
+        let Some(root) = isolated_root("second_publication_io_failure_restores_first")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
         fs_err::write(installation.target("alpha"), "original command")?;
         let original = ExportVersion::capture(&installation.target("alpha"))?;
         let (transaction, _) = installation.begin(true)?;
@@ -1308,8 +1453,10 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn foreign_in_place_edit_keeps_recovery_backups() -> anyhow::Result<()> {
-        let directory = tempfile::tempdir()?;
-        let installation = Installation::at(directory.path())?;
+        let Some(root) = isolated_root("foreign_in_place_edit_keeps_recovery_backups")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
         fs_err::write(installation.target("alpha"), "original command")?;
         let (mut transaction, _) = installation.begin(true)?;
         transaction.publish(Printer::Silent)?;
@@ -1324,7 +1471,133 @@ mod tests {
     }
 
     #[test]
-    fn interruption_before_ack_is_recovered() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    fn interrupted_replacement_restores_displaced_original() -> anyhow::Result<()> {
+        let Some(root) = isolated_root("interrupted_replacement_restores_displaced_original")?
+        else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
+        fs_err::write(installation.target("alpha"), "original command")?;
+        let original = ExportVersion::capture(&installation.target("alpha"))?;
+        let (transaction, _) = installation.begin(true)?;
+        let staging = transaction.record.journal.staging_directory()?;
+        // ReplaceFileW documents this intermediate state when moving the replacement fails.
+        fs_err::rename(installation.target("alpha"), staging.join("displaced-0"))?;
+        drop(transaction);
+        assert_eq!(
+            ExportVersion::capture(&installation.target("alpha"))?,
+            original
+        );
+        assert!(!journal_path(&installation.tools, &installation.name).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn deleted_acknowledged_export_is_not_recreated() -> anyhow::Result<()> {
+        let Some(root) = isolated_root("deleted_acknowledged_export_is_not_recreated")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
+        fs_err::write(installation.target("alpha"), "original command")?;
+        let (mut transaction, _) = installation.begin(true)?;
+        transaction.publish(Printer::Silent)?;
+        fs_err::remove_file(installation.target("alpha"))?;
+        drop(transaction);
+        assert!(!installation.target("alpha").exists());
+        assert!(!installation.target("beta").exists());
+        assert!(journal_path(&installation.tools, &installation.name).exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn running_export_remains_recoverable() -> anyhow::Result<()> {
+        const CHILD: &str = "UV_TEST_RUNNING_TOOL_EXPORT";
+        const TEST: &str =
+            "commands::tool::export_transaction::tests::running_export_remains_recoverable";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = PathBuf::from(root);
+            let installation = Installation::at(&root)?;
+            let (mut transaction, _) = installation.begin(true)?;
+            // Publish over this process's own executable, as a fresh uv self-install does.
+            transaction.publish(Printer::Silent)?;
+            fs_err::write(root.join("running"), "ready")?;
+            loop {
+                thread::park();
+            }
+        }
+        let Some(root) = isolated_root("running_export_remains_recoverable")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
+        fs_err::copy(std::env::current_exe()?, installation.target("alpha"))?;
+        let original = ExportVersion::capture(&installation.target("alpha"))?;
+        let mut child = Command::new(installation.target("alpha"))
+            .args([TEST, "--exact", "--nocapture", "--test-threads=1"])
+            .env("__RUST_TEST_INVOKE", TEST)
+            .env(CHILD, &root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !root.join("running").exists() {
+            if let Some(status) = child.try_wait()? {
+                let output = child.wait_with_output()?;
+                bail!(
+                    "running export exited before readiness: {status}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            if Instant::now() >= deadline {
+                child.kill()?;
+                child.wait()?;
+                bail!("running export did not reach readiness");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let published_alpha = fs_err::read(installation.target("alpha"));
+        let published_beta = fs_err::read(installation.target("beta"));
+        child.kill()?;
+        child.wait()?;
+        assert_eq!(published_alpha?, b"new alpha");
+        assert_eq!(published_beta?, b"new beta");
+        recover_tool_exports(&installation.tools, &installation.name).await?;
+        assert_eq!(
+            ExportVersion::capture(&installation.target("alpha"))?,
+            original
+        );
+        assert!(!installation.target("beta").exists());
+        assert!(!journal_path(&installation.tools, &installation.name).exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unrelated_uninstall_retains_pending_recovery() -> anyhow::Result<()> {
+        let Some(root) = isolated_root("unrelated_uninstall_retains_pending_recovery")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
+        let (mut transaction, _) = installation.begin(false)?;
+        transaction.publish(Printer::Silent)?;
+        // Leave the persisted journal responsible for recovery, as it is after process exit.
+        transaction.finished = true;
+        drop(transaction);
+        fs_err::remove_dir_all(installation.tools.tool_dir(&installation.name))?;
+        let unrelated = "unrelated".parse()?;
+        fs_err::create_dir_all(installation.tools.tool_dir(&unrelated))?;
+        super::super::uninstall::uninstall(vec![unrelated], Printer::Silent).await?;
+        assert!(journal_path(&installation.tools, &installation.name).exists());
+        assert!(installation.target("alpha").exists());
+        recover_tool_exports(&installation.tools, &installation.name).await?;
+        assert!(!installation.target("alpha").exists());
+        assert!(!installation.target("beta").exists());
+        assert!(!journal_path(&installation.tools, &installation.name).exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn interruption_before_ack_is_recovered() -> anyhow::Result<()> {
         const CHILD: &str = "UV_TEST_TOOL_EXPORT_INTERRUPTION";
         if let Some(root) = std::env::var_os(CHILD) {
             let root = PathBuf::from(root);
@@ -1337,8 +1610,10 @@ mod tests {
             }
         }
 
-        let directory = tempfile::tempdir()?;
-        let installation = Installation::at(directory.path())?;
+        let Some(root) = isolated_root("interruption_before_ack_is_recovered")? else {
+            return Ok(());
+        };
+        let installation = Installation::at(&root)?;
         fs_err::write(installation.target("alpha"), "original command")?;
         let original = ExportVersion::capture(&installation.target("alpha"))?;
         let mut child = Command::new(std::env::current_exe()?)
@@ -1348,12 +1623,18 @@ mod tests {
                 "--nocapture",
                 "--test-threads=1",
             ])
-            .env(CHILD, directory.path())
+            // Invoke the fixture directly when libtest uses a panic-abort subprocess, so the
+            // process we interrupt owns the transaction and cannot leave a parked grandchild.
+            .env(
+                "__RUST_TEST_INVOKE",
+                "commands::tool::export_transaction::tests::interruption_before_ack_is_recovered",
+            )
+            .env(CHILD, root.as_path())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
         let deadline = Instant::now() + Duration::from_secs(30);
-        while !directory.path().join("published").exists() {
+        while !root.as_path().join("published").exists() {
             if let Some(status) = child.try_wait()? {
                 bail!("publication child exited before the barrier: {status}");
             }
@@ -1382,7 +1663,23 @@ mod tests {
                 .exists()
         );
         drop(record);
-        recover_tool_exports(&installation.tools, &installation.name)?;
+        // Recovery must wait for the historical destination even if it is no longer configured.
+        let admission =
+            ToolEntrypointLocks::for_directories([installation.directory.clone()]).await?;
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                recover_tool_exports(&installation.tools, &installation.name),
+            )
+            .await
+            .is_err()
+        );
+        assert_ne!(
+            ExportVersion::capture(&installation.target("alpha"))?,
+            original
+        );
+        drop(admission);
+        recover_tool_exports(&installation.tools, &installation.name).await?;
         assert_eq!(
             ExportVersion::capture(&installation.target("alpha"))?,
             original

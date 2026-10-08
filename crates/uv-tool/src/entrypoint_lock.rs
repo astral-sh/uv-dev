@@ -58,7 +58,7 @@ impl ToolEntrypointLocks {
     ///
     /// Create a new publication directory before admission; absent historical destinations are
     /// skipped. Aliases share one guard, and all guards are acquired in canonical path order.
-    async fn for_directories(paths: impl IntoIterator<Item = PathBuf>) -> Result<Self, Error> {
+    pub async fn for_directories(paths: impl IntoIterator<Item = PathBuf>) -> Result<Self, Error> {
         let mut directories = BTreeSet::new();
         for path in paths {
             match fs_err::canonicalize(path) {
