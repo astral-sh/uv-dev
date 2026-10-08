@@ -3,6 +3,7 @@ use std::process::Command;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use insta::allow_duplicates;
+use predicates::prelude::predicate;
 use url::Url;
 use uv_static::EnvVars;
 
@@ -867,156 +868,27 @@ fn publish_modes_reject_same_source_conflicts() {
     uv_snapshot!(context.filters(), add_shared_args(context.publish())
         .arg("--show-settings")
         .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token")
-        .env(EnvVars::UV_PUBLISH_USERNAME, "publisher"), @r#"
+        .env(EnvVars::UV_PUBLISH_USERNAME, "publisher"), @"
     exit_code: 2 (failure)
-    ----- stdout -----
-    GlobalSettings {
-        required_version: None,
-        quiet: 0,
-        verbose: 0,
-        color: Auto,
-        network_settings: NetworkSettings {
-            connectivity: Online,
-            offline: Disabled,
-            system_certs: false,
-            custom_certificates: [CERTIFICATES],
-            http_proxy: None,
-            https_proxy: None,
-            no_proxy: None,
-            allow_insecure_host: [],
-            read_timeout: [TIME],
-            connect_timeout: [TIME],
-            retries: 3,
-            metadata_range_request: Fallback,
-        },
-        concurrency: Concurrency {
-            downloads: 50,
-            builds: 16,
-            installs: 8,
-            cache_reads: 2,
-        },
-        show_settings: true,
-        preview: Preview {
-            flags: [],
-        },
-        python_preference: Managed,
-        python_arch: None,
-        python_downloads: Automatic,
-        no_progress: false,
-        installer_metadata: true,
-    }
-    CacheSettings {
-        no_cache: false,
-        cache_dir: Some(
-            "[CACHE_DIR]/",
-        ),
-    }
-
     ----- stderr -----
     error: `UV_PUBLISH_TOKEN` cannot be combined with `UV_PUBLISH_USERNAME` or `UV_PUBLISH_PASSWORD`
-    "#);
+    ");
     uv_snapshot!(context.filters(), add_shared_args(context.publish())
         .arg("--show-settings")
         .env(EnvVars::UV_PUBLISH_INDEX, "private")
-        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/"), @r#"
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/"), @"
     exit_code: 2 (failure)
-    ----- stdout -----
-    GlobalSettings {
-        required_version: None,
-        quiet: 0,
-        verbose: 0,
-        color: Auto,
-        network_settings: NetworkSettings {
-            connectivity: Online,
-            offline: Disabled,
-            system_certs: false,
-            custom_certificates: [CERTIFICATES],
-            http_proxy: None,
-            https_proxy: None,
-            no_proxy: None,
-            allow_insecure_host: [],
-            read_timeout: [TIME],
-            connect_timeout: [TIME],
-            retries: 3,
-            metadata_range_request: Fallback,
-        },
-        concurrency: Concurrency {
-            downloads: 50,
-            builds: 16,
-            installs: 8,
-            cache_reads: 2,
-        },
-        show_settings: true,
-        preview: Preview {
-            flags: [],
-        },
-        python_preference: Managed,
-        python_arch: None,
-        python_downloads: Automatic,
-        no_progress: false,
-        installer_metadata: true,
-    }
-    CacheSettings {
-        no_cache: false,
-        cache_dir: Some(
-            "[CACHE_DIR]/",
-        ),
-    }
-
     ----- stderr -----
     error: `UV_PUBLISH_INDEX` cannot be combined with `UV_PUBLISH_URL` or `UV_PUBLISH_CHECK_URL`
-    "#);
+    ");
     uv_snapshot!(context.filters(), add_shared_args(context.publish())
         .arg("--show-settings")
-        .env(EnvVars::UV_PUBLISH_URL, "invalid URL"), @r#"
+        .env(EnvVars::UV_PUBLISH_URL, "invalid URL"), @"
     exit_code: 2 (failure)
-    ----- stdout -----
-    GlobalSettings {
-        required_version: None,
-        quiet: 0,
-        verbose: 0,
-        color: Auto,
-        network_settings: NetworkSettings {
-            connectivity: Online,
-            offline: Disabled,
-            system_certs: false,
-            custom_certificates: [CERTIFICATES],
-            http_proxy: None,
-            https_proxy: None,
-            no_proxy: None,
-            allow_insecure_host: [],
-            read_timeout: [TIME],
-            connect_timeout: [TIME],
-            retries: 3,
-            metadata_range_request: Fallback,
-        },
-        concurrency: Concurrency {
-            downloads: 50,
-            builds: 16,
-            installs: 8,
-            cache_reads: 2,
-        },
-        show_settings: true,
-        preview: Preview {
-            flags: [],
-        },
-        python_preference: Managed,
-        python_arch: None,
-        python_downloads: Automatic,
-        no_progress: false,
-        installer_metadata: true,
-    }
-    CacheSettings {
-        no_cache: false,
-        cache_dir: Some(
-            "[CACHE_DIR]/",
-        ),
-    }
-
     ----- stderr -----
     error: Invalid value for `UV_PUBLISH_URL`: expected a URL
       cause: relative URL without a base
-    "#);
+    ");
 }
 
 #[test]
@@ -1055,12 +927,20 @@ fn publish_environment_check_url_rejects_empty() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     context.temp_dir.child("nested").create_dir_all()?;
     for directory in [None, Some("nested")] {
-        let mut command = context.publish();
-        if let Some(directory) = directory {
-            command.args(["--directory", directory]);
-        }
+        let command = || {
+            let mut command = context.publish();
+            if let Some(directory) = directory {
+                command.args(["--directory", directory]);
+            }
+            command
+        };
+        command()
+            .args(["--check-url", ""])
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains("--check-url"));
         allow_duplicates! {
-            uv_snapshot!(context.filters(), command
+            uv_snapshot!(context.filters(), command()
                 .env(EnvVars::UV_PUBLISH_CHECK_URL, ""), @"
             exit_code: 2 (failure)
             ----- stderr -----
@@ -6078,5 +5958,38 @@ fn no_cache_env_override() -> anyhow::Result<()> {
         .arg("requirements.in")
         .env(EnvVars::UV_NO_CACHE, "true"), @"");
 
+    Ok(())
+}
+
+/// CLI and environment check URLs share Windows drive-relative and rooted path semantics.
+#[test]
+#[cfg(windows)]
+fn publish_environment_check_url_windows_paths() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("nested").create_dir_all()?;
+    for check_url in ["C:simple", r"\simple"] {
+        let baseline = capture_uv_snapshot!(
+            context.filters(),
+            add_shared_args(context.publish()).args(["--show-settings", "--check-url", check_url])
+        );
+        for working_directory_environment in [false, true] {
+            let command = || {
+                let mut command = add_shared_args(context.publish());
+                command.arg("--show-settings");
+                if working_directory_environment {
+                    command.env(EnvVars::UV_WORKING_DIRECTORY, "nested");
+                } else {
+                    command.args(["--directory", "nested"]);
+                }
+                command
+            };
+            allow_duplicates! {
+                diff_uv_snapshot!(context.filters(), &baseline, command()
+                    .args(["--check-url", check_url]), @"");
+                diff_uv_snapshot!(context.filters(), &baseline, command()
+                    .env(EnvVars::UV_PUBLISH_CHECK_URL, check_url), @"");
+            }
+        }
+    }
     Ok(())
 }

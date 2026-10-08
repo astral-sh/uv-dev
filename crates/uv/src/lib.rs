@@ -131,7 +131,7 @@ impl uv_errors::Hinted for ExternallyInstalledError {
 
 #[instrument(skip_all)]
 #[doc(hidden)]
-pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
+pub async fn run(mut cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
     let config_discovery = ConfigDiscovery::from_args(cli.top_level.no_config);
 
     // Configure color before resolving settings so argument errors retain their styling.
@@ -148,17 +148,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             std::env::var_os(EnvVars::UV_WORKING_DIRECTORY).map(std::path::PathBuf::from)
         });
 
-    // CLI check URLs are parsed before changing directories; environment paths use the same base.
-    let publish_check_url_base = if directory.is_some()
-        && let Commands::Publish(args) = &*cli.command
-        && args.check_url.is_none()
-        && args.index.is_none()
-        && std::env::var_os(EnvVars::UV_PUBLISH_CHECK_URL).is_some()
-    {
-        Some(std::env::current_dir()?)
-    } else {
-        None
-    };
+    // Publish check URLs use the invocation directory for both CLI and environment values.
+    if let Commands::Publish(args) = &mut *cli.command {
+        args.resolve_environment()?;
+    }
 
     // Switch directories as early as possible.
     if let Some(directory) = directory.as_ref() {
@@ -2064,8 +2057,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             }
 
             // Resolve the settings from the command-line arguments and workspace configuration.
-            let args =
-                PublishSettings::resolve(args, filesystem, publish_check_url_base.as_deref())?;
+            let args = PublishSettings::resolve(args, filesystem);
             show_settings!(args);
 
             let PublishSettings {

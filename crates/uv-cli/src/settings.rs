@@ -4985,44 +4985,54 @@ impl fmt::Debug for PublishSettings {
     }
 }
 
-impl PublishSettings {
-    /// Resolve the [`PublishSettings`] from the CLI, environment, and filesystem configuration.
-    pub fn resolve(
-        mut args: PublishArgs,
-        filesystem: Option<FilesystemOptions>,
-        check_url_base: Option<&Path>,
-    ) -> Result<Self> {
+impl PublishArgs {
+    /// Apply environment defaults for the selected credential and endpoint modes.
+    ///
+    /// Resolve relative paths before changing the process working directory.
+    pub fn resolve_environment(&mut self) -> Result<()> {
         // An explicit credential flag selects which environment defaults can complete the mode.
-        let token_mode = args.token.is_some();
-        let password_mode = args.username.is_some() || args.password.is_some();
+        let token_mode = self.token.is_some();
+        let password_mode = self.username.is_some() || self.password.is_some();
         if !password_mode {
-            args.token = publish_env(args.token, EnvVars::UV_PUBLISH_TOKEN, "a string")?;
+            self.token = publish_env(self.token.take(), EnvVars::UV_PUBLISH_TOKEN, "a string")?;
         }
         if !token_mode {
-            args.username = publish_env(args.username, EnvVars::UV_PUBLISH_USERNAME, "a string")?;
-            args.password = publish_env(args.password, EnvVars::UV_PUBLISH_PASSWORD, "a string")?;
+            self.username = publish_env(
+                self.username.take(),
+                EnvVars::UV_PUBLISH_USERNAME,
+                "a string",
+            )?;
+            self.password = publish_env(
+                self.password.take(),
+                EnvVars::UV_PUBLISH_PASSWORD,
+                "a string",
+            )?;
         }
-        if args.token.is_some() && (args.username.is_some() || args.password.is_some()) {
+        if self.token.is_some() && (self.username.is_some() || self.password.is_some()) {
             bail!(
                 "`UV_PUBLISH_TOKEN` cannot be combined with `UV_PUBLISH_USERNAME` or `UV_PUBLISH_PASSWORD`"
             );
         }
 
         // Named indexes and explicit URLs are alternative endpoint modes.
-        let index_mode = args.index.is_some();
-        let url_mode = args.publish_url.is_some() || args.check_url.is_some();
+        let index_mode = self.index.is_some();
+        let url_mode = self.publish_url.is_some() || self.check_url.is_some();
         if !url_mode {
-            args.index = publish_env(args.index, EnvVars::UV_PUBLISH_INDEX, "an index name")?;
+            self.index = publish_env(
+                self.index.take(),
+                EnvVars::UV_PUBLISH_INDEX,
+                "an index name",
+            )?;
         }
         if !index_mode {
-            args.publish_url = publish_env(args.publish_url, EnvVars::UV_PUBLISH_URL, "a URL")?;
-            if args.check_url.is_none() {
-                args.check_url =
+            self.publish_url =
+                publish_env(self.publish_url.take(), EnvVars::UV_PUBLISH_URL, "a URL")?;
+            if self.check_url.is_none() {
+                self.check_url =
                     publish_env::<String>(None, EnvVars::UV_PUBLISH_CHECK_URL, "a string")?
                         .map(|value| {
-                            // An empty check URL is invalid, even with a working directory.
-                            let base = check_url_base.filter(|_| !value.is_empty());
-                            IndexUrl::parse(&value, base)
+                            value
+                                .parse::<IndexUrl>()
                                 .map_err(publish_index_error)
                                 .with_context(|| {
                                     format!(
@@ -5034,12 +5044,19 @@ impl PublishSettings {
                         .transpose()?;
             }
         }
-        if args.index.is_some() && (args.publish_url.is_some() || args.check_url.is_some()) {
+        if self.index.is_some() && (self.publish_url.is_some() || self.check_url.is_some()) {
             bail!(
                 "`UV_PUBLISH_INDEX` cannot be combined with `UV_PUBLISH_URL` or `UV_PUBLISH_CHECK_URL`"
             );
         }
 
+        Ok(())
+    }
+}
+
+impl PublishSettings {
+    /// Resolve publish settings from arguments with environment defaults and filesystem configuration.
+    pub fn resolve(args: PublishArgs, filesystem: Option<FilesystemOptions>) -> Self {
         let Options {
             publish, top_level, ..
         } = filesystem
@@ -5066,7 +5083,7 @@ impl PublishSettings {
             (args.username, args.password)
         };
 
-        Ok(Self {
+        Self {
             files: args.files,
             username,
             password,
@@ -5096,7 +5113,7 @@ impl PublishSettings {
                 Vec::new(),
                 false,
             ),
-        })
+        }
     }
 }
 
