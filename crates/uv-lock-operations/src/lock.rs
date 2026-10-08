@@ -36,7 +36,6 @@ use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
 use crate::lock_target::find_lock_format_error;
-use crate::validated_lock::python_requirements_equivalent;
 use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
 
 /// The result of running a lock operation.
@@ -1033,10 +1032,9 @@ async fn do_lock(
                 // Specifier equality can ignore wildcard precision, which changes Python support.
                 previous.as_ref().is_some_and(|previous| {
                     *previous == lock
-                        && python_requirements_equivalent(
-                            previous.requires_python(),
-                            lock.requires_python(),
-                        )
+                        && previous
+                            .requires_python()
+                            .has_same_release_versions(lock.requires_python())
                 })
             };
 
