@@ -1701,7 +1701,7 @@ fn persist_archive_file(src: &Path, dst: &Path) -> io::Result<()> {
 
 /// A wrapper around `RegistryClient` that manages a concurrency limit.
 pub struct ManagedClient<'a> {
-    pub unmanaged: &'a RegistryClient,
+    pub(super) unmanaged: &'a RegistryClient,
     control: Arc<Semaphore>,
 }
 
@@ -1712,6 +1712,11 @@ impl<'a> ManagedClient<'a> {
             unmanaged: client,
             control,
         }
+    }
+
+    /// Return whether the client is configured for offline use.
+    pub fn is_offline(&self) -> bool {
+        self.unmanaged.connectivity().is_offline()
     }
 
     /// Perform a request using the client, respecting the concurrency limit.
