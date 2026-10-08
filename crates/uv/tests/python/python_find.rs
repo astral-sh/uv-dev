@@ -1263,12 +1263,9 @@ fn python_find_freethreaded_313() {
         .unwrap();
 
     uv_snapshot!(context.filters(), context.python_find(), @"
-    success: true
-    exit_code: 0
+    exit_code: 0 (success)
     ----- stdout -----
     [VENV]/[BIN]/[PYTHON]
-
-    ----- stderr -----
     ");
 }
 
