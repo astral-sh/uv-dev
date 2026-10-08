@@ -80,6 +80,8 @@ jobs:
           sudo mv "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/
       - name: "Test docs publication"
         run: python3 scripts/test-publish-docs.py
+      - name: "Test docs artifact handoff"
+        run: python3 scripts/test-docs-artifact.py
       - name: "Run shellcheck"
         run: find . -name '*.sh' -type f | xargs shellcheck --shell bash --severity style
 
