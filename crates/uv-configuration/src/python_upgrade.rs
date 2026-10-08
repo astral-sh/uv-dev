@@ -78,7 +78,9 @@ impl From<bool> for PythonInstallForce {
 pub enum PythonInstallDefault {
     /// Create default Python executable links.
     Enabled,
-    /// Only create minor-version Python executable links.
+    /// Do not explicitly request default Python executable links.
+    ///
+    /// Default installs can still create these links implicitly.
     Disabled,
 }
 
