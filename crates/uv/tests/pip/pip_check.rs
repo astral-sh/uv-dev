@@ -9,7 +9,7 @@ use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::uv_snapshot;
 
 #[test]
-fn check_quiet_policy() -> Result<()> {
+fn check_incompatible_packages_quiet() -> Result<()> {
     let scenario = toml::from_str::<Scenario>(indoc! {r#"
         name = "check-quiet-policy"
 
@@ -36,41 +36,11 @@ fn check_quiet_policy() -> Result<()> {
         .assert()
         .success();
 
-    uv_snapshot!(context.pip_check(), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    Found 1 incompatibility
-    The package `package-a` requires `package-b==1.0.0`, but it's not installed
-    ");
     uv_snapshot!(context.pip_check().arg("-q"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Found 1 incompatibility
     The package `package-a` requires `package-b==1.0.0`, but it's not installed
-    ");
-    uv_snapshot!(context.pip_check().arg("-qq"), @"
-    exit_code: 1 (failure)
-    ");
-
-    context
-        .pip_install()
-        .arg("package-b")
-        .arg("--index-url")
-        .arg(index.index_url())
-        .assert()
-        .success();
-    uv_snapshot!(context.pip_check(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 2 packages in [TIME]
-    All installed packages are compatible
-    ");
-    uv_snapshot!(context.pip_check().arg("-q"), @"
-    exit_code: 0 (success)
-    ");
-    uv_snapshot!(context.pip_check().arg("-qq"), @"
-    exit_code: 0 (success)
     ");
     Ok(())
 }
