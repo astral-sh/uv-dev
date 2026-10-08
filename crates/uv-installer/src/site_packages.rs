@@ -13,9 +13,9 @@ use uv_configuration::{
 };
 use uv_distribution_filename::EggInfoFilename;
 use uv_distribution_types::{
-    ConfigSettings, DependencyMetadata, Diagnostic, ExtraBuildRequires, ExtraBuildVariables,
-    InstalledDist, InstalledDistKind, Name, NameRequirementSpecification, PackageConfigSettings,
-    Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    ConfigSettings, DependencyMetadata, ExtraBuildRequires, ExtraBuildVariables, InstalledDist,
+    InstalledDistKind, Name, NameRequirementSpecification, PackageConfigSettings, Requirement,
+    UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
@@ -743,9 +743,9 @@ pub enum SitePackagesDiagnostic {
     },
 }
 
-impl Diagnostic for SitePackagesDiagnostic {
+impl SitePackagesDiagnostic {
     /// Convert the diagnostic into a user-facing message.
-    fn message(&self) -> String {
+    pub fn message(&self) -> String {
         match self {
             Self::MetadataUnavailable { package, path } => format!(
                 "The package `{package}` is broken or incomplete (unable to read `METADATA`). Consider recreating the virtualenv, or removing the package directory at: {}.",
@@ -791,7 +791,7 @@ impl Diagnostic for SitePackagesDiagnostic {
     }
 
     /// Returns `true` if the [`PackageName`] is involved in this diagnostic.
-    fn includes(&self, name: &PackageName) -> bool {
+    pub fn includes(&self, name: &PackageName) -> bool {
         match self {
             Self::MetadataUnavailable { package, .. } => name == package,
             Self::TagsUnavailable { package, .. } => name == package,
