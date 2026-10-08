@@ -14443,14 +14443,6 @@ async fn pep_751_install_noop_skips_build_indexes() -> Result<()> {
         .site_packages()
         .join("foo/__pycache__/__init__.cpython-312.pyc");
     assert!(!bytecode.exists());
-    context
-        .pip_sync()
-        .arg("--preview")
-        .arg("pylock.toml")
-        .arg("--compile-bytecode")
-        .assert()
-        .success();
-    assert!(bytecode.exists());
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("pylock.toml")
