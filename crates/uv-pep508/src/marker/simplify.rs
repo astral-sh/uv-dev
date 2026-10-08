@@ -794,8 +794,16 @@ mod tests {
                     .into_iter()
                     .chain(singletons.clone())
                     .collect(),
-                singletons.into_iter().chain([terms.clone()]).collect(),
+                singletons.iter().cloned().chain([terms.clone()]).collect(),
                 vec![terms.clone(), Vec::new(), terms],
+                // Complementary short clauses simplify to their shared term.
+                singletons
+                    .into_iter()
+                    .chain([
+                        vec![expression("extra == 'a'"), expression("extra == 'b'")],
+                        vec![expression("extra != 'a'"), expression("extra == 'b'")],
+                    ])
+                    .collect(),
             ] {
                 let mut expected = dnf.clone();
                 simplify_linear(&mut expected);
