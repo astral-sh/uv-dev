@@ -136,7 +136,7 @@ struct TagMap {
 
 #[derive(Debug, Eq, PartialEq)]
 enum PlatformPriorities {
-    /// Pure-Python rows commonly accept only `any`.
+    /// ABI rows for Windows and BSD typically contain only one platform.
     Single {
         platform: usize,
         priority: TagPriority,
