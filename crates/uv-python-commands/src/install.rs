@@ -521,12 +521,11 @@ async fn perform_install(
                 // If this is an upgrade, the requested version is a minor version but the
                 // requested download is the highest patch for that minor version. We need to
                 // install it unless an exact match is found (including build version).
-                if let Some(installation) = existing_installations
-                    .binary_search_by(|installation| {
-                        installation.key().cmp(request.download.key()).reverse()
-                    })
-                    .ok()
-                    .and_then(|index| existing_installations.get(index))
+                if let Some(installation) = request
+                    .download_request
+                    .narrow_sorted(&existing_installations, ManagedPythonInstallation::key)
+                    .iter()
+                    .find(|installation| installation.key() == request.download.key())
                 {
                     if matches_build(request.download.build(), installation.build()) {
                         debug!("Found `{}` for request `{}`", installation.key(), request);
@@ -626,14 +625,16 @@ async fn perform_install(
     let mut requests_by_new_installation = BTreeMap::new();
     let mut requests_by_minor = FxHashMap::<(u8, u8), Vec<usize>>::default();
     let mut broad_requests = Vec::new();
-    for (index, request) in requests.iter().enumerate() {
-        if let Some(minor_version) = request.download_request.minor_version() {
-            requests_by_minor
-                .entry(minor_version)
-                .or_default()
-                .push(index);
-        } else {
-            broad_requests.push(index);
+    if !downloads.is_empty() {
+        for (index, request) in requests.iter().enumerate() {
+            if let Some(minor_version) = request.download_request.minor_version() {
+                requests_by_minor
+                    .entry(minor_version)
+                    .or_default()
+                    .push(index);
+            } else {
+                broad_requests.push(index);
+            }
         }
     }
     while let Some((download, result)) = tasks.next().await {
