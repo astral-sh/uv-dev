@@ -626,10 +626,17 @@ async fn upgrade_tool(
             tool_lock.as_ref(),
             printer,
         )?;
+    } else if tool_locks {
+        let metadata = ToolLock::prepare_metadata(
+            installed_tools,
+            name,
+            existing_tool_receipt
+                .clone()
+                .with_options(ToolOptions::from(options)),
+            tool_lock.as_ref(),
+        )?;
+        installed_tools.commit_tool_metadata(name, &metadata)?;
     } else {
-        if tool_locks {
-            ToolLock::write(&tool_dir, tool_lock.as_ref())?;
-        }
         installed_tools.add_tool_receipt(
             name,
             existing_tool_receipt
