@@ -1,7 +1,8 @@
 use std::{io::ErrorKind, path::PathBuf};
 
+use uv_errors::{Hinted, Hints};
 use uv_fs::Simplified as _;
-use uv_warnings::warn_user;
+use uv_warnings::warn_user_with_chain;
 
 use crate::managed::ManagedPythonInstallation;
 
@@ -35,29 +36,45 @@ pub(crate) fn patch_dylib_install_name(dylib: PathBuf) -> Result<(), Error> {
 pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("`install_name_tool` is not available on this system.
-This utility is part of macOS Developer Tools. Please ensure that the Xcode Command Line Tools are installed by running:
-
-    xcode-select --install
-
-For more information, see: https://developer.apple.com/xcode/")]
+    #[error("`install_name_tool` is not available on this system")]
     MissingInstallNameTool,
-    #[error("Failed to update the install name of the Python dynamic library located at `{}`", dylib.user_display())]
+    #[error("Failed to update the install name of the Python dynamic library located at `{}`{}", dylib.user_display(), format_stderr(stderr))]
     RenameError { dylib: PathBuf, stderr: String },
+}
+
+impl Hinted for Error {
+    fn hints(&self) -> Hints<'_> {
+        match self {
+            Self::MissingInstallNameTool => {
+                Hints::from("Install the Xcode Command Line Tools with `xcode-select --install`.")
+            }
+            Self::Io(_) | Self::RenameError { .. } => Hints::none(),
+        }
+    }
+}
+
+fn format_stderr(stderr: &str) -> String {
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+        return String::new();
+    }
+    if let Some((end, _)) = stderr.char_indices().nth(4096) {
+        format!("\n\n[stderr]\n{}\n[output truncated]", &stderr[..end])
+    } else {
+        format!("\n\n[stderr]\n{stderr}")
+    }
 }
 
 impl Error {
     /// Emit a user-friendly warning about the patching failure.
-    pub fn warn_user(&self, installation: &ManagedPythonInstallation) {
-        let error = if tracing::enabled!(tracing::Level::DEBUG) {
-            format!("\nUnderlying error: {self}")
-        } else {
-            String::new()
-        };
-        warn_user!(
-            "Failed to patch the install name of the dynamic library for `{}`. This may cause issues when building Python native extensions.{}",
-            installation.executable(false).simplified_display(),
-            error
+    pub fn warn_user(self, installation: &ManagedPythonInstallation) {
+        let hints = self.hints().into_owned();
+        warn_user_with_chain!(
+            anyhow::Error::new(self).context(format!(
+                "Failed to patch the install name of the dynamic library for `{}`. This may cause issues when building Python native extensions.",
+                installation.executable(false).simplified_display(),
+            )).as_ref(),
+            hints
         );
     }
 }

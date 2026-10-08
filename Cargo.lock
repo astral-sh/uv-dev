@@ -7709,6 +7709,7 @@ dependencies = [
  "uv-client",
  "uv-dirs",
  "uv-distribution-filename",
+ "uv-errors",
  "uv-extract",
  "uv-fs",
  "uv-macros",

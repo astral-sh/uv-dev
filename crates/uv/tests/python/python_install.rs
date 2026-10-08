@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+use std::{fs::Permissions, os::unix::fs::PermissionsExt};
+
 #[cfg(windows)]
 use std::path::PathBuf;
 
@@ -2402,6 +2405,87 @@ fn python_install_default_from_env() {
 
     For more information, try '--help'.
     ");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn python_install_patch_dylib_warning() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs()
+        .with_filter((r"(?m)^DEBUG .*\n", ""));
+    let tools = context.temp_dir.child("tools");
+    tools.create_dir_all()?;
+    let command = || {
+        let mut command = context.python_install();
+        command
+            .args(["3.13.1", "--no-bin"])
+            .env(EnvVars::PATH, tools.path());
+        command
+    };
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Failed to patch the install name of the dynamic library for `[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13`. This may cause issues when building Python native extensions.
+      cause: `install_name_tool` is not available on this system
+
+    hint: Install the Xcode Command Line Tools with `xcode-select --install`.
+    Installed Python 3.13.1 in [TIME]
+     + cpython-3.13.1-[PLATFORM]
+    ");
+    uv_snapshot!(context.filters(), command().arg("--verbose"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Failed to patch the install name of the dynamic library for `[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13`. This may cause issues when building Python native extensions.
+      cause: `install_name_tool` is not available on this system
+
+    hint: Install the Xcode Command Line Tools with `xcode-select --install`.
+    Python 3.13.1 is already installed
+    ");
+
+    let tool = tools.child("install_name_tool");
+    tool.write_str("#!/bin/sh\nprintf 'cannot update dylib: fixture failure\\n' >&2\nexit 17\n")?;
+    fs_err::set_permissions(&tool, Permissions::from_mode(0o755))?;
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Failed to patch the install name of the dynamic library for `[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13`. This may cause issues when building Python native extensions.
+      cause: Failed to update the install name of the Python dynamic library located at `managed/cpython-3.13.1-[PLATFORM]/lib/libpython3.13.dylib`
+
+             [stderr]
+             cannot update dylib: fixture failure
+    Python 3.13.1 is already installed
+    ");
+    uv_snapshot!(context.filters(), command().arg("--quiet"), @"
+    exit_code: 0 (success)
+    ");
+
+    // Automatic downloads use the same nonfatal warning before querying the interpreter.
+    fs_err::remove_dir_all(context.temp_dir.child("managed"))?;
+    uv_snapshot!(context.filters(), context.venv().args(["--python", "3.13.1", "--managed-python", "auto-env"])
+        .env(EnvVars::PATH, tools.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Failed to patch the install name of the dynamic library for `[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13`. This may cause issues when building Python native extensions.
+      cause: Failed to update the install name of the Python dynamic library located at `managed/cpython-3.13.1-[PLATFORM]/lib/libpython3.13.dylib`
+
+             [stderr]
+             cannot update dylib: fixture failure
+    Using CPython 3.13.1
+    Creating virtual environment at: auto-env
+    Activate with: source auto-env/[BIN]/activate
+    ");
+
+    let long_stderr = format!("{}UNPRINTED_TAIL", "é".repeat(4097));
+    tool.write_str(&format!(
+        "#!/bin/sh\nprintf '%s' '{long_stderr}' >&2\nexit 17\n"
+    ))?;
+    let output = command().assert().success();
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    assert!(stderr.contains("[output truncated]"));
+    assert_eq!(stderr.matches('é').count(), 4096);
+    assert!(!stderr.contains("UNPRINTED_TAIL"));
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
