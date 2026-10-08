@@ -1,7 +1,6 @@
 #[cfg(feature = "test-universal")]
 use std::collections::BTreeMap;
 
-#[cfg(all(feature = "test-universal", feature = "test-git"))]
 use anyhow::Result;
 #[cfg(feature = "test-universal")]
 use anyhow::anyhow;
