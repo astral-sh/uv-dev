@@ -9,7 +9,6 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
-use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
@@ -23,7 +22,7 @@ use uv_cache::{Cache, CacheBucket, CleanReporter};
 use uv_fs::link::{LinkMode, LinkOptions, link_dir};
 use uv_static::EnvVars;
 
-use uv_test::{TestContext, uv_snapshot};
+use uv_test::uv_snapshot;
 
 /// `cache clean` should remove all packages.
 #[test]
@@ -644,24 +643,6 @@ async fn wait_for_cache_message(
 async fn clean_preserves_waiting_cache_users() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let root = context.cache_dir.path().to_owned();
-    assert_clean_preserves_waiting_cache_users(context, &root).await
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn clean_preserves_waiting_cache_users_through_alias() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let root = context.cache_dir.path().to_owned();
-    let alias = context.temp_dir.child("cache-alias");
-    fs_err::os::unix::fs::symlink(&root, &alias)?;
-    let context = context.with_cache_dir(alias.path());
-    assert_clean_preserves_waiting_cache_users(context, &root).await
-}
-
-async fn assert_clean_preserves_waiting_cache_users(
-    context: TestContext,
-    root: &Path,
-) -> Result<()> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let port = listener.local_addr()?.port();
     context
@@ -698,9 +679,7 @@ async fn assert_clean_preserves_waiting_cache_users(
     "#})?;
 
     // The first cleaner owns the same lock that the waiting build has already opened.
-    let cleaner = Cache::from_path(context.cache_dir.path())
-        .with_exclusive_lock()
-        .await?;
+    let cleaner = Cache::from_path(&root).with_exclusive_lock().await?;
     let mut command = context.build();
     command
         .args(["--wheel", "--offline"])
@@ -735,8 +714,6 @@ async fn assert_clean_preserves_waiting_cache_users(
     assert!(source_bucket.join(".git").is_file());
 
     // A later cleaner must wait for that user, even though it opened the lock after cleanup.
-    let cache_path = context.cache_dir.path().to_owned();
-    let context = context.with_cache_dir(root);
     let mut later = tokio::process::Command::from(context.clean())
         .kill_on_drop(true)
         .stdout(Stdio::piped())
@@ -751,9 +728,110 @@ async fn assert_clean_preserves_waiting_cache_users(
         tokio::time::timeout(Duration::from_secs(30), later.wait_with_output()).await??;
     output.stderr = later_stderr.await??;
     output.assert().success();
-    assert_eq!(fs_err::read_dir(context.cache_dir.path())?.count(), 1);
+    assert_eq!(fs_err::read_dir(context.cache_dir.path())?.count(), 2);
     assert!(context.cache_dir.child(".lock").is_file());
-    assert!(cache_path.is_dir());
+    assert!(root.join(".gitignore").is_file());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn clean_preserves_waiting_cache_users_through_alias() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let real_root = context.cache_dir.path().to_owned();
+    let alias = context.temp_dir.child("cache-alias");
+    fs_err::os::unix::fs::symlink(&real_root, &alias)?;
+    let alias_context = context.with_cache_dir(alias.path());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let port = listener.local_addr()?.port();
+    alias_context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = uv_test::packse::generate_wheel(
+        &"demo".parse()?,
+        &"1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    fs_err::write(alias_context.temp_dir.join(&filename), wheel)?;
+    alias_context.temp_dir.child("backend.py").write_str(&formatdoc! {r#"
+        import shutil
+        import socket
+        from pathlib import Path
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            with socket.create_connection(("127.0.0.1", {port}), timeout=30) as gate:
+                gate.sendall(b"ready")
+                if gate.recv(1) != b"S":
+                    raise RuntimeError("cache lifetime gate closed")
+            shutil.copyfile(Path(__file__).with_name("{filename}"), Path(wheel_directory) / "{filename}")
+            return "{filename}"
+    "#})?;
+
+    // The first cleaner owns the same lock that the waiting build has already opened.
+    let cleaner = Cache::from_path(alias.path()).with_exclusive_lock().await?;
+    let mut command = alias_context.build();
+    command
+        .args(["--wheel", "--offline"])
+        .env(EnvVars::RUST_LOG, "uv_fs=info");
+    let mut user = tokio::process::Command::from(command)
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut user_stderr =
+        wait_for_cache_message(&mut user, "Waiting to acquire shared lock").await?;
+    cleaner.clear(Box::new(SilentCacheCleaner))?;
+
+    let (mut gate, _) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::select! {
+            connection = listener.accept() => Ok(connection?),
+            status = user.wait() => {
+                let stderr = (&mut user_stderr).await??;
+                anyhow::bail!("cache user exited before its build hook: {status:?}\n{}", String::from_utf8_lossy(&stderr));
+            }
+        }
+    }).await??;
+    let mut ready = [0; 5];
+    tokio::time::timeout(Duration::from_secs(30), gate.read_exact(&mut ready)).await??;
+    assert_eq!(&ready, b"ready");
+    assert!(alias_context.cache_dir.child(".lock").is_file());
+    assert!(alias_context.cache_dir.child("CACHEDIR.TAG").is_file());
+    assert!(alias_context.cache_dir.child(".gitignore").is_file());
+    let source_bucket =
+        Cache::from_path(alias_context.cache_dir.path()).bucket(CacheBucket::SourceDistributions);
+    assert!(source_bucket.join(".gitignore").is_file());
+    assert!(source_bucket.join(".git").is_file());
+
+    // A later cleaner must wait for that user, even though it opened the lock after cleanup.
+    let real_context = alias_context.with_cache_dir(&real_root);
+    let mut later = tokio::process::Command::from(real_context.clean())
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let later_stderr = wait_for_cache_message(&mut later, "Cache is currently in-use").await?;
+    gate.write_all(b"S").await?;
+    let mut output = user.wait_with_output().await?;
+    output.stderr = user_stderr.await??;
+    output.assert().success();
+    let mut output =
+        tokio::time::timeout(Duration::from_secs(30), later.wait_with_output()).await??;
+    output.stderr = later_stderr.await??;
+    output.assert().success();
+    assert_eq!(fs_err::read_dir(real_context.cache_dir.path())?.count(), 2);
+    assert!(real_context.cache_dir.child(".lock").is_file());
+    assert!(alias.path().is_dir());
+    assert!(real_root.join(".gitignore").is_file());
     Ok(())
 }
 
@@ -788,7 +866,7 @@ async fn forced_clean_retains_cache_coordination() -> Result<()> {
     let cache = Cache::from_path(root.path()).init().await?;
     root.child("payload").write_str("payload")?;
     context.clean().arg("--force").assert().success();
-    assert_eq!(fs_err::read_dir(root.path())?.count(), 1);
+    assert_eq!(fs_err::read_dir(root.path())?.count(), 2);
     assert!(root.child(".lock").is_file());
     assert!(
         Cache::from_path(root.path())
@@ -814,5 +892,37 @@ async fn forced_clean_retains_cache_coordination() -> Result<()> {
             .join(".git")
             .is_file()
     );
+    Ok(())
+}
+
+#[cfg(feature = "test-git")]
+#[tokio::test]
+async fn clean_keeps_retained_cache_files_ignored() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .external_command("git")
+        .args(["init", "--quiet"])
+        .assert()
+        .success();
+    let cache_root = context.temp_dir.child(".uv-cache");
+    let context = context.with_cache_dir(cache_root.path());
+    drop(Cache::from_path(cache_root.path()).init().await?);
+    // A cache may be cleaned before an initializer has supplied its Git marker.
+    fs_err::remove_file(cache_root.join(".gitignore"))?;
+    context.clean().assert().success();
+    context
+        .external_command("git")
+        .args([
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            ".uv-cache",
+        ])
+        .assert()
+        .success()
+        .stdout("");
+    assert_eq!(fs_err::read_to_string(cache_root.join(".gitignore"))?, "*");
+    assert!(cache_root.join(".lock").is_file());
     Ok(())
 }

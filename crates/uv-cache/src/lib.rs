@@ -459,15 +459,8 @@ impl Cache {
         self.temp_dir.is_some()
     }
 
-    /// Populate the cache scaffold.
-    fn create_base_files(root: &PathBuf) -> io::Result<()> {
-        // Create the cache directory, if it doesn't exist.
-        fs_err::create_dir_all(root)?;
-
-        // Add the CACHEDIR.TAG.
-        cachedir::ensure_tag(root)?;
-
-        // Add the .gitignore.
+    /// Keep cache-owned metadata hidden from enclosing Git worktrees.
+    fn create_gitignore(root: &Path) -> io::Result<()> {
         match fs_err::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -477,6 +470,18 @@ impl Cache {
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => (),
             Err(err) => return Err(err),
         }
+        Ok(())
+    }
+
+    /// Populate the cache scaffold.
+    fn create_base_files(root: &PathBuf) -> io::Result<()> {
+        // Create the cache directory, if it doesn't exist.
+        fs_err::create_dir_all(root)?;
+
+        // Add the CACHEDIR.TAG.
+        cachedir::ensure_tag(root)?;
+
+        Self::create_gitignore(root)?;
 
         // Add an empty .gitignore to the build bucket, to ensure that the cache's own .gitignore
         // doesn't interfere with source distribution builds. Build backends (like hatchling) will
@@ -584,12 +589,13 @@ impl Cache {
         }))
     }
 
-    /// Clear the cache, removing all entries but retaining the root coordination lock.
+    /// Clear entries while retaining the root coordination lock and Git ignore marker.
     pub fn clear(self, reporter: Box<dyn CleanReporter>) -> Result<Removal, io::Error> {
         // Waiters may have already opened `.lock`. Keep its inode and parent directory in place
         // so later users and cleaners acquire the same lock, including after this guard drops.
         // The cache root itself can be a directory symlink; remove its entries, not the alias.
         let root = fs_err::canonicalize(&self.root)?;
+        Self::create_gitignore(&root)?;
         Remover::new(reporter)
             .with_removal_accounting(self.removal_accounting)
             .rm_rf(root, true)
