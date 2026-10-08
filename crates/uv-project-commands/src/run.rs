@@ -62,7 +62,7 @@ use uv_requirements::{
     RequirementsSource, RequirementsSpecification, script_extra_build_requires,
     script_specification,
 };
-use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
+use uv_resolve_operations::ResolveSummary;
 use uv_resolver::{DependencyMode, Preference};
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Metadata, Pep723Script};
 use uv_settings::{
@@ -255,9 +255,9 @@ pub async fn run(
                     &client_builder,
                     &lock_state,
                     if show_resolution {
-                        Box::new(DefaultResolveLogger)
+                        ResolveSummary::Display
                     } else {
-                        Box::new(SummaryResolveLogger)
+                        ResolveSummary::Suppress
                     },
                     &concurrency,
                     &cache,
@@ -441,9 +441,9 @@ pub async fn run(
                     &client_builder,
                     &sync_state,
                     if show_resolution {
-                        Box::new(DefaultResolveLogger)
+                        ResolveSummary::Display
                     } else {
-                        Box::new(SummaryResolveLogger)
+                        ResolveSummary::Suppress
                     },
                     if show_resolution {
                         Box::new(DefaultInstallLogger)
@@ -770,9 +770,9 @@ pub async fn run(
                         &client_builder,
                         &lock_state,
                         if show_resolution {
-                            Box::new(DefaultResolveLogger)
+                            ResolveSummary::Display
                         } else {
-                            Box::new(SummaryResolveLogger)
+                            ResolveSummary::Suppress
                         },
                         &concurrency,
                         &cache,
@@ -969,9 +969,9 @@ pub async fn run(
                 &client_builder,
                 &sync_state,
                 if show_resolution {
-                    Box::new(DefaultResolveLogger)
+                    ResolveSummary::Display
                 } else {
-                    Box::new(SummaryResolveLogger)
+                    ResolveSummary::Suppress
                 },
                 if show_resolution {
                     Box::new(DefaultInstallLogger)
