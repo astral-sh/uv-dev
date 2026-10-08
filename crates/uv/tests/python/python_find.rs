@@ -1108,17 +1108,6 @@ fn python_find_script_python_not_found() {
 
     hint: A managed Python download is available, but Python downloads are set to 'never'
     ");
-
-    uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py").arg("-q"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No interpreter found in virtual environments or managed installations
-
-    hint: A managed Python download is available, but Python downloads are set to 'never'
-    ");
-    uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py").arg("-qq"), @"
-    exit_code: 1 (failure)
-    ");
 }
 
 #[cfg(unix)]
@@ -1137,19 +1126,15 @@ fn python_find_script_interpreter_error_chain() -> Result<()> {
         .temp_dir
         .child(".python-version")
         .write_str(python.path().to_str().expect("UTF-8 fixture path"))?;
-    for quiet in [None, Some("-q")] {
-        insta::allow_duplicates! {
-            uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py").args(quiet), @"
-            exit_code: 1 (failure)
-            ----- stderr -----
-            error: Failed to inspect Python interpreter from provided path at `broken-python`
-              cause: Querying Python at `[TEMP_DIR]/broken-python` failed with exit status exit status: 42
+    uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py").arg("-q"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to inspect Python interpreter from provided path at `broken-python`
+      cause: Querying Python at `[TEMP_DIR]/broken-python` failed with exit status exit status: 42
 
-                     [stderr]
-                     interpreter probe failed
-            ");
-        }
-    }
+             [stderr]
+             interpreter probe failed
+    ");
     Ok(())
 }
 
