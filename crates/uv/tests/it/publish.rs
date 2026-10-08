@@ -1509,16 +1509,6 @@ async fn publish_credential_mode_precedence() {
             .mount(&server)
             .await;
         let mut command = context.publish();
-        for variable in [
-            EnvVars::UV_PUBLISH_TOKEN,
-            EnvVars::UV_PUBLISH_USERNAME,
-            EnvVars::UV_PUBLISH_PASSWORD,
-            EnvVars::UV_PUBLISH_INDEX,
-            EnvVars::UV_PUBLISH_URL,
-            EnvVars::UV_PUBLISH_CHECK_URL,
-        ] {
-            command.env_remove(variable);
-        }
         command
             .args(arguments)
             .envs(environment)

@@ -572,16 +572,6 @@ fn publish_modes_follow_source_precedence() {
     let command = || {
         let mut command = add_shared_args(context.publish());
         command.arg("--show-settings");
-        for name in [
-            EnvVars::UV_PUBLISH_TOKEN,
-            EnvVars::UV_PUBLISH_USERNAME,
-            EnvVars::UV_PUBLISH_PASSWORD,
-            EnvVars::UV_PUBLISH_INDEX,
-            EnvVars::UV_PUBLISH_URL,
-            EnvVars::UV_PUBLISH_CHECK_URL,
-        ] {
-            command.env_remove(name);
-        }
         command
     };
 
@@ -1058,6 +1048,29 @@ fn publish_environment_url_errors_retain_redacted_causes() {
       cause: path could not be normalized
       cause: invalid input parameter
     ");
+}
+
+#[test]
+fn publish_environment_check_url_rejects_empty() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("nested").create_dir_all()?;
+    for directory in [None, Some("nested")] {
+        let mut command = context.publish();
+        if let Some(directory) = directory {
+            command.args(["--directory", directory]);
+        }
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), command
+                .env(EnvVars::UV_PUBLISH_CHECK_URL, ""), @"
+            exit_code: 2 (failure)
+            ----- stderr -----
+            error: Invalid value for `UV_PUBLISH_CHECK_URL`: expected an index URL
+              cause: path could not be converted to an absolute path
+              cause: invalid input parameter
+            ");
+        }
+    }
+    Ok(())
 }
 
 #[test]

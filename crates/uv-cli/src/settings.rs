@@ -5020,7 +5020,9 @@ impl PublishSettings {
                 args.check_url =
                     publish_env::<String>(None, EnvVars::UV_PUBLISH_CHECK_URL, "a string")?
                         .map(|value| {
-                            IndexUrl::parse(&value, check_url_base)
+                            // An empty check URL is invalid, even with a working directory.
+                            let base = check_url_base.filter(|_| !value.is_empty());
+                            IndexUrl::parse(&value, base)
                                 .map_err(publish_index_error)
                                 .with_context(|| {
                                     format!(
