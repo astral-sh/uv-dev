@@ -1339,7 +1339,10 @@ impl ResolutionDisplay {
     }
 
     const fn enabled(self) -> bool {
-        matches!(self, Self::Enabled)
+        match self {
+            Self::Enabled => true,
+            Self::Disabled => false,
+        }
     }
 }
 
