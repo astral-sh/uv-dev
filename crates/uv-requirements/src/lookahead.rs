@@ -8,6 +8,7 @@ use tracing::trace;
 use uv_configuration::{Constraints, DependencyModifierScope, DependencyModifiers};
 use uv_distribution::{DistributionDatabase, Reporter};
 use uv_distribution_types::{Dist, Identifier, Requirement, RequirementSource};
+use uv_once_map::Registration;
 use uv_resolver::{InMemoryIndex, MetadataResponse, ResolverEnvironment};
 use uv_types::{BuildContext, HashStrategy, HashVerification, RequestedRequirements};
 
@@ -185,27 +186,28 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
         // Fetch the metadata for the distribution.
         let metadata = {
             let id = dist.distribution_id();
-            if let Some(response) = self.index.distributions().register_or_wait(&id).await {
-                let MetadataResponse::Found(archive) = &*response else {
-                    panic!("Failed to find metadata for: {requirement}");
-                };
-                archive.metadata.clone()
-            } else {
-                // Run the PEP 517 build process to extract metadata from the source distribution.
-                let archive = self
-                    .database
-                    .get_or_build_wheel_metadata(&dist, hasher.metadata_policy(&dist))
-                    .await
-                    .map_err(|err| Error::from_dist(dist, err))?;
+            match self.index.distributions().register_or_wait(&id).await {
+                Registration::Existing(response) => {
+                    let MetadataResponse::Found(archive) = &*response else {
+                        panic!("Failed to find metadata for: {requirement}");
+                    };
+                    archive.metadata.clone()
+                }
+                Registration::New(producer) => {
+                    // Run the PEP 517 build process to extract metadata from the source distribution.
+                    let archive = self
+                        .database
+                        .get_or_build_wheel_metadata(&dist, hasher.metadata_policy(&dist))
+                        .await
+                        .map_err(|err| Error::from_dist(dist, err))?;
 
-                let metadata = archive.metadata.clone();
+                    let metadata = archive.metadata.clone();
 
-                // Insert the metadata into the index.
-                self.index
-                    .distributions()
-                    .done(id, Arc::new(MetadataResponse::Found(archive)));
+                    // Insert the metadata into the index.
+                    producer.done(Arc::new(MetadataResponse::Found(archive)));
 
-                metadata
+                    metadata
+                }
             }
         };
 

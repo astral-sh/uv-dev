@@ -61,11 +61,12 @@ pub(crate) enum PendingVersions<'index> {
 }
 
 impl PendingVersions<'_> {
-    pub(crate) fn wait(self) -> Arc<VersionsResponse> {
+    pub(crate) fn wait(self) -> Result<Arc<VersionsResponse>, ResolveError> {
         match self {
             Self::Implicit(entry) => entry.wait_blocking(),
             Self::Explicit(entry) => entry.wait_blocking(),
         }
+        .map_err(ResolveError::from)
     }
 }
 
@@ -82,8 +83,8 @@ impl RegisteredMetadata<'_> {
         self.0.key()
     }
 
-    pub(crate) fn wait(&self) -> Arc<MetadataResponse> {
-        self.0.wait_blocking()
+    pub(crate) fn wait(&self) -> Result<Arc<MetadataResponse>, ResolveError> {
+        self.0.wait_blocking().map_err(ResolveError::from)
     }
 }
 

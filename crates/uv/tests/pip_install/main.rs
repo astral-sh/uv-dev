@@ -11,4 +11,6 @@ mod json;
 mod pip_install;
 
 #[cfg(feature = "test-python")]
+mod preparation_cancellation;
+#[cfg(feature = "test-python")]
 mod wheel_variants;
