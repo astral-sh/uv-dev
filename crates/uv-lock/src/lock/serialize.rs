@@ -132,7 +132,10 @@ fn write_lock(writer: &mut LockWriter, lock: &Lock) -> Result<(), WriteError> {
     Ok(())
 }
 
-/// A universal environment is still an entry in its declared environment list.
+/// Serialize a declared environment after simplifying it against `requires-python`.
+///
+/// The marker formatter returns `None` for `true`, so use an explicit always-true expression.
+/// Omitting the entry would change the environment list used to validate the lockfile.
 fn environment_marker(requires_python: &RequiresPython, marker: MarkerTree) -> String {
     SimplifiedMarkerTree::new(requires_python, marker)
         .try_to_string()
@@ -822,27 +825,52 @@ mod tests {
 
     #[test]
     fn environment_entries_round_trip() -> Result<(), Box<dyn std::error::Error>> {
-        for requires_python in ["", ">=3.9"] {
-            let lock: Lock = toml::from_str(&format!(
-                r#"
+        let lock: Lock = toml::from_str(
+            r#"
 version = 1
-requires-python = "{requires_python}"
+requires-python = ""
 supported-markers = ["python_version >= '0'", "sys_platform == 'linux'", "python_version < '0'", "python_version >= '0'"]
 required-markers = ["sys_platform == 'win32'", "python_version >= '0'", "python_version >= '0'"]
-"#
-            ))?;
-            let serialized = lock.to_toml()?;
-            for restored in [
-                Lock::from_canonical_toml(&serialized)?,
-                Lock::from_toml(
-                    &serialized.replace("supported-markers =", "\"supported-markers\" ="),
-                )?,
-            ] {
-                assert_eq!(lock.supported_environments, restored.supported_environments);
-                assert_eq!(lock.required_environments, restored.required_environments);
-                assert_eq!(serialized, restored.to_toml()?);
-            }
-        }
+"#,
+        )?;
+        let serialized = lock.to_toml()?;
+
+        let restored = Lock::from_canonical_toml(&serialized)?;
+        assert_eq!(lock.supported_environments, restored.supported_environments);
+        assert_eq!(lock.required_environments, restored.required_environments);
+        assert_eq!(serialized, restored.to_toml()?);
+
+        let restored =
+            Lock::from_toml(&serialized.replace("supported-markers =", "\"supported-markers\" ="))?;
+        assert_eq!(lock.supported_environments, restored.supported_environments);
+        assert_eq!(lock.required_environments, restored.required_environments);
+        assert_eq!(serialized, restored.to_toml()?);
+        Ok(())
+    }
+
+    #[test]
+    fn environment_entries_round_trip_with_requires_python()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let lock: Lock = toml::from_str(
+            r#"
+version = 1
+requires-python = ">=3.9"
+supported-markers = ["python_version >= '0'", "sys_platform == 'linux'", "python_version < '0'", "python_version >= '0'"]
+required-markers = ["sys_platform == 'win32'", "python_version >= '0'", "python_version >= '0'"]
+"#,
+        )?;
+        let serialized = lock.to_toml()?;
+
+        let restored = Lock::from_canonical_toml(&serialized)?;
+        assert_eq!(lock.supported_environments, restored.supported_environments);
+        assert_eq!(lock.required_environments, restored.required_environments);
+        assert_eq!(serialized, restored.to_toml()?);
+
+        let restored =
+            Lock::from_toml(&serialized.replace("supported-markers =", "\"supported-markers\" ="))?;
+        assert_eq!(lock.supported_environments, restored.supported_environments);
+        assert_eq!(lock.required_environments, restored.required_environments);
+        assert_eq!(serialized, restored.to_toml()?);
         Ok(())
     }
 
