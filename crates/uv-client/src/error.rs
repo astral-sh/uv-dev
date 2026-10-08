@@ -19,6 +19,7 @@ use uv_distribution_types::IndexUrl;
 use uv_errors::{Hinted, Hints};
 use uv_git::GitError;
 use uv_normalize::PackageName;
+use uv_pep440::Version;
 use uv_pypi_types::HashDigest;
 use uv_redacted::DisplaySafeUrl;
 
@@ -178,6 +179,7 @@ impl Error {
             | ErrorKind::MetadataRangeRequestsRequired(..)
             | ErrorKind::WheelFilename(_)
             | ErrorKind::NameMismatch { .. }
+            | ErrorKind::VersionMismatch { .. }
             | ErrorKind::Zip(..)
             | ErrorKind::MissingContentType(_)
             | ErrorKind::InvalidContentTypeHeader(..)
@@ -525,6 +527,14 @@ pub enum ErrorKind {
     NameMismatch {
         given: PackageName,
         metadata: PackageName,
+    },
+
+    #[error(
+        "Wheel metadata version `{metadata}` does not match `{filename}` from the wheel filename. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`."
+    )]
+    VersionMismatch {
+        filename: Version,
+        metadata: Version,
     },
 
     #[error("Failed to unzip wheel: {0}")]

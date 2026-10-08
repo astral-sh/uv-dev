@@ -1026,11 +1026,30 @@ impl RegistryClient {
             }
         };
 
-        if metadata.name != *built_dist.name() {
+        Self::validate_wheel_metadata(metadata, built_dist.name(), built_dist.version())
+    }
+
+    /// Validate both fresh metadata before cache publication and entries read from older caches.
+    fn validate_wheel_metadata(
+        metadata: ResolutionMetadata,
+        name: &PackageName,
+        version: &Version,
+    ) -> Result<ResolutionMetadata, Error> {
+        if metadata.name != *name {
             return Err(Error::from(ErrorKind::NameMismatch {
                 metadata: metadata.name,
-                given: built_dist.name().clone(),
+                given: name.clone(),
             }));
+        }
+
+        if !uv_flags::contains(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK)
+            && !metadata.matches_wheel_version(version)
+        {
+            return Err(ErrorKind::VersionMismatch {
+                filename: version.clone(),
+                metadata: metadata.version,
+            }
+            .into());
         }
 
         Ok(metadata)
@@ -1126,7 +1145,7 @@ impl RegistryClient {
                     }
                 }
 
-                info_span!("parse_metadata21")
+                let metadata = info_span!("parse_metadata21")
                     .in_scope(|| ResolutionMetadata::parse_metadata(bytes.as_ref()))
                     .map_err(|err| {
                         Error::from(ErrorKind::MetadataParseError(
@@ -1134,7 +1153,8 @@ impl RegistryClient {
                             url.to_string(),
                             Box::new(err),
                         ))
-                    })
+                    })?;
+                Self::validate_wheel_metadata(metadata, &filename.name, &filename.version)
             };
             let req = self
                 .uncached_client(&url)
@@ -1243,13 +1263,15 @@ impl RegistryClient {
                     .map_err(|err| ErrorKind::AsyncHttpRangeReader(url.clone(), err))?;
                     trace!("Getting metadata for `{filename}` by range request");
                     let text = wheel_metadata_from_remote_zip(filename, url, &mut reader).await?;
-                    ResolutionMetadata::parse_metadata(text.as_bytes()).map_err(|err| {
-                        Error::from(ErrorKind::MetadataParseError(
-                            filename.clone(),
-                            url.to_string(),
-                            Box::new(err),
-                        ))
-                    })
+                    let metadata =
+                        ResolutionMetadata::parse_metadata(text.as_bytes()).map_err(|err| {
+                            Error::from(ErrorKind::MetadataParseError(
+                                filename.clone(),
+                                url.to_string(),
+                                Box::new(err),
+                            ))
+                        })?;
+                    Self::validate_wheel_metadata(metadata, &filename.name, &filename.version)
                 }
                 .boxed_local()
                 .instrument(info_span!("read_metadata_range_request", wheel = %filename))
@@ -1317,9 +1339,10 @@ impl RegistryClient {
                     .map_err(|err| self.handle_response_errors(err))
                     .into_async_read();
 
-                read_metadata_async_stream(filename, url.as_ref(), reader)
+                let metadata = read_metadata_async_stream(filename, url.as_ref(), reader)
                     .await
-                    .map_err(|err| ErrorKind::Metadata(url.to_string(), err))
+                    .map_err(|err| ErrorKind::Metadata(url.to_string(), err))?;
+                Self::validate_wheel_metadata(metadata, &filename.name, &filename.version)
             }
             .instrument(info_span!("read_metadata_stream", wheel = %filename))
         };

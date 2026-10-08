@@ -40,6 +40,14 @@ pub struct ResolutionMetadata {
 
 /// From <https://github.com/PyO3/python-pkginfo-rs/blob/d719988323a0cfea86d4737116d7917f30e819e2/src/metadata.rs#LL78C2-L91C26>
 impl ResolutionMetadata {
+    /// Whether the metadata version identifies the wheel selected by its filename.
+    ///
+    /// A wheel's local version suffix may be omitted from its metadata, as permitted during
+    /// installation. Other version differences, including differing local suffixes, are invalid.
+    pub fn matches_wheel_version(&self, version: &Version) -> bool {
+        self.version == *version || self.version == version.clone().without_local()
+    }
+
     /// Parse the [`ResolutionMetadata`] from a `METADATA` file, as included in a built distribution (wheel).
     pub fn parse_metadata(content: &[u8]) -> Result<Self, MetadataError> {
         let headers = Headers::parse(content)?;
@@ -280,6 +288,30 @@ mod tests {
 
     use super::*;
     use crate::MetadataError;
+
+    #[test]
+    fn wheel_version_compatibility() -> anyhow::Result<()> {
+        for (metadata_version, filename_version, expected) in [
+            ("1.0", "1.0", true),
+            ("1.0", "1.0.0", true),
+            ("1.0", "1.0+local", true),
+            ("1.0+local", "1.0+local", true),
+            ("1.0+local", "1.0", false),
+            ("1.0+first", "1.0+second", false),
+            ("1.0rc1", "1.0", false),
+            ("2.0", "1.0", false),
+        ] {
+            let metadata = ResolutionMetadata::parse_metadata(
+                format!("Metadata-Version: 2.3\nName: demo\nVersion: {metadata_version}\n")
+                    .as_bytes(),
+            )?;
+            assert_eq!(
+                metadata.matches_wheel_version(&filename_version.parse()?),
+                expected
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_parse_metadata() {
