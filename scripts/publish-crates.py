@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import email.utils
 import json
+import math
 import pathlib
+import ssl
 import subprocess
 import sys
 import time
@@ -29,6 +32,10 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Short delay between crates.io API requests to avoid burst rate limits.
 CRATES_IO_REQUEST_DELAY_SECS = 0.2
+CRATES_IO_REQUEST_TIMEOUT_SECS = 15
+CRATES_IO_REQUEST_ATTEMPTS = 4
+CRATES_IO_MAX_RETRY_DELAY_SECS = 30
+CRATES_IO_RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -70,29 +77,76 @@ def crate_version_url(crate: Crate, api_url: str) -> str:
     return f"{api_url}/crates/{crate_name}/{crate_version}"
 
 
+def retry_after_seconds(value: str | None) -> float | None:
+    """Parse a bounded Retry-After delay, falling back for invalid values."""
+    if value is None:
+        return None
+    try:
+        delay = float(value)
+    except ValueError:
+        try:
+            delay = email.utils.parsedate_to_datetime(value).timestamp() - time.time()
+        except (ValueError, TypeError, OverflowError):
+            return None
+    if not math.isfinite(delay):
+        return None
+    return max(0, min(delay, CRATES_IO_MAX_RETRY_DELAY_SECS))
+
+
 def crate_version_exists(crate: Crate, api_url: str) -> bool:
-    """Return True if the crate version already exists on crates.io."""
+    """Return whether the version exists, retrying only transient read failures."""
     request = urllib.request.Request(
         crate_version_url(crate, api_url),
         headers={"User-Agent": USER_AGENT},
     )
-    try:
-        with urllib.request.urlopen(request) as response:
-            if response.status == 200:
-                return True
-            raise RuntimeError(
-                f"unexpected status {response.status} for {crate.pretty()}"
+    attempt = 0
+    while True:
+        attempt += 1
+        retry_after = None
+        try:
+            with urllib.request.urlopen(
+                request, timeout=CRATES_IO_REQUEST_TIMEOUT_SECS
+            ) as response:
+                if response.status == 200:
+                    return True
+                raise RuntimeError(
+                    f"unexpected status {response.status} for {crate.pretty()}"
+                )
+        except urllib.error.HTTPError as exc:
+            exc.close()
+            if exc.code == 404:
+                return False
+            if exc.code not in CRATES_IO_RETRY_STATUSES:
+                raise RuntimeError(
+                    f"failed to query {crate.pretty()} from crates.io: HTTP {exc.code}"
+                ) from exc
+            retry_after = retry_after_seconds(exc.headers.get("Retry-After"))
+            error = exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            certificate_error = isinstance(exc, urllib.error.URLError) and isinstance(
+                exc.reason, ssl.SSLCertVerificationError
             )
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return False
-        raise RuntimeError(
-            f"failed to query {crate.pretty()} from crates.io: HTTP {exc.code}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(
-            f"failed to query {crate.pretty()} from crates.io: {exc}"
-        ) from exc
+            if certificate_error:
+                raise RuntimeError(
+                    f"failed to query {crate.pretty()} from crates.io: {exc}"
+                ) from exc
+            error = exc
+
+        if attempt >= CRATES_IO_REQUEST_ATTEMPTS:
+            raise RuntimeError(
+                f"failed to query {crate.pretty()} from crates.io after {attempt} attempts: {error}"
+            ) from error
+        delay = (
+            retry_after
+            if retry_after is not None
+            else min(2 ** (attempt - 1), CRATES_IO_MAX_RETRY_DELAY_SECS)
+        )
+        print(
+            f"Retrying query for {crate.pretty()} after {error} in {delay:g}s "
+            f"(attempt {attempt + 1}/{CRATES_IO_REQUEST_ATTEMPTS})",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
 
 
 def existing_crate_versions(crates: list[Crate], api_url: str) -> set[str]:
