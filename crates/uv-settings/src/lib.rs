@@ -1079,10 +1079,17 @@ where
     };
 
     T::from_str(&value, false).map(Some).map_err(|err| {
+        let possible_values = T::value_variants()
+            .iter()
+            .filter_map(clap::ValueEnum::to_possible_value)
+            .filter(|value| !value.is_hide_set())
+            .map(|value| value.get_name().to_owned())
+            .collect::<Vec<_>>()
+            .join(", ");
         Error::InvalidEnvironmentVariable(InvalidEnvironmentVariable {
             name: name.to_string(),
             value,
-            err,
+            err: format!("{err}; expected one of: {possible_values}"),
         })
     })
 }

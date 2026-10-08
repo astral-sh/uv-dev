@@ -988,6 +988,18 @@ fn python_find_managed() {
 }
 
 #[test]
+fn python_find_invalid_python_preference_environment() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.python_find()
+        .env(EnvVars::UV_PYTHON_PREFERENCE, "managd"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse environment variable `UV_PYTHON_PREFERENCE` with invalid value `managd`: invalid variant: managd; expected one of: only-managed, managed, system, only-system
+    ");
+}
+
+#[test]
 fn python_find_python_preference_environment_precedence() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_sources()
