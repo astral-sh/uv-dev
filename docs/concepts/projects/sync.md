@@ -127,11 +127,12 @@ documentation describes how this default can change.
 
 `--no-dev` excludes the `dev` group.
 
-`--only-dev` installs the `dev` group _without_ the project and its dependencies.
+`--only-dev` installs the `dev` group _without_ the project, its dependencies, or other default
+groups.
 
 `--all-groups`, `--no-default-groups`, `--group <name>`, `--only-group <name>`, and
 `--no-group <name>` include or exclude additional groups. Like `--only-dev`, `--only-group` excludes
-the project. Unlike `--only-dev`, `--only-group` also excludes default groups.
+the project and default groups.
 
 Group exclusions take precedence over inclusions. For example:
 

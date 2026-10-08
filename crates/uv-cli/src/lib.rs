@@ -5915,8 +5915,8 @@ pub struct PythonInstallArgs {
     /// The Python version(s) to install.
     ///
     /// If you do not specify a version, uv checks `UV_PYTHON`, then `.python-versions` or
-    /// `.python-version` files. If none exist, uv checks for an installed Python version. If it
-    /// finds none, it installs the latest stable Python version.
+    /// `.python-version` files. If none exist, uv checks for a matching uv-managed Python version.
+    /// If it finds none, it installs the latest stable Python version.
     ///
     /// See `uv help python` to view supported request formats.
     #[arg(env = EnvVars::UV_PYTHON)]
