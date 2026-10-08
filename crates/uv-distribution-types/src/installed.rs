@@ -17,6 +17,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pypi_types::{DirectUrl, MetadataError};
 use uv_redacted::DisplaySafeUrl;
+use uv_warnings::warn_user_once;
 
 use crate::{
     BuildInfo, DistributionMetadata, InstalledMetadata, InstalledVersion, Name, VersionOrUrlRef,
@@ -184,7 +185,16 @@ impl InstalledDist {
             let cache_info = Self::read_cache_info(path)?;
             let build_info = Self::read_build_info(path)?;
 
-            return if let Some(direct_url) = Self::read_direct_url(path)? {
+            let direct_url = match Self::read_direct_url(path) {
+                Ok(direct_url) => direct_url,
+                Err(InstalledDistError::Json(err)) => {
+                    warn_user_once!("Ignoring invalid `direct_url.json` for `{name}`: {err}");
+                    None
+                }
+                Err(err) => return Err(err),
+            };
+
+            return if let Some(direct_url) = direct_url {
                 match DisplaySafeUrl::try_from(&direct_url) {
                     Ok(url) => Ok(Some(Self::from(InstalledDistKind::Url(
                         InstalledDirectUrlDist {
