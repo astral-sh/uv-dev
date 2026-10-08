@@ -7810,6 +7810,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rustc-hash",
+ "temp-env",
  "tempfile",
  "test-case",
  "thiserror",
