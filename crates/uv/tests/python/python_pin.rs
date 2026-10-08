@@ -336,22 +336,20 @@ async fn python_pin_reuses_workspace_requirement_for_multiple_pins() -> Result<(
         .mount(&server)
         .await;
 
-    let output = context
-        .python_pin()
+    uv_snapshot!(context.filters(), context.python_pin()
         .arg("--python-downloads-json-url")
         .arg(server.uri())
-        .env(EnvVars::RUST_LOG, "uv_python_commands::pin=debug")
-        .assert()
-        .success();
-    assert_snapshot!(String::from_utf8_lossy(&output.get_output().stdout), @"
+        .env(EnvVars::RUST_LOG, "uv_python_commands::pin=debug"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
     3.11
     3.12
+
+    ----- stderr -----
+    DEBUG Discovered virtual workspace at: [TEMP_DIR]/
+    DEBUG The pinned Python version `Python 3.11` resolves to `3.11.[X]`
+    DEBUG The pinned Python version `Python 3.12` resolves to `3.12.[X]`
     ");
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
-    assert_eq!(
-        stderr.matches("Discovered virtual workspace at:").count(),
-        1
-    );
     Ok(())
 }
 
