@@ -469,21 +469,130 @@ pub fn windows_python_launcher(
 #[cfg(all(test, windows))]
 #[expect(clippy::print_stdout)]
 mod test {
+    use std::env;
     use std::io::Write;
-    use std::path::Path;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf, absolute};
     use std::process::Command;
 
-    use anyhow::Result;
+    use anyhow::{Context, Result, ensure};
     use assert_cmd::prelude::OutputAssertExt;
-    use assert_fs::prelude::PathChild;
+    use assert_fs::prelude::{FileWriteStr, PathChild};
     use fs_err::File;
+    use uv_fs::Simplified;
 
     use which::which;
 
     use super::{
         Launcher, LauncherKind, WindowMode, windows_python_launcher, windows_script_launcher,
     };
+
+    const TEST_PYTHON: &str = "UV_TEST_TRAMPOLINE_PYTHON";
+
+    /// Resolve an explicit interpreter or local PATH candidate to the executable it runs.
+    pub(super) fn test_python() -> Result<PathBuf> {
+        let candidate = if let Some(path) = env::var_os(TEST_PYTHON) {
+            PathBuf::from(path)
+        } else {
+            which("python").context("Set UV_TEST_TRAMPOLINE_PYTHON to a Python executable")?
+        };
+        let candidate = absolute(&candidate)
+            .with_context(|| {
+                format!(
+                    "Invalid trampoline test interpreter: {}",
+                    candidate.display()
+                )
+            })?
+            .simplified()
+            .to_path_buf();
+        let output = python_command(&candidate)
+            .args(["-I", "-S", "-c"])
+            .arg(r#"import platform, struct, sys
+assert sys.version_info.major == 3, "Trampoline tests require Python 3"
+identity = "{} {} ({}, {}-bit)".format(sys.implementation.name, sys.version, platform.machine(), struct.calcsize("P") * 8)
+sys.stdout.buffer.write((sys.executable + "\n" + identity).encode("utf-8"))
+"#)
+            .output()
+            .with_context(|| format!("Could not query {}", candidate.display()))?;
+        ensure!(
+            output.status.success(),
+            "Could not query trampoline test interpreter {}: {}",
+            candidate.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = String::from_utf8(output.stdout)?;
+        let (executable, identity) = output
+            .split_once('\n')
+            .context("Interpreter query did not report its executable and identity")?;
+        let executable = Path::new(executable.trim_end_matches('\r'));
+        ensure!(
+            executable.is_absolute() && executable.is_file(),
+            "Interpreter did not report a real executable"
+        );
+        let executable = executable.simplified().to_path_buf();
+        println!(
+            "Trampoline test Python: {}\n{identity}",
+            executable.display()
+        );
+        Ok(executable)
+    }
+
+    /// Run the interpreter or generated launcher without host Python startup settings.
+    pub(super) fn python_command(program: impl AsRef<Path>) -> Command {
+        let mut command = Command::new(program.as_ref());
+        for (name, _) in env::vars_os() {
+            if name
+                .as_encoded_bytes()
+                .get(..6)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"PYTHON"))
+            {
+                command.env_remove(name);
+            }
+        }
+        command.env_remove("__PYVENV_LAUNCHER__");
+        command
+    }
+
+    #[test]
+    fn explicit_python_ignores_host_settings() -> Result<()> {
+        let python = test_python()?;
+        let temp_dir = assert_fs::TempDir::new()?;
+        temp_dir
+            .child("python.cmd")
+            .write_str("@echo trampoline PATH sentinel 1>&2\r\n@exit /b 97\r\n")?;
+        temp_dir
+            .child("sitecustomize.py")
+            .write_str("print('trampoline startup sentinel')\n")?;
+        let path = env::join_paths(
+            std::iter::once(temp_dir.to_path_buf())
+                .chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
+        )?;
+
+        // The fallback must encounter the authored shim, making the explicit-path control decisive.
+        let fallback = Command::new(env::current_exe()?)
+            .args(["--exact", "test::console_python_launcher", "--nocapture"])
+            .current_dir(temp_dir.path())
+            .env_remove(TEST_PYTHON)
+            .env("PATH", &path)
+            .env("PATHEXT", ".EXE;.CMD")
+            .assert()
+            .code(101);
+        let stderr = String::from_utf8_lossy(&fallback.get_output().stderr);
+        assert!(stderr.contains("trampoline PATH sentinel"), "{stderr}");
+
+        let explicit = Command::new(env::current_exe()?)
+            .args(["--exact", "test::console_python_launcher", "--nocapture"])
+            .current_dir(temp_dir.path())
+            .env(TEST_PYTHON, python)
+            .env("PATH", &path)
+            .env("PATHEXT", ".EXE;.CMD")
+            .env("PYTHONHOME", temp_dir.join("missing"))
+            .env("PYTHONPATH", temp_dir.path())
+            .assert()
+            .success();
+        let stdout = String::from_utf8_lossy(&explicit.get_output().stdout);
+        assert!(stdout.contains("1 passed"), "{stdout}");
+        Ok(())
+    }
 
     #[test]
     #[cfg(all(windows, target_arch = "x86", feature = "production"))]
@@ -686,8 +795,7 @@ if __name__ == "__main__":
         let temp_dir = assert_fs::TempDir::new()?;
         let console_bin_path = temp_dir.child("launcher.console.exe");
 
-        // Locate an arbitrary python installation from PATH
-        let python_executable_path = which("python")?;
+        let python_executable_path = test_python()?;
 
         // Generate Launcher Script
         let launcher_console_script =
@@ -710,7 +818,7 @@ if __name__ == "__main__":
 
         // Test Console Launcher
         #[cfg(windows)]
-        Command::new(console_bin_path.path())
+        python_command(console_bin_path.path())
             .assert()
             .success()
             .stdout(stdout_predicate)
@@ -720,7 +828,7 @@ if __name__ == "__main__":
         let stderr_predicate = format!("{}{}\r\n", stderr_predicate, args_to_test.join("\r\n"));
 
         // Test Console Launcher (with args)
-        Command::new(console_bin_path.path())
+        python_command(console_bin_path.path())
             .args(args_to_test)
             .assert()
             .success()
@@ -739,7 +847,7 @@ if __name__ == "__main__":
 
         let stdout_predicate = "Hello from uv-trampoline-console.exe\r\n";
         let stderr_predicate = "Hello from uv-trampoline-console.exe\r\n";
-        Command::new(console_bin_path.path())
+        python_command(console_bin_path.path())
             .assert()
             .success()
             .stdout(stdout_predicate)
@@ -754,8 +862,7 @@ if __name__ == "__main__":
         let temp_dir = assert_fs::TempDir::new()?;
         let console_bin_path = temp_dir.child("launcher.console.exe");
 
-        // Locate an arbitrary python installation from PATH
-        let python_executable_path = which("python")?;
+        let python_executable_path = test_python()?;
 
         // Generate Launcher Payload
         let console_launcher =
@@ -772,7 +879,7 @@ if __name__ == "__main__":
         );
 
         // Test Console Launcher
-        Command::new(console_bin_path.path())
+        python_command(console_bin_path.path())
             .arg("-c")
             .arg("print('Hello from Python Launcher')")
             .assert()
@@ -788,7 +895,7 @@ if __name__ == "__main__":
 
         // Now code-sign the launcher and verify that it still works.
         sign_authenticode(console_bin_path.path());
-        Command::new(console_bin_path.path())
+        python_command(console_bin_path.path())
             .arg("-c")
             .arg("print('Hello from Python Launcher')")
             .assert()
@@ -805,8 +912,11 @@ if __name__ == "__main__":
         let temp_dir = assert_fs::TempDir::new()?;
         let gui_bin_path = temp_dir.child("launcher.gui.exe");
 
-        // Locate an arbitrary pythonw installation from PATH
-        let pythonw_executable_path = which("pythonw")?;
+        let pythonw_executable_path = test_python()?.with_file_name("pythonw.exe");
+        ensure!(
+            pythonw_executable_path.is_file(),
+            "Selected Python has no adjacent pythonw.exe"
+        );
 
         // Generate Launcher Script
         let launcher_gui_script =
@@ -825,7 +935,7 @@ if __name__ == "__main__":
 
         // Test GUI Launcher
         // NOTICE: This will spawn a GUI and will wait until you close the window.
-        Command::new(gui_bin_path.path()).assert().success();
+        python_command(gui_bin_path.path()).assert().success();
 
         Ok(())
     }
