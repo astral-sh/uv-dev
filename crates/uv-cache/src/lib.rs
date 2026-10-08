@@ -7,7 +7,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
-use tracing::{debug, trace, warn};
+use tracing::{debug, warn};
 
 use uv_cache_info::Timestamp;
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, cachedir, directories};
@@ -526,7 +526,7 @@ impl Cache {
     pub async fn init(self) -> Result<Self, Error> {
         let root = &self.root;
 
-        Self::create_base_files(root).map_err(|err| Error::Init(root.clone(), err))?;
+        fs_err::create_dir_all(root).map_err(|err| Error::Init(root.clone(), err))?;
 
         // Block cache removal operations from interfering.
         let lock_file = match LockedFile::acquire(
@@ -551,6 +551,9 @@ impl Cache {
             Err(err) => return Err(err.into()),
         };
 
+        // A cleaner may have removed the scaffold while this initializer waited.
+        Self::create_base_files(root).map_err(|err| Error::Init(root.clone(), err))?;
+
         Ok(Self {
             root: std::path::absolute(root).map_err(Error::Absolute)?,
             lock_file,
@@ -562,7 +565,7 @@ impl Cache {
     pub fn init_no_wait(self) -> Result<Option<Self>, Error> {
         let root = &self.root;
 
-        Self::create_base_files(root).map_err(|err| Error::Init(root.clone(), err))?;
+        fs_err::create_dir_all(root).map_err(|err| Error::Init(root.clone(), err))?;
 
         // Block cache removal operations from interfering.
         let Some(lock_file) = LockedFile::acquire_no_wait(
@@ -572,6 +575,8 @@ impl Cache {
         ) else {
             return Ok(None);
         };
+        Self::create_base_files(root).map_err(|err| Error::Init(root.clone(), err))?;
+
         Ok(Some(Self {
             root: std::path::absolute(root).map_err(Error::Absolute)?,
             lock_file: Some(Arc::new(lock_file)),
@@ -579,37 +584,15 @@ impl Cache {
         }))
     }
 
-    /// Clear the cache, removing all entries.
+    /// Clear the cache, removing all entries but retaining the root coordination lock.
     pub fn clear(self, reporter: Box<dyn CleanReporter>) -> Result<Removal, io::Error> {
-        // Remove everything but `.lock`, Windows does not allow removal of a locked file
-        let mut removal = Remover::new(reporter)
+        // Waiters may have already opened `.lock`. Keep its inode and parent directory in place
+        // so later users and cleaners acquire the same lock, including after this guard drops.
+        // The cache root itself can be a directory symlink; remove its entries, not the alias.
+        let root = fs_err::canonicalize(&self.root)?;
+        Remover::new(reporter)
             .with_removal_accounting(self.removal_accounting)
-            .rm_rf(&self.root, true)?;
-        let Self {
-            root, lock_file, ..
-        } = self;
-
-        // Remove the `.lock` file, unlocking it first
-        if let Some(lock) = lock_file {
-            drop(lock);
-            fs_err::remove_file(root.join(".lock"))?;
-        }
-        removal.num_files += 1;
-
-        // Remove the root directory
-        match fs_err::remove_dir(root) {
-            Ok(()) => {
-                removal.num_dirs += 1;
-            }
-            // On Windows, when `--force` is used, the `.lock` file can exist and be unremovable,
-            // so we make this non-fatal
-            Err(err) if err.kind() == io::ErrorKind::DirectoryNotEmpty => {
-                trace!("Failed to remove root cache directory: not empty");
-            }
-            Err(err) => return Err(err),
-        }
-
-        Ok(removal)
+            .rm_rf(root, true)
     }
 
     /// Remove a package from the cache.
