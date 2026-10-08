@@ -665,10 +665,12 @@ pub async fn add(
         // the discovered members, etc.
         target = if modified {
             let workspace_content = toml.to_string();
-            fs_err::write(
-                project.workspace().install_path().join("pyproject.toml"),
-                &workspace_content,
-            )?;
+            edit.write(|| {
+                fs_err::write(
+                    project.workspace().install_path().join("pyproject.toml"),
+                    &workspace_content,
+                )
+            })?;
 
             EditTarget::Project(
                 VirtualProject::discover(
@@ -762,7 +764,7 @@ pub async fn add(
     let content = toml.to_string();
 
     // Save the modified `pyproject.toml` or script.
-    target.write(&content)?;
+    edit.write(|| target.write(&content))?;
 
     // If `--frozen`, exit early. There's no reason to lock and sync, since we don't need a `uv.lock`
     // to exist at all.
@@ -790,6 +792,7 @@ pub async fn add(
 
     match Box::pin(lock_and_sync(
         target,
+        &edit,
         &python_target,
         &mut toml,
         &edits,
@@ -1077,6 +1080,7 @@ fn edits(
 #[expect(clippy::fn_params_excessive_bools)]
 async fn lock_and_sync(
     mut target: EditTarget,
+    edit: &ProjectEdit,
     python_target: &PythonTarget,
     toml: &mut PyProjectTomlMut,
     edits: &[DependencyEdit],
@@ -1147,7 +1151,9 @@ async fn lock_and_sync(
         )
         .with_constraints(constraints)
         .with_first_party_exclusions(first_party_exclusions.clone())
-        .execute((&target).into()),
+        .execute_with_writer((&target).into(), |path, contents| {
+            edit.write_lockfile(path, contents)
+        }),
     )
     .await?
     .into_lock();
@@ -1236,7 +1242,7 @@ async fn lock_and_sync(
             let content = toml.to_string();
 
             // Write the updated `pyproject.toml` to disk.
-            target.write(&content)?;
+            edit.write(|| target.write(&content))?;
 
             // Update the `pypackage.toml` in-memory.
             target = target.update(&content, &WorkspaceCache::default())?;
@@ -1276,7 +1282,9 @@ async fn lock_and_sync(
                     preview,
                 )
                 .with_first_party_exclusions(first_party_exclusions)
-                .execute((&target).into()),
+                .execute_with_writer((&target).into(), |path, contents| {
+                    edit.write_lockfile(path, contents)
+                }),
             )
             .await?
             .into_lock();

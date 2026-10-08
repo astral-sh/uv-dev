@@ -339,6 +339,7 @@ pub async fn project_version(
         )?;
         let project = update_project(
             project,
+            &edit,
             new_version,
             &mut toml,
             &pyproject_path,
@@ -346,6 +347,7 @@ pub async fn project_version(
         )?;
         let status = Box::pin(lock_and_sync(
             project,
+            &edit,
             project_dir,
             lock_check,
             frozen,
@@ -434,6 +436,7 @@ async fn find_target(
 /// Update the pyproject.toml on-disk and in-memory with a new version
 fn update_project(
     project: VirtualProject,
+    edit: &ProjectEdit,
     new_version: &Version,
     toml: &mut PyProjectTomlMut,
     pyproject_path: &Path,
@@ -442,7 +445,7 @@ fn update_project(
     // Save to disk
     toml.set_version(new_version)?;
     let content = toml.to_string();
-    fs_err::write(pyproject_path, &content)?;
+    edit.write(|| fs_err::write(pyproject_path, &content))?;
 
     // Update the `pyproject.toml` in-memory.
     let project = project
@@ -497,6 +500,7 @@ async fn print_frozen_version(
 /// Re-lock and re-sync the project after a series of edits.
 async fn lock_and_sync(
     project: VirtualProject,
+    edit: &ProjectEdit,
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -608,7 +612,9 @@ async fn lock_and_sync(
             printer,
             preview,
         )
-        .execute(project.workspace().into()),
+        .execute_with_writer(project.workspace().into(), |path, contents| {
+            edit.write_lockfile(path, contents)
+        }),
     )
     .await
     {

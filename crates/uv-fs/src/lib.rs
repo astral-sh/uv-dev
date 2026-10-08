@@ -26,7 +26,6 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
 
 pub use crate::locked_file::*;
-#[cfg(feature = "tokio")]
 use crate::named_temp_file::tempfile_in_with_permissions;
 pub use crate::named_temp_file::{NamedTempFile, PersistError, tempfile_in};
 pub use crate::path::*;
@@ -552,6 +551,54 @@ pub async fn write_atomic_preserve(
         temp_file.as_file().set_permissions(permissions)?;
     }
     persist_with_retry(temp_file, path).await
+}
+
+/// Atomically write a user-managed file, preserving symlinks and the target's permissions.
+///
+/// This is a synchronous implementation of [`write_atomic_preserve`].
+pub fn write_atomic_preserve_sync(
+    path: impl AsRef<Path>,
+    data: impl AsRef<[u8]>,
+) -> std::io::Result<()> {
+    let mut path = path.as_ref().to_path_buf();
+    let permissions = loop {
+        match fs_err::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                path = match fs_err::canonicalize(&path) {
+                    Ok(target) => target,
+                    // Canonicalization resolves live links and catches cycles. For a dangling
+                    // chain, follow its next link and let the OS check the remaining path.
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        let target = fs_err::read_link(&path)?;
+                        path.parent()
+                            .expect("Write path must have a parent")
+                            .join(target)
+                    }
+                    Err(err) => return Err(err),
+                };
+            }
+            Ok(metadata) if metadata.is_file() => break Some(metadata.permissions()),
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "Cannot atomically replace `{}`: not a regular file",
+                        path.display()
+                    ),
+                ));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break None,
+            Err(err) => return Err(err),
+        }
+    };
+    let parent = path.parent().expect("Write path must have a parent");
+    let mut temp_file = tempfile_in_with_permissions(parent, permissions.clone())?;
+    // Write through the open handle: the umask may prevent reopening the temporary file.
+    temp_file.write_all(data.as_ref())?;
+    if let Some(permissions) = permissions {
+        temp_file.as_file().set_permissions(permissions)?;
+    }
+    persist_with_retry_sync(temp_file, path)
 }
 
 /// Write `data` to `path` atomically using a temporary file and atomic rename.
