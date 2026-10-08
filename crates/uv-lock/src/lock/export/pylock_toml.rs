@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf, absolute};
+use std::path::{Component, Path, PathBuf, absolute};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -127,6 +127,15 @@ pub enum PylockTomlErrorKind {
     SdistMissingPathUrl(PackageName),
     #[error("`packages.archive` entry for `{0}` must have a `path` or `url`")]
     ArchiveMissingPathUrl(PackageName),
+    #[error(
+        "Package `{name}` selects subdirectory `{}` in local archive `{}`, which is not supported",
+        subdirectory.display(), path.display()
+    )]
+    LocalArchiveSubdirectory {
+        name: PackageName,
+        path: Box<Path>,
+        subdirectory: Box<Path>,
+    },
     #[error("`packages.vcs` entry for `{0}` must have a `url` or `path`")]
     VcsMissingPathUrl(PackageName),
     #[error("`{1}` entry for `{0}` has no hashes and no URL or path to compute them")]
@@ -1874,6 +1883,21 @@ impl PylockTomlArchive {
                     })))
                 }
                 DistExtension::Source(ext) => {
+                    // Local source archive identities cannot carry a selected subtree through
+                    // metadata and wheel caching. Empty and current-directory selections name
+                    // the archive root; other selections must not silently build that root.
+                    if let Some(subdirectory) = &self.subdirectory
+                        && subdirectory
+                            .as_ref()
+                            .components()
+                            .any(|component| component != Component::CurDir)
+                    {
+                        return Err(PylockTomlErrorKind::LocalArchiveSubdirectory {
+                            name: name.clone(),
+                            path: Box::<Path>::from(path.clone()),
+                            subdirectory: Box::<Path>::from(subdirectory.clone()),
+                        });
+                    }
                     let install_path = install_path.join(path);
                     validate_path_size(&install_path, self.size)?;
                     let url = VerbatimUrl::from_absolute_path(&install_path)
