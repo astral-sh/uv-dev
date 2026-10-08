@@ -10946,6 +10946,75 @@ source = { directory = "packages/target" }
     }
 
     #[test]
+    fn lock_new_canonicalizes_independently_allocated_dependency_ids() -> Result<(), Box<dyn Error>>
+    {
+        let mut lock = Lock::from_toml(
+            r#"
+version = 1
+requires-python = ">=3.12"
+[[package]]
+name = "root"
+version = "1.0"
+source = { virtual = "." }
+dependencies = [{ name = "target" }]
+[package.optional-dependencies]
+feature = [{ name = "target" }]
+[package.dependency-groups]
+dev = [{ name = "target" }]
+[[package]]
+name = "target"
+version = "1.0"
+source = { directory = "packages/target" }
+"#,
+        )?;
+        // Fresh resolutions allocate edge identities before matching them to package entries.
+        for package in &mut lock.packages {
+            for dependency in package
+                .dependencies
+                .iter_mut()
+                .chain(package.optional_dependencies.values_mut().flatten())
+                .chain(package.dependency_groups.values_mut().flatten())
+            {
+                dependency.package_id = Arc::new(dependency.package_id.as_ref().clone());
+                let (target, _) = lock
+                    .by_id
+                    .get_key_value(&dependency.package_id)
+                    .expect("target indexed");
+                assert!(!Arc::ptr_eq(&dependency.package_id, target));
+            }
+        }
+        let lock = Lock::new(
+            lock.version,
+            lock.revision,
+            lock.packages,
+            lock.requires_python,
+            lock.options,
+            lock.manifest,
+            lock.conflicts,
+            lock.supported_environments,
+            lock.required_environments,
+            lock.fork_markers,
+        )?;
+        let mut dependencies = 0;
+        for package in &lock.packages {
+            for dependency in package
+                .dependencies
+                .iter()
+                .chain(package.optional_dependencies.values().flatten())
+                .chain(package.dependency_groups.values().flatten())
+            {
+                assert!(Arc::ptr_eq(
+                    &dependency.package_id,
+                    &lock.package(dependency.index).id
+                ));
+                dependencies += 1;
+            }
+        }
+        assert_eq!(dependencies, 3);
+        Ok(())
+    }
+
+    #[test]
     fn missing_dependency_source_unambiguous() {
         let data = r#"
 version = 1
