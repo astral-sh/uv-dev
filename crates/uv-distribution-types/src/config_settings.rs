@@ -277,7 +277,7 @@ impl PackageConfigSettings {
     }
 
     /// Returns the config settings for a specific package, if any.
-    pub fn get(&self, package: &PackageName) -> Option<&ConfigSettings> {
+    fn get(&self, package: &PackageName) -> Option<&ConfigSettings> {
         self.0.get(package)
     }
 
