@@ -640,15 +640,6 @@ async fn build_package(
         HashStrategy::default()
     };
 
-    // Initialize the registry client.
-    let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
-        .index_locations(index_locations.clone())
-        .index_strategy(index_strategy)
-        .keyring(keyring_provider)
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
-
     // Determine whether to enable build isolation.
     let environment;
     let types_build_isolation = match build_isolation {
@@ -660,55 +651,6 @@ async fn build_package(
         BuildIsolation::SharedPackage(packages) => {
             environment = PythonEnvironment::from_interpreter(interpreter.clone());
             uv_types::BuildIsolation::SharedPackage(&environment, packages)
-        }
-    };
-
-    // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
-
-    // Initialize any shared state.
-    let state = SharedState::default();
-
-    let extra_build_requires =
-        LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
-            .into_inner();
-
-    // Create a build dispatch.
-    let build_dispatch = BuildDispatch::new(
-        &client,
-        cache,
-        &build_constraints,
-        &interpreter,
-        index_locations,
-        &flat_index,
-        dependency_metadata,
-        state.clone(),
-        index_strategy,
-        config_setting,
-        config_settings_package,
-        types_build_isolation,
-        &extra_build_requires,
-        extra_build_variables,
-        link_mode,
-        build_options,
-        &hasher,
-        exclude_newer,
-        sources.clone(),
-        SourceTreeEditablePolicy::Project,
-        workspace_cache.clone(),
-        concurrency.clone(),
-        preview,
-    )
-    .with_build_hash_checking(build_hash_checking);
-    let dependency_check = match types_build_isolation {
-        uv_types::BuildIsolation::Isolated => None,
-        uv_types::BuildIsolation::Shared(_) | uv_types::BuildIsolation::SharedPackage(..) => {
-            (preview.is_enabled(PreviewFeature::BuildDependencyCheck) && !skip_dependency_check)
-                .then_some(BuildDependencyCheck {
-                    build_dispatch: &build_dispatch,
-                    constraints: &build_constraints,
-                    credentials_cache: client.credentials_cache(),
-                })
         }
     };
 
@@ -738,7 +680,7 @@ async fn build_package(
 
         BuildAction::List
     } else if force_pep517 {
-        BuildAction::Pep517
+        BuildAction::Pep517(())
     } else {
         match check_direct_build(
             source.path(),
@@ -753,8 +695,80 @@ async fn build_package(
                     source.path().user_display(),
                     reason
                 );
-                BuildAction::Pep517
+                BuildAction::Pep517(())
             }
+        }
+    };
+
+    let check_dependencies = match types_build_isolation {
+        uv_types::BuildIsolation::Isolated => false,
+        uv_types::BuildIsolation::Shared(_) | uv_types::BuildIsolation::SharedPackage(..) => {
+            preview.is_enabled(PreviewFeature::BuildDependencyCheck) && !skip_dependency_check
+        }
+    };
+    let client;
+    let flat_index;
+    let extra_build_requires;
+    let build_dispatch;
+    let (build_action, dependency_check) = match build_action {
+        BuildAction::List if !check_dependencies => (BuildAction::List, None),
+        BuildAction::DirectBuild if !check_dependencies => (BuildAction::DirectBuild, None),
+        build_action => {
+            // Initialize the registry client.
+            client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
+                .index_locations(index_locations.clone())
+                .index_strategy(index_strategy)
+                .keyring(keyring_provider)
+                .markers(interpreter.markers())
+                .platform(interpreter.platform())
+                .build()?;
+
+            // Resolve the flat indexes from `--find-links`.
+            flat_index = FlatIndex::load(&client, cache, index_locations).await?;
+
+            // Initialize any shared state.
+            let state = SharedState::default();
+
+            extra_build_requires =
+                LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
+                    .into_inner();
+
+            // Create a build dispatch.
+            build_dispatch = BuildDispatch::new(
+                &client,
+                cache,
+                &build_constraints,
+                &interpreter,
+                index_locations,
+                &flat_index,
+                dependency_metadata,
+                state.clone(),
+                index_strategy,
+                config_setting,
+                config_settings_package,
+                types_build_isolation,
+                &extra_build_requires,
+                extra_build_variables,
+                link_mode,
+                build_options,
+                &hasher,
+                exclude_newer,
+                sources.clone(),
+                SourceTreeEditablePolicy::Project,
+                workspace_cache.clone(),
+                concurrency.clone(),
+                preview,
+            )
+            .with_build_hash_checking(build_hash_checking);
+            let dependency_check = check_dependencies.then_some(BuildDependencyCheck {
+                build_dispatch: &build_dispatch,
+                constraints: &build_constraints,
+                credentials_cache: client.credentials_cache(),
+            });
+            (
+                build_action.with_pep517_context(&build_dispatch),
+                dependency_check,
+            )
         }
     };
 
@@ -794,7 +808,6 @@ async fn build_package(
                     &source,
                     printer,
                     "source distribution",
-                    &build_dispatch,
                     dependency_check.as_ref(),
                     &sources,
                     dist,
@@ -812,7 +825,6 @@ async fn build_package(
                 &source,
                 printer,
                 "source distribution",
-                &build_dispatch,
                 dependency_check.as_ref(),
                 &sources,
                 dist,
@@ -852,7 +864,6 @@ async fn build_package(
                 &source,
                 printer,
                 "wheel from source distribution",
-                &build_dispatch,
                 dependency_check.as_ref(),
                 sources,
                 dist,
@@ -872,7 +883,6 @@ async fn build_package(
                 &source,
                 printer,
                 "source distribution",
-                &build_dispatch,
                 dependency_check.as_ref(),
                 &sources,
                 dist,
@@ -891,7 +901,6 @@ async fn build_package(
                 &source,
                 printer,
                 "wheel",
-                &build_dispatch,
                 dependency_check.as_ref(),
                 sources,
                 dist,
@@ -911,7 +920,6 @@ async fn build_package(
                 &source,
                 printer,
                 "source distribution",
-                &build_dispatch,
                 dependency_check.as_ref(),
                 &sources,
                 dist,
@@ -928,7 +936,6 @@ async fn build_package(
                 &source,
                 printer,
                 "wheel",
-                &build_dispatch,
                 dependency_check.as_ref(),
                 sources,
                 dist,
@@ -979,7 +986,6 @@ async fn build_package(
                 &source,
                 printer,
                 "wheel from source distribution",
-                &build_dispatch,
                 dependency_check.as_ref(),
                 sources,
                 dist,
@@ -1065,23 +1071,32 @@ impl BuildDependencyCheck<'_> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-enum BuildAction {
+enum BuildAction<T> {
     /// Only list the files that would be included, don't actually build.
     List,
     /// Build by calling directly into the build backend.
     DirectBuild,
     /// Build through the PEP 517 hooks.
-    Pep517,
+    Pep517(T),
 }
 
-impl BuildAction {
+impl<T> BuildAction<T> {
+    /// Attach the services needed to execute a PEP 517 action.
+    fn with_pep517_context<C>(self, context: C) -> BuildAction<C> {
+        match self {
+            Self::List => BuildAction::List,
+            Self::DirectBuild => BuildAction::DirectBuild,
+            Self::Pep517(_) => BuildAction::Pep517(context),
+        }
+    }
+
     /// If in list mode, still build the distribution.
     fn force_build(self) -> Self {
         match self {
             // List is only available for the uv build backend
             Self::List => Self::DirectBuild,
             Self::DirectBuild => Self::DirectBuild,
-            Self::Pep517 => Self::Pep517,
+            Self::Pep517(context) => Self::Pep517(context),
         }
     }
 }
@@ -1091,12 +1106,10 @@ impl BuildAction {
 async fn build_sdist(
     source_tree: &Path,
     output_dir: &Path,
-    action: BuildAction,
+    action: BuildAction<&BuildDispatch<'_>>,
     source: &AnnotatedSource<'_>,
     printer: Printer,
     build_kind_message: &str,
-    // Below is only used with PEP 517 builds
-    build_dispatch: &BuildDispatch<'_>,
     dependency_check: Option<&BuildDependencyCheck<'_>>,
     sources: &NoSources,
     dist: Option<&SourceDist>,
@@ -1160,7 +1173,7 @@ async fn build_sdist(
                 output_dir: output_dir.to_path_buf(),
             }
         }
-        BuildAction::Pep517 => {
+        BuildAction::Pep517(build_dispatch) => {
             writeln!(
                 printer.stderr(),
                 "{}",
@@ -1210,12 +1223,10 @@ async fn build_sdist(
 async fn build_wheel(
     source_tree: &Path,
     output_dir: &Path,
-    action: BuildAction,
+    action: BuildAction<&BuildDispatch<'_>>,
     source: &AnnotatedSource<'_>,
     printer: Printer,
     build_kind_message: &str,
-    // Below is only used with PEP 517 builds
-    build_dispatch: &BuildDispatch<'_>,
     dependency_check: Option<&BuildDependencyCheck<'_>>,
     sources: NoSources,
     dist: Option<&SourceDist>,
@@ -1273,7 +1284,7 @@ async fn build_wheel(
                 output_dir: output_dir.to_path_buf(),
             }
         }
-        BuildAction::Pep517 => {
+        BuildAction::Pep517(build_dispatch) => {
             writeln!(
                 printer.stderr(),
                 "{}",
