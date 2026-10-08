@@ -10,6 +10,8 @@ mod ctrl_handler;
 mod exception;
 #[cfg(feature = "std")]
 mod file_identity;
+#[cfg(feature = "std")]
+mod file_replace;
 mod job;
 #[cfg(feature = "std")]
 mod spawn;
@@ -23,6 +25,8 @@ pub use file_identity::{
     FileIdentity, could_be_dos_short_name, directory_is_case_sensitive, names_equal_ordinal,
     open_directory, open_file_entry,
 };
+#[cfg(feature = "std")]
+pub use file_replace::replace_file_with_backup;
 pub use job::{Job, JobError};
 #[cfg(feature = "std")]
 pub use spawn::spawn_child;

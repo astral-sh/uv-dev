@@ -46,6 +46,14 @@ pub fn open_directory(path: &Path) -> io::Result<File> {
 }
 
 impl FileIdentity {
+    /// Encode the volume and complete file identifier for a persisted ownership record.
+    pub fn to_bytes(self) -> [u8; 24] {
+        let mut bytes = [0; 24];
+        bytes[..8].copy_from_slice(&self.volume.to_le_bytes());
+        bytes[8..].copy_from_slice(&self.file);
+        bytes
+    }
+
     /// Query the complete identity of an open file or directory.
     #[expect(unsafe_code)]
     pub fn from_file(file: &File) -> io::Result<Self> {

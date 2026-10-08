@@ -20,6 +20,7 @@ use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
+pub use receipt::PreparedToolReceipt;
 pub(crate) use receipt::ToolReceipt;
 pub use tool::{Tool, ToolEntrypoint};
 
@@ -221,7 +222,6 @@ impl InstalledTools {
     ///
     /// Note it is generally incorrect to use this without [`Self::acquire_lock`].
     pub fn add_tool_receipt(&self, name: &PackageName, tool: Tool) -> Result<(), Error> {
-        let tool_receipt = ToolReceipt::from(tool);
         let path = self.tool_dir(name).join("uv-receipt.toml");
 
         debug!(
@@ -229,13 +229,47 @@ impl InstalledTools {
             path.user_display()
         );
 
-        let doc = tool_receipt
-            .to_toml()
-            .map_err(|err| Error::ReceiptWrite(path.clone(), Box::new(err)))?;
+        let receipt = self.prepare_tool_receipt(name, tool)?;
 
         // Save the modified `uv-receipt.toml`.
-        fs_err::write(&path, doc)?;
+        fs_err::write(&path, receipt.as_bytes())?;
 
+        Ok(())
+    }
+
+    /// Serialize the exact receipt bytes before a fresh installation changes its exports.
+    pub fn prepare_tool_receipt(
+        &self,
+        name: &PackageName,
+        tool: Tool,
+    ) -> Result<PreparedToolReceipt, Error> {
+        let path = self.tool_dir(name).join("uv-receipt.toml");
+        let contents = ToolReceipt::from(tool)
+            .to_toml()
+            .map_err(|error| Error::ReceiptWrite(path, Box::new(error)))?;
+        Ok(PreparedToolReceipt { contents })
+    }
+
+    /// Publish a complete fresh receipt without replacing a receipt that appeared concurrently.
+    pub fn publish_new_tool_receipt(
+        &self,
+        name: &PackageName,
+        receipt: &PreparedToolReceipt,
+    ) -> Result<(), Error> {
+        let directory = self.tool_dir(name);
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(".uv-receipt-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o666));
+        }
+        let mut temporary = builder.tempfile_in(&directory)?;
+        temporary.write_all(receipt.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist_noclobber(directory.join("uv-receipt.toml"))
+            .map_err(|error| error.error)?;
         Ok(())
     }
 

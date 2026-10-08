@@ -4,6 +4,17 @@ use serde::Deserialize;
 
 use crate::Tool;
 
+/// A receipt serialized before any fresh executable publication begins.
+pub struct PreparedToolReceipt {
+    pub(crate) contents: String,
+}
+
+impl PreparedToolReceipt {
+    pub fn as_bytes(&self) -> &[u8] {
+        self.contents.as_bytes()
+    }
+}
+
 /// A `uv-receipt.toml` file tracking the installation of a tool.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
