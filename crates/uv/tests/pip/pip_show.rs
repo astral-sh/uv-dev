@@ -496,7 +496,7 @@ fn show_files_without_record() -> Result<()> {
     Requires:
     Required-by:
     Files:
-    Cannot locate RECORD or installed-files.txt
+    Cannot locate RECORD
     ");
 
     Ok(())

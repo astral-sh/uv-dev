@@ -226,10 +226,7 @@ pub fn pip_show(
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    writeln!(
-                        printer.stdout(),
-                        "Cannot locate RECORD or installed-files.txt"
-                    )?;
+                    writeln!(printer.stdout(), "Cannot locate RECORD")?;
                 }
                 Err(error) => return Err(error.into()),
             }
