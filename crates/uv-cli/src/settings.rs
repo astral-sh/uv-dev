@@ -2356,6 +2356,7 @@ impl AddSettings {
         // If the user passed an `--index-url` or `--extra-index-url`, warn.
         if installer
             .index_args
+            .options
             .index_url
             .as_ref()
             .is_some_and(Maybe::is_some)
@@ -2373,6 +2374,7 @@ impl AddSettings {
 
         if installer
             .index_args
+            .options
             .extra_index_url
             .as_ref()
             .is_some_and(|extra_index_url| extra_index_url.iter().any(Maybe::is_some))
@@ -2446,9 +2448,11 @@ impl AddSettings {
             no_editable_package,
         );
         let refresh = Refresh::try_from(refresh)?;
+        let indexes = installer
+            .index_args
+            .explicit_indexes(configured_indexes(filesystem.as_ref()))?;
         let options =
             resolver_installer_options(installer, build, configured_indexes(filesystem.as_ref()))?;
-        let indexes = options.indexes.index.clone().unwrap_or_default();
 
         Ok(Self {
             lock_check: locked,
@@ -5158,14 +5162,7 @@ mod tests {
             UpgradeArgs {
                 packages: vec![package.clone()],
                 exclude: Vec::new(),
-                index_args: IndexArgs {
-                    index: None,
-                    default_index: None,
-                    index_url: None,
-                    extra_index_url: None,
-                    find_links: None,
-                    no_index: false,
-                },
+                index_args: IndexArgs::default(),
                 registry_client: RegistryClientArgs {
                     index_strategy: None,
                     keyring_provider: None,
