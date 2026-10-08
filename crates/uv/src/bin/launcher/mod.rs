@@ -47,7 +47,7 @@ pub(super) fn get_uv_path(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use fs_err as fs;
 
     use super::get_uv_path;
 
