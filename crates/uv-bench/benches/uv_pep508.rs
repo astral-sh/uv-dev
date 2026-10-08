@@ -7,50 +7,19 @@ use std::hint::black_box;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main, measurement::WallTime};
 use uv_pep508::{MarkerTree, MarkerTreeContents};
 
-fn collect_markers(value: &toml::Value, markers: &mut Vec<MarkerTreeContents>) {
-    match value {
-        toml::Value::Table(table) => {
-            for (key, value) in table {
-                match (key.as_str(), value) {
-                    ("marker", toml::Value::String(marker)) => {
-                        markers.extend(marker.parse::<MarkerTree>().unwrap().contents());
-                    }
-                    ("resolution-markers", toml::Value::Array(values)) => {
-                        for value in values {
-                            markers.extend(
-                                value
-                                    .as_str()
-                                    .unwrap()
-                                    .parse::<MarkerTree>()
-                                    .unwrap()
-                                    .contents(),
-                            );
-                        }
-                    }
-                    _ => collect_markers(value, markers),
-                }
-            }
-        }
-        toml::Value::Array(values) => {
-            for value in values {
-                collect_markers(value, markers);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn format_markers(criterion: &mut Criterion<WallTime>) {
-    let mut markers = Vec::new();
-    for lockfile in [
-        include_str!("../../../uv.lock"),
-        include_str!("../../../scripts/benchmark/uv.lock"),
-    ] {
-        collect_markers(
-            &toml::from_str::<toml::Value>(lockfile).unwrap(),
-            &mut markers,
-        );
-    }
+    // Retain repeated markers from the lockfile corpus so their frequency remains part of the workload.
+    let markers: Vec<MarkerTreeContents> =
+        serde_json::from_str::<Vec<String>>(include_str!("../fixtures/markers.json"))
+            .expect("valid benchmark marker corpus")
+            .into_iter()
+            .filter_map(|marker| {
+                marker
+                    .parse::<MarkerTree>()
+                    .expect("valid benchmark marker")
+                    .contents()
+            })
+            .collect();
 
     let mut group = criterion.benchmark_group("marker_format");
     group.throughput(Throughput::Elements(markers.len() as u64));
