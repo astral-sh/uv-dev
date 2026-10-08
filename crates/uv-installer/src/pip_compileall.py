@@ -51,6 +51,11 @@ with warnings.catch_warnings():
         # based and has a matching mtime (unless force=True).
         force = True
 
+    source_root, destination_root = sys.argv[1:] if len(sys.argv) > 1 else (None, None)
+    if destination_root is not None:
+        # Recompile existing bytecode too, so code objects cannot retain temporary source paths.
+        force = True
+
     # In rust, we provide one line per file to compile.
     for path in sys.stdin:
         # Remove trailing newlines.
@@ -60,8 +65,18 @@ with warnings.catch_warnings():
         # Unlike pip, we set quiet=2, so we don't have to capture stdout.
         # We'd like to show those errors, but given that pip thinks that's totally fine,
         # we can't really change that.
+        display_directory = None
+        if destination_root is not None:
+            relative = os.path.relpath(os.path.dirname(path), source_root)
+            if relative == os.pardir or relative.startswith(os.pardir + os.sep):
+                raise ValueError("bytecode source is outside the staged directory")
+            display_directory = os.path.normpath(os.path.join(destination_root, relative))
         success = compileall.compile_file(
-            path, invalidation_mode=invalidation_mode, force=force, quiet=2
+            path,
+            ddir=display_directory,
+            invalidation_mode=invalidation_mode,
+            force=force,
+            quiet=2,
         )
         # We're ready for the next file.
         print(path)

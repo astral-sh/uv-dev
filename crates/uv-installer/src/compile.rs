@@ -1,11 +1,12 @@
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{env, io, panic};
 
 use async_channel::{Receiver, SendError};
-use tempfile::tempdir_in;
+use tempfile::{TempDir, tempdir_in};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
@@ -91,6 +92,24 @@ fn compile_timeout() -> Result<Option<Duration>, CompileError> {
     Ok(timeout)
 }
 
+#[derive(Clone)]
+struct WorkerResources {
+    script: Arc<TempDir>,
+    _environment: Option<Arc<TempDir>>,
+}
+
+impl WorkerResources {
+    fn new(cache: &Path, environment: Option<Arc<TempDir>>) -> Result<Self, CompileError> {
+        let script = Arc::new(tempdir_in(cache).map_err(CompileError::TempFile)?);
+        fs_err::write(script.path().join("pip_compileall.py"), COMPILEALL_SCRIPT)
+            .map_err(CompileError::TempFile)?;
+        Ok(Self {
+            script,
+            _environment: environment,
+        })
+    }
+}
+
 fn spawn_workers(
     dir: &Path,
     python_executable: &Path,
@@ -98,6 +117,8 @@ fn spawn_workers(
     receiver: &Receiver<PathBuf>,
     worker_count: usize,
     timeout: Option<Duration>,
+    resources: &WorkerResources,
+    destination: Option<&Path>,
 ) -> Vec<WorkerHandle> {
     debug!("Starting {} bytecode compilation workers", worker_count);
     let mut worker_handles = Vec::with_capacity(worker_count);
@@ -110,7 +131,9 @@ fn spawn_workers(
             pip_compileall_py.to_path_buf(),
             receiver.clone(),
             timeout,
+            destination.map(Path::to_path_buf),
         );
+        let resources = resources.clone();
 
         // Spawn each worker on a dedicated thread.
         std::thread::Builder::new()
@@ -125,6 +148,9 @@ fn spawn_workers(
                         .block_on(worker)
                 }));
 
+                // Actual workers retain both directories after caller cancellation. Release
+                // their leases before reporting completion so publication can take ownership.
+                drop(resources);
                 // This may fail if the main thread returned early due to an error.
                 let _ = tx.send(result);
             })
@@ -176,6 +202,41 @@ pub async fn compile_tree(
     concurrency: &Concurrency,
     cache: &Path,
 ) -> Result<usize, CompileError> {
+    compile_tree_inner(dir, python_executable, concurrency, cache, None, None).await
+}
+
+/// Compile a staged tree using its published paths in code objects, retaining the environment
+/// until every actual worker has exited even when the awaiting caller is cancelled.
+///
+/// `dir` must be inside `environment`; `destination` is its corresponding published directory.
+pub async fn compile_staged_tree(
+    dir: &Path,
+    destination: &Path,
+    python_executable: &Path,
+    concurrency: &Concurrency,
+    cache: &Path,
+    environment: Arc<TempDir>,
+) -> Result<usize, CompileError> {
+    debug_assert!(dir.starts_with(environment.path()));
+    compile_tree_inner(
+        dir,
+        python_executable,
+        concurrency,
+        cache,
+        Some(destination),
+        Some(environment),
+    )
+    .await
+}
+
+async fn compile_tree_inner(
+    dir: &Path,
+    python_executable: &Path,
+    concurrency: &Concurrency,
+    cache: &Path,
+    destination: Option<&Path>,
+    environment: Option<Arc<TempDir>>,
+) -> Result<usize, CompileError> {
     debug_assert!(
         dir.is_absolute(),
         "compileall doesn't work with relative paths: `{}`",
@@ -187,8 +248,8 @@ pub async fn compile_tree(
     let (sender, receiver) = async_channel::bounded::<PathBuf>(worker_count * 10);
 
     // Running Python with an actual file will produce better error messages.
-    let tempdir = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let pip_compileall_py = tempdir.path().join("pip_compileall.py");
+    let resources = WorkerResources::new(cache, environment)?;
+    let pip_compileall_py = resources.script.path().join("pip_compileall.py");
     let timeout = compile_timeout()?;
     let worker_handles = spawn_workers(
         dir,
@@ -197,6 +258,8 @@ pub async fn compile_tree(
         &receiver,
         worker_count,
         timeout,
+        &resources,
+        destination,
     );
     // Make sure the channel gets closed when all workers exit.
     drop(receiver);
@@ -269,8 +332,8 @@ pub async fn compile_files(
     let (sender, receiver) = async_channel::bounded::<PathBuf>(worker_count * 10);
 
     // Running Python with an actual file will produce better error messages.
-    let tempdir = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let pip_compileall_py = tempdir.path().join("pip_compileall.py");
+    let resources = WorkerResources::new(cache, None)?;
+    let pip_compileall_py = resources.script.path().join("pip_compileall.py");
     let timeout = compile_timeout()?;
     let worker_handles = spawn_workers(
         cache,
@@ -279,6 +342,8 @@ pub async fn compile_files(
         &receiver,
         worker_count,
         timeout,
+        &resources,
+        None,
     );
     drop(receiver);
 
@@ -320,36 +385,26 @@ async fn worker(
     pip_compileall_py: PathBuf,
     receiver: Receiver<PathBuf>,
     timeout: Option<Duration>,
+    destination: Option<PathBuf>,
 ) -> Result<(), CompileError> {
-    fs_err::tokio::write(&pip_compileall_py, COMPILEALL_SCRIPT)
-        .await
-        .map_err(CompileError::TempFile)?;
-
     // Sometimes, the first time we read from stdout, we get an empty string back (no newline). If
     // we try to write to stdin, it will often be a broken pipe. In this case, we have to restart
     // the child process
     // https://github.com/astral-sh/uv/issues/2245
-    let wait_until_ready = async {
-        loop {
-            // If the interpreter started successful, return it, else retry.
-            if let Some(child) =
-                launch_bytecode_compiler(&dir, &interpreter, &pip_compileall_py).await?
-            {
-                break Ok::<_, CompileError>(child);
-            }
+    let startup = timeout.map(|duration| (tokio::time::Instant::now() + duration, duration));
+    let (mut bytecode_compiler, child_stdin, mut child_stdout, mut child_stderr) = loop {
+        if let Some(child) = launch_bytecode_compiler(
+            &dir,
+            &interpreter,
+            &pip_compileall_py,
+            destination.as_deref(),
+            startup,
+        )
+        .await?
+        {
+            break child;
         }
     };
-
-    // Handle a broken `python` by using a timeout, one that's higher than any compilation
-    // should ever take.
-    let (mut bytecode_compiler, child_stdin, mut child_stdout, mut child_stderr) =
-        if let Some(duration) = timeout {
-            tokio::time::timeout(duration, wait_until_ready)
-                .await
-                .map_err(|_| CompileError::StartupTimeout(timeout.unwrap()))??
-        } else {
-            wait_until_ready.await?
-        };
 
     let stderr_reader = tokio::task::spawn(async move {
         let mut child_stderr_collected: Vec<u8> = Vec::new();
@@ -362,6 +417,7 @@ async fn worker(
     let result = worker_main_loop(receiver, child_stdin, &mut child_stdout, timeout).await;
     // Reap the process to avoid zombies.
     let _ = bytecode_compiler.kill().await;
+    let _ = bytecode_compiler.wait().await;
 
     // If there was something printed to stderr (which shouldn't happen, we muted all errors), tell
     // the user, otherwise only forward the result.
@@ -402,6 +458,8 @@ async fn launch_bytecode_compiler(
     dir: &Path,
     interpreter: &Path,
     pip_compileall_py: &Path,
+    destination: Option<&Path>,
+    startup: Option<(tokio::time::Instant, Duration)>,
 ) -> Result<
     Option<(
         Child,
@@ -412,8 +470,13 @@ async fn launch_bytecode_compiler(
     CompileError,
 > {
     // We input the paths through stdin and get the successful paths returned through stdout.
-    let mut bytecode_compiler = Command::new(interpreter)
-        .arg(pip_compileall_py)
+    let mut command = Command::new(interpreter);
+    command.arg(pip_compileall_py);
+    if let Some(destination) = destination {
+        command.arg(dir).arg(destination);
+    }
+    let mut bytecode_compiler = command
+        .kill_on_drop(true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -442,29 +505,41 @@ async fn launch_bytecode_compiler(
             .expect("Child must have stderr"),
     );
 
-    // Check if the launch was successful.
+    // Keep ownership of the child outside the timed read, then reap it before releasing the
+    // staging lease on every failed launch. Cancelling the read must not detach the Python writer.
     let mut out_line = String::new();
-    child_stdout
-        .read_line(&mut out_line)
-        .await
-        .map_err(|err| CompileError::ChildStdio {
-            device: "stdout",
-            err,
-        })?;
-
-    if out_line.trim_end() == "Ready" {
-        // Success
-        Ok(Some((
+    let ready = async {
+        child_stdout
+            .read_line(&mut out_line)
+            .await
+            .map_err(|err| CompileError::ChildStdio {
+                device: "stdout",
+                err,
+            })
+    };
+    let result = if let Some((deadline, duration)) = startup {
+        tokio::time::timeout_at(deadline, ready)
+            .await
+            .map_err(|_| CompileError::StartupTimeout(duration))
+            .and_then(std::convert::identity)
+    } else {
+        ready.await
+    };
+    if result.is_ok() && out_line.trim_end() == "Ready" {
+        return Ok(Some((
             bytecode_compiler,
             child_stdin,
             child_stdout,
             child_stderr,
-        )))
-    } else if out_line.is_empty() {
-        // Failed to launch, try again
+        )));
+    }
+    let _ = bytecode_compiler.kill().await;
+    let _ = bytecode_compiler.wait().await;
+    result?;
+    if out_line.is_empty() {
+        // Failed to launch, try again within the same startup deadline.
         Ok(None)
     } else {
-        // Not observed yet
         Err(CompileError::WrongPath("Ready".to_string(), out_line))
     }
 }
@@ -528,4 +603,233 @@ async fn worker_main_loop(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use anyhow::{Context, Result, bail, ensure};
+    use tempfile::TempDir;
+    use uv_cache::Cache;
+    use uv_configuration::Concurrency;
+    use uv_python::{EnvironmentPreference, PythonEnvironment, PythonPreference, PythonRequest};
+
+    use super::compile_staged_tree;
+    #[cfg(unix)]
+    use super::{CompileError, WorkerResources, spawn_workers, wait_for_workers};
+
+    struct StagedPython {
+        directory: Arc<TempDir>,
+        environment: PythonEnvironment,
+        #[cfg(unix)]
+        base_executable: PathBuf,
+        cache: Cache,
+    }
+
+    impl StagedPython {
+        fn new() -> Result<Self> {
+            let cache = Cache::temp()?;
+            let base = PythonEnvironment::find(
+                &PythonRequest::Any,
+                EnvironmentPreference::Any,
+                PythonPreference::System,
+                &cache,
+            )?;
+            let base_executable = base.python_executable().to_owned();
+            let directory = Arc::new(tempfile::tempdir()?);
+            let output = Command::new(&base_executable)
+                .args(["-m", "venv", "--without-pip"])
+                .arg(directory.path())
+                .output()?;
+            ensure!(output.status.success(), "{output:?}");
+            let environment = PythonEnvironment::from_root(directory.path(), &cache)?;
+            ensure!(
+                environment.root() == directory.path(),
+                "unexpected environment root: {:?}",
+                environment.root()
+            );
+            Ok(Self {
+                directory,
+                environment,
+                #[cfg(unix)]
+                base_executable,
+                cache,
+            })
+        }
+
+        fn site_packages(&self) -> Result<PathBuf> {
+            self.environment
+                .site_packages()
+                .next()
+                .filter(|path| path.starts_with(self.directory.path()))
+                .map(|path| path.to_path_buf())
+                .context("staged interpreter has no owned site-packages")
+        }
+
+        fn block_startup(&self, control: &Path) -> Result<()> {
+            let site_packages = self.site_packages()?;
+            fs_err::write(
+                site_packages.join("control-path"),
+                control.to_str().context("control path must be UTF-8")?,
+            )?;
+            fs_err::write(
+                site_packages.join("staging_worker_blocker.py"),
+                "import os, pathlib, time\ncontrol = pathlib.Path(pathlib.Path(__file__).with_name('control-path').read_text())\n(control / 'ready').write_text(str(os.getpid()))\nwhile not (control / 'release').exists():\n    time.sleep(0.01)\n(control / 'finished').write_text('finished')\n",
+            )?;
+            fs_err::write(
+                site_packages.join("staging-worker.pth"),
+                "import staging_worker_blocker\n",
+            )?;
+            Ok(())
+        }
+    }
+
+    fn directories(path: &Path) -> Result<BTreeSet<PathBuf>> {
+        fs_err::read_dir(path)?
+            .filter_map(|entry| match entry {
+                Ok(entry) if entry.path().is_dir() => Some(Ok(entry.path())),
+                Ok(_) => None,
+                Err(error) => Some(Err(error.into())),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn staged_bytecode_uses_published_source_paths() -> Result<()> {
+        let staged = StagedPython::new()?;
+        let source = staged.site_packages()?;
+        fs_err::write(source.join("example.py"), "value = 1\n")?;
+        let published = staged
+            .directory
+            .path()
+            .with_file_name("published environment");
+        let concurrency = Concurrency {
+            installs: 1,
+            ..Concurrency::default()
+        };
+        compile_staged_tree(
+            &source,
+            &published,
+            staged.environment.python_executable(),
+            &concurrency,
+            staged.cache.root(),
+            Arc::clone(&staged.directory),
+        )
+        .await?;
+        let output = Command::new(staged.environment.python_executable())
+            .args(["-c", "import importlib.util, marshal, sys; f = open(importlib.util.cache_from_source(sys.argv[1]), 'rb'); f.read(16); code = marshal.load(f); assert code.co_filename == sys.argv[2], (code.co_filename, sys.argv[2])"])
+            .arg(source.join("example.py"))
+            .arg(published.join("example.py"))
+            .output()?;
+        ensure!(output.status.success(), "{output:?}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_compilation_keeps_worker_directories_alive() -> Result<()> {
+        let staged = StagedPython::new()?;
+        let control = tempfile::tempdir()?;
+        staged.block_startup(control.path())?;
+        let source = staged.site_packages()?;
+        let published = staged
+            .directory
+            .path()
+            .with_file_name("published environment");
+        let concurrency = Concurrency {
+            installs: 1,
+            ..Concurrency::default()
+        };
+        let previous = directories(staged.cache.root())?;
+        let mut compiling = Box::pin(compile_staged_tree(
+            &source,
+            &published,
+            staged.environment.python_executable(),
+            &concurrency,
+            staged.cache.root(),
+            Arc::clone(&staged.directory),
+        ));
+        tokio::select! {
+            result = &mut compiling => bail!("compiler exited before its barrier: {result:?}"),
+            result = tokio::time::timeout(Duration::from_secs(10), async {
+                while !control.path().join("ready").exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => result.context("compiler did not reach its barrier")?,
+        }
+        let scripts = directories(staged.cache.root())?
+            .difference(&previous)
+            .cloned()
+            .collect::<Vec<_>>();
+        ensure!(
+            scripts.len() == 1,
+            "expected one compiler script directory: {scripts:?}"
+        );
+        let environment_path = staged.directory.path().to_owned();
+        drop(compiling);
+        drop(staged.directory);
+        let environment_retained = environment_path.exists();
+        let script_retained = scripts[0].join("pip_compileall.py").exists();
+        fs_err::write(control.path().join("release"), "release")?;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while environment_path.exists() || scripts[0].exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .context("worker did not release its directories")?;
+        ensure!(control.path().join("finished").exists());
+        ensure!(
+            environment_retained,
+            "staging disappeared while its worker was active"
+        );
+        ensure!(
+            script_retained,
+            "compiler script disappeared while its worker was active"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn startup_timeout_reaps_python_before_releasing_staging() -> Result<()> {
+        let staged = StagedPython::new()?;
+        let control = tempfile::tempdir()?;
+        staged.block_startup(control.path())?;
+        let resources =
+            WorkerResources::new(staged.cache.root(), Some(Arc::clone(&staged.directory)))?;
+        let (sender, receiver) = async_channel::bounded(1);
+        let workers = spawn_workers(
+            &staged.site_packages()?,
+            staged.environment.python_executable(),
+            &resources.script.path().join("pip_compileall.py"),
+            &receiver,
+            1,
+            Some(Duration::from_secs(2)),
+            &resources,
+            None,
+        );
+        drop(sender);
+        drop(receiver);
+        let Err(error) = wait_for_workers(workers, None).await else {
+            bail!("blocked compiler unexpectedly started");
+        };
+        let CompileError::StartupTimeout(_) = error else {
+            bail!("unexpected compiler error: {error:?}");
+        };
+        let pid = fs_err::read_to_string(control.path().join("ready"))?;
+        let output = Command::new(&staged.base_executable)
+            .args(["-c", "import os, sys\ntry:\n    os.kill(int(sys.argv[1]), 0)\nexcept ProcessLookupError:\n    sys.exit(0)\nsys.exit(1)"])
+            .arg(pid)
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "compiler process survived its timeout: {output:?}"
+        );
+        Ok(())
+    }
 }
