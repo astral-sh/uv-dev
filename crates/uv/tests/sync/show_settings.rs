@@ -5543,41 +5543,41 @@ fn no_cache_env_override() -> anyhow::Result<()> {
 )]
 fn timeout_fallbacks_ignore_shadowed_invalid_values() {
     let context = uv_test::test_context!("3.12");
-    let variables = [
-        EnvVars::UV_HTTP_TIMEOUT,
-        EnvVars::UV_REQUEST_TIMEOUT,
-        EnvVars::HTTP_TIMEOUT,
-    ];
-    let command = || {
-        let mut command = add_shared_args(context.version());
-        command.arg("--show-settings");
-        for variable in variables {
-            command.env_remove(variable);
-        }
-        command
-    };
     let mut filters = context.filters();
     // Timeout values are part of this precedence contract, rather than elapsed command timings.
     filters.retain(|(_, replacement)| *replacement != "$1[TIME]");
     let baseline = capture_uv_snapshot!(
         filters.clone(),
-        command().env(EnvVars::UV_HTTP_TIMEOUT, "31")
+        add_shared_args(context.version())
+            .arg("--show-settings")
+            .env(EnvVars::UV_HTTP_TIMEOUT, "31")
     );
-    for values in [
-        [Some("31"), Some("invalid"), Some("invalid")],
-        [None, Some("31"), Some("invalid")],
-        [Some(""), Some("31"), Some("invalid")],
-        [Some(""), Some(""), Some("31")],
-    ] {
-        let mut command = command();
-        for (variable, value) in variables.into_iter().zip(values) {
-            if let Some(value) = value {
-                command.env(variable, value);
-            }
-        }
-        assert_eq!(baseline, capture_uv_snapshot!(filters.clone(), command));
-    }
-    diff_uv_snapshot!(filters.clone(), &baseline, command()
+
+    diff_uv_snapshot!(filters.clone(), &baseline, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "31")
+        .env(EnvVars::UV_REQUEST_TIMEOUT, "invalid")
+        .env(EnvVars::HTTP_TIMEOUT, "invalid"), @"");
+
+    diff_uv_snapshot!(filters.clone(), &baseline, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::UV_REQUEST_TIMEOUT, "31")
+        .env(EnvVars::HTTP_TIMEOUT, "invalid"), @"");
+
+    diff_uv_snapshot!(filters.clone(), &baseline, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "")
+        .env(EnvVars::UV_REQUEST_TIMEOUT, "31")
+        .env(EnvVars::HTTP_TIMEOUT, "invalid"), @"");
+
+    diff_uv_snapshot!(filters.clone(), &baseline, add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "")
+        .env(EnvVars::UV_REQUEST_TIMEOUT, "")
+        .env(EnvVars::HTTP_TIMEOUT, "31"), @"");
+
+    diff_uv_snapshot!(filters.clone(), &baseline, add_shared_args(context.version())
+        .arg("--show-settings")
         .env(EnvVars::UV_HTTP_TIMEOUT, "0")
         .env(EnvVars::UV_REQUEST_TIMEOUT, "invalid")
         .env(EnvVars::HTTP_TIMEOUT, "invalid"), @"
@@ -5593,38 +5593,35 @@ fn timeout_fallbacks_ignore_shadowed_invalid_values() {
     ...
     ");
 
-    let mut failures = Vec::new();
-    for (selected, variable) in variables.into_iter().enumerate() {
-        let mut command = command();
-        for higher in &variables[..selected] {
-            command.env(higher, "");
-        }
-        command.env(variable, "invalid");
-        for lower in &variables[selected + 1..] {
-            command.env(lower, "31");
-        }
-        failures.push(format!(
-            "{variable}\n{}",
-            capture_uv_snapshot!(filters.clone(), command)
-        ));
-    }
-    insta::assert_snapshot!(failures.join("\n"), @"
-    UV_HTTP_TIMEOUT
+    uv_snapshot!(filters.clone(), add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "invalid")
+        .env(EnvVars::UV_REQUEST_TIMEOUT, "31")
+        .env(EnvVars::HTTP_TIMEOUT, "31"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse environment variable `UV_HTTP_TIMEOUT` with invalid value `invalid`: invalid digit found in string; value should be an integer number of seconds
+    ");
 
-    UV_REQUEST_TIMEOUT
+    uv_snapshot!(filters.clone(), add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "")
+        .env(EnvVars::UV_REQUEST_TIMEOUT, "invalid")
+        .env(EnvVars::HTTP_TIMEOUT, "31"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse environment variable `UV_REQUEST_TIMEOUT` with invalid value `invalid`: invalid digit found in string; value should be an integer number of seconds
+    ");
 
-    HTTP_TIMEOUT
+    uv_snapshot!(filters.clone(), add_shared_args(context.version())
+        .arg("--show-settings")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "")
+        .env(EnvVars::UV_REQUEST_TIMEOUT, "")
+        .env(EnvVars::HTTP_TIMEOUT, "invalid"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse environment variable `HTTP_TIMEOUT` with invalid value `invalid`: invalid digit found in string; value should be an integer number of seconds
-    "
-    );
+    ");
 }
 
 #[test]
@@ -5634,24 +5631,30 @@ fn timeout_fallbacks_ignore_shadowed_invalid_values() {
 )]
 fn python_download_flags_ignore_shadowed_invalid_environment() {
     let context = uv_test::test_context!("3.12");
-    let command = || {
-        let mut command = add_shared_args(context.version());
-        command.arg("--show-settings");
-        command
-    };
-    for flag in ["--allow-python-downloads", "--no-python-downloads"] {
-        let baseline = capture_uv_snapshot!(context.filters(), command().arg(flag));
-        assert_eq!(
-            baseline,
-            capture_uv_snapshot!(
-                context.filters(),
-                command()
-                    .arg(flag)
-                    .env(EnvVars::UV_PYTHON_DOWNLOADS, "invalid")
-            )
-        );
-    }
-    uv_snapshot!(context.filters(), command().env(EnvVars::UV_PYTHON_DOWNLOADS, "invalid"), @"
+    let allowed = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.version())
+            .arg("--show-settings")
+            .arg("--allow-python-downloads")
+    );
+    diff_uv_snapshot!(context.filters(), &allowed, add_shared_args(context.version())
+        .arg("--show-settings")
+        .arg("--allow-python-downloads")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "invalid"), @"");
+
+    let disallowed = capture_uv_snapshot!(
+        context.filters(),
+        add_shared_args(context.version())
+            .arg("--show-settings")
+            .arg("--no-python-downloads")
+    );
+    diff_uv_snapshot!(context.filters(), &disallowed, add_shared_args(context.version())
+        .arg("--show-settings")
+        .arg("--no-python-downloads")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "invalid"), @"");
+
+    uv_snapshot!(context.filters(), add_shared_args(context.version())
+        .arg("--show-settings").env(EnvVars::UV_PYTHON_DOWNLOADS, "invalid"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: invalid value for UV_PYTHON_DOWNLOADS, expected one of 'auto', 'true', 'manual', 'never', or 'false'
