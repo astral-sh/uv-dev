@@ -18700,15 +18700,7 @@ async fn pep_751_compile_hash_completion_refreshes_advisory_size() -> Result<()>
     let context = uv_test::test_context!("3.12");
     let name = "demo".parse()?;
     let server = PackageServer::new(&name).await;
-    let (filename, bytes) = generate_wheel(
-        &name,
-        &"1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, bytes) = WheelBuilder::new(&name, &"1.0".parse()?).build();
     server
         .serve_with(
             &filename,

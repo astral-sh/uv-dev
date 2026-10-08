@@ -6,7 +6,6 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use serde_json::json;
-use std::collections::BTreeMap;
 #[cfg(all(unix, feature = "test-universal"))]
 use std::os::unix::fs::FileTypeExt;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
@@ -15,15 +14,15 @@ use std::process::{Command, Stdio};
 #[cfg(all(unix, feature = "test-universal"))]
 use std::thread;
 use toml_edit::{DocumentMut, Item, Value};
-use url::Url;
 #[cfg(feature = "test-universal")]
 use uv_fs::Simplified;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
 #[cfg(feature = "test-universal")]
 use uv_test::copy_dir_ignore;
 use uv_test::package_server::PackageServer;
-use uv_test::packse::{PackseServer, WheelBuilder, generate_wheel, scenario::Scenario};
+use uv_test::packse::{PackseServer, WheelBuilder, scenario::Scenario};
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_SSH_DEPLOY_KEY, READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{TestContext, apply_filters, uv_snapshot};
@@ -4690,15 +4689,7 @@ async fn pep_751_hash_completion_checks_recorded_size() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let name = "demo".parse()?;
     let server = PackageServer::new(&name).await;
-    let (filename, bytes) = generate_wheel(
-        &name,
-        &"1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, bytes) = WheelBuilder::new(&name, &"1.0".parse()?).build();
     let actual_size = u64::try_from(bytes.len())?;
     server
         .serve_with(
@@ -4779,43 +4770,15 @@ async fn pep_751_hash_completion_checks_recorded_size() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn pep_751_local_hash_completion_checks_recorded_size() -> Result<()> {
+#[test]
+fn pep_751_local_hash_completion_checks_recorded_size() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let name = "demo".parse()?;
-    let server = PackageServer::new(&name).await;
-    let (filename, bytes) = generate_wheel(
-        &name,
-        &"1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, bytes) = WheelBuilder::new(&name, &"1.0".parse()?).build();
     let actual_size = u64::try_from(bytes.len())?;
-    server
-        .serve_with(
-            &filename,
-            &bytes,
-            None,
-            json!({
-                "core-metadata": true,
-                "size": actual_size,
-            }),
-        )
-        .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/{filename}.metadata")))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string("Metadata-Version: 2.3\nName: demo\nVersion: 1.0\n"),
-        )
-        .mount(server.mock_server())
-        .await;
     let local_wheel = context.temp_dir.child(&filename);
     local_wheel.write_binary(&bytes)?;
-    let file_url = Url::from_file_path(local_wheel.path()).expect("absolute fixture path");
+    let file_url = SafeUrl::from_file_path(local_wheel.path()).expect("absolute fixture path");
     context
         .temp_dir
         .child("pyproject.toml")
@@ -4826,18 +4789,26 @@ async fn pep_751_local_hash_completion_checks_recorded_size() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = ["demo"]
     "#})?;
-    context
-        .lock()
-        .arg("--default-index")
-        .arg(server.index_url())
-        .assert()
-        .success();
     let lock_path = context.temp_dir.child("uv.lock");
-    let mut lock = context.read("uv.lock").parse::<DocumentMut>()?;
     let output_path = context.temp_dir.child("pylock.toml");
 
-    set_recorded_wheel(&mut lock, file_url.as_str(), actual_size)?;
-    lock_path.write_str(&lock.to_string())?;
+    lock_path.write_str(&formatdoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "demo"
+        version = "1.0"
+        source = {{ registry = "https://pypi.org/simple" }}
+        wheels = [{{ url = "{file_url}", size = {actual_size} }}]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = {{ virtual = "." }}
+        dependencies = [{{ name = "demo" }}]
+    "#})?;
     uv_snapshot!(context.filters(), context.export()
         .arg("--frozen")
         .arg("--no-emit-project")
@@ -4854,12 +4825,29 @@ async fn pep_751_local_hash_completion_checks_recorded_size() -> Result<()> {
     [[packages]]
     name = "demo"
     version = "1.0"
-    index = "http://[LOCALHOST]/simple"
-    wheels = [{ url = "file://[TEMP_DIR]/demo-1.0-py3-none-any.whl", upload-time = 2024-01-01T00:00:00Z, size = 914, hashes = { sha256 = "7644bb2ffdaa9ba75b83b45ae61389f32968aff000923cf8d5d5c4fb7309ef25" } }]
+    index = "https://pypi.org/simple"
+    wheels = [{ url = "file://[TEMP_DIR]/demo-1.0-py3-none-any.whl", size = 914, hashes = { sha256 = "7644bb2ffdaa9ba75b83b45ae61389f32968aff000923cf8d5d5c4fb7309ef25" } }]
     "#);
 
-    set_recorded_wheel(&mut lock, file_url.as_str(), actual_size + 1)?;
-    lock_path.write_str(&lock.to_string())?;
+    lock_path.write_str(&formatdoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "demo"
+        version = "1.0"
+        source = {{ registry = "https://pypi.org/simple" }}
+        wheels = [{{ url = "{file_url}", size = {recorded_size} }}]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = {{ virtual = "." }}
+        dependencies = [{{ name = "demo" }}]
+        "#,
+        recorded_size = actual_size + 1,
+    })?;
     output_path.write_str("previous export\n")?;
     uv_snapshot!(context.filters(), context.export()
         .arg("--frozen")
