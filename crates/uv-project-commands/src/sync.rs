@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::ops::Deref;
@@ -433,7 +432,7 @@ pub async fn sync(
         SyncTarget::Lockfile {
             path, workspace, ..
         } => (
-            Outcome::Frozen(Cow::Borrowed(workspace.lock())),
+            Outcome::Frozen(workspace.lock()),
             LockReport {
                 path: path.as_path().into(),
                 action: LockAction::Use,
@@ -451,8 +450,8 @@ pub async fn sync(
                     )
             });
 
-            let result = if let Some(lock) = frozen_lock {
-                Ok(Outcome::Frozen(Cow::Owned(lock)))
+            let result = if let Some(lock) = frozen_lock.as_ref() {
+                Ok(Outcome::Frozen(lock))
             } else {
                 Box::pin(
                     LockOperation::new(
@@ -590,7 +589,7 @@ enum Outcome<'a> {
     /// The `lock` operation was successful.
     Success(LockResult),
     /// A frozen lockfile was discovered without a lock operation.
-    Frozen(Cow<'a, Lock>),
+    Frozen(&'a Lock),
     /// The `lock` operation successfully resolved, but failed due to a mismatch (e.g., with `--locked`).
     LockMismatch(Option<Box<Lock>>, Box<Lock>, LockedSource),
 }
