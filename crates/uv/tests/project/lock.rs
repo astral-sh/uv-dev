@@ -254,6 +254,74 @@ async fn workspace_default_groups_update_without_resolution() -> Result<()> {
     Ok(())
 }
 
+/// New empty root groups remain selectable after a default change and removal of the manifest.
+#[test]
+fn workspace_default_changes_retain_new_empty_groups() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let initial = indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [tool.uv]
+        default-groups = ["dev"]
+
+        [dependency-groups]
+        dev = []
+    "#};
+    pyproject.write_str(initial)?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+
+    pyproject.write_str(&format!(
+        "{}docs = []\n",
+        initial.replace("default-groups = [\"dev\"]", "default-groups = [\"docs\"]")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [manifest]
+    members = [
+        "member",
+    ]
+    default-groups = ["docs"]
+
+    [manifest.dependency-groups]
+    dev = []
+    docs = []
+
+    [[package]]
+    name = "member"
+    version = "1.0.0"
+    source = { virtual = "member" }
+    "#);
+
+    fs_err::remove_file(pyproject.path())?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--only-group", "docs", "--no-header",
+        "--preview-features", "frozen-lockfile",
+    ]), @"exit_code: 0 (success)");
+    Ok(())
+}
+
 /// Metadata-free locks can update defaults only when their dependency edges still satisfy inputs.
 #[tokio::test]
 async fn metadata_free_default_groups_update_without_resolution() -> Result<()> {
@@ -337,7 +405,7 @@ async fn metadata_free_default_groups_update_without_resolution() -> Result<()> 
         .expect(1)
         .mount(server.mock_server())
         .await;
-    pyproject.write_str(&changed_defaults.replace("dev = [\"a\"]", "dev = [\"a>=2\"]"))?;
+    pyproject.write_str(&initial.replace("dev = [\"a\"]", "dev = [\"a>=2\"]"))?;
     uv_snapshot!(context.filters(), context.lock()
         .arg("--index-url").arg(server.index_url())
         .arg("--no-cache")

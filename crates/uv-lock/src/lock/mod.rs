@@ -4454,9 +4454,12 @@ impl Lock {
         }
 
         {
+            // A default-only update reuses the manifest, including empty groups needed by
+            // frozen commands. Rebuilding it is required if those group names also changed.
+            let include_empty = default_groups_mismatch.is_some();
             let expected = dependency_groups
                 .iter()
-                .filter(|(_, requirements)| !requirements.is_empty())
+                .filter(|(_, requirements)| include_empty || !requirements.is_empty())
                 .map(|(group, requirements)| {
                     Ok((
                         group.clone(),
@@ -4468,7 +4471,7 @@ impl Lock {
                 .manifest
                 .dependency_groups
                 .iter()
-                .filter(|(_, requirements)| !requirements.is_empty())
+                .filter(|(_, requirements)| include_empty || !requirements.is_empty())
                 .map(|(group, requirements)| {
                     Ok((
                         group.clone(),
