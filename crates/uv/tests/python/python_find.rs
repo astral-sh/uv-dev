@@ -1086,7 +1086,9 @@ fn python_find_script_no_environment() {
 
 #[test]
 fn python_find_script_python_not_found() {
-    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_env(EnvVars::UV_PYTHON_PREFERENCE, "only-managed")
+        .with_env(EnvVars::UV_INTERNAL__TEST_PYTHON_MANAGED, "");
     context.temp_dir.child(".python-version").touch().unwrap();
 
     let script = context.temp_dir.child("foo.py");
@@ -1102,7 +1104,7 @@ fn python_find_script_python_not_found() {
     uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: No interpreter found in [PYTHON SOURCES]
+    error: No interpreter found in virtual environments or managed installations
 
     hint: A managed Python download is available, but Python downloads are set to 'never'
     ");
@@ -1110,7 +1112,7 @@ fn python_find_script_python_not_found() {
     uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py").arg("-q"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: No interpreter found in [PYTHON SOURCES]
+    error: No interpreter found in virtual environments or managed installations
 
     hint: A managed Python download is available, but Python downloads are set to 'never'
     ");
