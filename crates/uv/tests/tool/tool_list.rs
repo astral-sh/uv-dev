@@ -1,6 +1,6 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::PathChild;
+use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 use fs_err as fs;
 use insta::assert_snapshot;
 use uv_static::EnvVars;
@@ -710,5 +710,58 @@ fn tool_list_missing_package() -> Result<()> {
 
     hint: Run `uv tool install simple-launcher --reinstall` to reinstall the tool.
     ");
+    Ok(())
+}
+
+#[test]
+fn tool_list_skips_damaged_receipts_safely() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    context
+        .tool_install()
+        .arg("simple-launcher")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(context.workspace_root.join("test/links"))
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("tools/bad-source/uv-receipt.toml")
+        .write_str("url = \"https://user:receipt-secret@example.com/\" trailing")?;
+    context
+        .temp_dir
+        .child("tools/bad-schema/uv-receipt.toml")
+        .write_str("[tool]\nrequirements = \"https://user:receipt-secret@example.com/\"")?;
+    context
+        .temp_dir
+        .child("tools/missing-receipt")
+        .create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.tool_list(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    simple-launcher v0.1.0
+    - simple_launcher
+
+    ----- stderr -----
+    warning: Ignoring malformed tool `bad-schema`
+      cause: Failed to read `uv-receipt.toml` at `[TEMP_DIR]/tools/bad-schema/uv-receipt.toml`
+      cause: Invalid TOML tool receipt at line 2, column 16
+
+    hint: Run `uv tool uninstall bad-schema` to remove the tool.
+    warning: Ignoring malformed tool `bad-source`
+      cause: Failed to read `uv-receipt.toml` at `[TEMP_DIR]/tools/bad-source/uv-receipt.toml`
+      cause: Invalid TOML tool receipt at line 1, column 50
+
+    hint: Run `uv tool uninstall bad-source` to remove the tool.
+    warning: Ignoring malformed tool `missing-receipt`
+      cause: Failed to find a receipt for tool `missing-receipt` at `[TEMP_DIR]/tools/missing-receipt/uv-receipt.toml`
+
+    hint: Run `uv tool uninstall missing-receipt` to remove the tool.
+    ");
+    uv_snapshot!(context.filters(), context.tool_list().arg("--quiet"), @"exit_code: 0 (success)");
+
     Ok(())
 }

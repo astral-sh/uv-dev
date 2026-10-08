@@ -266,7 +266,7 @@ fn tool_audit_invalid_receipt() -> Result<()> {
 }
 
 #[tokio::test]
-async fn tool_inspection_skips_damaged_receipts_safely() -> Result<()> {
+async fn tool_audit_skips_damaged_receipts_safely() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
@@ -283,30 +283,6 @@ async fn tool_inspection_skips_damaged_receipts_safely() -> Result<()> {
         .temp_dir
         .child("tools/missing-receipt")
         .create_dir_all()?;
-
-    uv_snapshot!(context.filters(), context.tool_list(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    simple-launcher v0.1.0
-    - simple_launcher
-
-    ----- stderr -----
-    warning: Ignoring malformed tool `bad-schema`
-      cause: Failed to read `uv-receipt.toml` at `[TEMP_DIR]/tools/bad-schema/uv-receipt.toml`
-      cause: Invalid TOML tool receipt at line 2, column 16
-
-    hint: Run `uv tool uninstall bad-schema` to remove the tool.
-    warning: Ignoring malformed tool `bad-source`
-      cause: Failed to read `uv-receipt.toml` at `[TEMP_DIR]/tools/bad-source/uv-receipt.toml`
-      cause: Invalid TOML tool receipt at line 1, column 50
-
-    hint: Run `uv tool uninstall bad-source` to remove the tool.
-    warning: Ignoring malformed tool `missing-receipt`
-      cause: Failed to find a receipt for tool `missing-receipt` at `[TEMP_DIR]/tools/missing-receipt/uv-receipt.toml`
-
-    hint: Run `uv tool uninstall missing-receipt` to remove the tool.
-    ");
-    uv_snapshot!(context.filters(), context.tool_list().arg("--quiet"), @"exit_code: 0 (success)");
 
     let server = MockServer::start().await;
     mount_clean_service(&server).await;
