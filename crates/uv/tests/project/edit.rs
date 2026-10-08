@@ -14278,7 +14278,7 @@ async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
         .assert()
         .success();
 
-    let context = uv_test::test_context!("3.12").with_filter((r"127\.0\.0\.1:\d*", "[LOCALHOST]"));
+    let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -14295,6 +14295,9 @@ async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
     })?;
 
     let redirect_server = MockServer::start().await;
+    let context = context
+        .with_endpoint_role(redirect_server.address(), "[INDEX]")
+        .with_endpoint_role(&proxy.host_port().parse()?, "[REDIRECT_TARGET]");
     let proxy_base = proxy.url("/basic-auth/simple/");
 
     Mock::given(method("GET"))
@@ -14315,14 +14318,14 @@ async fn add_redirect_with_keyring_cross_origin() -> Result<()> {
         .env(EnvVars::PATH, venv_bin_path(&keyring_context.venv)), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Keyring request for public@http://[LOCALHOST]/
-    Keyring request for public@[LOCALHOST]
-    Keyring request for public@http://[LOCALHOST]
+    Keyring request for public@http://[INDEX]/
+    Keyring request for public@[INDEX]
+    Keyring request for public@http://[INDEX]
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
 
-    hint: An index URL (http://[LOCALHOST]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
+    hint: An index URL (http://[INDEX]/) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "
