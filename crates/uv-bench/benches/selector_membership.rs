@@ -1,3 +1,7 @@
+// Don't optimize the alloc crate away due to it being otherwise unused.
+// https://github.com/rust-lang/rust/issues/64402
+extern crate uv_performance_memory_allocator;
+
 use std::hint::black_box;
 use std::str::FromStr;
 
@@ -27,14 +31,14 @@ fn selector_membership(c: &mut Criterion<WallTime>) {
         let extra_queries = included_extras
             .iter()
             .cloned()
-            .chain(extra_names("missing", count))
+            .chain(extra_names("missing", count.max(1)))
             .collect::<Vec<_>>();
         let default_extra = ExtraName::from_str("default-extra").expect("valid extra");
         let dev_group = GroupName::from_str("dev").expect("valid group");
         let group_queries = included_groups
             .iter()
             .cloned()
-            .chain(group_names("missing", count))
+            .chain(group_names("missing", count.max(1)))
             .collect::<Vec<_>>();
         let extras = ExtrasSpecification::from_args(
             included_extras.clone(),

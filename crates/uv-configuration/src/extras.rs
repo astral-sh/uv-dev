@@ -434,11 +434,22 @@ mod tests {
     fn indexed_extras_preserve_all_and_only_semantics() {
         let all = ExtrasSpecification::from_args(
             Vec::new(),
-            vec![extra("disabled-a"), extra("disabled-b")],
+            vec![
+                extra("disabled-a"),
+                extra("disabled-b"),
+                extra("disabled-c"),
+                extra("disabled-d"),
+                extra("disabled-e"),
+                extra("disabled-f"),
+                extra("disabled-g"),
+                extra("disabled-h"),
+                extra("disabled-i"),
+            ],
             false,
             Vec::new(),
             true,
         );
+        assert!(all.0.exclude_index.is_some());
         assert!(all.contains(&extra("other")));
         assert!(!all.contains(&extra("DISABLED_A")));
 
@@ -449,10 +460,21 @@ mod tests {
             Vec::new(),
             Vec::new(),
             false,
-            vec![extra("only-a"), extra("only-b")],
+            vec![
+                extra("only-a"),
+                extra("only-b"),
+                extra("only-c"),
+                extra("only-d"),
+                extra("only-e"),
+                extra("only-f"),
+                extra("only-g"),
+                extra("only-h"),
+                extra("only-i"),
+            ],
             false,
         )
         .with_defaults(DefaultExtras::List(vec![extra("default-c")]));
+        assert!(only.cur.0.include_index.is_some());
         assert!(only.contains(&extra("ONLY_A")));
         assert!(!only.contains(&extra("default-c")));
 

@@ -520,12 +520,23 @@ mod tests {
         let all = DependencyGroups::from_args(
             None,
             Vec::new(),
-            vec![group("disabled-a"), group("disabled-b")],
+            vec![
+                group("disabled-a"),
+                group("disabled-b"),
+                group("disabled-c"),
+                group("disabled-d"),
+                group("disabled-e"),
+                group("disabled-f"),
+                group("disabled-g"),
+                group("disabled-h"),
+                group("disabled-i"),
+            ],
             false,
             Vec::new(),
             true,
         )
         .with_defaults(DefaultGroups::default());
+        assert!(all.cur.0.exclude_index.is_some());
         assert!(all.contains(&group("other")));
         assert!(!all.contains(&group("DISABLED_A")));
         assert!(!all.contains_because_default(&group("other")));
@@ -541,10 +552,21 @@ mod tests {
             Vec::new(),
             Vec::new(),
             false,
-            vec![group("only-a"), group("only-b")],
+            vec![
+                group("only-a"),
+                group("only-b"),
+                group("only-c"),
+                group("only-d"),
+                group("only-e"),
+                group("only-f"),
+                group("only-g"),
+                group("only-h"),
+                group("only-i"),
+            ],
             false,
         )
         .with_defaults(DefaultGroups::List(vec![group("default-c")]));
+        assert!(only.cur.0.include_index.is_some());
         assert!(only.contains(&group("ONLY_A")));
         assert!(!only.contains(&group("default-c")));
         assert!(!only.contains_because_default(&group("default-c")));
@@ -552,11 +574,22 @@ mod tests {
         let no_dev = DependencyGroups::from_args(
             Some(DevMode::Exclude),
             vec![group("dev"), group("feature")],
-            vec![group("other")],
+            vec![
+                group("other-0"),
+                group("other-1"),
+                group("other-2"),
+                group("other-3"),
+                group("other-4"),
+                group("other-5"),
+                group("other-6"),
+                group("other-7"),
+                group("other-8"),
+            ],
             false,
             Vec::new(),
             false,
         );
+        assert!(no_dev.0.exclude_index.is_some());
         assert!(!no_dev.contains(&group("DEV")));
         assert!(no_dev.contains(&group("feature")));
     }
