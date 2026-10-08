@@ -6988,22 +6988,32 @@ fn requires_python_source_dist_installed_incompatible_registry() {
 #[tokio::test]
 async fn failed_parallel_build_removes_live_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    for name in ["slow", "fail"] {
-        context
-            .temp_dir
-            .child(name)
-            .child("pyproject.toml")
-            .write_str(&formatdoc! {r#"
-                [project]
-                name = "{name}"
-                version = "0.1.0"
+    context
+        .temp_dir
+        .child("slow/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "slow"
+        version = "0.1.0"
 
-                [build-system]
-                requires = []
-                build-backend = "backend"
-                backend-path = ["."]
-            "#})?;
-    }
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context
+        .temp_dir
+        .child("fail/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "fail"
+        version = "0.1.0"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
     context.temp_dir.child("slow/backend.py").write_str(indoc! {r#"
         import os
         from pathlib import Path

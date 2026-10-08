@@ -88,7 +88,7 @@ pub(super) async fn start_build_backend(context: &TestContext) -> Result<(Child,
     let child = TokioCommand::from(command)
         .kill_on_drop(true)
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::inherit())
         .spawn()?;
     let (mut backend, _) = timeout(Duration::from_secs(30), listener.accept()).await??;
     let mut ready = [0];
