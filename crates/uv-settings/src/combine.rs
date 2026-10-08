@@ -14,13 +14,17 @@ use uv_distribution_types::{
     MinimumLibcVersion, PackageConfigSettings, PipExtraIndex, PipFindLinks, PipIndex,
 };
 use uv_install_wheel::LinkMode;
+use uv_normalize::PackageName;
 use uv_pypi_types::{SchemaConflicts, SupportedEnvironments};
 use uv_python_types::{PythonDownloads, PythonPreference, PythonVersion};
 use uv_redacted::DisplaySafeUrl;
 use uv_torch::TorchMode;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
-use crate::{AuditOptions, FilesystemOptions, Options, PipOptions, PreviewOption};
+use crate::{
+    AuditOptions, FilesystemOptions, Options, PipOptions, PreviewOption, ResolverInstallerOptions,
+    ResolverOptions,
+};
 
 pub trait Combine {
     /// Combine two values, preferring the values in `self`.
@@ -36,6 +40,89 @@ pub trait Combine {
     /// ...with one exception: we place items with higher precedence earlier in the merged array.
     #[must_use]
     fn combine(self, other: Self) -> Self;
+}
+
+impl ResolverOptions {
+    /// Combine CLI options above an environment layer and the remaining configuration.
+    #[must_use]
+    pub fn combine_with_environment(self, environment: Self, other: Self) -> Self {
+        let no_build = environment.no_build;
+        let no_binary = environment.no_binary;
+        let no_sources = environment.no_sources;
+        let mut other = environment.combine(other);
+        preserve_cli_packages_after_environment_reset(
+            self.no_build,
+            self.no_build_package.as_deref(),
+            no_build,
+            &mut other.no_build,
+            &mut other.no_build_package,
+        );
+        preserve_cli_packages_after_environment_reset(
+            self.no_binary,
+            self.no_binary_package.as_deref(),
+            no_binary,
+            &mut other.no_binary,
+            &mut other.no_binary_package,
+        );
+        preserve_cli_packages_after_environment_reset(
+            self.no_sources,
+            self.no_sources_package.as_deref(),
+            no_sources,
+            &mut other.no_sources,
+            &mut other.no_sources_package,
+        );
+        self.combine(other)
+    }
+}
+
+impl ResolverInstallerOptions {
+    /// Combine CLI options above an environment layer and the remaining configuration.
+    #[must_use]
+    pub fn combine_with_environment(self, environment: Self, other: Self) -> Self {
+        let no_build = environment.no_build;
+        let no_binary = environment.no_binary;
+        let no_sources = environment.no_sources;
+        let mut other = environment.combine(other);
+        preserve_cli_packages_after_environment_reset(
+            self.no_build,
+            self.no_build_package.as_deref(),
+            no_build,
+            &mut other.no_build,
+            &mut other.no_build_package,
+        );
+        preserve_cli_packages_after_environment_reset(
+            self.no_binary,
+            self.no_binary_package.as_deref(),
+            no_binary,
+            &mut other.no_binary,
+            &mut other.no_binary_package,
+        );
+        preserve_cli_packages_after_environment_reset(
+            self.no_sources,
+            self.no_sources_package.as_deref(),
+            no_sources,
+            &mut other.no_sources,
+            &mut other.no_sources_package,
+        );
+        self.combine(other)
+    }
+}
+
+/// A false environment policy clears lower restrictions before CLI packages add specific ones.
+fn preserve_cli_packages_after_environment_reset(
+    cli: Option<bool>,
+    cli_packages: Option<&[PackageName]>,
+    environment: Option<bool>,
+    other: &mut Option<bool>,
+    other_packages: &mut Option<Vec<PackageName>>,
+) {
+    if cli.is_none()
+        && cli_packages.is_some_and(|packages| !packages.is_empty())
+        && environment == Some(false)
+    {
+        *other = None;
+        *other_packages = None;
+    }
 }
 
 impl Combine for Option<FilesystemOptions> {

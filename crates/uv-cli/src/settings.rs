@@ -70,8 +70,9 @@ use crate::{
     HashCheckingArgs, PackageExcludeNewerArgs, PublishArgs, PythonDirArgs, RegistryClientArgs,
     ResolverArgs, ResolverInstallerArgs, ToolUpgradeArgs,
     options::{
-        Flag, FlagSource, IntoPipOptions, check_conflicts, flag, resolve_flag, resolve_flag_pair,
-        resolver_installer_options, resolver_options, upgrade_options,
+        Flag, FlagSource, IntoPipOptions, check_conflicts, env_flag, flag, flag_with_env,
+        resolve_flag, resolve_flag_pair, resolver_installer_options, resolver_options,
+        upgrade_options,
     },
 };
 
@@ -966,23 +967,24 @@ impl ToolRunSettings {
 
         let filesystem_options = filesystem.map(FilesystemOptions::into_options);
 
-        let options = resolver_installer_options_with_environment(
-            resolver_installer_options(
-                installer,
-                build,
-                filesystem_options
-                    .as_ref()
-                    .and_then(|options| options.top_level.index.as_deref())
-                    .unwrap_or_default(),
-            )?,
-            &environment,
-        )
-        .combine(ResolverInstallerOptions::from(
+        let args = resolver_installer_options(
+            installer,
+            build,
             filesystem_options
                 .as_ref()
-                .map(|options| options.top_level.clone())
+                .and_then(|options| options.top_level.index.as_deref())
                 .unwrap_or_default(),
-        ));
+        )?;
+        let options = combine_resolver_installer_options(
+            args,
+            ResolverInstallerOptions::from(
+                filesystem_options
+                    .as_ref()
+                    .map(|options| options.top_level.clone())
+                    .unwrap_or_default(),
+            ),
+            &environment,
+        )?;
 
         let filesystem_install_mirrors = filesystem_options
             .map(|options| options.install_mirrors.clone())
@@ -1101,23 +1103,24 @@ impl ToolInstallSettings {
 
         let filesystem_options = filesystem.map(FilesystemOptions::into_options);
 
-        let options = resolver_installer_options_with_environment(
-            resolver_installer_options(
-                installer,
-                build,
-                filesystem_options
-                    .as_ref()
-                    .and_then(|options| options.top_level.index.as_deref())
-                    .unwrap_or_default(),
-            )?,
-            &environment,
-        )
-        .combine(ResolverInstallerOptions::from(
+        let args = resolver_installer_options(
+            installer,
+            build,
             filesystem_options
                 .as_ref()
-                .map(|options| options.top_level.clone())
+                .and_then(|options| options.top_level.index.as_deref())
                 .unwrap_or_default(),
-        ));
+        )?;
+        let options = combine_resolver_installer_options(
+            args,
+            ResolverInstallerOptions::from(
+                filesystem_options
+                    .as_ref()
+                    .map(|options| options.top_level.clone())
+                    .unwrap_or_default(),
+            ),
+            &environment,
+        )?;
 
         let filesystem_install_mirrors = filesystem_options
             .map(|options| options.install_mirrors.clone())
@@ -1187,6 +1190,7 @@ pub struct ToolUpgradeSettings {
     pub python_platform: Option<TargetTriple>,
     pub install_mirrors: PythonInstallMirrors,
     pub args: ResolverInstallerOptions,
+    pub environment: ResolverInstallerOptions,
     pub filesystem: ResolverInstallerOptions,
 }
 impl ToolUpgradeSettings {
@@ -1244,10 +1248,9 @@ impl ToolUpgradeSettings {
             sources,
         };
 
-        let args = resolver_installer_options_with_environment(
-            resolver_installer_options(installer, build, configured_indexes(filesystem.as_ref()))?,
-            environment,
-        );
+        let args =
+            resolver_installer_options(installer, build, configured_indexes(filesystem.as_ref()))?;
+        let environment_options = resolver_installer_environment_options(&args, environment)?;
         let filesystem = filesystem.map(FilesystemOptions::into_options);
         let filesystem_install_mirrors = filesystem
             .as_ref()
@@ -1264,6 +1267,7 @@ impl ToolUpgradeSettings {
             python: python.and_then(Maybe::into_option),
             python_platform,
             args,
+            environment: environment_options,
             filesystem: top_level,
             install_mirrors: environment
                 .install_mirrors
@@ -1587,10 +1591,11 @@ impl PythonInstallSettings {
             },
             install_mirrors,
             default,
-            compile_bytecode: flag(
+            compile_bytecode: flag_with_env(
                 compile_bytecode.compile_bytecode,
                 compile_bytecode.no_compile_bytecode,
                 "compile-bytecode",
+                EnvVars::UV_COMPILE_BYTECODE,
             )?
             .unwrap_or_default(),
         })
@@ -1660,10 +1665,11 @@ impl PythonUpgradeSettings {
             reinstall,
             default,
             bin,
-            compile_bytecode: flag(
+            compile_bytecode: flag_with_env(
                 compile_bytecode.compile_bytecode,
                 compile_bytecode.no_compile_bytecode,
                 "compile-bytecode",
+                EnvVars::UV_COMPILE_BYTECODE,
             )?
             .unwrap_or_default(),
         })
@@ -2124,7 +2130,7 @@ impl UpgradeSettings {
             .unwrap_or_default();
         let (packages, exclude, options) =
             upgrade_options(args, configured_indexes(filesystem.as_ref()))?;
-        let mut settings = combine_resolver_settings(options, filesystem, &environment);
+        let mut settings = combine_resolver_settings(options, filesystem, &environment)?;
         settings.upgrade = if packages.is_empty() {
             Upgrade::default()
         } else {
@@ -2485,7 +2491,7 @@ impl AddSettings {
             extras: extra.unwrap_or_default(),
             refresh,
             indexes,
-            settings: combine_resolver_installer_settings(options, filesystem, &environment),
+            settings: combine_resolver_installer_settings(options, filesystem, &environment)?,
             install_mirrors: environment
                 .install_mirrors
                 .combine(filesystem_install_mirrors),
@@ -3525,7 +3531,7 @@ impl PipCompileSettings {
             required_environments,
             minimum_libc_version,
             refresh: Refresh::try_from(refresh)?,
-            settings: PipSettings::combine(
+            settings: PipSettings::combine_with_environment(
                 PipOptions {
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
@@ -3570,7 +3576,7 @@ impl PipCompileSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )?,
         })
     }
 }
@@ -3664,19 +3670,31 @@ impl PipSyncSettings {
             },
             output_format,
             refresh: Refresh::try_from(refresh)?,
-            settings: PipSettings::combine(
+            settings: PipSettings::combine_with_environment(
                 PipOptions {
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
-                    break_system_packages: flag(
+                    break_system_packages: flag_with_env(
                         break_system_packages,
                         no_break_system_packages,
                         "break-system-packages",
+                        EnvVars::UV_BREAK_SYSTEM_PACKAGES,
                     )?,
                     target,
                     prefix,
-                    require_hashes: flag(require_hashes, no_require_hashes, "require-hashes")?,
-                    verify_hashes: flag(verify_hashes, no_verify_hashes, "verify-hashes")?,
+                    require_hashes: flag_with_env(
+                        require_hashes,
+                        no_require_hashes,
+                        "require-hashes",
+                        EnvVars::UV_REQUIRE_HASHES,
+                    )?,
+                    verify_hashes: flag_with_env(
+                        no_verify_hashes,
+                        verify_hashes,
+                        "verify-hashes",
+                        EnvVars::UV_NO_VERIFY_HASHES,
+                    )?
+                    .map(|disabled| !disabled),
                     no_build: flag(no_build, build, "build")?,
                     no_binary,
                     only_binary,
@@ -3696,7 +3714,7 @@ impl PipSyncSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )?,
         })
     }
 }
@@ -3883,14 +3901,15 @@ impl PipInstallSettings {
                 no_editable_package,
             ),
             refresh: Refresh::try_from(refresh)?,
-            settings: PipSettings::combine(
+            settings: PipSettings::combine_with_environment(
                 PipOptions {
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
-                    break_system_packages: flag(
+                    break_system_packages: flag_with_env(
                         break_system_packages,
                         no_break_system_packages,
                         "break-system-packages",
+                        EnvVars::UV_BREAK_SYSTEM_PACKAGES,
                     )?,
                     target,
                     prefix,
@@ -3904,14 +3923,25 @@ impl PipInstallSettings {
                     no_deps: flag(no_deps, deps, "deps")?,
                     python_version,
                     python_platform,
-                    require_hashes: flag(require_hashes, no_require_hashes, "require-hashes")?,
-                    verify_hashes: flag(verify_hashes, no_verify_hashes, "verify-hashes")?,
+                    require_hashes: flag_with_env(
+                        require_hashes,
+                        no_require_hashes,
+                        "require-hashes",
+                        EnvVars::UV_REQUIRE_HASHES,
+                    )?,
+                    verify_hashes: flag_with_env(
+                        no_verify_hashes,
+                        verify_hashes,
+                        "verify-hashes",
+                        EnvVars::UV_NO_VERIFY_HASHES,
+                    )?
+                    .map(|disabled| !disabled),
                     torch_backend,
                     ..installer.into_pip_options(configured_indexes(filesystem.as_ref()))?
                 },
                 filesystem,
                 environment,
-            ),
+            )?,
         })
     }
 }
@@ -3955,10 +3985,11 @@ impl PipUninstallSettings {
                 PipOptions {
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
-                    break_system_packages: flag(
+                    break_system_packages: flag_with_env(
                         break_system_packages,
                         no_break_system_packages,
                         "break-system-packages",
+                        EnvVars::UV_BREAK_SYSTEM_PACKAGES,
                     )?,
                     target,
                     prefix,
@@ -4319,8 +4350,19 @@ impl BuildSettings {
                 .collect(),
             build_constraints_from_workspace,
             hash_checking: HashCheckingMode::from_args(
-                flag(require_hashes, no_require_hashes, "require-hashes")?,
-                flag(verify_hashes, no_verify_hashes, "verify-hashes")?,
+                flag_with_env(
+                    require_hashes,
+                    no_require_hashes,
+                    "require-hashes",
+                    EnvVars::UV_REQUIRE_HASHES,
+                )?,
+                flag_with_env(
+                    no_verify_hashes,
+                    verify_hashes,
+                    "verify-hashes",
+                    EnvVars::UV_NO_VERIFY_HASHES,
+                )?
+                .map(|disabled| !disabled),
             ),
             python: python.and_then(Maybe::into_option),
             refresh: Refresh::try_from(refresh)?,
@@ -4474,46 +4516,31 @@ fn resolve_resolver_settings(
     environment: &EnvironmentOptions,
 ) -> Result<ResolverSettings> {
     let args = resolver_options(args, build, configured_indexes(filesystem.as_ref()))?;
-
-    Ok(combine_resolver_settings(args, filesystem, environment))
+    combine_resolver_settings(args, filesystem, environment)
 }
 
-/// Resolve the [`ResolverSettings`] from the CLI and filesystem configuration.
 fn combine_resolver_settings(
-    mut args: ResolverOptions,
+    args: ResolverOptions,
     filesystem: Option<FilesystemOptions>,
     environment: &EnvironmentOptions,
-) -> ResolverSettings {
-    args.require_build_hashes = args
-        .require_build_hashes
-        .or(environment.require_build_hashes);
-    args.no_binary_package = args
-        .no_binary_package
-        .or(environment.no_binary_package.clone());
-    args.no_build_package = args
-        .no_build_package
-        .or(environment.no_build_package.clone());
-    args.no_sources_package = args
-        .no_sources_package
-        .or(environment.no_sources_package.clone());
-
-    // The problem is that for `upgrade`... we want to combine the two `Upgrade` structs,
-    // not the individual fields.
-    let options = args.combine(ResolverOptions::from(
-        filesystem
-            .map(FilesystemOptions::into_options)
-            .map(|options| options.top_level)
-            .unwrap_or_default(),
-    ));
-
-    ResolverSettings {
+) -> Result<ResolverSettings> {
+    let environment_options = resolver_environment_options(&args, environment)?;
+    let options = args.combine_with_environment(
+        environment_options,
+        ResolverOptions::from(
+            filesystem
+                .map(FilesystemOptions::into_options)
+                .map(|options| options.top_level)
+                .unwrap_or_default(),
+        ),
+    );
+    Ok(ResolverSettings {
         cuda_driver_version: environment.cuda_driver_version.clone(),
         amd_gpu_architecture: environment.amd_gpu_architecture,
         ..ResolverSettings::from(options)
-    }
+    })
 }
 
-/// Resolve the [`ResolverInstallerSettings`] from CLI, environment, and filesystem options.
 fn resolve_resolver_installer_settings(
     args: ResolverInstallerArgs,
     build: BuildOptionsArgs,
@@ -4521,57 +4548,110 @@ fn resolve_resolver_installer_settings(
     environment: &EnvironmentOptions,
 ) -> Result<ResolverInstallerSettings> {
     let args = resolver_installer_options(args, build, configured_indexes(filesystem.as_ref()))?;
-
-    Ok(combine_resolver_installer_settings(
-        args,
-        filesystem,
-        environment,
-    ))
+    combine_resolver_installer_settings(args, filesystem, environment)
 }
 
-/// Reconcile the [`ResolverInstallerSettings`] from the CLI and filesystem configuration.
 fn combine_resolver_installer_settings(
     args: ResolverInstallerOptions,
     filesystem: Option<FilesystemOptions>,
     environment: &EnvironmentOptions,
-) -> ResolverInstallerSettings {
-    let options = resolver_installer_options_with_environment(args, environment).combine(
+) -> Result<ResolverInstallerSettings> {
+    let options = combine_resolver_installer_options(
+        args,
         ResolverInstallerOptions::from(
             filesystem
                 .map(FilesystemOptions::into_options)
                 .map(|options| options.top_level)
                 .unwrap_or_default(),
         ),
-    );
-
+        environment,
+    )?;
     let base = ResolverInstallerSettings::from(options);
-    ResolverInstallerSettings {
+    Ok(ResolverInstallerSettings {
         resolver: ResolverSettings {
             cuda_driver_version: environment.cuda_driver_version.clone(),
             amd_gpu_architecture: environment.amd_gpu_architecture,
             ..base.resolver
         },
         ..base
-    }
+    })
 }
 
-fn resolver_installer_options_with_environment(
-    mut options: ResolverInstallerOptions,
+fn combine_resolver_installer_options(
+    args: ResolverInstallerOptions,
+    filesystem: ResolverInstallerOptions,
     environment: &EnvironmentOptions,
-) -> ResolverInstallerOptions {
-    options.require_build_hashes = options
-        .require_build_hashes
-        .or(environment.require_build_hashes);
-    options.no_binary_package = options
-        .no_binary_package
-        .or(environment.no_binary_package.clone());
-    options.no_build_package = options
-        .no_build_package
-        .or(environment.no_build_package.clone());
-    options.no_sources_package = options
-        .no_sources_package
-        .or(environment.no_sources_package.clone());
-    options
+) -> Result<ResolverInstallerOptions> {
+    let environment = resolver_installer_environment_options(&args, environment)?;
+    Ok(args.combine_with_environment(environment, filesystem))
+}
+
+fn environment_build_isolation(cli: Option<&BuildIsolation>) -> Result<Option<BuildIsolation>> {
+    let value = match cli {
+        Some(BuildIsolation::Isolate | BuildIsolation::Shared) => None,
+        None | Some(BuildIsolation::SharedPackage(_)) => {
+            env_flag(None, EnvVars::UV_NO_BUILD_ISOLATION)?
+        }
+    };
+    Ok(BuildIsolation::from_args(value, Vec::new()))
+}
+
+fn resolver_environment_options(
+    args: &ResolverOptions,
+    environment: &EnvironmentOptions,
+) -> Result<ResolverOptions> {
+    Ok(ResolverOptions {
+        require_build_hashes: environment.require_build_hashes,
+        no_build: env_flag(args.no_build, EnvVars::UV_NO_BUILD)?,
+        no_binary: env_flag(args.no_binary, EnvVars::UV_NO_BINARY)?,
+        no_sources: env_flag(args.no_sources, EnvVars::UV_NO_SOURCES)?,
+        build_isolation: environment_build_isolation(args.build_isolation.as_ref())?,
+        no_build_package: if args.no_build_package.is_none() {
+            environment.no_build_package.clone()
+        } else {
+            None
+        },
+        no_binary_package: if args.no_binary_package.is_none() {
+            environment.no_binary_package.clone()
+        } else {
+            None
+        },
+        no_sources_package: if args.no_sources_package.is_none() {
+            environment.no_sources_package.clone()
+        } else {
+            None
+        },
+        ..ResolverOptions::default()
+    })
+}
+
+fn resolver_installer_environment_options(
+    args: &ResolverInstallerOptions,
+    environment: &EnvironmentOptions,
+) -> Result<ResolverInstallerOptions> {
+    Ok(ResolverInstallerOptions {
+        require_build_hashes: environment.require_build_hashes,
+        no_build: env_flag(args.no_build, EnvVars::UV_NO_BUILD)?,
+        no_binary: env_flag(args.no_binary, EnvVars::UV_NO_BINARY)?,
+        no_sources: env_flag(args.no_sources, EnvVars::UV_NO_SOURCES)?,
+        build_isolation: environment_build_isolation(args.build_isolation.as_ref())?,
+        no_build_package: if args.no_build_package.is_none() {
+            environment.no_build_package.clone()
+        } else {
+            None
+        },
+        no_binary_package: if args.no_binary_package.is_none() {
+            environment.no_binary_package.clone()
+        } else {
+            None
+        },
+        no_sources_package: if args.no_sources_package.is_none() {
+            environment.no_sources_package.clone()
+        } else {
+            None
+        },
+        ..ResolverInstallerOptions::default()
+    })
 }
 
 /// The resolved settings to use for an invocation of the `pip` CLI.
@@ -4634,6 +4714,40 @@ pub struct PipSettings {
 }
 
 impl PipSettings {
+    /// Apply environment resets to the lower file layer before CLI package selections are combined.
+    fn combine_with_environment(
+        args: PipOptions,
+        filesystem: Option<FilesystemOptions>,
+        environment: EnvironmentOptions,
+    ) -> Result<Self> {
+        let mut options = filesystem
+            .map(FilesystemOptions::into_options)
+            .unwrap_or_default();
+        let mut pip = options.pip.take().unwrap_or_default();
+        if let Some(value) = env_flag(args.no_build_isolation, EnvVars::UV_NO_BUILD_ISOLATION)? {
+            pip.no_build_isolation = Some(value);
+            pip.no_build_isolation_package = None;
+            options.top_level.no_build_isolation = None;
+            options.top_level.no_build_isolation_package = None;
+        }
+        if let Some(value) = env_flag(args.no_sources, EnvVars::UV_NO_SOURCES)? {
+            pip.no_sources = Some(value);
+            pip.no_sources_package = None;
+            options.top_level.no_sources = None;
+            options.top_level.no_sources_package = None;
+            if !value
+                && args
+                    .no_sources_package
+                    .as_ref()
+                    .is_some_and(|packages| !packages.is_empty())
+            {
+                pip.no_sources = None;
+            }
+        }
+        options.pip = Some(pip);
+        Ok(Self::combine(args, Some(options.into()), environment))
+    }
+
     /// Resolve the [`PipSettings`] from the CLI and filesystem configuration.
     fn combine(
         args: PipOptions,
