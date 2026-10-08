@@ -544,6 +544,7 @@ impl Args for IndexArgs {
     }
 }
 
+#[derive(Clone, Copy)]
 struct IndexArgumentSources {
     index: Option<ValueSource>,
     default_index: Option<ValueSource>,
