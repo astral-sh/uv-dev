@@ -25,3 +25,6 @@ mod pip_sync;
 mod pip_tree;
 
 mod pip_uninstall;
+
+#[cfg(feature = "test-python")]
+mod pylock_archive_subdirectory;
