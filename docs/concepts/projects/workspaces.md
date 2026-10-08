@@ -123,6 +123,68 @@ overrides the `tqdm` entry in its own `tool.uv.sources` table.
     limited by a [marker](dependencies.md#platform-specific-sources) that doesn't match the current
     platform.
 
+## Selecting resolution roots
+
+By default, every workspace member participates in dependency resolution independently. A marker on
+a dependency between members does not restrict the environments in which the dependency's
+requirements are resolved, because that member is also a resolution root.
+
+Use `tool.uv.workspace.roots` to select which members seed resolution. Other members remain
+available through workspace sources and participate only when required by a selected root. For
+example, a root project can select different applications on Windows and Linux:
+
+```toml title="pyproject.toml"
+[project]
+name = "applications"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "windows-app; sys_platform == 'win32'",
+    "linux-app; sys_platform == 'linux'",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+roots = ["applications"]
+
+[tool.uv.sources]
+windows-app = { workspace = true }
+linux-app = { workspace = true }
+```
+
+Each application declares its dependencies normally, without repeating the platform marker:
+
+```toml title="packages/windows-app/pyproject.toml"
+[project]
+name = "windows-app"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["numpy==1.26.4"]
+```
+
+```toml title="packages/linux-app/pyproject.toml"
+[project]
+name = "linux-app"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["numpy==2.1.0"]
+```
+
+`uv lock` resolves both applications in one lockfile. Their incompatible NumPy requirements apply in
+disjoint environments, as selected by the root's dependency markers. `uv sync` at the root includes
+only the application selected for the target platform. With explicit resolution roots,
+`uv sync --all-packages` also starts from those roots and follows their marked dependencies. A
+discovered member that is not reachable from any selected root is omitted from the lockfile.
+
+The marker belongs to the dependency edge. It does not declare which platforms the application
+itself supports. Selecting an application directly with `uv sync --package windows-app` does not
+apply the root's marker, and another member can require it under a different marker. Dependency
+groups belonging to members that are not resolution roots are not included automatically; extras can
+be requested on the root's dependencies, such as `windows-app[gui]; sys_platform == 'win32'`.
+
 ## Workspace layouts
 
 The most common workspace layout can be thought of as a root project with a series of accompanying
@@ -174,11 +236,13 @@ Other common use cases for workspaces include:
 - A library with a plugin system, where each plugin is a separate workspace package with a
   dependency on the root.
 
-Workspaces are _not_ suited for cases in which members have conflicting requirements, or desire a
-separate virtual environment for each member. In this case, path dependencies are often preferable.
-For example, rather than grouping `albatross` and its members in a workspace, you can always define
-each package as its own independent project, with inter-package dependencies defined as path
-dependencies in `tool.uv.sources`:
+Workspaces are _not_ suited for cases in which members have conflicting requirements in the same
+environment, or desire a separate virtual environment for each member. Explicit
+[resolution roots](#selecting-resolution-roots) allow a parent to select members with conflicting
+requirements in disjoint environments. For independently managed environments, path dependencies are
+often preferable. For example, rather than grouping `albatross` and its members in a workspace, you
+can always define each package as its own independent project, with inter-package dependencies
+defined as path dependencies in `tool.uv.sources`:
 
 ```toml title="pyproject.toml"
 [project]
@@ -200,9 +264,9 @@ dependency resolution and virtual environment management (with the downside that
 is no longer available; instead, commands must be run from the relevant package directory).
 
 Finally, uv's workspaces enforce a single `requires-python` for the entire workspace, taking the
-intersection of all members' `requires-python` values. If you need to support testing a given member
-on a Python version that isn't supported by the rest of the workspace, you may need to use `uv pip`
-to install that member in a separate virtual environment.
+intersection of the resolution roots' `requires-python` values (all members by default). If you need
+to support testing a given member on a Python version that isn't supported by the rest of the
+workspace, you may need to use `uv pip` to install that member in a separate virtual environment.
 
 !!! note
 

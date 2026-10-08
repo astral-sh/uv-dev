@@ -912,15 +912,15 @@ async fn do_lock(
                     }),
             );
 
-            // Expand the available extras for each workspace member.
+            // Expand the available extras for each workspace resolution root.
             let member_requirements = ExtrasResolver::new(&hasher, state.index(), database)
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(target.members_requirements())
+                .resolve(target.resolution_root_requirements())
                 .await
                 .map_err(ResolveError::from)?;
-            let workspace_members = member_requirements
-                .iter()
-                .map(|requirement| (requirement.name.clone(), requirement.source.clone()))
+            let workspace_members = target
+                .members_requirements()
+                .map(|requirement| (requirement.name, requirement.source))
                 .collect();
 
             // Resolve the requirements.

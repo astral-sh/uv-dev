@@ -142,6 +142,8 @@ struct ResolverState<InstalledPackages: InstalledPackagesProvider> {
     python_requirement: PythonRequirement,
     conflicts: Conflicts,
     workspace_members: BTreeSet<PackageName>,
+    /// Workspace members without an unconditional root requirement.
+    non_root_workspace_members: BTreeSet<PackageName>,
     selector: CandidateSelector,
     index: InMemoryIndex,
     installed_packages: InstalledPackages,
@@ -246,6 +248,18 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
         installed_packages: InstalledPackages,
     ) -> Self {
         let env = env.with_conflicts(&conflicts);
+        let resolution_roots = manifest
+            .requirements
+            .iter()
+            .filter(|requirement| requirement.marker.is_true())
+            .map(|requirement| &requirement.name)
+            .collect::<BTreeSet<_>>();
+        let non_root_workspace_members = manifest
+            .workspace_members
+            .keys()
+            .filter(|name| !resolution_roots.contains(name))
+            .cloned()
+            .collect();
         let state = ResolverState {
             index: index.clone(),
             git: git.clone(),
@@ -257,6 +271,7 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
             recorder: manifest.recorder.clone(),
             project: manifest.project,
             workspace_members: manifest.workspace_members.into_keys().collect(),
+            non_root_workspace_members,
             requirements: manifest.requirements,
             constraints: manifest
                 .constraints
@@ -1787,6 +1802,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 env,
                 python_requirement,
                 &self.conflicts,
+                &self.non_root_workspace_members,
             ))
         }
     }
@@ -3401,9 +3417,8 @@ enum Dependencies {
 /// Information about the (possibly forked) dependencies for a particular
 /// package.
 ///
-/// This is like `Dependencies` but with an extra variant that only occurs when
-/// a `Dependencies` list has multiple dependency specifications with the same
-/// name and non-overlapping marker expressions (i.e., a fork occurs).
+/// This is like `Dependencies` but with an extra variant for dependency specifications
+/// that require separate marker environments (i.e., a fork occurs).
 #[derive(Debug)]
 enum ForkedDependencies {
     /// Package dependencies are not available.
@@ -3430,14 +3445,17 @@ impl ForkedDependencies {
     /// Turn a flat list of dependencies into a potential set of forked
     /// groups of dependencies.
     ///
-    /// A fork *only* occurs when there are multiple dependencies with the same
+    /// A fork usually occurs when there are multiple dependencies with the same
     /// name *and* those dependency specifications have corresponding marker
-    /// expressions that are completely disjoint with one another.
+    /// expressions that are completely disjoint with one another. Non-root workspace
+    /// members also fork on a single marked dependency, so a parent's markers apply
+    /// before their transitive requirements are combined.
     fn from_dependencies_universal(
         dependencies: Dependencies,
         env: &ResolverEnvironment,
         python_requirement: &PythonRequirement,
         conflicts: &Conflicts,
+        non_root_workspace_members: &BTreeSet<PackageName>,
     ) -> Self {
         let deps = match dependencies {
             Dependencies::Available(deps) => deps,
@@ -3456,8 +3474,13 @@ impl ForkedDependencies {
                 .clone();
             name_to_deps.entry(name).or_default().push(dep);
         }
-        let (mut forks, diverging_packages) =
-            Self::fork(name_to_deps, env, python_requirement, conflicts);
+        let (mut forks, diverging_packages) = Self::fork(
+            name_to_deps,
+            env,
+            python_requirement,
+            conflicts,
+            non_root_workspace_members,
+        );
         if forks.is_empty() {
             Self::Unforked(vec![])
         } else if forks.len() == 1 {
@@ -3492,6 +3515,7 @@ impl ForkedDependencies {
         env: &ResolverEnvironment,
         python_requirement: &PythonRequirement,
         conflicts: &Conflicts,
+        non_root_workspace_members: &BTreeSet<PackageName>,
     ) -> (Vec<Fork>, BTreeSet<PackageName>) {
         let python_marker = python_requirement.to_marker_tree();
 
@@ -3499,7 +3523,7 @@ impl ForkedDependencies {
         let mut diverging_packages = BTreeSet::new();
         for (name, mut deps) in name_to_deps {
             assert!(!deps.is_empty(), "every name has at least one dependency");
-            // We never fork if there's only one dependency
+            // We normally avoid forking if there's only one dependency
             // specification for a given package name. This particular
             // strategy results in a "conservative" approach to forking
             // that gives up correctness in some cases in exchange for
@@ -3510,15 +3534,17 @@ impl ForkedDependencies {
             // that case, we don't detect the fork ahead of time (at
             // present).
             if let [dep] = deps.as_slice() {
-                // There's one exception: if the requirement increases the minimum-supported Python
-                // version, we also fork in order to respect that minimum in the subsequent
-                // resolution.
+                // Non-root workspace members are selected by their parents, so their markers must
+                // separate resolution even when there is only one dependency with that name.
+                // Requirements that increase the minimum-supported Python version also need a fork
+                // to respect that minimum in the subsequent resolution.
                 //
                 // For example, given `requires-python = ">=3.7"` and `uv ; python_version >= "3.8"`,
                 // where uv itself only supports Python 3.8 and later, we need to fork to ensure
                 // that the resolution can find a solution.
-                if marker::requires_python(dep.package.marker())
-                    .is_none_or(|bound| !python_requirement.raises(&bound))
+                if !non_root_workspace_members.contains(&name)
+                    && marker::requires_python(dep.package.marker())
+                        .is_none_or(|bound| !python_requirement.raises(&bound))
                 {
                     let dep = deps.pop().unwrap();
                     let marker = dep.package.marker();
@@ -3534,11 +3560,11 @@ impl ForkedDependencies {
                 if let Some(dep) = deps.first() {
                     let marker = dep.package.marker();
                     if deps.iter().all(|dep| marker == dep.package.marker()) {
-                        // Unless that "same marker" is a Python requirement that is stricter than
-                        // the current Python requirement. In that case, we need to fork to respect
-                        // the stricter requirement.
-                        if marker::requires_python(marker)
-                            .is_none_or(|bound| !python_requirement.raises(&bound))
+                        // Non-root workspace members and stricter Python requirements still need
+                        // separate environments when all their dependency markers are identical.
+                        if !non_root_workspace_members.contains(&name)
+                            && marker::requires_python(marker)
+                                .is_none_or(|bound| !python_requirement.raises(&bound))
                         {
                             for dep in deps {
                                 for fork in &mut forks {
