@@ -562,20 +562,6 @@ impl<'a> IndexLocations {
             .find(|index| is_same_index(index.url(), url))
     }
 
-    /// Return the Simple API cache control header for an [`IndexUrl`], if configured.
-    #[cfg(test)]
-    fn simple_api_cache_control_for(&self, url: &IndexUrl) -> Option<http::HeaderValue> {
-        self.index_for_url(url)
-            .and_then(Index::simple_api_cache_control)
-    }
-
-    /// Return the artifact cache control header for an [`IndexUrl`], if configured.
-    #[cfg(test)]
-    fn artifact_cache_control_for(&self, url: &IndexUrl) -> Option<http::HeaderValue> {
-        self.index_for_url(url)
-            .and_then(Index::artifact_cache_control)
-    }
-
     /// Return the hash algorithm required for distributions resolved from a given index.
     pub fn hash_algorithm_for(&self, url: &IndexUrl) -> Option<HashAlgorithm> {
         self.index_for_url(url)
@@ -967,24 +953,25 @@ mod tests {
         ];
 
         let index_locations = IndexLocations::new(indexes, Vec::new(), false);
+        let lookup = IndexLocationsLookup::from(&index_locations);
 
         let url1 = IndexUrl::from_str("https://index1.example.com/simple").unwrap();
         assert_eq!(
-            index_locations.simple_api_cache_control_for(&url1),
+            lookup.simple_api_cache_control_for(&url1),
             Some(HeaderValue::from_static("max-age=300"))
         );
         assert_eq!(
-            index_locations.artifact_cache_control_for(&url1),
+            lookup.artifact_cache_control_for(&url1),
             Some(HeaderValue::from_static("max-age=1800"))
         );
 
         let url2 = IndexUrl::from_str("https://index2.example.com/simple").unwrap();
-        assert_eq!(index_locations.simple_api_cache_control_for(&url2), None);
-        assert_eq!(index_locations.artifact_cache_control_for(&url2), None);
+        assert_eq!(lookup.simple_api_cache_control_for(&url2), None);
+        assert_eq!(lookup.artifact_cache_control_for(&url2), None);
 
         let url3 = IndexUrl::from_str("https://index3.example.com/simple").unwrap();
-        assert_eq!(index_locations.simple_api_cache_control_for(&url3), None);
-        assert_eq!(index_locations.artifact_cache_control_for(&url3), None);
+        assert_eq!(lookup.simple_api_cache_control_for(&url3), None);
+        assert_eq!(lookup.artifact_cache_control_for(&url3), None);
     }
 
     #[test]
@@ -1006,15 +993,13 @@ mod tests {
         }];
 
         let index_locations = IndexLocations::new(indexes, Vec::new(), false);
+        let lookup = IndexLocationsLookup::from(&index_locations);
 
         let pytorch_url = IndexUrl::from_str("https://download.pytorch.org/whl/cu118").unwrap();
 
+        assert_eq!(lookup.simple_api_cache_control_for(&pytorch_url), None);
         assert_eq!(
-            index_locations.simple_api_cache_control_for(&pytorch_url),
-            None
-        );
-        assert_eq!(
-            index_locations.artifact_cache_control_for(&pytorch_url),
+            lookup.artifact_cache_control_for(&pytorch_url),
             Some(HeaderValue::from_static(
                 "max-age=365000000, immutable, public",
             ))
@@ -1043,15 +1028,16 @@ mod tests {
         }];
 
         let index_locations = IndexLocations::new(indexes, Vec::new(), false);
+        let lookup = IndexLocationsLookup::from(&index_locations);
 
         let pytorch_url = IndexUrl::from_str("https://download.pytorch.org/whl/cu118").unwrap();
 
         assert_eq!(
-            index_locations.simple_api_cache_control_for(&pytorch_url),
+            lookup.simple_api_cache_control_for(&pytorch_url),
             Some(HeaderValue::from_static("no-cache"))
         );
         assert_eq!(
-            index_locations.artifact_cache_control_for(&pytorch_url),
+            lookup.artifact_cache_control_for(&pytorch_url),
             Some(HeaderValue::from_static("max-age=3600"))
         );
     }
@@ -1075,15 +1061,13 @@ mod tests {
         }];
 
         let index_locations = IndexLocations::new(indexes, Vec::new(), false);
+        let lookup = IndexLocationsLookup::from(&index_locations);
 
         let nvidia_url = IndexUrl::from_str("https://pypi.nvidia.com").unwrap();
 
+        assert_eq!(lookup.simple_api_cache_control_for(&nvidia_url), None);
         assert_eq!(
-            index_locations.simple_api_cache_control_for(&nvidia_url),
-            None
-        );
-        assert_eq!(
-            index_locations.artifact_cache_control_for(&nvidia_url),
+            lookup.artifact_cache_control_for(&nvidia_url),
             Some(HeaderValue::from_static(
                 "max-age=365000000, immutable, public",
             ))
