@@ -4,6 +4,7 @@ use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use async_zip::base::read::mem::ZipFileReader;
+use futures::FutureExt;
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
@@ -12,10 +13,26 @@ use sha2::{Digest, Sha256};
 use std::env::current_dir;
 use std::path::Path;
 use url::Url;
+use uv_cache::Cache;
+use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_configuration::{
+    BuildKind, BuildOptions, Concurrency, Constraints, IndexStrategy, NoSources,
+};
+use uv_dispatch::{BuildDispatch, SharedState};
+use uv_distribution_types::{
+    ConfigSettings, DependencyMetadata, ExtraBuildRequires, ExtraBuildVariables, IndexLocations,
+    PackageConfigSettings,
+};
+use uv_install_wheel::LinkMode;
+use uv_preview::Preview;
+use uv_python_interpreter::PythonEnvironment;
+use uv_resolver::{ExcludeNewer, FlatIndex};
 use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
 use uv_test::packse::generate_wheel;
 use uv_test::{DEFAULT_PYTHON_VERSION, apply_filters, get_bin, uv_snapshot};
+use uv_types::{BuildContext, BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
+use uv_workspace::WorkspaceCache;
 
 fn zip_file_names(path: &Path) -> Result<Vec<String>> {
     block_on(async {
@@ -972,6 +989,68 @@ fn build_workspace() -> Result<()> {
     error: Package `fail` not found in workspace
     ");
 
+    Ok(())
+}
+
+/// Direct native builds must wait for the shared build quota before spawning a worker.
+#[test]
+fn direct_native_build_waits_for_shared_quota() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let cache = Cache::from_path(context.cache_dir.path());
+    let environment = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone()).build()?;
+    let constraints = Constraints::default();
+    let locations = IndexLocations::default();
+    let flat_index = FlatIndex::default();
+    let metadata = DependencyMetadata::default();
+    let config_settings = ConfigSettings::default();
+    let package_config_settings = PackageConfigSettings::default();
+    let extra_requires = ExtraBuildRequires::default();
+    let extra_variables = ExtraBuildVariables::default();
+    let build_options = BuildOptions::default();
+    let hashes = HashStrategy::default();
+    let concurrency = Concurrency::new(1, 1, 1, 1);
+    let _permit = concurrency.builds_semaphore.clone().try_acquire_owned()?;
+    let dispatch = BuildDispatch::new(
+        &client,
+        &cache,
+        &constraints,
+        environment.interpreter(),
+        &locations,
+        &flat_index,
+        &metadata,
+        SharedState::default(),
+        IndexStrategy::default(),
+        &config_settings,
+        &package_config_settings,
+        BuildIsolation::default(),
+        &extra_requires,
+        &extra_variables,
+        LinkMode::default(),
+        &build_options,
+        &hashes,
+        ExcludeNewer::default(),
+        NoSources::default(),
+        SourceTreeEditablePolicy::default(),
+        WorkspaceCache::default(),
+        concurrency,
+        Preview::default(),
+    );
+    let source = current_dir()?.join("../../test/packages/built-by-uv");
+    let output = context.temp_dir.child("blocked-build");
+    output.create_dir_all()?;
+
+    // No runtime is entered: admission must yield before attempting a blocking spawn.
+    let build = dispatch.direct_build(
+        &source,
+        None,
+        output.path(),
+        NoSources::default(),
+        BuildKind::Wheel,
+        None,
+    );
+    assert!(build.now_or_never().is_none());
+    assert!(fs_err::read_dir(output.path())?.next().is_none());
     Ok(())
 }
 
