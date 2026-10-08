@@ -8,6 +8,7 @@ pub mod lock_target;
 pub mod lockfile;
 pub mod malware;
 pub mod python;
+pub mod sync;
 pub mod toolchain;
 
 use std::collections::BTreeMap;
@@ -27,7 +28,7 @@ use uv_cache_key::{cache_digest, cache_name};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
-    ExtrasSpecification, GitLfsSetting, HashCheckingMode, Reinstall, TargetTriple, Upgrade,
+    ExtrasSpecification, GitLfsSetting, Reinstall, TargetTriple, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
@@ -39,6 +40,7 @@ use uv_fs::{CWD, LockedFile, LockedFileError, LockedFileMode, Simplified, verbat
 use uv_git::ResolvedRepositoryReference;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock, LockParseError};
+use uv_macros::DebugNoInline;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::MarkerTreeContents;
@@ -118,7 +120,7 @@ impl From<FrozenSource> for MissingLockfileSource {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, DebugNoInline)]
 pub enum ProjectError {
     #[error("The lockfile at `uv.lock` needs to be updated, but `{2}` was provided.")]
     LockMismatch(Option<Box<Lock>>, Box<Lock>, LockedSource),
@@ -245,6 +247,11 @@ pub enum ProjectError {
 
     #[error("Project virtual environment directory `{0}` cannot be used because {1}")]
     InvalidProjectEnvironmentDir(PathBuf, String),
+
+    #[error(
+        "Script environment at `{0}` cannot be replaced because it is a non-empty directory that is not a virtual environment"
+    )]
+    InvalidScriptEnvironmentDir(PathBuf),
 
     #[error("Failed to parse `uv.lock`")]
     UvLockParse(#[source] toml::de::Error),
@@ -1503,8 +1510,11 @@ pub async fn lock_project_environment(
     target: ProjectEnvironmentTarget<'_>,
 ) -> Result<LockedFile, LockedFileError> {
     let install_path = target.install_path();
+    // The workspace exists even when its environment does not. Resolve aliases before choosing
+    // the lock so two paths to the same workspace cannot initialize it concurrently.
+    let workspace_path = install_path.simple_canonicalize()?;
     LockedFile::acquire(
-        std::env::temp_dir().join(format!("uv-{}.lock", cache_digest(&install_path))),
+        std::env::temp_dir().join(format!("uv-{}.lock", cache_digest(&workspace_path))),
         LockedFileMode::Exclusive,
         install_path.simplified_display(),
     )
@@ -2020,6 +2030,27 @@ impl ScriptEnvironment {
                 let interpreter = requested.into_interpreter();
                 let root = ScriptInterpreter::root(script, active, cache);
 
+                // The derived cache entry is owned by uv and can be repaired, but an active
+                // destination may contain user data.
+                let is_cache_entry = match active {
+                    ActiveEnvironment::Ignore | ActiveEnvironment::Warn => true,
+                    ActiveEnvironment::Prefer => {
+                        root == ScriptInterpreter::root(script, ActiveEnvironment::Ignore, cache)
+                    }
+                };
+                let replace_environment = is_cache_entry || uv_fs::is_virtualenv_base(&root);
+                if !replace_environment {
+                    match fs_err::read_dir(&root) {
+                        Ok(mut entries) => {
+                            if entries.next().transpose()?.is_some() {
+                                return Err(ProjectError::InvalidScriptEnvironmentDir(root));
+                            }
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                        Err(err) => return Err(err.into()),
+                    }
+                }
+
                 // Determine a prompt for the environment, in order of preference:
                 //
                 // 1) The name of the script
@@ -2046,7 +2077,7 @@ impl ScriptEnvironment {
                         uv_virtualenv::Seed::Disabled,
                         upgrade_policy,
                     )?;
-                    return Ok(if root.exists() {
+                    return Ok(if replace_environment && root.exists() {
                         Self::WouldReplace(root, environment, temp_dir)
                     } else {
                         Self::WouldCreate(root, environment, temp_dir)
@@ -2054,16 +2085,20 @@ impl ScriptEnvironment {
                 }
 
                 // Remove the existing virtual environment.
-                let replaced = match uv_fs::remove_virtualenv(&root) {
-                    Ok(()) => {
-                        debug!(
-                            "Removed virtual environment at: {}",
-                            root.user_display().cyan()
-                        );
-                        true
+                let replaced = if replace_environment {
+                    match uv_fs::remove_virtualenv(&root) {
+                        Ok(()) => {
+                            debug!(
+                                "Removed virtual environment at: {}",
+                                root.user_display().cyan()
+                            );
+                            true
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                        Err(err) => return Err(uv_virtualenv::Error::from(err).into()),
                     }
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-                    Err(err) => return Err(uv_virtualenv::Error::from(err).into()),
+                } else {
+                    false
                 };
 
                 debug!(
@@ -2076,9 +2111,8 @@ impl ScriptEnvironment {
                     interpreter,
                     prompt,
                     false,
-                    uv_virtualenv::OnExisting::Remove(
-                        uv_virtualenv::RemovalReason::ManagedEnvironment,
-                    ),
+                    // Do not clear any contents that appeared after validating the destination.
+                    uv_virtualenv::OnExisting::Fail,
                     false,
                     uv_virtualenv::Seed::Disabled,
                     upgrade_policy,
@@ -2175,6 +2209,7 @@ pub async fn resolve_names(
         keyring_provider,
         link_mode,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         prerelease: _,
@@ -2232,7 +2267,7 @@ pub async fn resolve_names(
     let build_hasher = HashStrategy::from_constraints(
         build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        *build_hash_checking,
     )?;
     let flat_index = FlatIndex::load(&client, cache, index_locations)
         .await
@@ -2365,6 +2400,7 @@ pub async fn resolve_environment(
         config_setting,
         config_settings_package,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         exclude_newer,
@@ -2477,7 +2513,7 @@ pub async fn resolve_environment(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        *build_hash_checking,
     )?;
 
     // When resolving from an interpreter, we assume an empty environment, so reinstalls aren't
@@ -2503,7 +2539,19 @@ pub async fn resolve_environment(
 
             preferences
         }
-        Some(PreferenceLocation::Entries(entries)) => entries,
+        Some(PreferenceLocation::Entries(entries)) => {
+            // Drop preferences for any packages that are included in the upgrade strategy.
+            if upgrade.is_all() {
+                vec![]
+            } else if let Some(packages) = upgrade.packages() {
+                entries
+                    .into_iter()
+                    .filter(|preference| !packages.contains(preference.name()))
+                    .collect()
+            } else {
+                entries
+            }
+        }
         None => vec![],
     };
 
@@ -2603,6 +2651,7 @@ pub async fn sync_environment(
         config_setting,
         config_settings_package,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         exclude_newer,
@@ -2641,7 +2690,7 @@ pub async fn sync_environment(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        build_hash_checking,
     )?;
     // TODO(charlie): These are all default values. We should consider whether we want to make them
     // optional on the downstream APIs.
@@ -2769,6 +2818,7 @@ pub async fn update_environment(
                 keyring_provider,
                 link_mode,
                 build_isolation,
+                build_hash_checking,
                 extra_build_dependencies: _,
                 extra_build_variables,
                 prerelease,
@@ -2899,7 +2949,7 @@ pub async fn update_environment(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        *build_hash_checking,
     )?;
     // TODO(charlie): These are all default values. We should consider whether we want to make them
     // optional on the downstream APIs.

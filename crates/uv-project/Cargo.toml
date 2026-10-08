@@ -36,6 +36,7 @@ uv-fs = { workspace = true }
 uv-git = { workspace = true }
 uv-installer = { workspace = true }
 uv-lock = { workspace = true }
+uv-macros = { workspace = true }
 uv-normalize = { workspace = true }
 uv-operations = { workspace = true }
 uv-pep440 = { workspace = true }

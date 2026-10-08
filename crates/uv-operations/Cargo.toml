@@ -30,6 +30,7 @@ uv-git = { workspace = true }
 uv-install-wheel = { workspace = true, default-features = false }
 uv-installer = { workspace = true }
 uv-lock = { workspace = true }
+uv-macros = { workspace = true }
 uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
@@ -49,7 +50,6 @@ uv-warnings = { workspace = true }
 
 anyhow = { workspace = true }
 fs-err = { workspace = true }
-insta = { workspace = true }
 itertools = { workspace = true }
 jiff = { workspace = true }
 owo-colors = { workspace = true }

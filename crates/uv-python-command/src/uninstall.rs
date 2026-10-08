@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fmt::Write;
+use std::io;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -25,6 +26,14 @@ use crate::{ChangeEvent, ChangeEventKind};
 use uv_cli_output::format::elapsed;
 use uv_cli_output::printer::Printer;
 use uv_cli_types::exit::ExitStatus;
+
+#[derive(Debug, thiserror::Error)]
+#[error("Failed to remove symlink directory `{}`", path.display())]
+struct MinorVersionLinkRemovalError {
+    path: PathBuf,
+    #[source]
+    source: io::Error,
+}
 
 /// Uninstall managed Python versions.
 pub async fn uninstall(
@@ -52,8 +61,12 @@ pub async fn uninstall(
                 Err(err) => return Err(err.into()),
             }
 
-            if uv_fs::directories(top_level)?.all(|path| uv_fs::is_temporary(&path)) {
-                fs_err::tokio::remove_dir_all(top_level).await?;
+            // Best-effort cleanup: the parent may contain user files or be in use.
+            if let Err(err) = fs_err::tokio::remove_dir(top_level).await {
+                debug!(
+                    "Skipping removal of parent directory `{}`: {err}",
+                    top_level.user_display()
+                );
             }
         }
     }
@@ -241,7 +254,7 @@ async fn do_uninstall(
         .iter()
         .filter(|(minor_version, _)| uninstalled_minor_versions.contains(minor_version))
     {
-        installation.ensure_minor_version_link()?;
+        installation.ensure_minor_version_link().await?;
     }
     // For each uninstalled installation, check if there are no remaining installations
     // for its minor version. If there are none remaining, remove the symlink directory
@@ -252,12 +265,12 @@ async fn do_uninstall(
                 PythonMinorVersionLink::from_installation(installation)
             {
                 if minor_version_link.exists() {
-                    if uv_fs::remove_symlink(&minor_version_link.symlink_directory).is_err() {
-                        return Err(anyhow::anyhow!(
-                            "Failed to remove symlink directory `{}`",
-                            minor_version_link.symlink_directory.display()
-                        ));
-                    }
+                    uv_fs::remove_symlink(&minor_version_link.symlink_directory).map_err(
+                        |source| MinorVersionLinkRemovalError {
+                            path: minor_version_link.symlink_directory.clone(),
+                            source,
+                        },
+                    )?;
                     let symlink_term = if cfg!(windows) {
                         "junction"
                     } else {

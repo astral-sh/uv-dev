@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use anyhow::{Context, Error, Result};
 use futures::{StreamExt, join};
@@ -438,7 +437,7 @@ async fn perform_install(
             if let PythonRequest::Version(VersionRequest::MajorMinor(major, minor, ..)) =
                 request.python_request()
             {
-                uv_pep440::Version::from_str(&format!("{major}.{minor}")).ok()
+                Some((*major, *minor))
             } else {
                 None
             }
@@ -671,16 +670,17 @@ async fn perform_install(
     // Ensure that the installations are _complete_ for both downloaded installations and existing
     // installations that match the request
     for installation in &installations {
-        installation.ensure_externally_managed()?;
-        installation.ensure_sysconfig_patched()?;
-        installation.ensure_canonical_executables()?;
-        installation.ensure_build_file()?;
+        installation.ensure_externally_managed().await?;
+        installation.ensure_sysconfig_patched().await?;
+        installation.ensure_canonical_executables().await?;
+        installation.ensure_build_file().await?;
         if let Err(e) = installation.ensure_dylib_patched() {
             e.warn_user(installation);
         }
 
         let upgradeable = (default || is_default_install)
-            || requested_minor_versions.contains(&installation.key().version().python_version());
+            || requested_minor_versions
+                .contains(&(installation.key().major(), installation.key().minor()));
 
         if let Some(bin_dir) = bin_dir.as_ref() {
             create_bin_links(
@@ -728,7 +728,7 @@ async fn perform_install(
     );
 
     for installation in minor_versions.values() {
-        installation.ensure_minor_version_link()?;
+        installation.ensure_minor_version_link().await?;
     }
 
     if changelog.installed.is_empty() && errors.is_empty() {
@@ -824,7 +824,7 @@ async fn perform_install(
                         not_explicit.download_request.clone().with_arch(native_arch);
                     writeln!(
                         printer.stderr(),
-                        "{} uv selected a Python distribution with an emulated architecture ({}) for your platform because support for the native architecture ({}) is not yet mature; to override this behaviour, request the native architecture explicitly with: {}",
+                        "{} uv selected a Python distribution with an emulated architecture ({}) for your platform ({}); to require the native architecture, use: {}",
                         "note:".bold(),
                         install_key.arch(),
                         native_arch,
