@@ -834,6 +834,22 @@ async fn do_lock(
         None
     };
 
+    let update_default_groups = |lock: Lock| {
+        lock.with_member_default_groups(
+            packages
+                .iter()
+                .filter_map(|(name, member)| {
+                    member
+                        .pyproject_toml()
+                        .configured_default_groups()
+                        .cloned()
+                        .map(|groups| (name.clone(), groups))
+                })
+                .collect(),
+        )
+        .with_workspace_default_groups(workspace_default_groups.clone())
+    };
+
     match existing_lock {
         // Resolution from the lockfile succeeded.
         Some(ValidatedLock::Satisfies(lock)) => {
@@ -841,6 +857,12 @@ async fn do_lock(
             logger.on_complete(lock.len(), start, printer)?;
 
             Ok(LockResult::Unchanged(lock))
+        }
+
+        Some(ValidatedLock::DefaultGroupsChanged(previous)) => {
+            let lock = update_default_groups(previous.clone());
+            logger.on_complete(lock.len(), start, printer)?;
+            Ok(LockResult::Changed(Some(previous), lock))
         }
 
         // The lockfile did not contain enough information to obtain a resolution, fallback
@@ -865,6 +887,7 @@ async fn do_lock(
             // Determine whether we can reuse the existing package versions.
             let versions_lock = existing_lock.as_ref().and_then(|lock| match &lock {
                 ValidatedLock::Satisfies(lock) => Some(lock),
+                ValidatedLock::DefaultGroupsChanged(lock) => Some(lock),
                 ValidatedLock::Preferable(lock) => Some(lock),
                 ValidatedLock::Versions(lock) => Some(lock),
                 ValidatedLock::Unusable(_) => None,
@@ -885,6 +908,7 @@ async fn do_lock(
             // Determine whether we can reuse the existing package forks.
             let forks_lock = existing_lock.as_ref().and_then(|lock| match &lock {
                 ValidatedLock::Satisfies(lock) => Some(lock),
+                ValidatedLock::DefaultGroupsChanged(lock) => Some(lock),
                 ValidatedLock::Preferable(lock) => Some(lock),
                 ValidatedLock::Versions(_) => None,
                 ValidatedLock::Unusable(_) => None,
@@ -992,29 +1016,18 @@ async fn do_lock(
             .relative_to(target.install_path())?;
 
             let previous = existing_lock.map(ValidatedLock::into_lock);
-            let lock = Lock::from_resolution(
-                &resolution,
-                manifest,
-                target.install_path(),
-                lock_supported_environments.clone().into_markers(),
-                index_locations,
-                preview.is_enabled(PreviewFeature::LockWithoutMetadata),
-            )?
-            .with_conflicts(conflicts)
-            .with_required_environments(lock_required_environments.into_markers())
-            .with_member_default_groups(
-                packages
-                    .iter()
-                    .filter_map(|(name, member)| {
-                        member
-                            .pyproject_toml()
-                            .configured_default_groups()
-                            .cloned()
-                            .map(|groups| (name.clone(), groups))
-                    })
-                    .collect(),
+            let lock = update_default_groups(
+                Lock::from_resolution(
+                    &resolution,
+                    manifest,
+                    target.install_path(),
+                    lock_supported_environments.clone().into_markers(),
+                    index_locations,
+                    preview.is_enabled(PreviewFeature::LockWithoutMetadata),
+                )?
+                .with_conflicts(conflicts)
+                .with_required_environments(lock_required_environments.into_markers()),
             )
-            .with_workspace_default_groups(workspace_default_groups)
             .with_member_group_metadata(packages)?
             .with_workspace_group_metadata(workspace_group_metadata);
 

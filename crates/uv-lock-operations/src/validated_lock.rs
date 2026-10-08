@@ -35,6 +35,8 @@ pub enum ValidatedLock {
     Preferable(Lock),
     /// An existing lockfile was provided, and it satisfies the workspace requirements.
     Satisfies(Lock),
+    /// The resolved graph satisfies the workspace, but its default group selections differ.
+    DefaultGroupsChanged(Lock),
 }
 
 impl ValidatedLock {
@@ -316,10 +318,10 @@ impl ValidatedLock {
             }
             SatisfiesResult::MismatchedMemberDefaultGroups(expected, actual) => {
                 debug!(
-                    "Resolving despite existing lockfile due to mismatched member default groups:\n  Requested: {:?}\n  Existing: {:?}",
+                    "Updating existing lockfile due to mismatched member default groups:\n  Requested: {:?}\n  Existing: {:?}",
                     expected, actual
                 );
-                Ok(Self::Preferable(lock))
+                Ok(Self::DefaultGroupsChanged(lock))
             }
             SatisfiesResult::MismatchedWorkspaceGroupMetadata(expected, actual) => {
                 debug!(
@@ -330,10 +332,10 @@ impl ValidatedLock {
             }
             SatisfiesResult::MismatchedWorkspaceDefaultGroups(expected, actual) => {
                 debug!(
-                    "Resolving despite existing lockfile due to mismatched workspace default groups:\n  Requested: {:?}\n  Existing: {:?}",
+                    "Updating existing lockfile due to mismatched workspace default groups:\n  Requested: {:?}\n  Existing: {:?}",
                     expected, actual
                 );
-                Ok(Self::Preferable(lock))
+                Ok(Self::DefaultGroupsChanged(lock))
             }
             SatisfiesResult::MismatchedMemberGroupMetadata(expected, actual) => {
                 debug!(
@@ -543,6 +545,7 @@ impl ValidatedLock {
         match self {
             Self::Unusable(lock) => lock,
             Self::Satisfies(lock) => lock,
+            Self::DefaultGroupsChanged(lock) => lock,
             Self::Preferable(lock) => lock,
             Self::Versions(lock) => lock,
         }

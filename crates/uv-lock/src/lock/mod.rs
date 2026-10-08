@@ -4241,6 +4241,9 @@ impl Lock {
             }
         }
 
+        // Default selection can be updated without resolving only after the graph is validated.
+        let mut default_groups_mismatch = None;
+
         // Older lockfiles did not record defaults, so they remain valid without this check.
         if let Some(actual) = self.configured_member_default_groups() {
             let expected = nonstandard_member_default_groups(
@@ -4261,7 +4264,7 @@ impl Lock {
                     .collect(),
             );
             if expected != actual {
-                return Ok(SatisfiesResult::MismatchedMemberDefaultGroups(
+                default_groups_mismatch = Some(SatisfiesResult::MismatchedMemberDefaultGroups(
                     expected, actual,
                 ));
             }
@@ -4271,8 +4274,9 @@ impl Lock {
         if let Some(expected) = workspace_default_groups
             && let Some(actual) = self.workspace_default_groups()
             && *expected != actual
+            && default_groups_mismatch.is_none()
         {
-            return Ok(SatisfiesResult::MismatchedWorkspaceDefaultGroups(
+            default_groups_mismatch = Some(SatisfiesResult::MismatchedWorkspaceDefaultGroups(
                 expected.clone(),
                 actual,
             ));
@@ -5013,7 +5017,7 @@ impl Lock {
             }
         }
 
-        Ok(SatisfiesResult::Satisfied)
+        Ok(default_groups_mismatch.unwrap_or(SatisfiesResult::Satisfied))
     }
 
     /// Return whether an authorized direct source selects this package in the active context.

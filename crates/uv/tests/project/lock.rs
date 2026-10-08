@@ -5,9 +5,446 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
+use wiremock::{Mock, ResponseTemplate, matchers::any};
+
 use uv_lock::Lock;
 use uv_normalize::DefaultGroups;
+use uv_static::EnvVars;
+use uv_test::package_server::PackageServer;
+use uv_test::packse::generate_wheel;
 use uv_test::uv_snapshot;
+
+async fn default_groups_index() -> Result<PackageServer> {
+    let name = "a".parse()?;
+    let server = PackageServer::new(&name).await;
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    server.serve(&filename, &bytes, None).await;
+    Ok(server)
+}
+
+/// Updating member defaults requires no index access after the graph has been validated.
+#[tokio::test]
+async fn member_default_groups_update_without_resolution() -> Result<()> {
+    let server = default_groups_index().await?;
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let initial = indoc! {r#"
+        [project]
+        name = "root"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        default-groups = ["dev"]
+
+        [dependency-groups]
+        dev = ["a"]
+        docs = []
+    "#};
+    pyproject.write_str(initial)?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+    server.mock_server().reset().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(server.mock_server())
+        .await;
+    pyproject
+        .write_str(&initial.replace("default-groups = [\"dev\"]", "default-groups = [\"docs\"]"))?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--locked", "--no-cache"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .arg("--no-cache")
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let updated = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(updated, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple" }
+        wheels = [
+            { url = "http://[LOCALHOST]/a-1.0.0-py3-none-any.whl", upload-time = "2024-01-01T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "root"
+        version = "1.0.0"
+        source = { virtual = "." }
+        default-groups = ["docs"]
+
+        [package.dev-dependencies]
+        dev = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+
+        [package.metadata.requires-dev]
+        dev = [{ name = "a" }]
+        docs = []
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--locked", "--no-cache"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(updated, context.read("uv.lock"));
+
+    fs_err::remove_file(pyproject.path())?;
+    uv_snapshot!(context.filters(), context.tree().args([
+        "--frozen", "--offline", "--no-cache", "--preview-features", "frozen-lockfile",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    root v1.0.0
+    ");
+    assert_eq!(updated, context.read("uv.lock"));
+    server.mock_server().verify().await;
+    Ok(())
+}
+
+/// Non-project root defaults use the same graph-preserving update path.
+#[tokio::test]
+async fn workspace_default_groups_update_without_resolution() -> Result<()> {
+    let server = default_groups_index().await?;
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let initial = indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+
+        [tool.uv]
+        default-groups = ["dev"]
+
+        [dependency-groups]
+        dev = ["a"]
+        docs = []
+    "#};
+    pyproject.write_str(initial)?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+    server.mock_server().reset().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(server.mock_server())
+        .await;
+    pyproject
+        .write_str(&initial.replace("default-groups = [\"dev\"]", "default-groups = [\"docs\"]"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--locked", "--no-cache"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .arg("--no-cache")
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let updated = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(updated, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [manifest]
+        members = [
+            "member",
+        ]
+        default-groups = ["docs"]
+
+        [manifest.dependency-groups]
+        dev = [{ name = "a" }]
+        docs = []
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple" }
+        wheels = [
+            { url = "http://[LOCALHOST]/a-1.0.0-py3-none-any.whl", upload-time = "2024-01-01T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "member"
+        version = "1.0.0"
+        source = { virtual = "member" }
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--locked", "--no-cache"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(updated, context.read("uv.lock"));
+    server.mock_server().verify().await;
+    Ok(())
+}
+
+/// Metadata-free locks can update defaults only when their dependency edges still satisfy inputs.
+#[tokio::test]
+async fn metadata_free_default_groups_update_without_resolution() -> Result<()> {
+    let server = default_groups_index().await?;
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let initial = indoc! {r#"
+        [project]
+        name = "root"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        preview-features = ["lock-without-metadata"]
+        default-groups = ["dev"]
+
+        [dependency-groups]
+        dev = ["a"]
+        docs = []
+    "#};
+    pyproject.write_str(initial)?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    server.mock_server().reset().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(server.mock_server())
+        .await;
+    let changed_defaults =
+        initial.replace("default-groups = [\"dev\"]", "default-groups = [\"docs\"]");
+    pyproject.write_str(&changed_defaults)?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .arg("--no-cache")
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let updated = context.read("uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(updated, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple" }
+        wheels = [
+            { url = "http://[LOCALHOST]/a-1.0.0-py3-none-any.whl", upload-time = "2024-01-01T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "root"
+        version = "1.0.0"
+        source = { virtual = "." }
+        default-groups = ["docs"]
+
+        [package.dev-dependencies]
+        dev = [
+            { name = "a" },
+        ]
+        docs = []
+        "#);
+    });
+    server.mock_server().verify().await;
+
+    server.mock_server().reset().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(server.mock_server())
+        .await;
+    pyproject.write_str(&changed_defaults.replace("dev = [\"a\"]", "dev = [\"a>=2\"]"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .arg("--no-cache")
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/a/
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/simple/a/)
+    ");
+    assert_eq!(updated, context.read("uv.lock"));
+    server.mock_server().verify().await;
+    Ok(())
+}
+
+/// Default changes cannot bypass graph validation or explicit resolution requests.
+#[tokio::test]
+async fn default_group_changes_still_validate_resolution_inputs() -> Result<()> {
+    let server = default_groups_index().await?;
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let initial = indoc! {r#"
+        [project]
+        name = "root"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        default-groups = ["dev"]
+
+        [dependency-groups]
+        dev = ["a"]
+        docs = []
+    "#};
+    pyproject.write_str(initial)?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let original = context.read("uv.lock");
+    let changed_defaults =
+        initial.replace("default-groups = [\"dev\"]", "default-groups = [\"docs\"]");
+    server.mock_server().reset().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .expect(5)
+        .mount(server.mock_server())
+        .await;
+    let resolve = || {
+        let mut command = context.lock();
+        command
+            .arg("--index-url")
+            .arg(server.index_url())
+            .arg("--no-cache")
+            .env(EnvVars::UV_HTTP_RETRIES, "0");
+        command
+    };
+
+    pyproject.write_str(&changed_defaults.replace("dev = [\"a\"]", "dev = [\"a>=2\"]"))?;
+    uv_snapshot!(context.filters(), resolve(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/a/
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/simple/a/)
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+
+    pyproject.write_str(&changed_defaults.replace(
+        "requires-python = \">=3.12\"",
+        "requires-python = \">=3.12,!=3.13.0\"",
+    ))?;
+    uv_snapshot!(context.filters(), resolve(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/a/
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/simple/a/)
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+
+    pyproject.write_str(&format!("{changed_defaults}\n[tool.uv.dependency-groups]\ndev = {{ requires-python = \">=3.12,!=3.13.0\" }}\n"))?;
+    uv_snapshot!(context.filters(), resolve(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/a/
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/simple/a/)
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+
+    pyproject.write_str(&changed_defaults)?;
+    uv_snapshot!(context.filters(), resolve().arg("--refresh"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/a/
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/simple/a/)
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), resolve().arg("--upgrade"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/a/
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/simple/a/)
+    ");
+    assert_eq!(original, context.read("uv.lock"));
+    server.mock_server().verify().await;
+    Ok(())
+}
 
 /// Record nonstandard workspace member defaults and update them when the selection changes.
 #[test]
