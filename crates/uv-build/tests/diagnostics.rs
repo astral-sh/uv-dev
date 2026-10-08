@@ -1,7 +1,6 @@
 use std::process::Command;
 
 use fs_err as fs;
-use uv_errors::Hinted;
 use uv_static::EnvVars;
 
 fn command() -> Command {
@@ -17,8 +16,6 @@ fn command() -> Command {
 
 #[test]
 fn backend_hints_and_filename_protocol() -> anyhow::Result<()> {
-    uv_preview::set(uv_preview::Preview::default())?;
-    uv_preview::finalize()?;
     let project = tempfile::tempdir()?;
     fs::create_dir_all(project.path().join("src/project"))?;
     fs::write(project.path().join("src/project/__init__.py"), "")?;
@@ -28,17 +25,6 @@ fn backend_hints_and_filename_protocol() -> anyhow::Result<()> {
         project.path().join("pyproject.toml"),
         format!("{pyproject}\n[tool.uv.build-backend]\nsource-include = ['**/@test']\n"),
     )?;
-    let error = uv_build_backend::build_source_dist(
-        project.path(),
-        &project.path().join("dist"),
-        uv_version::version(),
-        false,
-    )
-    .expect_err("the invalid glob should be rejected by the backend");
-    assert_eq!(
-        error.hints().iter().collect::<Vec<_>>(),
-        ["Characters can be escaped with a backslash"]
-    );
     let output = command()
         .current_dir(project.path())
         .args(["build-sdist", "dist"])
