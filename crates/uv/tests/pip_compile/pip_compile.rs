@@ -14968,6 +14968,26 @@ fn invalid_tool_uv_sources() -> Result<()> {
     "
     );
 
+    // A local source error uses the path from the project configuration.
+    let filename = "ok-1.0.0-py3-none-any.whl";
+    context.temp_dir.child(filename).write_binary(&read(
+        context.workspace_root.join("test/links").join(filename),
+    )?)?;
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.0.0"
+        dependencies = ["wrong"]
+
+        [tool.uv.sources]
+        wrong = { path = "ok-1.0.0-py3-none-any.whl" }
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile().arg("pyproject.toml").arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Requested package name `wrong` does not match `ok` in the distribution filename: ok-1.0.0-py3-none-any.whl
+    ");
+
     Ok(())
 }
 

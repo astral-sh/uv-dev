@@ -482,7 +482,7 @@ impl Dist {
                     return Err(Error::PackageNameMismatch(
                         name,
                         filename.name,
-                        url.to_string(),
+                        url.given().map_or_else(|| url.to_string(), str::to_owned),
                     ));
                 }
                 Ok(Self::Built(BuiltDist::Path(PathBuiltDist {
@@ -493,7 +493,9 @@ impl Dist {
             }
             DistExtension::Source(ext) => {
                 if !ext.is_pep625_compliant() {
-                    return Err(Error::NotPep625Filename(url.to_string()));
+                    return Err(Error::NotPep625Filename(
+                        url.given().map_or_else(|| url.to_string(), str::to_owned),
+                    ));
                 }
 
                 // If there is a version in the filename, record it.
