@@ -665,12 +665,10 @@ pub async fn add(
         // the discovered members, etc.
         target = if modified {
             let workspace_content = toml.to_string();
-            edit.write(|| {
-                fs_err::write(
-                    project.workspace().install_path().join("pyproject.toml"),
-                    &workspace_content,
-                )
-            })?;
+            edit.write_file(
+                &project.workspace().install_path().join("pyproject.toml"),
+                workspace_content.as_bytes(),
+            )?;
 
             EditTarget::Project(
                 VirtualProject::discover(
@@ -764,7 +762,7 @@ pub async fn add(
     let content = toml.to_string();
 
     // Save the modified `pyproject.toml` or script.
-    edit.write(|| target.write(&content))?;
+    target.write(&content, &edit)?;
 
     // If `--frozen`, exit early. There's no reason to lock and sync, since we don't need a `uv.lock`
     // to exist at all.
@@ -1242,7 +1240,7 @@ async fn lock_and_sync(
             let content = toml.to_string();
 
             // Write the updated `pyproject.toml` to disk.
-            edit.write(|| target.write(&content))?;
+            target.write(&content, edit)?;
 
             // Update the `pypackage.toml` in-memory.
             target = target.update(&content, &WorkspaceCache::default())?;

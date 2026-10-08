@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
-use std::io;
+use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,12 +9,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 
 use anyhow::Result;
-use tracing::{debug, warn};
+use same_file::Handle;
+use tracing::debug;
 
 use uv_fs::Simplified;
 use uv_lock_operations::LockTarget;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_scripts::{Pep723Metadata, Pep723Script};
+use uv_warnings::warn_user;
 use uv_workspace::pyproject::PyProjectToml;
 use uv_workspace::{VirtualProject, WorkspaceCache};
 
@@ -39,14 +43,16 @@ impl<'lock> From<&'lock EditTarget> for LockTarget<'lock> {
 
 impl EditTarget {
     /// Write the updated metadata, returning whether the content changed.
-    pub(super) fn write(&self, content: &str) -> Result<bool, io::Error> {
+    pub(super) fn write(&self, content: &str, edit: &ProjectEdit) -> Result<bool, io::Error> {
         match self {
             Self::Script(script) => {
                 if content == script.metadata.raw {
                     debug!("No changes to dependencies; skipping update");
                     Ok(false)
                 } else {
-                    script.write(content)?;
+                    script.write_with(content, |path, contents| {
+                        edit.write_file(path, contents.as_bytes())
+                    })?;
                     Ok(true)
                 }
             }
@@ -56,7 +62,7 @@ impl EditTarget {
                     Ok(false)
                 } else {
                     let pyproject_path = project.root().join("pyproject.toml");
-                    fs_err::write(pyproject_path, content)?;
+                    edit.write_file(&pyproject_path, content.as_bytes())?;
                     Ok(true)
                 }
             }
@@ -136,11 +142,9 @@ impl ProjectEdit {
         Ok(Self { state })
     }
 
-    /// Publish a synchronous project or script edit inside the transaction's write fence.
-    ///
-    /// The callback must complete publication before returning.
-    pub(super) fn write<T>(&self, write: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
-        self.state.write(write)
+    /// Publish a tracked file, retaining the written contents and file identity for rollback.
+    pub(super) fn write_file(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        self.state.write_file(path, contents)
     }
 
     /// Publish a lockfile while retaining the transaction fence in the blocking worker.
@@ -185,8 +189,12 @@ impl EditState {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .map(|path| {
-                let contents = read_file(&path)?;
-                Ok(FileSnapshot { path, contents })
+                let original = read_file(&path)?;
+                Ok(FileSnapshot {
+                    path,
+                    original,
+                    written: None,
+                })
             })
             .collect::<io::Result<Vec<_>>>()?;
         Ok(Self {
@@ -198,8 +206,8 @@ impl EditState {
         })
     }
 
-    fn write<T>(&self, write: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
-        let files = self.files.lock().unwrap_or_else(PoisonError::into_inner);
+    fn write<T>(&self, write: impl FnOnce(&mut [FileSnapshot]) -> io::Result<T>) -> io::Result<T> {
+        let mut files = self.files.lock().unwrap_or_else(PoisonError::into_inner);
         if files.finished || self.interrupted.load(Ordering::Acquire) {
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
@@ -208,11 +216,26 @@ impl EditState {
         }
         // Keep the guard until the synchronous write completes. Queuing work while holding it
         // would allow a detached worker to publish after rollback.
-        write()
+        write(&mut files.snapshots)
+    }
+
+    fn write_file(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        self.write(|files| {
+            let snapshot = files
+                .iter_mut()
+                .find(|file| file.path == path)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "file is not tracked by this project edit",
+                    )
+                })?;
+            snapshot.write(contents)
+        })
     }
 
     async fn write_lockfile(self: Arc<Self>, path: PathBuf, contents: String) -> io::Result<()> {
-        tokio::task::spawn_blocking(move || self.write(|| fs_err::write(path, contents)))
+        tokio::task::spawn_blocking(move || self.write_file(&path, contents.as_bytes()))
             .await
             .map_err(io::Error::other)?
     }
@@ -233,52 +256,197 @@ impl EditState {
 
 struct FileSnapshot {
     path: PathBuf,
-    contents: Option<Vec<u8>>,
+    original: Option<FileContents>,
+    written: Option<FileContents>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct FileContents {
+    identity: Handle,
+    contents: Vec<u8>,
 }
 
 impl FileSnapshot {
-    /// Restore the original contents, or remove a file created by the operation.
+    fn write(&mut self, contents: &[u8]) -> io::Result<()> {
+        let expected = self.written.as_ref().or(self.original.as_ref());
+        if read_file(&self.path)?.as_ref() != expected {
+            return Err(io::Error::other(format!(
+                "refusing to overwrite `{}` because it changed outside this project edit",
+                self.path.user_display()
+            )));
+        }
+        // Identify the opened file before truncating it. A newly discovered path must not replace
+        // a file another writer created after the original absent snapshot.
+        let created = expected.is_none();
+        let mut file = fs_err::OpenOptions::new()
+            .write(true)
+            .create_new(created)
+            .truncate(false)
+            .open(&self.path)?;
+        let result = self.write_opened(&mut file, contents);
+        if result.is_err()
+            && created
+            && self.written.is_none()
+            && let Err(err) = remove_created_file(&self.path, file)
+        {
+            warn_user!(
+                "Failed to remove newly created `{}`: {err}",
+                self.path.user_display()
+            );
+        }
+        result
+    }
+
+    fn write_opened(&mut self, file: &mut fs_err::File, contents: &[u8]) -> io::Result<()> {
+        let identity = Handle::from_file(file.file().try_clone()?)?;
+        if let Some(expected) = self.written.as_ref().or(self.original.as_ref())
+            && identity != expected.identity
+        {
+            return Err(io::Error::other(format!(
+                "refusing to overwrite `{}` because it was replaced before publication",
+                self.path.user_display()
+            )));
+        }
+        let written_contents = Vec::with_capacity(contents.len());
+        file.set_len(0)?;
+        let written = self.written.insert(FileContents {
+            identity,
+            contents: written_contents,
+        });
+        // Track successful partial writes too, so an I/O failure does not make their bytes look
+        // like a foreign edit. Interrupted writes follow `write_all` retry semantics.
+        while written.contents.len() < contents.len() {
+            let remaining = &contents[written.contents.len()..];
+            match file.write(remaining) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "failed to write project file",
+                    ));
+                }
+                Ok(count) => written.contents.extend_from_slice(&remaining[..count]),
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    }
+
+    /// Restore only the unchanged version last published by this transaction.
     fn revert(&self) -> io::Result<()> {
-        // An unchanged file may be read-only, even when another file in the edit is writable.
-        if let Ok(contents) = read_file(&self.path)
-            && contents == self.contents
+        if let Err(err) = self.restore_owned() {
+            return match self.save_original() {
+                Ok(Some(path)) => Err(io::Error::new(
+                    err.kind(),
+                    format!(
+                        "{err}; original contents saved to `{}`",
+                        path.user_display()
+                    ),
+                )),
+                Ok(None) => Err(err),
+                Err(recovery) => Err(io::Error::new(
+                    err.kind(),
+                    format!("{err}; failed to save original contents: {recovery}"),
+                )),
+            };
+        }
+        Ok(())
+    }
+
+    fn restore_owned(&self) -> io::Result<()> {
+        let Some(written) = &self.written else {
+            return Ok(());
+        };
+        let current = read_file(&self.path)?;
+        if current.as_ref().map(|file| &file.contents)
+            == self.original.as_ref().map(|file| &file.contents)
         {
             return Ok(());
         }
+        if current.as_ref() != Some(written) {
+            return Err(io::Error::other(
+                "file changed outside this project edit; leaving it unchanged",
+            ));
+        }
 
+        // This is conflict detection, not a filesystem compare-and-swap. Uncooperative writers
+        // can still race the final comparison and restoration.
         debug!("Reverting changes to `{}`", self.path.user_display());
-        if let Some(contents) = &self.contents {
-            fs_err::write(&self.path, contents)
+        if let Some(original) = &self.original {
+            fs_err::write(&self.path, &original.contents)
         } else {
-            match fs_err::remove_file(&self.path) {
-                Ok(()) => Ok(()),
-                Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-                Err(err) => Err(err),
-            }
+            fs_err::remove_file(&self.path)
         }
     }
+
+    fn save_original(&self) -> io::Result<Option<PathBuf>> {
+        let Some(original) = &self.original else {
+            return Ok(None);
+        };
+        let parent = self.path.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "project file has no parent directory",
+            )
+        })?;
+        let mut recovery = tempfile::Builder::new()
+            .prefix(".uv-project-recovery-")
+            .tempfile_in(parent)?;
+        recovery.write_all(&original.contents)?;
+        let (_, path) = recovery.keep().map_err(|err| err.error)?;
+        Ok(Some(path))
+    }
+}
+
+/// Clean up creation when handle setup fails before the first write is recorded.
+fn remove_created_file(path: &Path, file: fs_err::File) -> io::Result<()> {
+    // Consume the original descriptor rather than duplicating it: creation may have used the
+    // process's last available descriptor. Retain it until after the identity comparison.
+    let created = Handle::from_file(file.into_file())?;
+    let current = match fs_err::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    #[cfg(unix)]
+    let same = current.dev() == created.dev() && current.ino() == created.ino();
+    #[cfg(not(unix))]
+    let same = Handle::from_path(path)? == created;
+    if !same || !current.is_file() || current.len() != 0 {
+        return Err(io::Error::other(
+            "file changed outside this project edit; leaving it unchanged",
+        ));
+    }
+    fs_err::remove_file(path)
 }
 
 /// Attempt every restoration even if an earlier file cannot be restored.
 fn revert(files: &mut Vec<FileSnapshot>) {
     for file in files.drain(..) {
         if let Err(err) = file.revert() {
-            warn!("Failed to restore `{}`: {err}", file.path.user_display());
+            warn_user!("Did not restore `{}`: {err}", file.path.user_display());
         }
     }
 }
 
-fn read_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
-    match fs_err::read(path) {
-        Ok(contents) => Ok(Some(contents)),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err),
-    }
+fn read_file(path: &Path) -> io::Result<Option<FileContents>> {
+    let mut file = match fs_err::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)?;
+    Ok(Some(FileContents {
+        identity: Handle::from_file(file.into_file())?,
+        contents,
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::Ordering;
     use std::sync::{Arc, TryLockError, mpsc};
     use std::thread;
@@ -287,7 +455,210 @@ mod tests {
     use anyhow::{Result, anyhow, bail};
     use futures::poll;
 
-    use super::{EditState, read_file};
+    use super::{EditState, FileSnapshot, read_file};
+
+    fn recovery_files(directory: &Path) -> Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        for entry in fs_err::read_dir(directory)? {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".uv-project-recovery-")
+            {
+                paths.push(entry.path());
+            }
+        }
+        Ok(paths)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn created_file_setup_failure_is_cleaned() -> Result<()> {
+        const CHILD: &str = "UV_TEST_PROJECT_EDIT_DESCRIPTOR_LIMIT";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "edit::tests::created_file_setup_failure_is_cleaned",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()?;
+            assert!(output.status.success(), "{output:?}");
+            return Ok(());
+        }
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let state = EditState::new([path.clone()])?;
+        // This limit belongs to the isolated child, never the test runner's other tests.
+        uv_unix::set_open_file_limit(64)?;
+        let mut descriptors = Vec::new();
+        while let Ok(file) = fs_err::File::open("/dev/null") {
+            descriptors.push(file);
+        }
+        // Creation can take the final descriptor, but duplicating it for identity tracking fails.
+        drop(descriptors.pop());
+        let result = state.write_file(&path, b"lock contents");
+        state.finish(false);
+        let exists = path.try_exists()?;
+        drop(descriptors);
+        let Err(error) = result else {
+            bail!("descriptor exhaustion did not fail handle setup");
+        };
+        assert_eq!(error.raw_os_error(), Some(24)); // EMFILE on Unix.
+        assert!(
+            !exists,
+            "setup failure left the newly created lockfile behind"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn created_file_cleanup_preserves_foreign_changes() -> Result<()> {
+        for replacement in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("uv.lock");
+            let file = fs_err::File::create_new(&path)?;
+            if replacement {
+                let external = directory.path().join("external");
+                fs_err::write(&external, "")?;
+                fs_err::rename(external, &path)?;
+            } else {
+                fs_err::write(&path, "external")?;
+            }
+            assert!(super::remove_created_file(&path, file).is_err());
+            assert_eq!(
+                fs_err::read_to_string(&path)?,
+                if replacement { "" } else { "external" }
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn opened_replacement_is_rejected_before_truncation() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("pyproject.toml");
+        fs_err::write(&path, "original")?;
+        let mut snapshot = FileSnapshot {
+            path: path.clone(),
+            original: read_file(&path)?,
+            written: None,
+        };
+        assert_eq!(read_file(&path)?, snapshot.original);
+        // Replace the path after the initial comparison, before opening it for publication.
+        let replacement = directory.path().join("replacement");
+        fs_err::write(&replacement, "external")?;
+        fs_err::rename(replacement, &path)?;
+        let mut opened = fs_err::OpenOptions::new().write(true).open(&path)?;
+        assert!(snapshot.write_opened(&mut opened, b"edited").is_err());
+        assert_eq!(fs_err::read_to_string(&path)?, "external");
+        assert!(snapshot.written.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn untouched_files_are_not_restored() -> Result<()> {
+        for existed in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("uv.lock");
+            if existed {
+                fs_err::write(&path, "original")?;
+            }
+            let state = EditState::new([path.clone()])?;
+            fs_err::write(&path, "external")?;
+            state.finish(false);
+            assert_eq!(fs_err::read_to_string(&path)?, "external");
+            assert!(recovery_files(directory.path())?.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn external_changes_keep_the_original_in_recovery() -> Result<()> {
+        for replacement in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("pyproject.toml");
+            fs_err::write(&path, "original")?;
+            let state = EditState::new([path.clone()])?;
+            state.write_file(&path, b"edited")?;
+            let expected = if replacement {
+                // Identical bytes on a replacement inode still belong to the external writer.
+                let replacement = directory.path().join("replacement");
+                fs_err::write(&replacement, "edited")?;
+                fs_err::rename(replacement, &path)?;
+                "edited"
+            } else {
+                fs_err::write(&path, "external")?;
+                "external"
+            };
+            state.finish(false);
+            assert_eq!(fs_err::read_to_string(&path)?, expected);
+            let recovery = recovery_files(directory.path())?;
+            assert_eq!(recovery.len(), 1);
+            assert_eq!(fs_err::read_to_string(&recovery[0])?, "original");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn external_deletion_is_not_undone() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("pyproject.toml");
+        fs_err::write(&path, "original")?;
+        let state = EditState::new([path.clone()])?;
+        state.write_file(&path, b"edited")?;
+        fs_err::remove_file(&path)?;
+        state.finish(false);
+        assert!(!path.exists());
+        let recovery = recovery_files(directory.path())?;
+        assert_eq!(recovery.len(), 1);
+        assert_eq!(fs_err::read_to_string(&recovery[0])?, "original");
+        Ok(())
+    }
+
+    #[test]
+    fn later_publications_reject_external_changes() -> Result<()> {
+        for owned in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("uv.lock");
+            let state = EditState::new([path.clone()])?;
+            if owned {
+                state.write_file(&path, b"edited")?;
+            }
+            fs_err::write(&path, "external")?;
+            assert!(state.write_file(&path, b"later").is_err());
+            state.finish(false);
+            assert_eq!(fs_err::read_to_string(&path)?, "external");
+            // The snapshot was absent, so there is no original content to save.
+            assert!(recovery_files(directory.path())?.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_and_empty_owned_writes_restore_originals() -> Result<()> {
+        for existed in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("script.py");
+            if existed {
+                fs_err::write(&path, "original")?;
+            }
+            let state = EditState::new([path.clone()])?;
+            state.write_file(&path, b"first")?;
+            state.write_file(&path, b"second")?;
+            state.write_file(&path, b"")?;
+            state.finish(false);
+            assert_eq!(
+                read_file(&path)?.map(|file| file.contents),
+                existed.then(|| b"original".to_vec())
+            );
+            assert!(recovery_files(directory.path())?.is_empty());
+        }
+        Ok(())
+    }
 
     #[test]
     fn interrupt_waits_for_active_publication() -> Result<()> {
@@ -299,12 +670,14 @@ mod tests {
         let (release, resume) = mpsc::channel();
         let writer = thread::spawn({
             let state = Arc::clone(&state);
-            let path = path.clone();
             move || {
-                state.write(|| {
+                state.write(|files| {
                     entered.send(()).map_err(io::Error::other)?;
                     resume.recv().map_err(io::Error::other)?;
-                    fs_err::write(path, "published")
+                    let [file] = files else {
+                        return Err(io::Error::other("expected one tracked file"));
+                    };
+                    file.write(b"published")
                 })
             }
         });
@@ -335,7 +708,7 @@ mod tests {
             .map_err(|_| anyhow!("rollback worker panicked"))??;
         assert_eq!(fs_err::read_to_string(&path)?, "original");
         let error = state
-            .write(|| fs_err::write(&path, "late"))
+            .write_file(&path, b"late")
             .expect_err("an interrupted transaction must reject new writes");
         assert_eq!(error.kind(), io::ErrorKind::Interrupted);
         assert_eq!(fs_err::read_to_string(&path)?, "original");
@@ -348,7 +721,7 @@ mod tests {
         let path = directory.path().join("pyproject.toml");
         fs_err::write(&path, "original")?;
         let state = EditState::new([path.clone()])?;
-        state.write(|| fs_err::write(&path, "edited"))?;
+        state.write_file(&path, b"edited")?;
         state.interrupted.store(true, Ordering::Release);
         state.finish(true);
         assert_eq!(fs_err::read_to_string(&path)?, "original");
@@ -365,7 +738,7 @@ mod tests {
                     fs_err::write(&path, "original")?;
                 }
                 let state = Arc::new(EditState::new([path.clone()])?);
-                state.write(|| fs_err::write(&path, "edited"))?;
+                state.write_file(&path, b"edited")?;
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .max_blocking_threads(1)
@@ -407,7 +780,7 @@ mod tests {
                     None
                 };
                 assert_eq!(
-                    read_file(&path)?,
+                    read_file(&path)?.map(|file| file.contents),
                     expected,
                     "existed={existed}, commit={commit}"
                 );
