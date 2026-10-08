@@ -1922,10 +1922,27 @@ mod test {
         ] {
             let input = format!("({prefix}) {operator} ({})", clauses.join(" or "));
             assert_eq!(m(&input), expected);
-            assert!(
-                MarkerTree::from_str(&format!("{input} {operator} (python_version <)")).is_err()
-            );
         }
+    }
+
+    #[test]
+    fn parse_constant_boolean_chain_trailing_error() {
+        assert_snapshot!(
+            parse_err("(extra == 'a' or extra != 'a') or (python_version < invalid)"),
+            @"
+        Expected a quoted string or a valid marker name, found `invalid`
+        (extra == 'a' or extra != 'a') or (python_version < invalid)
+                                                            ^^^^^^^
+        "
+        );
+        assert_snapshot!(
+            parse_err("(extra == 'a' and extra != 'a') and (python_version < invalid)"),
+            @"
+        Expected a quoted string or a valid marker name, found `invalid`
+        (extra == 'a' and extra != 'a') and (python_version < invalid)
+                                                              ^^^^^^^
+        "
+        );
     }
 
     #[test]
