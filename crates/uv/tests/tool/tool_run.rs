@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -9,7 +11,8 @@ use fs_err::{metadata, set_permissions};
 use indoc::indoc;
 use uv_fs::copy_dir_all;
 use uv_static::EnvVars;
-use uv_test::packse::{PackseServer, scenario::Scenario};
+use uv_test::package_server::PackageServer;
+use uv_test::packse::{PackseServer, generate_wheel, scenario::Scenario};
 use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
@@ -3699,4 +3702,89 @@ async fn tool_run_latest_keyring_auth() {
      + executable-application==0.3.0
     Installed 1 executable: app
     ");
+}
+
+/// Repeated upgrades with the same indexes must still allow reuse of an installed tool.
+#[tokio::test]
+async fn tool_run_from_install_after_index_upgrades() -> Result<()> {
+    let name = "example".parse()?;
+    let server = PackageServer::new(&name).await;
+    for named_index in [false, true] {
+        let context = uv_test::test_context!("3.12").with_tool_dirs();
+        let config = context.temp_dir.child("config.toml");
+        let url = server.index_url();
+        let mut contents = format!("index-url = {url:?}\n");
+        if named_index {
+            write!(
+                contents,
+                "[[index]]\nname = \"named\"\nurl = {url:?}\nexplicit = true\n"
+            )?;
+        }
+        config.write_str(&contents)?;
+        let (filename, bytes) = generate_wheel(
+            &name,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &["example".to_string()],
+        );
+        server.serve(&filename, &bytes, None).await;
+        context
+            .tool_install()
+            .arg("--config-file")
+            .arg(config.path())
+            .arg("example")
+            .assert()
+            .success();
+        let receipt_path = context.temp_dir.child("tools/example/uv-receipt.toml");
+        let read_indexes = || -> Result<toml::Value> {
+            let receipt: toml::Value = toml::from_str(&fs_err::read_to_string(&receipt_path)?)?;
+            receipt["tool"]["options"]
+                .get("index")
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Expected receipt indexes"))
+        };
+        let initial_indexes = read_indexes()?;
+        assert_eq!(
+            initial_indexes.as_array().map(Vec::len),
+            Some(if named_index { 2 } else { 1 })
+        );
+        let mut upgraded_indexes = Vec::new();
+        for version in ["2.0.0", "3.0.0"] {
+            let (filename, bytes) = generate_wheel(
+                &name,
+                &version.parse()?,
+                &[],
+                &BTreeMap::new(),
+                None,
+                "py3-none-any",
+                &["example".to_string()],
+            );
+            server.serve(&filename, &bytes, None).await;
+            context
+                .tool_upgrade()
+                .arg("--config-file")
+                .arg(config.path())
+                .arg("example")
+                .assert()
+                .success();
+            upgraded_indexes.push(read_indexes()?);
+        }
+        fs_err::remove_dir_all(&context.cache_dir)?;
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), context.tool_run()
+                .arg("--config-file").arg(config.path())
+                .args(["--offline", "example"]), @"
+            exit_code: 0 (success)
+            ----- stdout -----
+            Hello from example!
+            ");
+        }
+        for indexes in upgraded_indexes {
+            assert_eq!(indexes, initial_indexes);
+        }
+    }
+    Ok(())
 }

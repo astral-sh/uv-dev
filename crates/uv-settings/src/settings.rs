@@ -2457,16 +2457,32 @@ pub struct ToolOptionsWire {
     torch_backend: Option<TorchMode>,
 }
 
+/// Keep receipt comparisons independent of repeated declarations in configuration layers.
+fn deduplicate_tool_indexes(indexes: Option<Vec<Index>>) -> Option<Vec<Index>> {
+    indexes.map(|mut indexes| {
+        // Keep the first occurrence and the order of distinct indexes. Equality includes policy.
+        let mut unique = 0;
+        for position in 0..indexes.len() {
+            if !indexes[..unique].contains(&indexes[position]) {
+                indexes.swap(unique, position);
+                unique += 1;
+            }
+        }
+        indexes.truncate(unique);
+        indexes
+    })
+}
+
 impl From<ResolverInstallerOptions> for ToolOptions {
     fn from(mut value: ResolverInstallerOptions) -> Self {
         value.indexes = value.indexes.normalize();
         Self {
-            index: value.indexes.index.map(|indexes| {
+            index: deduplicate_tool_indexes(value.indexes.index.map(|indexes| {
                 indexes
                     .into_iter()
                     .map(Index::with_promoted_auth_policy)
                     .collect()
-            }),
+            })),
             index_url: value.indexes.index_url,
             extra_index_url: value.indexes.extra_index_url,
             no_index: value.indexes.no_index,
@@ -2522,7 +2538,7 @@ impl From<ToolOptionsWire> for ToolOptions {
             });
 
         Self {
-            index: value.index,
+            index: deduplicate_tool_indexes(value.index),
             index_url: value.index_url,
             extra_index_url: value.extra_index_url,
             no_index: value.no_index,
