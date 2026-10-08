@@ -7,7 +7,7 @@ use std::{fmt, mem};
 use itertools::Itertools;
 use thiserror::Error;
 use toml_edit::{
-    Array, ArrayOfTables, DocumentMut, Formatted, InlineTable, Item, RawString, Table, TomlError,
+    Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TableLike, TomlError,
     Value,
 };
 
@@ -349,11 +349,6 @@ impl PyProjectTomlMut {
             .cloned()
             .unwrap_or_default();
 
-        let previous_name = table
-            .get("name")
-            .and_then(Item::as_str)
-            .map(ToString::to_string);
-
         // If necessary, update the name.
         if let Some(index) = index.name.as_deref()
             && table
@@ -450,37 +445,24 @@ impl PyProjectTomlMut {
             }
         }
 
-        // Remove any replaced tables.
+        // Remove any replaced tables and retain every name whose sources need updating.
+        let mut previous_names = Vec::new();
         existing.retain(|table| {
-            // If the index has the same name, skip it.
-            if let Some(index) = index.name.as_deref()
-                && table
-                    .get("name")
-                    .and_then(|name| name.as_str())
-                    .is_some_and(|name| name == index)
-            {
-                return false;
-            }
-
-            // If there's another default index, skip it.
-            if index.default
-                && table
-                    .get("default")
-                    .is_some_and(|default| default.as_bool() == Some(true))
-            {
-                return false;
-            }
-
-            // If there's another index with the same URL, skip it.
-            if table
+            let same_name = index
+                .name
+                .as_deref()
+                .is_some_and(|name| table.get("name").and_then(Item::as_str) == Some(name));
+            let replaced_default =
+                index.default && table.get("default").and_then(Item::as_bool) == Some(true);
+            let same_url = table
                 .get("url")
-                .and_then(|item| item.as_str())
-                .is_some_and(|url| index_locations_equal(url, &index.url, root_dir))
-            {
-                return false;
+                .and_then(Item::as_str)
+                .is_some_and(|url| index_locations_equal(url, &index.url, root_dir));
+            let replaced = same_name || replaced_default || same_url;
+            if replaced && let Some(name) = table.get("name").and_then(Item::as_str) {
+                previous_names.push(name.to_owned());
             }
-
-            true
+            !replaced
         });
 
         // Set the position to the minimum, if it's not already the first element.
@@ -502,24 +484,26 @@ impl PyProjectTomlMut {
         existing.push(table);
 
         // Keep source references valid when an equivalent index is renamed.
-        if let Some(previous_name) = previous_name
-            && let Some(name) = index.name.as_deref()
-            && previous_name != name
+        if let Some(name) = index.name.as_deref()
             && let Some(sources) = self
                 .doc
                 .get_mut("tool")
-                .and_then(Item::as_table_mut)
+                .and_then(Item::as_table_like_mut)
                 .and_then(|tool| tool.get_mut("uv"))
-                .and_then(Item::as_table_mut)
+                .and_then(Item::as_table_like_mut)
                 .and_then(|uv| uv.get_mut("sources"))
-                .and_then(Item::as_table_mut)
+                .and_then(Item::as_table_like_mut)
         {
             for (_, source) in sources.iter_mut() {
-                if let Some(source) = source.as_inline_table_mut() {
-                    rename_index_source(source, &previous_name, name);
+                if let Some(source) = source.as_table_like_mut() {
+                    rename_index_source(source, &previous_names, name);
                 } else if let Some(source) = source.as_array_mut() {
                     for source in source.iter_mut().filter_map(Value::as_inline_table_mut) {
-                        rename_index_source(source, &previous_name, name);
+                        rename_index_source(source, &previous_names, name);
+                    }
+                } else if let Some(source) = source.as_array_of_tables_mut() {
+                    for source in source.iter_mut() {
+                        rename_index_source(source, &previous_names, name);
                     }
                 }
             }
@@ -1687,11 +1671,14 @@ fn find_source(name: &PackageName, sources: &Table) -> Option<String> {
     None
 }
 
-fn rename_index_source(source: &mut InlineTable, previous_name: &str, name: &str) {
-    let Some(index) = source.get_mut("index") else {
+fn rename_index_source(source: &mut dyn TableLike, previous_names: &[String], name: &str) {
+    let Some(index) = source.get_mut("index").and_then(Item::as_value_mut) else {
         return;
     };
-    if index.as_str() != Some(previous_name) {
+    if !previous_names
+        .iter()
+        .any(|previous_name| index.as_str() == Some(previous_name.as_str()))
+    {
         return;
     }
 
@@ -2283,6 +2270,71 @@ dependencies = [
 ]
 "#
         );
+    }
+
+    #[test]
+    fn add_index_renames_all_replaced_source_tables() -> Result<()> {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"[project]
+name = "project"
+version = "0.1.0"
+dependencies = ["inline", "array", "table", "tables"]
+
+[tool.uv.sources]
+inline = { index = "old-a" }
+array = [{ index = "old-b", marker = "sys_platform == 'linux'" }, { index = "old-a", marker = "sys_platform != 'linux'" }]
+
+[tool.uv.sources.table]
+index = "old-b"
+
+[[tool.uv.sources.tables]]
+index = "old-a"
+marker = "sys_platform == 'linux'"
+
+[[tool.uv.sources.tables]]
+index = "old-b"
+marker = "sys_platform != 'linux'"
+
+[[tool.uv.index]]
+name = "old-a"
+url = "https://example.com/simple"
+
+[[tool.uv.index]]
+name = "old-b"
+url = "https://example.com/simple"
+"#,
+            DependencyTarget::PyProjectToml,
+        )?;
+        doc.add_index(
+            &Index::from_str("new=https://example.com/simple")?,
+            Path::new("."),
+        )?;
+        assert_snapshot!(doc.to_string(), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = ["inline", "array", "table", "tables"]
+
+        [tool.uv.sources]
+        inline = { index = "new" }
+        array = [{ index = "new", marker = "sys_platform == 'linux'" }, { index = "new", marker = "sys_platform != 'linux'" }]
+
+        [[tool.uv.index]]
+        name = "new"
+        url = "https://example.com/simple"
+
+        [tool.uv.sources.table]
+        index = "new"
+
+        [[tool.uv.sources.tables]]
+        index = "new"
+        marker = "sys_platform == 'linux'"
+
+        [[tool.uv.sources.tables]]
+        index = "new"
+        marker = "sys_platform != 'linux'"
+        "#);
+        Ok(())
     }
 
     #[test]

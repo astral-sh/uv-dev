@@ -11789,11 +11789,7 @@ fn add_index_renames_existing_sources() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").arg("--index").arg(format!("new={}", index_url.trim_end_matches('/'))).arg("--frozen"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
-    ----- stderr -----
+    exit_code: 0 (success)
     ");
 
     insta::with_settings!({filters => context.filters()}, {
@@ -11819,10 +11815,7 @@ fn add_index_renames_existing_sources() -> Result<()> {
     });
 
     uv_snapshot!(context.filters(), context.lock(), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
