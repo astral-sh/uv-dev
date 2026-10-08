@@ -45,9 +45,19 @@ pub enum CredentialsFromUrlError {
     InvalidPasswordUtf8(#[source] Utf8Error),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Username(Option<String>);
+
+impl fmt::Debug for Username {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Usernames can contain tokens, and this type has no context to distinguish them.
+        formatter
+            .debug_tuple("Username")
+            .field(&self.0.as_ref().map(|_| "****"))
+            .finish()
+    }
+}
 
 impl Username {
     /// Create a new username.
@@ -860,7 +870,14 @@ mod tests {
     fn test_password_redaction() {
         let credentials =
             Credentials::basic(Some(String::from("user")), Some(String::from("password")));
-        insta::assert_compact_debug_snapshot!(credentials, @r#"Basic { username: Username(Some("user")), password: Some(****) }"#);
+        insta::assert_compact_debug_snapshot!(credentials, @r#"Basic { username: Username(Some("****")), password: Some(****) }"#);
+    }
+
+    #[test]
+    fn test_username_token_redaction() {
+        let credentials = Credentials::basic(Some("synthetic-token".to_string()), None);
+        insta::assert_compact_debug_snapshot!(credentials, @r#"Basic { username: Username(Some("****")), password: None }"#);
+        assert_eq!(credentials.username(), Some("synthetic-token"));
     }
 
     /// Bearer credentials should be redacted in debug output.
