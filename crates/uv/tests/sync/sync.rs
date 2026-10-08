@@ -2594,61 +2594,102 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
 
 #[test]
 fn check_script_recovery_keeps_invocation() -> Result<()> {
-    for locked in [false, true] {
-        let context = uv_test::test_context!("3.12");
-        let (filename, wheel) = generate_wheel(
-            &"demo".parse()?,
-            &"1.0.0".parse()?,
-            &[],
-            &BTreeMap::default(),
-            None,
-            "py3-none-any",
-            &[],
-        );
-        let wheel_path = context.temp_dir.child(filename);
-        fs_err::write(&wheel_path, wheel)?;
-        let wheel_url =
-            Url::from_file_path(wheel_path.path()).map_err(|()| anyhow!("absolute wheel path"))?;
-        let script = context.temp_dir.child("script with spaces.py");
-        script.write_str(&formatdoc! {r#"
-            # /// script
-            # requires-python = ">=3.12"
-            # dependencies = ["demo @ {wheel_url}"]
-            # ///
-        "#})?;
-        if locked {
-            context
-                .lock()
-                .arg("--script")
-                .arg(script.path())
-                .arg("--offline")
-                .assert()
-                .success();
-        }
-        let command = || {
-            let mut command = context.sync();
-            command
-                .arg("--script")
-                .arg(script.path())
-                .args(["--offline", "--quiet"]);
-            command
-        };
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), command().arg("--check"), @"
-            exit_code: 1 (failure)
-            ----- stderr -----
-            error: The environment is outdated
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    fs_err::write(&wheel_path, wheel)?;
+    let wheel_url =
+        Url::from_file_path(wheel_path.path()).map_err(|()| anyhow!("absolute wheel path"))?;
+    let script = context.temp_dir.child("script with spaces.py");
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["demo @ {wheel_url}"]
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet", "--check"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The environment is outdated
 
-            hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
-            ");
-        }
-        command().assert().success();
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), command().arg("--check"), @"
-            exit_code: 0 (success)
-            ");
-        }
-    }
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
+    ");
+    context
+        .sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet", "--check"]), @"exit_code: 0 (success)");
+    Ok(())
+}
+
+#[test]
+fn check_locked_script_recovery_keeps_invocation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    fs_err::write(&wheel_path, wheel)?;
+    let wheel_url =
+        Url::from_file_path(wheel_path.path()).map_err(|()| anyhow!("absolute wheel path"))?;
+    let script = context.temp_dir.child("script with spaces.py");
+    script.write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["demo @ {wheel_url}"]
+        # ///
+    "#})?;
+    context
+        .lock()
+        .arg("--script")
+        .arg(script.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet", "--check"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The environment is outdated
+
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
+    ");
+    context
+        .sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--script")
+        .arg(script.path())
+        .args(["--offline", "--quiet", "--check"]), @"exit_code: 0 (success)");
     Ok(())
 }
 
@@ -2678,17 +2719,10 @@ fn check_project_group_recovery_keeps_invocation() -> Result<()> {
         [dependency-groups]
         selected = ["demo @ {wheel_url}"]
     "#})?;
-    let command = || {
-        let mut command = context.sync();
-        command.arg("--project").arg(project.path()).args([
-            "--only-group",
-            "selected",
-            "--offline",
-            "--quiet",
-        ]);
-        command
-    };
-    uv_snapshot!(context.filters(), command().args(["--check", "--dry-run"]), @"
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--project")
+        .arg(project.path())
+        .args(["--only-group", "selected", "--offline", "--quiet"]).args(["--check", "--dry-run"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: The environment is outdated
@@ -2696,8 +2730,18 @@ fn check_project_group_recovery_keeps_invocation() -> Result<()> {
     hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
     ");
     // Removing only `--check` still leaves the environment unchanged.
-    command().arg("--dry-run").assert().success();
-    uv_snapshot!(context.filters(), command().arg("--check"), @"
+    context
+        .sync()
+        .arg("--project")
+        .arg(project.path())
+        .args(["--only-group", "selected", "--offline", "--quiet"])
+        .arg("--dry-run")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--project")
+        .arg(project.path())
+        .args(["--only-group", "selected", "--offline", "--quiet"]).arg("--check"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: The environment is outdated
@@ -2705,10 +2749,17 @@ fn check_project_group_recovery_keeps_invocation() -> Result<()> {
     hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
     ");
 
-    command().assert().success();
-    uv_snapshot!(context.filters(), command().arg("--check"), @"
-    exit_code: 0 (success)
-    ");
+    context
+        .sync()
+        .arg("--project")
+        .arg(project.path())
+        .args(["--only-group", "selected", "--offline", "--quiet"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--project")
+        .arg(project.path())
+        .args(["--only-group", "selected", "--offline", "--quiet"]).arg("--check"), @"exit_code: 0 (success)");
     Ok(())
 }
 
