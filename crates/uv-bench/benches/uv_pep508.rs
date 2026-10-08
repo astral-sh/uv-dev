@@ -5,7 +5,7 @@ use criterion::{Criterion, criterion_group, criterion_main, measurement::WallTim
 use uv_pep508::MarkerTree;
 
 fn visit_extras(c: &mut Criterion<WallTime>) {
-    for width in [16, 64, 256] {
+    for width in [1, 7, 8, 16, 64, 256] {
         let conditions = (0..width)
             .map(|index| format!("platform_machine == 'machine-{index:08}'"))
             .collect::<Vec<_>>()
