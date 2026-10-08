@@ -357,16 +357,20 @@ pub async fn pip_sync(
     // Determine the set of installed packages.
     let site_packages = SitePackages::from_environment(&environment)?;
 
-    // Initialize services only when resolving requirements or executing an installation plan.
-    let init_services = || async {
-        // Initialize the registry client.
-        let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
+    // Remote lockfiles can use credentials from the configured indexes before a registry client
+    // is needed for resolution or installation.
+    let mut registry_client_builder =
+        RegistryClientBuilder::new(client_builder.clone(), cache.clone())
             .index_locations(index_locations.clone())
             .index_strategy(index_strategy)
             .torch_backend(torch_backend.clone())
             .markers(interpreter.markers())
-            .platform(interpreter.platform())
-            .build()?;
+            .platform(interpreter.platform());
+    registry_client_builder.cache_index_credentials()?;
+
+    // Initialize services only when resolving requirements or executing an installation plan.
+    let init_services = || async {
+        let client = registry_client_builder.clone().build()?;
 
         let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;
         Ok::<_, anyhow::Error>((client, flat_index, SharedState::default()))

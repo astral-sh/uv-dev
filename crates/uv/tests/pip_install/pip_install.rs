@@ -14189,6 +14189,96 @@ fn pep_751_install_directory() -> Result<()> {
 }
 
 #[tokio::test]
+async fn pep_751_remote_uses_index_credentials_before_planning() -> Result<()> {
+    let server = MockServer::start().await;
+    let (filename, wheel) = generate_wheel(
+        &"foo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let hash = hex::encode(Sha256::digest(&wheel));
+    let lock = formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "foo"
+        version = "1.0.0"
+        wheels = [{{ url = "{url}/{filename}", size = {size}, hashes = {{ sha256 = "{hash}" }} }}]
+    "#, url = server.uri(), size = wheel.len()};
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .and(basic_auth("user", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(lock))
+        .with_priority(1)
+        .expect(8)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/unused"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    for sync in [false, true] {
+        for named in [false, true] {
+            let context = uv_test::test_context!("3.12");
+            let command = || {
+                let mut command = if sync {
+                    context.pip_sync()
+                } else {
+                    let mut command = context.pip_install();
+                    command.arg("-r");
+                    command
+                };
+                command
+                    .arg(format!("{}/pylock.toml", server.uri()))
+                    .arg("--preview");
+                if named {
+                    command
+                        .arg("--index")
+                        .arg(format!("private={}/simple", server.uri()))
+                        .env("UV_INDEX_PRIVATE_USERNAME", "user")
+                        .env("UV_INDEX_PRIVATE_PASSWORD", "password");
+                } else {
+                    command.arg("--index-url").arg(format!(
+                        "{}/simple",
+                        server.uri().replace("http://", "http://user:password@")
+                    ));
+                }
+                command
+            };
+            command().assert().success();
+            assert!(context.site_packages().join("foo-1.0.0.dist-info").is_dir());
+            insta::allow_duplicates! {
+                uv_snapshot!(context.filters(), command().arg("--find-links").arg(format!("{}/unused", server.uri())), @"
+                exit_code: 0 (success)
+                ----- stderr -----
+                Checked 1 package in [TIME]
+                ");
+            }
+        }
+    }
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn pep_751_noop_skips_build_indexes() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let pyproject = context.temp_dir.child("foo/pyproject.toml");
