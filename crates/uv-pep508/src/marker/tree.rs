@@ -1893,6 +1893,31 @@ mod test {
     }
 
     #[test]
+    fn parse_large_boolean_chains() {
+        let mut clauses = Vec::new();
+        let mut at_most_one = MarkerTree::TRUE;
+        for left in 0..12 {
+            for right in left + 1..12 {
+                let left = format!("extra == 'item-{left:02}'");
+                let right = format!("extra == 'item-{right:02}'");
+                clauses.push(format!("({left} and {right})"));
+                at_most_one = at_most_one.and(m(&left).negate().or(m(&right).negate()));
+            }
+        }
+        assert_eq!(m(&clauses.join(" or ")), at_most_one.negate());
+        clauses.reverse();
+        assert_eq!(m(&clauses.join(" or ")), at_most_one.negate());
+
+        let conjunction = (0..37)
+            .map(|index| format!("(extra == 'item-{index:02}' or sys_platform == 'linux')"))
+            .collect::<Vec<_>>();
+        let expected = conjunction
+            .iter()
+            .fold(MarkerTree::TRUE, |marker, term| marker.and(m(term)));
+        assert_eq!(m(&conjunction.join(" and ")), expected);
+    }
+
+    #[test]
     fn darwin_platform_release() {
         let baseline = m("sys_platform == 'darwin' and platform_release == '24.0.0'");
         assert!(!baseline.is_disjoint(m("platform_release >= '9.0.0'")));
