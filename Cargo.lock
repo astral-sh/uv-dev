@@ -7428,6 +7428,7 @@ name = "uv-pyproject-toml"
 version = "0.0.92"
 dependencies = [
  "indexmap",
+ "insta",
  "serde",
  "toml",
  "uv-normalize",
