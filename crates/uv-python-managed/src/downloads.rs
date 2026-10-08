@@ -1366,7 +1366,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn relative_installation_minor_link_resolves() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
+        let root = tempfile::tempdir_in(std::env::current_dir()?)?;
         let download = cpython_download_for_url("https://example.com/python.tar.gz");
         let installed = root.path().join(download.key().to_string());
         fs_err::create_dir_all(installed.join("bin"))?;
