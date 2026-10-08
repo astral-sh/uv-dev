@@ -2413,14 +2413,18 @@ fn python_install_preserves_unrelated_toolchains() -> Result<()> {
     toolchains.child("important.txt").write_str("keep me")?;
     let install_dir = state.child("custom-python");
 
-    context
-        .python_install()
+    uv_snapshot!(context.filters(), context.python_install()
         .arg("--offline")
         .arg("--install-dir")
         .arg(install_dir.path())
-        .arg("3.12")
-        .assert()
-        .failure();
+        .arg("3.12"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Python downloads are not allowed (`python-downloads = "never"`). Change to `python-downloads = "manual"` to allow explicit installs.
+    "#);
+    install_dir
+        .child(".gitignore")
+        .assert(predicate::path::exists());
 
     toolchains.child("important.txt").assert("keep me");
     install_dir
