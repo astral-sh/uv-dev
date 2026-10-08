@@ -42758,10 +42758,7 @@ fn lock_exclude_newer_index_locked() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--preview-features").arg("index-exclude-newer"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
@@ -42786,10 +42783,7 @@ fn lock_exclude_newer_index_locked() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
-    success: false
-    exit_code: 1
-    ----- stdout -----
-
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
@@ -42832,10 +42826,7 @@ fn lock_exclude_newer_index_locked_transitive_boundary() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--preview-features").arg("index-exclude-newer"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
     ");
@@ -42859,7 +42850,7 @@ fn lock_exclude_newer_index_locked_transitive_boundary() -> Result<()> {
         name = "internal"
         url = "https://pypi.org/simple"
         explicit = true
-        exclude-newer = "2024-03-01T00:00:00Z"
+        exclude-newer = "2024-03-01T00:00:00.000001Z"
         "#,
     )?;
 
@@ -42876,10 +42867,7 @@ fn lock_exclude_newer_index_locked_transitive_boundary() -> Result<()> {
     lockfile.write_str(&at_cutoff_with_usable)?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
     ");
@@ -42890,10 +42878,7 @@ fn lock_exclude_newer_index_locked_transitive_boundary() -> Result<()> {
     lockfile.write_str(&missing_upload_time_with_usable)?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
     ");
@@ -42911,15 +42896,63 @@ fn lock_exclude_newer_index_locked_transitive_boundary() -> Result<()> {
     lockfile.write_str(&at_cutoff)?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
-    success: false
-    exit_code: 1
-    ----- stdout -----
-
+    exit_code: 1 (failure)
     ----- stderr -----
     Resolved 4 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
     hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
+/// Flat indexes have no upload timestamps and remain reusable with an explicit cutoff.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_flat_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        links.child("ok-1.0.0-py3-none-any.whl"),
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+
+        [tool.uv.sources]
+        ok = { index = "local" }
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "./links"
+        format = "flat"
+        explicit = true
+        exclude-newer = "2000-01-01T00:00:00Z"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("index-exclude-newer")
+        .arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
     ");
 
     Ok(())

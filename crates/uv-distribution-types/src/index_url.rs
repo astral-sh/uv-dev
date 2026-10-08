@@ -17,7 +17,7 @@ use uv_pypi_types::HashAlgorithm;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
 
-use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Verbatim};
+use crate::{ExcludeNewerOverride, Index, IndexFormat, IndexStatusCodeStrategy, Verbatim};
 
 pub static PYPI_URL: LazyLock<DisplaySafeUrl> =
     LazyLock::new(|| DisplaySafeUrl::parse("https://pypi.org/simple").unwrap());
@@ -513,9 +513,11 @@ impl<'a> IndexLocations {
             .and_then(|index| index.hash_algorithm.map(HashAlgorithm::from))
     }
 
-    /// Return the `exclude-newer` setting for a given index, if the index is configured.
+    /// Return the `exclude-newer` setting for a configured simple index.
     pub fn exclude_newer_for(&self, url: &IndexUrl) -> Option<&ExcludeNewerOverride> {
-        self.index_for_url(url).and_then(Index::exclude_newer)
+        self.index_for_url(url)
+            .filter(|index| index.format != IndexFormat::Flat)
+            .and_then(Index::exclude_newer)
     }
 }
 

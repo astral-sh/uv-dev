@@ -4668,7 +4668,9 @@ impl Lock {
                     .map(SourceDist::upload_time)
                     .chain(package.wheels.iter().map(|wheel| wheel.upload_time))
                     .all(|upload_time| {
-                        upload_time.is_none_or(|upload_time| upload_time >= exclude_newer)
+                        upload_time.is_none_or(|upload_time| {
+                            upload_time.as_millisecond() >= exclude_newer.as_millisecond()
+                        })
                     })
             {
                 let Some(version) = package.id.version.as_ref() else {
