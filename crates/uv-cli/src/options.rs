@@ -544,58 +544,90 @@ impl Args for IndexArgs {
     }
 }
 
+struct IndexArgumentSources {
+    index: Option<ValueSource>,
+    default_index: Option<ValueSource>,
+    index_url: Option<ValueSource>,
+    extra_index_url: Option<ValueSource>,
+}
+
+impl From<&ArgMatches> for IndexArgumentSources {
+    fn from(matches: &ArgMatches) -> Self {
+        Self {
+            index: matches.value_source("index"),
+            default_index: matches.value_source("default_index"),
+            index_url: matches.value_source("index_url"),
+            extra_index_url: matches.value_source("extra_index_url"),
+        }
+    }
+}
+
 impl FromArgMatches for IndexArgs {
     fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
+        let sources = IndexArgumentSources::from(matches);
         let mut args = Self {
             cli: IndexOptionsArgs::from_arg_matches(matches)?,
             environment: IndexOptionsArgs::default(),
         };
-        args.partition_environment(matches);
+        args.partition_environment(sources);
+        Ok(args)
+    }
+
+    fn from_arg_matches_mut(matches: &mut ArgMatches) -> Result<Self, clap::Error> {
+        let sources = IndexArgumentSources::from(&*matches);
+        let mut args = Self {
+            cli: IndexOptionsArgs::from_arg_matches_mut(matches)?,
+            environment: IndexOptionsArgs::default(),
+        };
+        args.partition_environment(sources);
         Ok(args)
     }
 
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
+        let sources = IndexArgumentSources::from(matches);
         self.cli.update_from_arg_matches(matches)?;
-        self.partition_environment(matches);
+        self.partition_environment(sources);
+        Ok(())
+    }
+
+    fn update_from_arg_matches_mut(&mut self, matches: &mut ArgMatches) -> Result<(), clap::Error> {
+        let sources = IndexArgumentSources::from(&*matches);
+        self.cli.update_from_arg_matches_mut(matches)?;
+        self.partition_environment(sources);
         Ok(())
     }
 }
 
 impl IndexArgs {
-    fn partition_environment(&mut self, matches: &ArgMatches) {
+    fn partition_environment(&mut self, sources: IndexArgumentSources) {
         fn partition<T>(
-            matches: &ArgMatches,
-            name: &str,
+            source: Option<ValueSource>,
             cli: &mut Option<T>,
             environment: &mut Option<T>,
         ) {
-            if matches.value_source(name) == Some(ValueSource::EnvVariable) {
+            if source == Some(ValueSource::EnvVariable) {
                 *environment = cli.take();
-            } else if matches.value_source(name) == Some(ValueSource::CommandLine) {
+            } else if source == Some(ValueSource::CommandLine) {
                 *environment = None;
             }
         }
         partition(
-            matches,
-            "index",
+            sources.index,
             &mut self.cli.index,
             &mut self.environment.index,
         );
         partition(
-            matches,
-            "default_index",
+            sources.default_index,
             &mut self.cli.default_index,
             &mut self.environment.default_index,
         );
         partition(
-            matches,
-            "index_url",
+            sources.index_url,
             &mut self.cli.index_url,
             &mut self.environment.index_url,
         );
         partition(
-            matches,
-            "extra_index_url",
+            sources.extra_index_url,
             &mut self.cli.extra_index_url,
             &mut self.environment.extra_index_url,
         );
@@ -617,28 +649,30 @@ impl IndexArgs {
             .is_some_and(|indexes| indexes.iter().any(Maybe::is_some))
     }
 
-    /// Resolve the modern declarations used for index persistence, excluding legacy URL flags.
-    pub(crate) fn modern_indexes(
-        &self,
-        configured_indexes: &[Index],
-    ) -> anyhow::Result<Vec<Index>> {
-        let mut args = self.clone();
-        args.cli.index_url = None;
-        args.cli.extra_index_url = None;
-        args.environment.index_url = None;
-        args.environment.extra_index_url = None;
-        Ok(args
-            .resolve(configured_indexes)?
-            .relative_to(&env::current_dir()?)?
-            .index
-            .unwrap_or_default())
+    fn resolve(self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
+        self.resolve_with_declarations(configured_indexes, false)
+            .map(|(options, _)| options)
     }
 
-    fn resolve(self, configured_indexes: &[Index]) -> anyhow::Result<IndexOptions> {
-        Ok(self
-            .cli
-            .resolve(configured_indexes)?
-            .combine(self.environment.resolve(configured_indexes)?))
+    fn resolve_with_declarations(
+        self,
+        configured_indexes: &[Index],
+        collect_declarations: bool,
+    ) -> anyhow::Result<(IndexOptions, Vec<Index>)> {
+        let cli = self.cli.resolve(configured_indexes)?;
+        let environment = self.environment.resolve(configured_indexes)?;
+        // The editor only persists modern declarations, before legacy URLs are normalized.
+        let declarations = if collect_declarations {
+            cli.index
+                .iter()
+                .flatten()
+                .chain(environment.index.iter().flatten())
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok((cli.combine(environment), declarations))
     }
 }
 
@@ -840,6 +874,35 @@ pub(crate) fn resolver_installer_options(
     build_args: BuildOptionsArgs,
     configured_indexes: &[Index],
 ) -> anyhow::Result<ResolverInstallerOptions> {
+    resolver_installer_options_inner(
+        resolver_installer_args,
+        build_args,
+        configured_indexes,
+        false,
+    )
+    .map(|(options, _)| options)
+}
+
+/// Resolve installer options and modern index declarations for the project editor.
+pub(crate) fn resolver_installer_options_with_index_declarations(
+    resolver_installer_args: ResolverInstallerArgs,
+    build_args: BuildOptionsArgs,
+    configured_indexes: &[Index],
+) -> anyhow::Result<(ResolverInstallerOptions, Vec<Index>)> {
+    resolver_installer_options_inner(
+        resolver_installer_args,
+        build_args,
+        configured_indexes,
+        true,
+    )
+}
+
+fn resolver_installer_options_inner(
+    resolver_installer_args: ResolverInstallerArgs,
+    build_args: BuildOptionsArgs,
+    configured_indexes: &[Index],
+    collect_declarations: bool,
+) -> anyhow::Result<(ResolverInstallerOptions, Vec<Index>)> {
     let ResolverInstallerArgs {
         index_args,
         upgrade,
@@ -902,8 +965,11 @@ pub(crate) fn resolver_installer_options(
         no_binary_package,
     } = build_args;
 
-    ResolverInstallerOptions {
-        indexes: index_args.resolve(configured_indexes)?,
+    let (indexes, declarations) =
+        index_args.resolve_with_declarations(configured_indexes, collect_declarations)?;
+    let root = env::current_dir()?;
+    let options = ResolverInstallerOptions {
+        indexes,
         upgrade: Upgrade::from_args(
             flag(upgrade, no_upgrade, "upgrade")?,
             upgrade_package.into_iter().map(Requirement::from).collect(),
@@ -961,6 +1027,10 @@ pub(crate) fn resolver_installer_options(
         },
         torch_backend: None,
     }
-    .relative_to(&env::current_dir()?)
-    .map_err(Into::into)
+    .relative_to(&root)?;
+    let declarations = declarations
+        .into_iter()
+        .map(|index| index.relative_to(&root))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((options, declarations))
 }

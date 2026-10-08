@@ -210,13 +210,13 @@ impl FilesystemOptions {
 
         let options = read_file(path)?;
         validate_uv_toml(path, &options)?;
-        Ok(Self(options))
+        Ok(Self(options.normalize_indexes()))
     }
 }
 
 impl From<Options> for FilesystemOptions {
     fn from(options: Options) -> Self {
-        Self(options)
+        Self(options.normalize_indexes())
     }
 }
 

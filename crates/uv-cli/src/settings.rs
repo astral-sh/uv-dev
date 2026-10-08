@@ -71,7 +71,8 @@ use crate::{
     ResolverArgs, ResolverInstallerArgs, ToolUpgradeArgs,
     options::{
         Flag, FlagSource, IntoPipOptions, check_conflicts, flag, resolve_flag, resolve_flag_pair,
-        resolver_installer_options, resolver_options, upgrade_options,
+        resolver_installer_options, resolver_installer_options_with_index_declarations,
+        resolver_options, upgrade_options,
     },
 };
 
@@ -2433,11 +2434,11 @@ impl AddSettings {
             no_editable_package,
         );
         let refresh = Refresh::try_from(refresh)?;
-        let indexes = installer
-            .index_args
-            .modern_indexes(configured_indexes(filesystem.as_ref()))?;
-        let options =
-            resolver_installer_options(installer, build, configured_indexes(filesystem.as_ref()))?;
+        let (options, indexes) = resolver_installer_options_with_index_declarations(
+            installer,
+            build,
+            configured_indexes(filesystem.as_ref()),
+        )?;
 
         Ok(Self {
             lock_check: locked,

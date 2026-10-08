@@ -5,7 +5,7 @@ use assert_cmd::prelude::*;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
-use predicates::prelude::predicate;
+use predicates::prelude::{PredicateStrExt, predicate};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 #[cfg(feature = "test-git")]
@@ -19386,5 +19386,367 @@ fn project_build_hashes_locked_script_run_with_no_sync() -> Result<()> {
     package
         .child("backend-executed")
         .assert(predicate::path::missing());
+    Ok(())
+}
+
+/// Legacy and modern index flags obey the same CLI, environment, and configuration precedence.
+#[tokio::test]
+async fn index_precedence_across_sources() -> Result<()> {
+    let fixture = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &fs_err::read(
+                fixture
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            )?,
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &fs_err::read(
+                fixture
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            )?,
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    let modern_default = format!("[[index]]\nurl = {fallback_url:?}\ndefault = true\n");
+    let modern_extra = format!("[[index]]\nurl = {fallback_url:?}\n");
+    let legacy_default = format!("index-url = {fallback_url:?}\n");
+    let legacy_extra = format!("extra-index-url = [{fallback_url:?}]\n");
+    for (configuration, arguments, environment, expected_version, expected_url) in [
+        (
+            modern_default.as_str(),
+            vec![("--index-url", preferred_url.as_str())],
+            vec![],
+            "1.0.0",
+            preferred_url.as_str(),
+        ),
+        (
+            modern_extra.as_str(),
+            vec![("--extra-index-url", preferred_url.as_str())],
+            vec![],
+            "1.0.0",
+            preferred_url.as_str(),
+        ),
+        (
+            legacy_default.as_str(),
+            vec![("--default-index", preferred_url.as_str())],
+            vec![],
+            "1.0.0",
+            preferred_url.as_str(),
+        ),
+        (
+            legacy_extra.as_str(),
+            vec![("--index", preferred_url.as_str())],
+            vec![],
+            "1.0.0",
+            preferred_url.as_str(),
+        ),
+        (
+            "",
+            vec![("--index-url", preferred_url.as_str())],
+            vec![(EnvVars::UV_DEFAULT_INDEX, fallback_url.as_str())],
+            "1.0.0",
+            preferred_url.as_str(),
+        ),
+        (
+            "",
+            vec![("--default-index", preferred_url.as_str())],
+            vec![(EnvVars::UV_INDEX_URL, fallback_url.as_str())],
+            "1.0.0",
+            preferred_url.as_str(),
+        ),
+        (
+            "",
+            vec![("--extra-index-url", preferred_url.as_str())],
+            vec![(EnvVars::UV_INDEX, fallback_url.as_str())],
+            "1.0.0",
+            preferred_url.as_str(),
+        ),
+        (
+            "",
+            vec![("--index", preferred_url.as_str())],
+            vec![(EnvVars::UV_EXTRA_INDEX_URL, fallback_url.as_str())],
+            "1.0.0",
+            preferred_url.as_str(),
+        ),
+        (
+            "",
+            vec![
+                ("--index-url", preferred_url.as_str()),
+                ("--default-index", fallback_url.as_str()),
+            ],
+            vec![],
+            "2.0.0",
+            fallback_url.as_str(),
+        ),
+        (
+            "",
+            vec![
+                ("--extra-index-url", preferred_url.as_str()),
+                ("--index", fallback_url.as_str()),
+            ],
+            vec![],
+            "2.0.0",
+            fallback_url.as_str(),
+        ),
+        (
+            modern_extra.as_str(),
+            vec![("--default-index", preferred_url.as_str())],
+            vec![],
+            "2.0.0",
+            fallback_url.as_str(),
+        ),
+        (
+            modern_extra.as_str(),
+            vec![("--index-url", preferred_url.as_str())],
+            vec![],
+            "2.0.0",
+            fallback_url.as_str(),
+        ),
+    ] {
+        let context = uv_test::test_context!("3.12");
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["ok"]
+        "#})?;
+        context.temp_dir.child("uv.toml").write_str(configuration)?;
+        for mut command in [context.lock(), context.sync()] {
+            for variable in [
+                EnvVars::UV_INDEX,
+                EnvVars::UV_DEFAULT_INDEX,
+                EnvVars::UV_INDEX_URL,
+                EnvVars::UV_EXTRA_INDEX_URL,
+            ] {
+                command.env_remove(variable);
+            }
+            for (flag, value) in &arguments {
+                command.args([*flag, *value]);
+            }
+            command.envs(environment.iter().copied()).assert().success();
+        }
+        context.assert_installed("ok", expected_version);
+        let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+        let package = lock["package"]
+            .as_array()
+            .and_then(|packages| {
+                packages
+                    .iter()
+                    .find(|package| package["name"].as_str() == Some("ok"))
+            })
+            .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+        assert_eq!(package["version"].as_str(), Some(expected_version));
+        assert_eq!(package["source"]["registry"].as_str(), Some(expected_url));
+    }
+    Ok(())
+}
+
+/// Configuration files are ordered by source before legacy spellings are combined with modern ones.
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_across_configuration_files() -> Result<()> {
+    let fixture = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &fs_err::read(
+                fixture
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            )?,
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &fs_err::read(
+                fixture
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            )?,
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    for (project, user, system) in [
+        (
+            format!("index-url = {preferred_url:?}"),
+            format!("[[index]]\nurl = {fallback_url:?}\ndefault = true"),
+            String::new(),
+        ),
+        (
+            format!("[[index]]\nurl = {preferred_url:?}\ndefault = true"),
+            format!("index-url = {fallback_url:?}"),
+            String::new(),
+        ),
+        (
+            format!("extra-index-url = [{preferred_url:?}]"),
+            format!("[[index]]\nurl = {fallback_url:?}"),
+            String::new(),
+        ),
+        (
+            format!("[[index]]\nurl = {preferred_url:?}"),
+            format!("extra-index-url = [{fallback_url:?}]"),
+            String::new(),
+        ),
+        (
+            String::new(),
+            format!("index-url = {preferred_url:?}"),
+            format!("[[index]]\nurl = {fallback_url:?}\ndefault = true"),
+        ),
+        (
+            String::new(),
+            format!("[[index]]\nurl = {preferred_url:?}\ndefault = true"),
+            format!("index-url = {fallback_url:?}"),
+        ),
+    ] {
+        let context = uv_test::test_context!("3.12");
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["ok"]
+        "#})?;
+        context.temp_dir.child("uv.toml").write_str(&project)?;
+        let user_dir = context.temp_dir.child("user");
+        let system_dir = context.temp_dir.child("system");
+        user_dir.child("uv/uv.toml").write_str(&user)?;
+        system_dir.child("uv/uv.toml").write_str(&system)?;
+        for mut command in [context.lock(), context.sync()] {
+            for variable in [
+                EnvVars::UV_INDEX,
+                EnvVars::UV_DEFAULT_INDEX,
+                EnvVars::UV_INDEX_URL,
+                EnvVars::UV_EXTRA_INDEX_URL,
+            ] {
+                command.env_remove(variable);
+            }
+            command
+                .env_remove(EnvVars::UV_NO_SYSTEM_CONFIG)
+                .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+                .env(EnvVars::XDG_CONFIG_DIRS, system_dir.path())
+                .assert()
+                .success();
+        }
+        context.assert_installed("ok", "1.0.0");
+        let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+        let package = lock["package"]
+            .as_array()
+            .and_then(|packages| {
+                packages
+                    .iter()
+                    .find(|package| package["name"].as_str() == Some("ok"))
+            })
+            .ok_or_else(|| anyhow!("Expected ok in lockfile"))?;
+        assert_eq!(
+            package["source"]["registry"].as_str(),
+            Some(preferred_url.as_str())
+        );
+    }
+    Ok(())
+}
+
+/// Script declarations take priority over user configuration regardless of spelling.
+#[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+async fn index_precedence_for_script_configuration() -> Result<()> {
+    let fixture = uv_test::test_context!("3.12");
+    let preferred = PackageServer::new(&"ok".parse()?).await;
+    let fallback = PackageServer::new(&"ok".parse()?).await;
+    preferred
+        .serve(
+            "ok-1.0.0-py3-none-any.whl",
+            &fs_err::read(
+                fixture
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            )?,
+            None,
+        )
+        .await;
+    fallback
+        .serve(
+            "ok-2.0.0-py3-none-any.whl",
+            &fs_err::read(
+                fixture
+                    .workspace_root
+                    .join("test/links/ok-2.0.0-py3-none-any.whl"),
+            )?,
+            None,
+        )
+        .await;
+    let preferred_url = preferred.index_url();
+    let fallback_url = fallback.index_url();
+    for (script_index, user_index) in [
+        (
+            format!("# [tool.uv]\n# index-url = {preferred_url:?}"),
+            format!("[[index]]\nurl = {fallback_url:?}\ndefault = true"),
+        ),
+        (
+            format!("# [[tool.uv.index]]\n# url = {preferred_url:?}\n# default = true"),
+            format!("index-url = {fallback_url:?}"),
+        ),
+    ] {
+        let context = uv_test::test_context!("3.12");
+        let script = context.temp_dir.child("main.py");
+        script.write_str(&formatdoc! {r#"
+            # /// script
+            # requires-python = ">=3.12"
+            # dependencies = ["ok"]
+            #
+            {script_index}
+            # ///
+            from importlib.metadata import version
+            print(version("ok"))
+        "#})?;
+        let user_dir = context.temp_dir.child("user");
+        user_dir.child("uv/uv.toml").write_str(&user_index)?;
+        let mut command = context.run();
+        for variable in [
+            EnvVars::UV_INDEX,
+            EnvVars::UV_DEFAULT_INDEX,
+            EnvVars::UV_INDEX_URL,
+            EnvVars::UV_EXTRA_INDEX_URL,
+        ] {
+            command.env_remove(variable);
+        }
+        command
+            .env(EnvVars::XDG_CONFIG_HOME, user_dir.path())
+            .arg("--script")
+            .arg(script.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::diff("1.0.0").trim());
+    }
     Ok(())
 }

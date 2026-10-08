@@ -239,6 +239,11 @@ impl Options {
                 }
             }
         }
+        self.normalize_indexes()
+    }
+
+    /// Normalize index spellings while this configuration source is still independent.
+    pub(crate) fn normalize_indexes(mut self) -> Self {
         normalize_indexes(
             &mut self.top_level.index,
             &mut self.top_level.index_url,
