@@ -8772,15 +8772,16 @@ async fn registry_wheel_size_is_advisory() -> Result<()> {
             json!({ "size": 1, "core-metadata": true }),
         )
         .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/{wheel_filename}.metadata")))
-        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {"
-            Metadata-Version: 2.1
-            Name: tqdm
-            Version: 1000.0.0
-        "}))
-        .expect(1)
-        .mount(server.mock_server())
+    server
+        .serve_metadata(
+            wheel_filename,
+            indoc! {b"
+                Metadata-Version: 2.1
+                Name: tqdm
+                Version: 1000.0.0
+            "},
+            1,
+        )
         .await;
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -8819,15 +8820,16 @@ async fn reject_wheel_with_multiple_dist_info_directories() -> Result<()> {
             json!({ "core-metadata": true }),
         )
         .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/{wheel_filename}.metadata")))
-        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {"
-            Metadata-Version: 2.1
-            Name: validation
-            Version: 3.0.0
-        "}))
-        .expect(1)
-        .mount(server.mock_server())
+    server
+        .serve_metadata(
+            wheel_filename,
+            indoc! {b"
+                Metadata-Version: 2.1
+                Name: validation
+                Version: 3.0.0
+            "},
+            1,
+        )
         .await;
 
     uv_snapshot!(context.filters(), context.pip_install()

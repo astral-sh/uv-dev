@@ -13352,13 +13352,21 @@ async fn lock_index_hash_algorithm_missing() -> Result<()> {
             }),
         )
         .await;
+    server
+        .serve_metadata(
+            wheel_filename,
+            indoc! {b"
+                Metadata-Version: 2.1
+                Name: basic-package
+                Version: 0.1.0
+            "},
+            1,
+        )
+        .await;
     Mock::given(method("GET"))
-        .and(path(format!("/{wheel_filename}.metadata")))
-        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {"
-            Metadata-Version: 2.1
-            Name: basic-package
-            Version: 0.1.0
-        "}))
+        .and(path(format!("/{wheel_filename}")))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(server.mock_server())
         .await;
 
