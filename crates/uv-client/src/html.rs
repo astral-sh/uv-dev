@@ -9,7 +9,7 @@ use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifiers, VersionSpecifiersParseError};
 use uv_pypi_types::{BaseUrl, CoreMetadata, Hashes, ProjectStatus, PypiFile, Status, Yanked};
 use uv_pypi_types::{HashError, LenientVersionSpecifiers};
-use uv_redacted::{SafeUrl, SafeUrlError};
+use uv_redacted::{SafeUrl, SafeUrlError, SafeUrlInput};
 use uv_small_str::SmallString;
 
 type RequiresPythonResult = Result<Arc<VersionSpecifiers>, VersionSpecifiersParseError>;
@@ -160,7 +160,8 @@ impl SimpleDetailHTML {
         let Some(href) = attribute(base, "href") else {
             return Ok(None);
         };
-        let url = SafeUrl::parse(href).map_err(|err| Error::UrlParse(href.to_string(), err))?;
+        let url =
+            SafeUrl::parse(href).map_err(|err| Error::UrlParse(href.to_string().into(), err))?;
         Ok(Some(url))
     }
 
@@ -345,7 +346,7 @@ pub enum Error {
     FromUtf8(#[from] std::string::FromUtf8Error),
 
     #[error("Failed to parse URL: {0}")]
-    UrlParse(String, #[source] SafeUrlError),
+    UrlParse(SafeUrlInput, #[source] SafeUrlError),
 
     #[error(transparent)]
     HtmlParse(#[from] astral_html::Error),
@@ -372,6 +373,30 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_base_url_context_is_redacted() -> Result<(), Box<dyn std::error::Error>> {
+        let base = SafeUrl::parse("https://example.com/simple/")?;
+        let text = r#"<html><head><base href="https://user:password@example.com:invalid/?sig=signature"></head><body></body></html>"#;
+        let error = SimpleDetailHTML::parse(text, &base).unwrap_err();
+        insta::assert_snapshot!(error, @"Failed to parse URL: [invalid URL]");
+        let Error::UrlParse(input, source) = error else {
+            return Err("expected a base URL error".into());
+        };
+        assert_eq!(
+            input.as_ref(),
+            "https://user:password@example.com:invalid/?sig=signature"
+        );
+        match source {
+            SafeUrlError::Url(source) => {
+                assert_eq!(source.to_string(), "invalid port number");
+            }
+            SafeUrlError::AmbiguousAuthority(_) => {
+                return Err("expected a URL parse error".into());
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn parse_sha256() {
