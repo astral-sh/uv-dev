@@ -409,8 +409,7 @@ async fn audit_vulnerability_advisory_url_redacts_credentials() {
         .arg("audit")
         .arg("--service-url")
         .arg(server.uri()), @"
-    success: false
-    exit_code: 1
+    exit_code: 1 (failure)
     ----- stdout -----
 
     Vulnerabilities:
@@ -2563,7 +2562,7 @@ async fn audit_json_vulnerability_and_project_status() {
             }],
             "references": [{
                 "type": "ADVISORY",
-                "url": "https://example.com/advisory/PYSEC-2023-0001"
+                "url": "https://username:password@example.com/advisory/PYSEC-2023-0001"
             }]
         })))
         .mount(&server)
@@ -2600,7 +2599,7 @@ async fn audit_json_vulnerability_and_project_status() {
           "aliases": [],
           "summary": "A test vulnerability in iniconfig",
           "description": null,
-          "link": "https://example.com/advisory/PYSEC-2023-0001",
+          "link": "https://username:****@example.com/advisory/PYSEC-2023-0001",
           "fix_versions": [
             "2.1.0"
           ],
@@ -2661,7 +2660,7 @@ async fn audit_sarif_vulnerability_and_project_status() -> Result<()> {
             }],
             "references": [{
                 "type": "ADVISORY",
-                "url": "https://example.com/advisory/PYSEC-2023-0001"
+                "url": "https://username:password@example.com/advisory/PYSEC-2023-0001"
             }]
         })))
         .mount(&server)
@@ -2777,7 +2776,7 @@ async fn audit_sarif_vulnerability_and_project_status() -> Result<()> {
                   "help": {
                     "text": "A longer description of the test vulnerability."
                   },
-                  "helpUri": "https://example.com/advisory/PYSEC-2023-0001",
+                  "helpUri": "https://username:****@example.com/advisory/PYSEC-2023-0001",
                   "id": "OSV-2023-0001",
                   "name": "PYSEC-2023-0001",
                   "properties": {
