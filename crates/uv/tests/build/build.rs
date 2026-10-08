@@ -975,6 +975,57 @@ fn build_workspace() -> Result<()> {
     Ok(())
 }
 
+/// Native workspace builds share the configured backend-execution limit.
+#[test]
+fn build_native_workspace_limits() -> Result<()> {
+    for builds in [1, 2] {
+        let context =
+            uv_test::test_context!("3.12").with_filter((r"\[(alpha|bravo|charlie)\]", "[PKG]"));
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(indoc! {r#"
+            [tool.uv.workspace]
+            members = ["alpha", "bravo", "charlie"]
+        "#})?;
+        for name in ["alpha", "bravo", "charlie"] {
+            let member = context.temp_dir.child(name);
+            member.child("pyproject.toml").write_str(&formatdoc! {r#"
+                [project]
+                name = "{name}"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+
+                [build-system]
+                requires = ["uv_build>=0.7,<1"]
+                build-backend = "uv_build"
+            "#})?;
+            member
+                .child("src")
+                .child(name)
+                .child("__init__.py")
+                .touch()?;
+        }
+
+        insta::allow_duplicates! {
+        uv_snapshot!(context.filters(), context.build()
+            .env(EnvVars::UV_CONCURRENT_BUILDS, builds.to_string())
+            .arg("--all")
+            .arg("--wheel"), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        [PKG] Building wheel...
+        [PKG] Building wheel...
+        [PKG] Building wheel...
+        Successfully built dist/alpha-0.1.0-py3-none-any.whl
+        Successfully built dist/bravo-0.1.0-py3-none-any.whl
+        Successfully built dist/charlie-0.1.0-py3-none-any.whl
+        ");
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn build_all_with_failure() -> Result<()> {
     let context = uv_test::test_context!("3.12")
