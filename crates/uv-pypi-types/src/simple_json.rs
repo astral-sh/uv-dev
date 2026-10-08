@@ -98,10 +98,44 @@ impl<'de> DeserializeSeed<'de> for PypiFileSeed<'_> {
     }
 }
 
-struct PypiFilesVisitor;
+/// A collector can consume files as they are decoded, before the next file is allocated.
+trait FileCollector {
+    fn reserve(&mut self, capacity: usize);
+    fn push(&mut self, file: PypiFile);
+}
 
-impl<'de> Visitor<'de> for PypiFilesVisitor {
-    type Value = Vec<PypiFile>;
+impl FileCollector for Vec<PypiFile> {
+    fn reserve(&mut self, capacity: usize) {
+        Self::reserve(self, capacity);
+    }
+
+    fn push(&mut self, file: PypiFile) {
+        Self::push(self, file);
+    }
+}
+
+struct FileCallback<F>(F);
+
+impl<F: FnMut(PypiFile)> FileCollector for FileCallback<F> {
+    fn reserve(&mut self, _capacity: usize) {}
+
+    fn push(&mut self, file: PypiFile) {
+        (self.0)(file);
+    }
+}
+
+struct PypiFilesSeed<'a, C>(&'a mut C);
+
+impl<'de, C: FileCollector> DeserializeSeed<'de> for PypiFilesSeed<'_, C> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de, C: FileCollector> Visitor<'de> for PypiFilesSeed<'_, C> {
+    type Value = ();
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a sequence of files")
@@ -116,16 +150,15 @@ impl<'de> Visitor<'de> for PypiFilesVisitor {
             .size_hint()
             .unwrap_or_default()
             .min(1024 * 1024 / size_of::<PypiFile>());
-        let mut files = Vec::with_capacity(capacity);
+        self.0.reserve(capacity);
         let mut interner = RequiresPythonInterner::default();
 
         while let Some(file) = access.next_element_seed(PypiFileSeed {
             interner: &mut interner,
         })? {
-            files.push(file);
+            self.0.push(file);
         }
-
-        Ok(files)
+        Ok(())
     }
 }
 
@@ -134,7 +167,82 @@ fn deserialize_files<'de, D>(deserializer: D) -> Result<Vec<PypiFile>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    deserializer.deserialize_seq(PypiFilesVisitor)
+    let mut files = Vec::new();
+    PypiFilesSeed(&mut files).deserialize(deserializer)?;
+    Ok(files)
+}
+
+#[derive(Deserialize)]
+#[serde(field_identifier, rename_all = "kebab-case")]
+enum SimpleField {
+    ProjectStatus,
+    Files,
+    #[serde(other)]
+    Ignore,
+}
+
+impl PypiSimpleDetail {
+    /// Decode each file into a caller-provided collector, returning the response's project status.
+    ///
+    /// Files can precede project status in the response. The collector must defer any work that
+    /// depends on that status until decoding succeeds. Files may have been consumed before a
+    /// later decoding error.
+    pub fn deserialize_with<'de, D: Deserializer<'de>>(
+        deserializer: D,
+        on_file: impl FnMut(PypiFile),
+    ) -> Result<ProjectStatus, D::Error> {
+        deserializer.deserialize_struct(
+            "PypiSimpleDetail",
+            &["project-status", "files"],
+            SimpleVisitor(FileCallback(on_file)),
+        )
+    }
+}
+
+struct SimpleVisitor<F>(FileCallback<F>);
+
+impl<'de, F: FnMut(PypiFile)> Visitor<'de> for SimpleVisitor<F> {
+    type Value = ProjectStatus;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("struct PypiSimpleDetail")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(mut self, mut access: A) -> Result<Self::Value, A::Error> {
+        let project_status = access.next_element()?.unwrap_or_default();
+        access
+            .next_element_seed(PypiFilesSeed(&mut self.0))?
+            .ok_or_else(|| {
+                serde::de::Error::invalid_length(1, &"struct PypiSimpleDetail with 2 elements")
+            })?;
+        Ok(project_status)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(mut self, mut access: A) -> Result<Self::Value, A::Error> {
+        let mut project_status = None;
+        let mut files = None;
+        while let Some(field) = access.next_key()? {
+            match field {
+                SimpleField::ProjectStatus => {
+                    if project_status.is_some() {
+                        return Err(serde::de::Error::duplicate_field("project-status"));
+                    }
+                    project_status = Some(access.next_value()?);
+                }
+                SimpleField::Files => {
+                    if files.is_some() {
+                        return Err(serde::de::Error::duplicate_field("files"));
+                    }
+                    files = Some(access.next_value_seed(PypiFilesSeed(&mut self.0))?);
+                }
+                SimpleField::Ignore => {
+                    access.next_value::<serde::de::IgnoredAny>()?;
+                }
+            }
+        }
+        files.ok_or_else(|| serde::de::Error::missing_field("files"))?;
+        Ok(project_status.unwrap_or_default())
+    }
 }
 
 struct RequiresPythonSeed<'a>(&'a mut RequiresPythonInterner);
@@ -861,12 +969,81 @@ pub enum HashError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use rkyv::rancor::Error as RkyvError;
 
     use super::{
         ArchivedHashDigest, CoreMetadata, Digest, HashAlgorithm, HashDigest, HashDigests,
         HashError, Hashes, PypiFile,
     };
+
+    #[test]
+    fn callback_decoder_shares_requires_python() -> Result<(), serde_json::Error> {
+        let mut requirements = Vec::new();
+        let document = r#"{"files":[
+            {"filename":"a.whl","hashes":{},"url":"a.whl","requires-python":">=3.8"},
+            {"filename":"b.whl","hashes":{},"url":"b.whl","requires-python":">=3.8"},
+            {"filename":"c.whl","hashes":{},"url":"c.whl","requires-python":"invalid"},
+            {"filename":"d.whl","hashes":{},"url":"d.whl","requires-python":"invalid"}
+        ]}"#;
+        crate::PypiSimpleDetail::deserialize_with(
+            &mut serde_json::Deserializer::from_str(document),
+            |file| requirements.push(file.requires_python),
+        )?;
+        let first = requirements[0]
+            .as_ref()
+            .expect("specifier")
+            .as_ref()
+            .expect("valid specifier");
+        let second = requirements[1]
+            .as_ref()
+            .expect("specifier")
+            .as_ref()
+            .expect("valid specifier");
+        assert!(Arc::ptr_eq(first, second));
+        let first = requirements[2]
+            .as_ref()
+            .expect("specifier")
+            .as_ref()
+            .expect_err("invalid specifier");
+        let second = requirements[3]
+            .as_ref()
+            .expect("specifier")
+            .as_ref()
+            .expect_err("invalid specifier");
+        assert_eq!(first.to_string(), second.to_string());
+        Ok(())
+    }
+
+    #[test]
+    fn callback_decoder_matches_deserialization_errors() {
+        for document in [
+            "null",
+            "true",
+            "0",
+            "[]",
+            "[{}]",
+            "[null, []]",
+            "[{}, [], null]",
+            "{}",
+            r#"{"files":null}"#,
+            r#"{"files":{}}"#,
+            r#"{"files":[],"files":[]}"#,
+            r#"{"project-status":{},"project-status":{},"files":[]}"#,
+            r#"{"files":[{}]}"#,
+            r#"{"files":[],"ignored":[{"nested":null}]} trailing"#,
+            r#"{"files":[],"project-status":null}"#,
+        ] {
+            let expected = serde_json::from_str::<crate::PypiSimpleDetail>(document)
+                .expect_err("invalid response");
+            let mut deserializer = serde_json::Deserializer::from_str(document);
+            let actual = crate::PypiSimpleDetail::deserialize_with(&mut deserializer, |_| {})
+                .and_then(|status| deserializer.end().map(|()| status))
+                .expect_err("invalid response");
+            assert_eq!(actual.to_string(), expected.to_string(), "{document}");
+        }
+    }
 
     #[test]
     fn pypi_core_metadata_precedence() -> Result<(), serde_json::Error> {
