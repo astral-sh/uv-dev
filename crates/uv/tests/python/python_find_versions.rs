@@ -38,20 +38,18 @@ fn python_find_reports_invalid_version_components() -> Result<()> {
     ))?;
     fs_err::set_permissions(executable.path(), std::fs::Permissions::from_mode(0o755))?;
     let version_file = context.temp_dir.child("version.json");
-    let command = || {
-        let mut command = context.python_find();
-        command
-            .arg("--no-cache")
-            .arg(executable.path())
-            .env(EnvVars::UV_NO_WRAP, "1");
-        command
-    };
 
     version_file.write_str(&json!("3.12.0").to_string())?;
-    command().assert().success();
+    context
+        .python_find()
+        .arg("--no-cache")
+        .arg(executable.path())
+        .env(EnvVars::UV_NO_WRAP, "1")
+        .assert()
+        .success();
 
     version_file.write_str(&json!("3").to_string())?;
-    uv_snapshot!(context.filters(), command(), @"
+    uv_snapshot!(context.filters(), context.python_find().arg("--no-cache").arg(executable.path()).env(EnvVars::UV_NO_WRAP, "1"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to inspect Python interpreter from provided path at `mock-python`
@@ -62,7 +60,7 @@ fn python_find_reports_invalid_version_components() -> Result<()> {
     ");
 
     version_file.write_str(&json!("3.9999.0").to_string())?;
-    uv_snapshot!(context.filters(), command(), @"
+    uv_snapshot!(context.filters(), context.python_find().arg("--no-cache").arg(executable.path()).env(EnvVars::UV_NO_WRAP, "1"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to inspect Python interpreter from provided path at `mock-python`
