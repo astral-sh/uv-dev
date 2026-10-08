@@ -121,14 +121,6 @@ jobs:
     permissions:
       "contents": "read"
 
-  test-release-artifacts:
-    needs: build-release-artifacts
-    uses: $/.github/workflows/test-release-artifacts.yml
-    with:
-      test-native-wheels: false
-    permissions:
-      contents: read
-
   build-docker:
     needs:
       - plan
@@ -154,10 +146,11 @@ jobs:
       contents: read
       id-token: write
 
-  test-signed-release-artifacts:
+  test-release-artifacts:
     needs: assemble-release-artifacts
-    uses: $/.github/workflows/test-signed-release-artifacts.yml
+    uses: $/.github/workflows/test-release-artifacts.yml
     with:
+      signed: true
       macos: ${{ needs.assemble-release-artifacts.outputs.macos }}
       windows: ${{ needs.assemble-release-artifacts.outputs.windows }}
       signed-macos: ${{ needs.assemble-release-artifacts.outputs.signed-macos }}
@@ -293,9 +286,8 @@ jobs:
       - generate-local-dist-manifest
       - assemble-release-artifacts
       - test-release-artifacts
-      - test-signed-release-artifacts
     # Publication requires successful artifact tests as well as builds and signing.
-    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && needs.assemble-release-artifacts.result == 'success' && needs.test-release-artifacts.result == 'success' && needs.test-signed-release-artifacts.result == 'success' && (needs.build-global-dist-artifacts.result == 'skipped' || needs.build-global-dist-artifacts.result == 'success') && (needs.build-release-artifacts.result == 'skipped' || needs.build-release-artifacts.result == 'success') && (needs.build-docker.result == 'skipped' || needs.build-docker.result == 'success') }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && needs.assemble-release-artifacts.result == 'success' && needs.test-release-artifacts.result == 'success' && (needs.build-global-dist-artifacts.result == 'skipped' || needs.build-global-dist-artifacts.result == 'success') && (needs.build-release-artifacts.result == 'skipped' || needs.build-release-artifacts.result == 'success') && (needs.build-docker.result == 'skipped' || needs.build-docker.result == 'success') }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "depot-ubuntu-latest-4"
