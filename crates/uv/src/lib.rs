@@ -40,7 +40,7 @@ use uv_cli::{
 };
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_configuration::{PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
+use uv_configuration::{InstallOptions, PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
@@ -2632,14 +2632,16 @@ async fn run_project(
                 args.frozen,
                 args.active,
                 args.no_sync,
-                args.no_install_project,
-                args.only_install_project,
-                args.no_install_workspace,
-                args.only_install_workspace,
-                args.no_install_local,
-                args.only_install_local,
-                args.no_install_package,
-                args.only_install_package,
+                InstallOptions::new(
+                    args.no_install_project,
+                    args.only_install_project,
+                    args.no_install_workspace,
+                    args.only_install_workspace,
+                    args.no_install_local,
+                    args.only_install_local,
+                    args.no_install_package,
+                    args.only_install_package,
+                ),
                 requirements,
                 constraints,
                 args.marker,
