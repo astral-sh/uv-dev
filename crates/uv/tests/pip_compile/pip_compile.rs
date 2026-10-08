@@ -14967,10 +14967,7 @@ fn dynamic_pyproject_toml_extras_missing() -> Result<()> {
         .arg("missing-a")
         .arg("--extra")
         .arg("missing-z"), @"
-    success: false
-    exit_code: 2
-    ----- stdout -----
-
+    exit_code: 2 (failure)
     ----- stderr -----
     error: Requested extras not found: missing-a, missing-z
     "
