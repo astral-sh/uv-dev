@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild};
 use bytes::Bytes;
 use http::StatusCode;
@@ -251,13 +252,22 @@ where
     (server, shutdown_tx)
 }
 
-/// Explicit requirements files share the configured download limit and retain their input order.
+/// Explicit requirements files use one download slot in input order.
+#[test]
+fn requirements_input_downloads_are_serial() -> Result<()> {
+    check_requirements_input_downloads(1)
+}
+
+/// Explicit requirements files share a smaller download limit than the input batch.
 #[test]
 fn requirements_input_downloads_are_bounded() -> Result<()> {
-    for concurrency in [1, 2, 12] {
-        check_requirements_input_downloads(concurrency)?;
-    }
-    Ok(())
+    check_requirements_input_downloads(2)
+}
+
+/// The entire input batch can download when every request has an available slot.
+#[test]
+fn requirements_input_downloads_fill_the_batch() -> Result<()> {
+    check_requirements_input_downloads(12)
 }
 
 fn check_requirements_input_downloads(concurrency: usize) -> Result<()> {
@@ -319,15 +329,7 @@ fn check_requirements_input_downloads(concurrency: usize) -> Result<()> {
     let output = process
         .join()
         .map_err(|_| anyhow::anyhow!("requirements command panicked"))??;
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout)?;
-    allow_duplicates! {
-        assert_snapshot!(stdout, @"build-tag==1.0.0");
-    }
+    output.assert().success().stdout("build-tag==1.0.0\n");
     Ok(())
 }
 
