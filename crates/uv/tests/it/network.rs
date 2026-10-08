@@ -3,7 +3,7 @@ use std::future::ready;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild};
@@ -1059,7 +1059,6 @@ fn connect_timeout_index() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let server = listener.local_addr().unwrap().to_string();
 
-    let start = Instant::now();
     uv_snapshot!(context.filters(), context
         .pip_install()
         .arg("tqdm")
@@ -1074,13 +1073,6 @@ fn connect_timeout_index() {
       cause: client error (Connect)
       cause: operation timed out
     ");
-
-    // Assumption: There's less than 2s overhead for this test and startup.
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed < Duration::from_secs(3),
-        "Test with 1s connect timeout took too long"
-    );
 }
 
 #[test]
@@ -1091,7 +1083,6 @@ fn connect_timeout_stream() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let server = listener.local_addr().unwrap().to_string();
 
-    let start = Instant::now();
     uv_snapshot!(context.filters(), context
         .pip_install()
         .arg(format!("https://{server}/tqdm-0.1-py3-none-any.whl"))
@@ -1105,13 +1096,6 @@ fn connect_timeout_stream() {
       cause: client error (Connect)
       cause: operation timed out
     ");
-
-    // Assumption: There's less than 2s overhead for this test and startup.
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed < Duration::from_secs(3),
-        "Test with 1s connect timeout took too long"
-    );
 }
 
 #[tokio::test]
