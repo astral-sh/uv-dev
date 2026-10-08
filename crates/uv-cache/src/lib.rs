@@ -587,7 +587,17 @@ impl Cache {
         let root = self.root.components().as_path();
         let is_directory_link = fs_err::symlink_metadata(root)?.is_symlink();
         let root = if is_directory_link {
-            fs_err::canonicalize(root)?
+            let root = fs_err::canonicalize(root)?;
+            if !fs_err::metadata(&root)?.is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotADirectory,
+                    format!(
+                        "Cache link target is not a directory: {}",
+                        root.simplified_display()
+                    ),
+                ));
+            }
+            root
         } else {
             root.to_path_buf()
         };
