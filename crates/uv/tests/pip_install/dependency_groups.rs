@@ -87,11 +87,15 @@ fn dependency_group_installed_requirements() -> Result<()> {
     ");
 
     // A missing transitive dependency still requires resolution.
-    pip_install(&context)
-        .args(["--group", "dev"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("group-leaf"));
+    uv_snapshot!(context.filters(), pip_install(&context).args(["--group", "dev"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because group-leaf was not found in the provided package locations and group-root==1.0.0 depends on group-leaf==1.0.0, we can conclude that group-root==1.0.0 cannot be used.
+             And because group-root was not found in the provided package locations and you require group-root==1.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
     pip_install(&context)
         .args(["--group", "dev", "--find-links"])
         .arg(context.temp_dir.path())
