@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::ffi::OsString;
 use std::fmt::Formatter;
 use std::fmt::Write;
+use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -25,7 +26,7 @@ use serde::{Deserialize, Deserializer};
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tracing::{Instrument, debug, info_span, instrument, warn};
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
@@ -256,7 +257,7 @@ pub struct SourceBuild {
     project: Option<Project>,
     /// The virtual environment in which to build the source distribution.
     venv: PythonEnvironment,
-    /// Populated if `prepare_metadata_for_build_wheel` was called.
+    /// The completed metadata-preparation outcome, including unsupported hooks.
     ///
     /// > If the build frontend has previously called `prepare_metadata_for_build_wheel` and depends
     /// > on the wheel resulting from this call to have metadata matching this earlier call, then
@@ -265,7 +266,7 @@ pub struct SourceBuild {
     /// > identical metadata. The directory passed in by the build frontend MUST be identical to the
     /// > directory created by `prepare_metadata_for_build_wheel`, including any unrecognized files
     /// > it created.
-    metadata_directory: Option<PathBuf>,
+    metadata: MetadataState,
     /// The name of the package, if known.
     package_name: Option<PackageName>,
     /// The version of the package, if known.
@@ -283,6 +284,26 @@ pub struct SourceBuild {
     environment_variables: FxHashMap<OsString, OsString>,
     /// Runner for Python scripts.
     runner: PythonRunner,
+}
+
+/// A metadata attempt is either pending, completed without a hook, or prepared at a path.
+#[derive(Default)]
+struct MetadataState {
+    directory: OnceCell<Option<PathBuf>>,
+}
+
+impl MetadataState {
+    /// Cache completed outcomes without retaining failures or cancellation.
+    async fn get_or_prepare(
+        &self,
+        prepare: impl Future<Output = Result<Option<PathBuf>, Error>>,
+    ) -> Result<Option<PathBuf>, Error> {
+        self.directory.get_or_try_init(|| prepare).await.cloned()
+    }
+
+    fn directory(&self) -> Option<&Path> {
+        self.directory.get().and_then(Option::as_deref)
+    }
 }
 
 impl SourceBuild {
@@ -524,7 +545,7 @@ impl SourceBuild {
             build_kind,
             level,
             config_settings,
-            metadata_directory: None,
+            metadata: MetadataState::default(),
             package_name,
             package_version,
             version_id: version_id.map(ToString::to_string),
@@ -850,12 +871,11 @@ impl SourceBuild {
 
     /// Try calling `prepare_metadata_for_build_wheel` to get the metadata without executing the
     /// actual build.
-    async fn get_metadata_without_build(&mut self) -> Result<Option<PathBuf>, Error> {
-        // We've already called this method; return the existing result.
-        if let Some(metadata_dir) = &self.metadata_directory {
-            return Ok(Some(metadata_dir.clone()));
-        }
+    async fn get_metadata_without_build(&self) -> Result<Option<PathBuf>, Error> {
+        self.metadata.get_or_prepare(self.prepare_metadata()).await
+    }
 
+    async fn prepare_metadata(&self) -> Result<Option<PathBuf>, Error> {
         // Lock the source tree, if necessary.
         let _lock = self.acquire_lock().await?;
 
@@ -956,8 +976,7 @@ impl SourceBuild {
         if dirname.is_empty() {
             return Ok(None);
         }
-        self.metadata_directory = Some(metadata_directory.join(dirname));
-        Ok(self.metadata_directory.clone())
+        Ok(Some(metadata_directory.join(dirname)))
     }
 
     /// Build a distribution from an archive (`.zip` or `.tar.gz`) or source tree, and return the
@@ -1013,8 +1032,8 @@ impl SourceBuild {
             }
             BuildKind::Wheel | BuildKind::Editable => {
                 let metadata_directory = self
-                    .metadata_directory
-                    .as_deref()
+                    .metadata
+                    .directory()
                     .map_or("None".to_string(), |path| path.escape_for_python());
                 debug!(
                     r"Calling `{}.build_{}({}, {}, {})`",
@@ -1390,6 +1409,72 @@ impl Write for Printer {
             }
             Self::Quiet => {}
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::io;
+    use std::path::PathBuf;
+
+    use fs_err as fs;
+    use tempfile::tempdir;
+
+    use super::{Error, MetadataState};
+
+    #[tokio::test]
+    async fn metadata_without_hook_is_completed() -> Result<(), Error> {
+        let temporary = tempdir()?;
+        let metadata_directory = temporary.path().join("metadata_directory");
+        let state = MetadataState::default();
+        for _ in 0..2 {
+            let metadata = state
+                .get_or_prepare(async {
+                    // A hook attempt creates this directory before checking hook availability.
+                    fs::create_dir(&metadata_directory)?;
+                    Ok(None)
+                })
+                .await?;
+            assert_eq!(metadata, None);
+        }
+        assert!(metadata_directory.is_dir());
+        assert_eq!(state.directory(), None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn metadata_directory_is_reused() -> Result<(), Error> {
+        let state = MetadataState::default();
+        let calls = Cell::new(0);
+        let expected = PathBuf::from("metadata_directory/demo-1.0.dist-info");
+        for _ in 0..2 {
+            let metadata = state
+                .get_or_prepare(async {
+                    calls.set(calls.get() + 1);
+                    Ok(Some(expected.clone()))
+                })
+                .await?;
+            assert_eq!(metadata.as_ref(), Some(&expected));
+        }
+        assert_eq!(state.directory(), Some(expected.as_path()));
+        assert_eq!(calls.get(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn metadata_failures_are_not_cached() -> Result<(), Error> {
+        let state = MetadataState::default();
+        let error = state
+            .get_or_prepare(async { Err(Error::Io(io::Error::other("backend failed"))) })
+            .await;
+        assert!(error.is_err());
+        let expected = PathBuf::from("metadata_directory/demo-1.0.dist-info");
+        let metadata = state
+            .get_or_prepare(async { Ok(Some(expected.clone())) })
+            .await?;
+        assert_eq!(metadata.as_ref(), Some(&expected));
         Ok(())
     }
 }
