@@ -12,11 +12,10 @@ use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use thiserror::Error;
 use tokio::sync::AcquireError;
-use tokio::task::JoinHandle;
 use tracing::{debug, instrument, trace};
 
 use uv_build_backend::{Error as BuildBackendError, check_direct_build};
-use uv_build_frontend::{SourceBuild, SourceBuildContext};
+use uv_build_frontend::{SourceBuild, SourceBuildContext, spawn_native_build};
 use uv_cache::Cache;
 use uv_client::RegistryClient;
 use uv_configuration::{
@@ -47,8 +46,6 @@ use uv_types::{
     HashStrategy, HashVerification, InFlight, ResolvedRequirements, SourceTreeEditablePolicy,
 };
 use uv_workspace::WorkspaceCache;
-
-mod native_build;
 
 #[derive(Debug, Error)]
 pub enum BuildDispatchError {
@@ -248,16 +245,6 @@ impl<'a> BuildDispatch<'a> {
             preview,
             tar_backend: TarBackend::from_env(),
         }
-    }
-
-    /// Admit a native build to the shared backend-execution quota.
-    ///
-    /// The worker retains its permit until the build finishes, even if its caller stops waiting.
-    pub async fn spawn_native_build<T: Send + 'static>(
-        &self,
-        build: impl FnOnce() -> T + Send + 'static,
-    ) -> Result<JoinHandle<T>, AcquireError> {
-        native_build::spawn_native_build(self.concurrency.builds_semaphore.clone(), build).await
     }
 
     /// Fork the dispatch with a different hash strategy.
@@ -710,8 +697,9 @@ impl BuildContext for BuildDispatch<'_> {
 
         let output_dir = output_dir.to_path_buf();
         let tar_backend = self.tar_backend;
-        let filename = self
-            .spawn_native_build(move || -> Result<_, BuildBackendError> {
+        let filename = spawn_native_build(
+            self.concurrency.builds_semaphore.clone(),
+            move || -> Result<_, BuildBackendError> {
                 let filename = match build_kind {
                     BuildKind::Wheel => {
                         let wheel = uv_build_backend::build_wheel(
@@ -720,7 +708,6 @@ impl BuildContext for BuildDispatch<'_> {
                             None,
                             uv_version::version(),
                             sources.is_none(),
-                            tar_backend,
                         )?;
                         DistFilename::WheelFilename(wheel)
                     }
@@ -730,6 +717,7 @@ impl BuildContext for BuildDispatch<'_> {
                             &output_dir,
                             uv_version::version(),
                             sources.is_none(),
+                            tar_backend,
                         )?;
                         DistFilename::SourceDistFilename(source_dist)
                     }
@@ -745,9 +733,10 @@ impl BuildContext for BuildDispatch<'_> {
                     }
                 };
                 Ok(filename)
-            })
-            .await?
-            .await??;
+            },
+        )
+        .await?
+        .await??;
 
         Ok(Some(filename))
     }

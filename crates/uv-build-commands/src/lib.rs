@@ -5,16 +5,18 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::{fmt, io, iter};
 
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use thiserror::Error;
+use tokio::sync::Semaphore;
 use tracing::{debug, instrument};
 
 use uv_auth::CredentialsCache;
 use uv_build_backend::check_direct_build;
-use uv_build_frontend::SourceBuild;
+use uv_build_frontend::{SourceBuild, spawn_native_build};
 use uv_cache::{Cache, CacheBucket};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, Printer};
@@ -776,6 +778,7 @@ async fn build_package(
                     &source,
                     printer,
                     "source distribution",
+                    &concurrency.builds_semaphore,
                     &build_dispatch,
                     dependency_check.as_ref(),
                     &sources,
@@ -794,6 +797,7 @@ async fn build_package(
                 &source,
                 printer,
                 "source distribution",
+                &concurrency.builds_semaphore,
                 &build_dispatch,
                 dependency_check.as_ref(),
                 &sources,
@@ -834,6 +838,7 @@ async fn build_package(
                 &source,
                 printer,
                 "wheel from source distribution",
+                &concurrency.builds_semaphore,
                 &build_dispatch,
                 dependency_check.as_ref(),
                 sources,
@@ -854,6 +859,7 @@ async fn build_package(
                 &source,
                 printer,
                 "source distribution",
+                &concurrency.builds_semaphore,
                 &build_dispatch,
                 dependency_check.as_ref(),
                 &sources,
@@ -873,6 +879,7 @@ async fn build_package(
                 &source,
                 printer,
                 "wheel",
+                &concurrency.builds_semaphore,
                 &build_dispatch,
                 dependency_check.as_ref(),
                 sources,
@@ -893,6 +900,7 @@ async fn build_package(
                 &source,
                 printer,
                 "source distribution",
+                &concurrency.builds_semaphore,
                 &build_dispatch,
                 dependency_check.as_ref(),
                 &sources,
@@ -910,6 +918,7 @@ async fn build_package(
                 &source,
                 printer,
                 "wheel",
+                &concurrency.builds_semaphore,
                 &build_dispatch,
                 dependency_check.as_ref(),
                 sources,
@@ -961,6 +970,7 @@ async fn build_package(
                 &source,
                 printer,
                 "wheel from source distribution",
+                &concurrency.builds_semaphore,
                 &build_dispatch,
                 dependency_check.as_ref(),
                 sources,
@@ -1077,6 +1087,7 @@ async fn build_sdist(
     source: &AnnotatedSource<'_>,
     printer: Printer,
     build_kind_message: &str,
+    build_slots: &Arc<Semaphore>,
     // Below is only used with PEP 517 builds
     build_dispatch: &BuildDispatch<'_>,
     dependency_check: Option<&BuildDependencyCheck<'_>>,
@@ -1121,19 +1132,18 @@ async fn build_sdist(
             let output_dir_ = output_dir.to_path_buf();
             let sources_enabled = sources.is_none();
             let tar_backend = build_dispatch.tar_backend();
-            let filename = build_dispatch
-                .spawn_native_build(move || {
-                    uv_build_backend::build_source_dist(
-                        &source_tree,
-                        &output_dir_,
-                        uv_version::version(),
-                        sources_enabled,
-                        tar_backend,
-                    )
-                })
-                .await?
-                .await??
-                .to_string();
+            let filename = spawn_native_build(build_slots.clone(), move || {
+                uv_build_backend::build_source_dist(
+                    &source_tree,
+                    &output_dir_,
+                    uv_version::version(),
+                    sources_enabled,
+                    tar_backend,
+                )
+            })
+            .await?
+            .await??
+            .to_string();
 
             BuildMessage::Build {
                 normalized_filename: DistFilename::SourceDistFilename(
@@ -1198,6 +1208,7 @@ async fn build_wheel(
     source: &AnnotatedSource<'_>,
     printer: Printer,
     build_kind_message: &str,
+    build_slots: &Arc<Semaphore>,
     // Below is only used with PEP 517 builds
     build_dispatch: &BuildDispatch<'_>,
     dependency_check: Option<&BuildDependencyCheck<'_>>,
@@ -1239,18 +1250,17 @@ async fn build_wheel(
             let source_tree = source_tree.to_path_buf();
             let output_dir_ = output_dir.to_path_buf();
             let sources_enabled = sources.is_none();
-            let filename = build_dispatch
-                .spawn_native_build(move || {
-                    uv_build_backend::build_wheel(
-                        &source_tree,
-                        &output_dir_,
-                        None,
-                        uv_version::version(),
-                        sources_enabled,
-                    )
-                })
-                .await?
-                .await??;
+            let filename = spawn_native_build(build_slots.clone(), move || {
+                uv_build_backend::build_wheel(
+                    &source_tree,
+                    &output_dir_,
+                    None,
+                    uv_version::version(),
+                    sources_enabled,
+                )
+            })
+            .await?
+            .await??;
 
             let raw_filename = filename.to_string();
             BuildMessage::Build {
