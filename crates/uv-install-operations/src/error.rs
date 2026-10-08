@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use owo_colors::OwoColorize;
 use uv_command_support::UvError;
 use uv_distribution::dist_hints;
 use uv_distribution_types::Name;
@@ -35,7 +34,7 @@ pub enum Error {
     Fmt(#[from] std::fmt::Error),
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
-    #[error("The environment is outdated; run `{}` to update the environment", "uv sync".cyan())]
+    #[error("The environment is outdated")]
     OutdatedEnvironment(Box<Changelog>),
 }
 

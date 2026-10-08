@@ -2048,7 +2048,9 @@ fn sync_json_check_outdated_environment() -> Result<()> {
     Would download 1 package
     Would install 1 package
      + iniconfig==2.0.0
-    error: The environment is outdated; run `uv sync` to update the environment
+    error: The environment is outdated
+
+    hint: Rerun the same `uv sync` invocation without `--check` to update the environment.
     "#);
 
     Ok(())
@@ -2591,6 +2593,116 @@ fn group_requires_python_useful_non_defaults() -> Result<()> {
 }
 
 #[test]
+fn check_script_recovery_keeps_invocation() -> Result<()> {
+    for locked in [false, true] {
+        let context = uv_test::test_context!("3.12");
+        let (filename, wheel) = generate_wheel(
+            &"demo".parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::default(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        let wheel_path = context.temp_dir.child(filename);
+        fs_err::write(&wheel_path, wheel)?;
+        let wheel_url =
+            Url::from_file_path(wheel_path.path()).map_err(|()| anyhow!("absolute wheel path"))?;
+        let script = context.temp_dir.child("script with spaces.py");
+        script.write_str(&formatdoc! {r#"
+            # /// script
+            # requires-python = ">=3.12"
+            # dependencies = ["demo @ {wheel_url}"]
+            # ///
+        "#})?;
+        if locked {
+            context
+                .lock()
+                .arg("--script")
+                .arg(script.path())
+                .arg("--offline")
+                .assert()
+                .success();
+        }
+        let command = || {
+            let mut command = context.sync();
+            command
+                .arg("--script")
+                .arg(script.path())
+                .args(["--offline", "--quiet"]);
+            command
+        };
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), command().arg("--check"), @"
+            exit_code: 1 (failure)
+            ----- stderr -----
+            error: The environment is outdated
+
+            hint: Rerun the same `uv sync` invocation without `--check` to update the environment.
+            ");
+        }
+        command().assert().success();
+        allow_duplicates! {
+            uv_snapshot!(context.filters(), command().arg("--check"), @"
+            exit_code: 0 (success)
+            ");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn check_project_group_recovery_keeps_invocation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel_path = context.temp_dir.child(filename);
+    fs_err::write(&wheel_path, wheel)?;
+    let wheel_url =
+        Url::from_file_path(wheel_path.path()).map_err(|()| anyhow!("absolute wheel path"))?;
+    let project = context.temp_dir.child("project with spaces");
+    project.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        selected = ["demo @ {wheel_url}"]
+    "#})?;
+    let command = || {
+        let mut command = context.sync();
+        command.arg("--project").arg(project.path()).args([
+            "--only-group",
+            "selected",
+            "--offline",
+            "--quiet",
+        ]);
+        command
+    };
+    uv_snapshot!(context.filters(), command().arg("--check"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The environment is outdated
+
+    hint: Rerun the same `uv sync` invocation without `--check` to update the environment.
+    ");
+    command().assert().success();
+    uv_snapshot!(context.filters(), command().arg("--check"), @"
+    exit_code: 0 (success)
+    ");
+    Ok(())
+}
+
+#[test]
 fn check() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -2615,7 +2727,9 @@ fn check() -> Result<()> {
     Would download 1 package
     Would install 1 package
      + iniconfig==2.0.0
-    error: The environment is outdated; run `uv sync` to update the environment
+    error: The environment is outdated
+
+    hint: Rerun the same `uv sync` invocation without `--check` to update the environment.
     ");
 
     // Sync the environment.
