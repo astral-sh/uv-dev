@@ -1943,10 +1943,7 @@ fn allow_incompatibilities() -> Result<()> {
     uv_snapshot!(context.pip_install()
         .arg("idna==3.6")
         .arg("--strict"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
