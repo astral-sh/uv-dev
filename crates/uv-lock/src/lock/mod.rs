@@ -38,11 +38,11 @@ use uv_distribution_types::{
     ArchiveHashPolicy, BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist,
     DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
     FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
-    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString, VersionId,
+    HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl, InvalidWheelSelection,
+    MetadataHashPolicy, MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
+    SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString, VersionId,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -6740,11 +6740,8 @@ impl Package {
                             .iter()
                             .map(|wheel| wheel.to_registry_wheel(source, workspace_root))
                             .collect::<Result<_, LockError>>()?;
-                        let reg_built_dist = RegistryBuiltDist {
-                            wheels,
-                            best_wheel_index,
-                            sdist: None,
-                        };
+                        let reg_built_dist =
+                            RegistryBuiltDist::try_new(wheels, best_wheel_index, None)?;
                         Dist::Built(BuiltDist::Registry(reg_built_dist))
                     }
                     Source::Path(path) => {
@@ -8897,7 +8894,7 @@ impl Wheel {
         index_locations: &IndexLocations,
     ) -> Result<Vec<Self>, LockError> {
         reg_dist
-            .wheels
+            .wheels()
             .iter()
             .filter(|wheel| {
                 // Reject distributions from registries that don't match the index URL, as can occur with
@@ -9809,6 +9806,8 @@ impl std::fmt::Display for WheelTagHint {
 /// is with the caller somewhere in such cases.
 #[derive(Debug, thiserror::Error)]
 enum LockErrorKind {
+    #[error(transparent)]
+    InvalidWheelSelection(#[from] InvalidWheelSelection),
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
     DependencyGroups(#[from] DependencyGroupError),

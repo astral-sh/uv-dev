@@ -140,7 +140,7 @@ impl ResolverOutput {
                 Dist::Built(BuiltDist::Registry(dist))
                     if build_options.no_build_package(&distribution.name) =>
                 {
-                    dist.wheels
+                    dist.wheels()
                         .iter()
                         .flat_map(|wheel| wheel.file.hashes.iter())
                         .collect::<FxHashSet<_>>()

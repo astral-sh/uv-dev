@@ -552,13 +552,13 @@ impl PrioritizedDist {
         // Remove any excluded wheels from the list of wheels, and adjust the wheel index to be
         // relative to the filtered list.
         let mut adjusted_wheels = Vec::with_capacity(self.0.wheels.len());
-        let mut adjusted_best_index = 0;
+        let mut adjusted_best_index = None;
         for (i, (wheel, compatibility)) in self.0.wheels.iter().enumerate() {
             if compatibility.is_excluded() {
                 continue;
             }
             if i == best_wheel_index {
-                adjusted_best_index = adjusted_wheels.len();
+                adjusted_best_index = Some(adjusted_wheels.len());
             }
             adjusted_wheels.push(wheel.clone());
         }
@@ -569,11 +569,7 @@ impl PrioritizedDist {
             .as_ref()
             .filter(|(_, compatibility)| !compatibility.is_excluded())
             .map(|(sdist, _)| sdist.clone());
-        Some(RegistryBuiltDist {
-            wheels: adjusted_wheels,
-            best_wheel_index: adjusted_best_index,
-            sdist,
-        })
+        RegistryBuiltDist::try_new(adjusted_wheels, adjusted_best_index?, sdist).ok()
     }
 
     /// If this prioritized dist has an sdist, then this creates a source
