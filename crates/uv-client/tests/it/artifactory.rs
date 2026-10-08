@@ -236,7 +236,7 @@ async fn artifactory_metadata_matches_advertised_behavior() -> Result<()> {
             .and(path("/simple/ok/"))
             .respond_with(
                 simple(
-                    &format!("/{WHEEL}?download=1#sha256=abcd"),
+                    &format!("/{WHEEL}?download=1#sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
                     advertisement,
                     false,
                 )
