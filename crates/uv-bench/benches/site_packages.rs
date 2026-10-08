@@ -95,6 +95,11 @@ fn discover_site_packages(criterion: &mut Criterion<WallTime>) {
         PathBuf::from,
     );
 
+    let fixture_mode = if directories_only {
+        "directories_only"
+    } else {
+        "mixed_entries"
+    };
     let mut group = criterion.benchmark_group("site_packages_from_environment");
     for package_count in [0, 50, 500, 5_000] {
         let site_packages = create_site_packages(&root, package_count, directories_only);
@@ -118,7 +123,7 @@ fn discover_site_packages(criterion: &mut Criterion<WallTime>) {
         drop(packages);
 
         group.bench_with_input(
-            BenchmarkId::from_parameter(package_count),
+            BenchmarkId::new(fixture_mode, package_count),
             &environment,
             |bencher, environment| {
                 bencher.iter(|| {
