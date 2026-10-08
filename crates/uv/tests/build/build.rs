@@ -840,43 +840,64 @@ async fn build_workspace_reads_shared_constraints_once() -> Result<()> {
     Mock::given(method("GET"))
         .and(path("/nested.txt"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_string("uv_build>=0 ; python_version >= '3.11'\n"),
+            ResponseTemplate::new(200)
+                .set_body_string("uv_build==0.5.15 ; python_version == '3.11'\n"),
         )
         .expect(1)
         .mount(&server)
         .await;
 
-    context
+    uv_snapshot!(context.filters(), context
         .build()
+        .arg("--quiet")
         .arg("--all-packages")
         .arg("--wheel")
+        .arg("--no-index")
         .arg("--build-constraint")
-        .arg(format!("{}/constraints.txt", server.uri()))
-        .assert()
-        .success();
-    for name in ["a", "b"] {
-        context
-            .temp_dir
-            .child("dist")
-            .child(format!("{name}-1.0.0-py3-none-any.whl"))
-            .assert(predicate::path::is_file());
-    }
+        .arg(format!("{}/constraints.txt", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `a @ [TEMP_DIR]/a`
+      cause: Failed to resolve requirements from `build-system.requires`
+      cause: No solution found when resolving: `uv-build`
+      cause: Because uv-build was not found in the provided package locations and you require uv-build{python_full_version < '3.12'}==0.5.15, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+    context
+        .temp_dir
+        .child("dist/a-1.0.0-py3-none-any.whl")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child("dist/b-1.0.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
     Mock::given(method("GET"))
         .and(path("/invalid.txt"))
         .respond_with(ResponseTemplate::new(200).set_body_string("invalid requirement ???\n"))
         .expect(1)
         .mount(&server)
         .await;
-    let output = context
+    uv_snapshot!(context.filters(), context
         .build()
+        .arg("--quiet")
         .arg("--all-packages")
         .arg("--wheel")
         .arg("--build-constraint")
-        .arg(format!("{}/invalid.txt", server.uri()))
-        .assert()
-        .code(2);
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
-    assert_eq!(stderr.matches("Failed to build").count(), 2);
+        .arg(format!("{}/invalid.txt", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `a @ [TEMP_DIR]/a`
+      cause: Couldn't parse requirement in `http://[LOCALHOST]/invalid.txt` at position 0
+      cause: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `r`
+             invalid requirement ???
+                     ^
+    error: Failed to build `b @ [TEMP_DIR]/b`
+      cause: Couldn't parse requirement in `http://[LOCALHOST]/invalid.txt` at position 0
+      cause: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `r`
+             invalid requirement ???
+                     ^
+    ");
     server.verify().await;
     Ok(())
 }
