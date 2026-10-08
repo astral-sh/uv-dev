@@ -1791,26 +1791,28 @@ async fn outdated_filters_inactive_extra_context() -> Result<()> {
         version = "1.0.0"
         source = {{ registry = "{url}/simple" }}
     "#, url = server.uri()})?;
-    let command = || {
-        let mut command = context.tree();
-        command
-            .args(["--frozen", "--universal", "--outdated"])
-            .env(EnvVars::UV_HTTP_RETRIES, "0");
-        command
-    };
-    uv_snapshot!(context.filters(), command().args(["--package", "a"]), @"
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--outdated"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--package", "a"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     a v1.0.0
     └── p v1.0.0
     ");
-    assert_json_snapshot!(json_tree_package_names(command().args(["--package", "a"]))?, @r#"
+    assert_json_snapshot!(json_tree_package_names(context.tree()
+        .args(["--frozen", "--universal", "--outdated"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--package", "a"]))?, @r#"
     [
       "a",
       "p"
     ]
     "#);
-    uv_snapshot!(context.filters(), command().args(["--package", "b"]), @"
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--outdated"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--package", "b"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to fetch: http://[LOCALHOST]/simple/x/
@@ -1825,25 +1827,36 @@ async fn outdated_filters_inactive_extra_context() -> Result<()> {
 async fn outdated_filters_graph_and_keeps_index_identity() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
-    for (index, latest, requests) in [("one", "2.0.0", 3), ("two", "3.0.0", 2)] {
-        Mock::given(method("GET"))
-            .and(path(format!("/{index}/simple/foo/")))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                format!("<a href=\"/foo-{latest}-py3-none-any.whl\">foo</a>"),
-                "text/html",
-            ))
-            .expect(requests)
-            .mount(&server)
-            .await;
-    }
-    for name in ["hidden", "dev-only"] {
-        Mock::given(method("GET"))
-            .and(path(format!("/one/simple/{name}/")))
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
-            .mount(&server)
-            .await;
-    }
+    Mock::given(method("GET"))
+        .and(path("/one/simple/foo/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"<a href="/foo-2.0.0-py3-none-any.whl">foo</a>"#,
+            "text/html",
+        ))
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/two/simple/foo/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"<a href="/foo-3.0.0-py3-none-any.whl">foo</a>"#,
+            "text/html",
+        ))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/one/simple/hidden/"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/one/simple/dev-only/"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
     context
         .temp_dir
         .child("pyproject.toml")
@@ -1898,56 +1911,88 @@ async fn outdated_filters_graph_and_keeps_index_identity() -> Result<()> {
         [package.dev-dependencies]
         dev = [{{ name = "dev-only" }}]
     "#})?;
-    let command = || {
-        let mut command = context.tree();
-        command
-            .args(["--frozen", "--outdated", "--no-default-groups"])
-            .env(EnvVars::UV_HTTP_RETRIES, "0");
-        command
-    };
-    uv_snapshot!(context.filters(), command().args(["--universal", "--package", "foo"]), @"
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--outdated", "--no-default-groups"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--universal", "--package", "foo"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     foo v1.0.0 (latest: v2.0.0)
     foo v1.0.0 (latest: v3.0.0)
     ");
-    uv_snapshot!(context.filters(), command().args(["--python-version", "3.12", "--prune", "hidden"]), @"
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--outdated", "--no-default-groups"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--python-version", "3.12", "--prune", "hidden"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v1.0.0
     └── foo v1.0.0 (latest: v2.0.0)
     ");
-    uv_snapshot!(context.filters(), command().args(["--universal", "--prune", "foo", "--prune", "hidden"]), @"
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--outdated", "--no-default-groups"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--universal", "--prune", "foo", "--prune", "hidden"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v1.0.0
     ");
-    let output = command()
-        .args([
-            "--universal",
-            "--package",
-            "foo",
-            "--preview-features",
-            "json-output",
-            "--format",
-            "json",
-        ])
-        .output()?;
-    output.clone().assert().success();
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    let mut latest = report["resolution"]
-        .as_object()
-        .context("resolution object")?
-        .values()
-        .filter(|node| node["name"] == "foo")
-        .map(|node| node["latest_version"].clone())
-        .collect::<Vec<_>>();
-    latest.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
-    assert_json_snapshot!(latest, @r#"
-    [
-      "2.0.0",
-      "3.0.0"
-    ]
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--outdated", "--no-default-groups"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .args(["--universal", "--package", "foo", "--preview-features", "json-output", "--format", "json"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "roots": [
+        {
+          "id": "foo==1.0.0@registry+http://[LOCALHOST]/one/simple"
+        },
+        {
+          "id": "foo==1.0.0@registry+http://[LOCALHOST]/two/simple"
+        }
+      ],
+      "inverted": false,
+      "resolution": {
+        "foo==1.0.0@registry+http://[LOCALHOST]/one/simple": {
+          "name": "foo",
+          "version": "1.0.0",
+          "source": {
+            "registry": {
+              "url": "http://[LOCALHOST]/one/simple"
+            }
+          },
+          "kind": "package",
+          "dependencies": [],
+          "latest_version": "2.0.0"
+        },
+        "foo==1.0.0@registry+http://[LOCALHOST]/two/simple": {
+          "name": "foo",
+          "version": "1.0.0",
+          "source": {
+            "registry": {
+              "url": "http://[LOCALHOST]/two/simple"
+            }
+          },
+          "kind": "package",
+          "dependencies": [],
+          "latest_version": "3.0.0"
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
     "#);
     server.verify().await;
     Ok(())

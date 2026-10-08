@@ -6,7 +6,7 @@ use assert_fs::fixture::FileTouch;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
 use assert_fs::fixture::PathCreateDir;
-use indoc::{formatdoc, indoc};
+use indoc::indoc;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
@@ -933,58 +933,85 @@ fn print_output_even_with_quite_flag() {
 #[tokio::test]
 async fn outdated_filters_selected_graph() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    for (name, dependencies) in [
-        ("root", "Requires-Dist: child\n"),
-        ("child", "Requires-Dist: missing\n"),
-        ("hidden", ""),
-    ] {
-        let directory = context
-            .site_packages()
-            .join(format!("{name}-1.0.0.dist-info"));
-        fs_err::create_dir_all(&directory)?;
-        fs_err::write(
-            directory.join("METADATA"),
-            formatdoc! {"
-            Metadata-Version: 2.3
-            Name: {name}
-            Version: 1.0.0
-            {dependencies}
-        "},
-        )?;
-        fs_err::write(
-            directory.join("WHEEL"),
-            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-        )?;
-    }
+    let root = context.site_packages().join("root-1.0.0.dist-info");
+    fs_err::create_dir_all(&root)?;
+    fs_err::write(
+        root.join("METADATA"),
+        indoc! {"
+        Metadata-Version: 2.3
+        Name: root
+        Version: 1.0.0
+        Requires-Dist: child
+    "},
+    )?;
+    fs_err::write(
+        root.join("WHEEL"),
+        "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    )?;
+
+    let child = context.site_packages().join("child-1.0.0.dist-info");
+    fs_err::create_dir_all(&child)?;
+    fs_err::write(
+        child.join("METADATA"),
+        indoc! {"
+        Metadata-Version: 2.3
+        Name: child
+        Version: 1.0.0
+        Requires-Dist: missing
+    "},
+    )?;
+    fs_err::write(
+        child.join("WHEEL"),
+        "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    )?;
+
+    let hidden = context.site_packages().join("hidden-1.0.0.dist-info");
+    fs_err::create_dir_all(&hidden)?;
+    fs_err::write(
+        hidden.join("METADATA"),
+        indoc! {"
+        Metadata-Version: 2.3
+        Name: hidden
+        Version: 1.0.0
+    "},
+    )?;
+    fs_err::write(
+        hidden.join("WHEEL"),
+        "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    )?;
+
     let server = MockServer::start().await;
-    for (name, requests) in [("root", 3), ("child", 2)] {
-        Mock::given(method("GET"))
-            .and(path(format!("/simple/{name}/")))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                format!("<a href=\"/{name}-2.0.0-py3-none-any.whl\">{name}</a>"),
-                "text/html",
-            ))
-            .expect(requests)
-            .mount(&server)
-            .await;
-    }
+    Mock::given(method("GET"))
+        .and(path("/simple/root/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"<a href="/root-2.0.0-py3-none-any.whl">root</a>"#,
+            "text/html",
+        ))
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/child/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"<a href="/child-2.0.0-py3-none-any.whl">child</a>"#,
+            "text/html",
+        ))
+        .expect(2)
+        .mount(&server)
+        .await;
     Mock::given(method("GET"))
         .and(path("/simple/hidden/"))
         .respond_with(ResponseTemplate::new(500))
         .expect(0)
         .mount(&server)
         .await;
-    let command = || {
-        let mut command = context.pip_tree();
-        command
-            .arg("--outdated")
-            .arg("--index-url")
-            .arg(format!("{}/simple", server.uri()))
-            .env(EnvVars::UV_HTTP_RETRIES, "0")
-            .env_remove(EnvVars::UV_EXCLUDE_NEWER);
-        command
-    };
-    uv_snapshot!(context.filters(), command().arg("--package").arg("root").arg("--strict"), @"
+    uv_snapshot!(context.filters(), context.pip_tree()
+        .arg("--outdated")
+        .arg("--index-url")
+        .arg(format!("{}/simple", server.uri()))
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--package").arg("root").arg("--strict"), @"
     exit_code: 0 (success)
     ----- stdout -----
     root v1.0.0 (latest: v2.0.0)
@@ -993,18 +1020,36 @@ async fn outdated_filters_selected_graph() -> Result<()> {
     ----- stderr -----
     warning: The package `child` requires `missing`, but it's not installed
     ");
-    uv_snapshot!(context.filters(), command().arg("--package").arg("child").arg("--invert"), @"
+    uv_snapshot!(context.filters(), context.pip_tree()
+        .arg("--outdated")
+        .arg("--index-url")
+        .arg(format!("{}/simple", server.uri()))
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--package").arg("child").arg("--invert"), @"
     exit_code: 0 (success)
     ----- stdout -----
     child v1.0.0 (latest: v2.0.0)
     └── root v1.0.0 (latest: v2.0.0)
     ");
-    uv_snapshot!(context.filters(), command().arg("--package").arg("root").arg("--prune").arg("child"), @"
+    uv_snapshot!(context.filters(), context.pip_tree()
+        .arg("--outdated")
+        .arg("--index-url")
+        .arg(format!("{}/simple", server.uri()))
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--package").arg("root").arg("--prune").arg("child"), @"
     exit_code: 0 (success)
     ----- stdout -----
     root v1.0.0 (latest: v2.0.0)
     ");
-    uv_snapshot!(context.filters(), command().arg("--package").arg("absent"), @"
+    uv_snapshot!(context.filters(), context.pip_tree()
+        .arg("--outdated")
+        .arg("--index-url")
+        .arg(format!("{}/simple", server.uri()))
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--package").arg("absent"), @"
     exit_code: 0 (success)
     ");
     server.verify().await;
