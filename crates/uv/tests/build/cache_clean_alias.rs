@@ -6,7 +6,10 @@ use uv_test::uv_snapshot;
 
 #[test]
 fn clean_cache_directory_link() -> Result<()> {
-    for relative in [false, true] {
+    for (relative, suffix) in [false, true]
+        .into_iter()
+        .flat_map(|relative| ["", "/", "/."].map(|suffix| (relative, suffix)))
+    {
         if cfg!(windows) && relative {
             continue;
         }
@@ -23,7 +26,9 @@ fn clean_cache_directory_link() -> Result<()> {
         } else {
             target.path()
         };
-        uv_fs::create_symlink(link_target, context.cache_dir.path())?;
+        let link = context.cache_dir.path().to_path_buf();
+        uv_fs::create_symlink(link_target, &link)?;
+        let context = context.with_cache_dir(format!("{}{suffix}", link.display()));
 
         insta::allow_duplicates! {
             uv_snapshot!(context.filters(), context.clean(), @"
@@ -34,7 +39,7 @@ fn clean_cache_directory_link() -> Result<()> {
             ");
         }
 
-        assert!(fs_err::symlink_metadata(context.cache_dir.path())?.is_symlink());
+        assert!(fs_err::symlink_metadata(&link)?.is_symlink());
         assert_eq!(fs_err::read_dir(target.path())?.count(), 0);
         assert_eq!(
             fs_err::read(external.child("sentinel"))?,
