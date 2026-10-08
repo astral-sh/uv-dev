@@ -1535,10 +1535,8 @@ fn prefix_site_packages<'a>(
 }
 
 fn init_prefix(prefix: &Prefix, virtualenv: &Scheme) -> io::Result<()> {
-    for site_packages in prefix_site_packages(prefix, virtualenv) {
-        fs::create_dir_all(site_packages)?;
-    }
-    Ok(())
+    // Read-only commands inspect prefixes too; a distinct platlib may not exist yet.
+    fs::create_dir_all(prefix.root().join(&virtualenv.purelib))
 }
 
 #[cfg(test)]
@@ -1576,7 +1574,7 @@ mod prefix_tests {
 
         init_prefix(&prefix, &virtualenv)?;
         assert!(root.join("lib/python3.12/site-packages").is_dir());
-        assert!(root.join("lib64/python3.12/site-packages").is_dir());
+        assert!(!root.join("lib64/python3.12/site-packages").exists());
 
         let combined = Scheme {
             platlib: virtualenv.purelib.clone(),
