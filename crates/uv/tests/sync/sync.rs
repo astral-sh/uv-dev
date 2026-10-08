@@ -18758,7 +18758,18 @@ async fn sync_malware_check_url_invalid() {
         .env(EnvVars::UV_MALWARE_CHECK_URL, "not-a-url"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse environment variable `UV_MALWARE_CHECK_URL` with invalid value `not-a-url`: relative URL without a base
+    error: Failed to parse environment variable `UV_MALWARE_CHECK_URL` with invalid value `[invalid URL]`: relative URL without a base
+    ");
+}
+
+#[test]
+fn malformed_malware_check_url_is_redacted() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    uv_snapshot!(context.sync()
+        .env(EnvVars::UV_MALWARE_CHECK_URL, "https://user:password@example.com:invalid/check?sig=signature"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse environment variable `UV_MALWARE_CHECK_URL` with invalid value `[invalid URL]`: invalid port number
     ");
 }
 

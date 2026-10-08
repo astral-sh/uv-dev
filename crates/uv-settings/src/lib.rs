@@ -13,7 +13,7 @@ use uv_fs::Simplified;
 use uv_normalize::{GroupName, PackageName};
 use uv_pep440::Version;
 use uv_python_types::PythonArchitecture;
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlInput};
 use uv_static::{EnvVars, InvalidEnvironmentVariable, parse_boolish_environment_variable};
 use uv_torch::AmdGpuArchitecture;
 use uv_warnings::warn_user;
@@ -710,6 +710,29 @@ pub enum Error {
 
     #[error(transparent)]
     InvalidEnvironmentVariable(#[from] InvalidEnvironmentVariable),
+
+    #[error("Failed to parse environment variable `{name}` with invalid value `{value}`: {err}")]
+    InvalidUrlEnvironmentVariable {
+        name: String,
+        value: DisplaySafeUrlInput,
+        err: String,
+    },
+}
+
+impl Error {
+    fn redact_url(self) -> Self {
+        if let Self::InvalidEnvironmentVariable(InvalidEnvironmentVariable { name, value, err }) =
+            self
+        {
+            Self::InvalidUrlEnvironmentVariable {
+                name,
+                value: value.into(),
+                err,
+            }
+        } else {
+            self
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -949,17 +972,21 @@ impl EnvironmentOptions {
             venv_relocatable: EnvFlag::new(EnvVars::UV_VENV_RELOCATABLE)?,
             init_bare: EnvFlag::new(EnvVars::UV_INIT_BARE)?,
             malware_check: EnvFlag::new(EnvVars::UV_MALWARE_CHECK)?,
-            malware_check_url: parse_string_environment_variable(EnvVars::UV_MALWARE_CHECK_URL)?
-                .map(|value| {
-                    value.parse::<DisplaySafeUrl>().map_err(|err| {
-                        Error::InvalidEnvironmentVariable(InvalidEnvironmentVariable {
-                            name: EnvVars::UV_MALWARE_CHECK_URL.to_string(),
-                            value,
-                            err: err.to_string(),
+            malware_check_url: parse_string_environment_variable(EnvVars::UV_MALWARE_CHECK_URL)
+                .and_then(|value| {
+                    value
+                        .map(|value| {
+                            value.parse::<DisplaySafeUrl>().map_err(|err| {
+                                Error::InvalidEnvironmentVariable(InvalidEnvironmentVariable {
+                                    name: EnvVars::UV_MALWARE_CHECK_URL.to_string(),
+                                    value,
+                                    err: err.to_string(),
+                                })
+                            })
                         })
-                    })
+                        .transpose()
                 })
-                .transpose()?,
+                .map_err(Error::redact_url)?,
             #[cfg(unix)]
             run_rlimit_nofile: parse_integer_environment_variable(
                 EnvVars::UV_RUN_RLIMIT_NOFILE,

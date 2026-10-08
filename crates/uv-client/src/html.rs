@@ -9,7 +9,7 @@ use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifiers, VersionSpecifiersParseError};
 use uv_pypi_types::{BaseUrl, CoreMetadata, Hashes, ProjectStatus, PypiFile, Status, Yanked};
 use uv_pypi_types::{HashError, LenientVersionSpecifiers};
-use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
+use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError, DisplaySafeUrlInput};
 use uv_small_str::SmallString;
 
 type RequiresPythonResult = Result<Arc<VersionSpecifiers>, VersionSpecifiersParseError>;
@@ -160,8 +160,8 @@ impl SimpleDetailHTML {
         let Some(href) = attribute(base, "href") else {
             return Ok(None);
         };
-        let url =
-            DisplaySafeUrl::parse(href).map_err(|err| Error::UrlParse(href.to_string(), err))?;
+        let url = DisplaySafeUrl::parse(href)
+            .map_err(|err| Error::UrlParse(href.to_string().into(), err))?;
         Ok(Some(url))
     }
 
@@ -346,7 +346,7 @@ pub enum Error {
     FromUtf8(#[from] std::string::FromUtf8Error),
 
     #[error("Failed to parse URL: {0}")]
-    UrlParse(String, #[source] DisplaySafeUrlError),
+    UrlParse(DisplaySafeUrlInput, #[source] DisplaySafeUrlError),
 
     #[error(transparent)]
     HtmlParse(#[from] astral_html::Error),
@@ -373,6 +373,26 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_base_url_context_is_redacted() -> Result<(), Box<dyn std::error::Error>> {
+        let base = DisplaySafeUrl::parse("https://example.com/simple/")?;
+        let text = r#"<html><head><base href="https://user:password@example.com:invalid/?sig=signature"></head><body></body></html>"#;
+        let error = SimpleDetailHTML::parse(text, &base).unwrap_err();
+        insta::assert_snapshot!(error, @"Failed to parse URL: [invalid URL]");
+        let Error::UrlParse(input, source) = error else {
+            return Err("expected a base URL error".into());
+        };
+        assert_eq!(
+            input.as_ref(),
+            "https://user:password@example.com:invalid/?sig=signature"
+        );
+        assert_eq!(
+            source,
+            DisplaySafeUrlError::Url(url::ParseError::InvalidPort)
+        );
+        Ok(())
+    }
 
     #[test]
     fn parse_sha256() {
