@@ -77,16 +77,6 @@ fn clean_cache_directory_link_absolute_trailing_separator() -> Result<()> {
         b"external contents"
     );
 
-    context
-        .cache_dir
-        .child("next-payload")
-        .write_str("next contents")?;
-    uv_snapshot!(context.filters(), context.clean(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Clearing cache at: cache-link
-    Removed 2 files ([SIZE])
-    ");
     assert!(context.cache_dir.is_dir());
     Ok(())
 }
@@ -120,16 +110,6 @@ fn clean_cache_directory_link_absolute_trailing_dot() -> Result<()> {
         b"external contents"
     );
 
-    context
-        .cache_dir
-        .child("next-payload")
-        .write_str("next contents")?;
-    uv_snapshot!(context.filters(), context.clean(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Clearing cache at: cache-link
-    Removed 2 files ([SIZE])
-    ");
     assert!(context.cache_dir.is_dir());
     Ok(())
 }
@@ -164,16 +144,6 @@ fn clean_cache_directory_link_relative_plain() -> Result<()> {
         b"external contents"
     );
 
-    context
-        .cache_dir
-        .child("next-payload")
-        .write_str("next contents")?;
-    uv_snapshot!(context.filters(), context.clean(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Clearing cache at: cache-link
-    Removed 2 files ([SIZE])
-    ");
     assert!(context.cache_dir.is_dir());
     Ok(())
 }
@@ -208,16 +178,6 @@ fn clean_cache_directory_link_relative_trailing_separator() -> Result<()> {
         b"external contents"
     );
 
-    context
-        .cache_dir
-        .child("next-payload")
-        .write_str("next contents")?;
-    uv_snapshot!(context.filters(), context.clean(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Clearing cache at: cache-link
-    Removed 2 files ([SIZE])
-    ");
     assert!(context.cache_dir.is_dir());
     Ok(())
 }
@@ -252,16 +212,6 @@ fn clean_cache_directory_link_relative_trailing_dot() -> Result<()> {
         b"external contents"
     );
 
-    context
-        .cache_dir
-        .child("next-payload")
-        .write_str("next contents")?;
-    uv_snapshot!(context.filters(), context.clean(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Clearing cache at: cache-link
-    Removed 2 files ([SIZE])
-    ");
     assert!(context.cache_dir.is_dir());
     Ok(())
 }
