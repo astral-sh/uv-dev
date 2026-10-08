@@ -21,7 +21,7 @@ use uv_environment_operations::{
 };
 use uv_fs::normalize_path;
 use uv_install_operations::loggers::SummaryInstallLogger;
-use uv_lock_operations::{LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockMode, LockOperation, LockResult, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -393,32 +393,38 @@ pub async fn check(
             })
             .ok();
         let sync_state = state.fork();
-        let mode = if let Some(frozen_source) = frozen {
-            LockMode::Frozen(frozen_source.into())
-        } else if let LockCheck::Enabled(lock_check) = lock_check {
-            LockMode::Locked(venv.interpreter(), lock_check)
-        } else if isolated || !lock_target.lock_path().is_file() {
-            LockMode::DryRun(venv.interpreter())
+
+        let lock_result = if let Some(frozen_source) = frozen {
+            lock_target
+                .read_frozen(frozen_source.into())
+                .await
+                .map(LockResult::Unchanged)
         } else {
-            LockMode::Write(venv.interpreter())
-        };
-        let result = match Box::pin(
-            LockOperation::new(
-                mode,
-                &settings.resolver,
-                &client_builder,
-                &state,
-                Box::new(SummaryResolveLogger),
-                &concurrency,
-                cache,
-                workspace_cache,
-                printer,
-                preview,
+            let mode = if let LockCheck::Enabled(lock_check) = lock_check {
+                LockMode::Locked(venv.interpreter(), lock_check)
+            } else if isolated || !lock_target.lock_path().is_file() {
+                LockMode::DryRun(venv.interpreter())
+            } else {
+                LockMode::Write(venv.interpreter())
+            };
+            Box::pin(
+                LockOperation::new(
+                    mode,
+                    &settings.resolver,
+                    &client_builder,
+                    &state,
+                    Box::new(SummaryResolveLogger),
+                    &concurrency,
+                    cache,
+                    workspace_cache,
+                    printer,
+                    preview,
+                )
+                .execute(lock_target),
             )
-            .execute(lock_target),
-        )
-        .await
-        {
+            .await
+        };
+        let result = match lock_result {
             Ok(result) => result,
             Err(err) => return Err(UvError::from(err).into()),
         };
@@ -569,39 +575,43 @@ pub async fn check(
                 .ok();
         }
 
-        let mode = if let Some(frozen_source) = frozen {
-            LockMode::Frozen(frozen_source.into())
-        } else if let LockCheck::Enabled(lock_check) = lock_check {
-            LockMode::Locked(lock_interpreter, lock_check)
-        } else if isolated {
-            LockMode::DryRun(lock_interpreter)
-        } else {
-            LockMode::Write(lock_interpreter)
-        };
-
         let selection = PackageSelection::from_args(all_packages, &package, project.project_name());
-        let result = match Box::pin(
-            LockOperation::new(
-                mode,
-                &settings.resolver,
-                &client_builder,
-                &state,
-                Box::new(SummaryResolveLogger),
-                &concurrency,
-                cache,
-                workspace_cache,
-                printer,
-                preview,
+        let lock_result = if let Some(frozen_source) = frozen {
+            LockTarget::Workspace(project.workspace())
+                .read_frozen(frozen_source.into())
+                .await
+                .map(LockResult::Unchanged)
+        } else {
+            let mode = if let LockCheck::Enabled(lock_check) = lock_check {
+                LockMode::Locked(lock_interpreter, lock_check)
+            } else if isolated {
+                LockMode::DryRun(lock_interpreter)
+            } else {
+                LockMode::Write(lock_interpreter)
+            };
+            Box::pin(
+                LockOperation::new(
+                    mode,
+                    &settings.resolver,
+                    &client_builder,
+                    &state,
+                    Box::new(SummaryResolveLogger),
+                    &concurrency,
+                    cache,
+                    workspace_cache,
+                    printer,
+                    preview,
+                )
+                .with_first_party_exclusions(selection.first_party_exclusions(
+                    project.workspace(),
+                    project.project_name(),
+                    &install_options,
+                ))
+                .execute(project.workspace().into()),
             )
-            .with_first_party_exclusions(selection.first_party_exclusions(
-                project.workspace(),
-                project.project_name(),
-                &install_options,
-            ))
-            .execute(project.workspace().into()),
-        )
-        .await
-        {
+            .await
+        };
+        let result = match lock_result {
             Ok(result) => result,
             Err(err) => return Err(UvError::from(err).into()),
         };
