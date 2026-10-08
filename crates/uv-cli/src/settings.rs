@@ -5080,13 +5080,24 @@ impl AuthTokenSettings {
     }
 }
 
-/// The resolved settings to use for an invocation of the `uv auth set` CLI.
-#[derive(Debug, Clone)]
+/// The resolved settings to use for an invocation of the `uv auth login` CLI.
+#[derive(Clone)]
 pub struct AuthLoginSettings {
     pub service: Service,
     pub username: Option<String>,
     pub password: Option<String>,
     pub token: Option<String>,
+}
+
+impl fmt::Debug for AuthLoginSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthLoginSettings")
+            .field("service", &self.service)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "****"))
+            .field("token", &self.token.as_ref().map(|_| "****"))
+            .finish()
+    }
 }
 
 impl AuthLoginSettings {
