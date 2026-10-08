@@ -24,7 +24,7 @@ use uv_install_wheel::Layout;
 use uv_pep440::Version;
 use uv_pep508::{MarkerEnvironment, StringVersion};
 use uv_platform::{Arch, Libc, Os};
-use uv_platform_tags::{Platform, Tags, TagsError, TagsOptions};
+use uv_platform_tags::{Platform, TagImplementation, Tags, TagsError, TagsOptions};
 use uv_pypi_types::{ResolverMarkerEnvironment, Scheme};
 use uv_static::EnvVars;
 
@@ -289,17 +289,19 @@ impl Interpreter {
     /// Returns the [`Tags`] for this Python executable.
     pub fn tags(&self) -> Result<&Tags, TagsError> {
         if self.tags.get().is_none() {
-            let tags = Tags::from_env(
+            let options = TagsOptions {
+                manylinux_compatible: self.manylinux_compatible,
+                gil_disabled: self.gil_disabled,
+                debug_enabled: self.debug_enabled,
+                is_cross: false,
+            };
+            let implementation = TagImplementation::from_env(self.implementation_name(), options)?;
+            let tags = Tags::from_implementation(
                 self.platform().clone(),
                 self.python_tuple(),
-                self.implementation_name(),
+                implementation,
                 self.implementation_tuple(),
-                TagsOptions {
-                    manylinux_compatible: self.manylinux_compatible,
-                    gil_disabled: self.gil_disabled,
-                    debug_enabled: self.debug_enabled,
-                    is_cross: false,
-                },
+                options,
             )?;
             self.tags.set(tags).expect("tags should not be set");
         }
