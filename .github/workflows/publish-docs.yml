@@ -113,6 +113,7 @@ jobs:
         run: rm -rf astral-docs/site/uv && mkdir -p astral-docs/site && cp -r site/uv astral-docs/site/
 
       - name: "Commit docs"
+        id: commit
         working-directory: astral-docs
         run: |
           git config user.name "astral-releases-bot[bot]"
@@ -120,36 +121,22 @@ jobs:
 
           git checkout -b "${branch_name}"
           git add site/uv
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git commit -m "Update uv documentation for $version"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: "Create Pull Request"
+        if: ${{ steps.commit.outputs.changed == 'true' }}
         working-directory: astral-docs
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
-        run: |
-          # set the PR title
-          pull_request_title="Update uv documentation for ${display_name}"
-
-          # Delete any existing pull requests that are open for this version
-          # by checking against pull_request_title because the new PR will
-          # supersede the old one.
-          gh pr list --state open --json title --jq '.[] | select(.title == "$pull_request_title") | .number' | \
-            xargs -I {} gh pr close {}
-
-          # push the branch to GitHub
-          gh auth setup-git
-          git push origin "${branch_name}"
-
-          # create the PR
-          gh pr create \
-            --base=main \
-            --head="${branch_name}" \
-            --title="${pull_request_title}" \
-            --body="Automated documentation update for ${display_name}" \
-            --label="documentation"
+        run: python3 ../scripts/publish-docs-pr.py "$branch_name" "$display_name"
 
       - name: "Merge Pull Request"
-        if: ${{ inputs.plan != '' && !fromJson(inputs.plan).announcement_tag_is_implicit }}
+        if: ${{ steps.commit.outputs.changed == 'true' && inputs.plan != '' && !fromJson(inputs.plan).announcement_tag_is_implicit }}
         working-directory: astral-docs
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
