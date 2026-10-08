@@ -254,9 +254,12 @@ fn prepare_permissions(_original: &fs_err::File, _staged: &fs_err::File) -> bool
 
 #[cfg(target_os = "linux")]
 fn plain_access_metadata(file: &fs_err::File) -> bool {
-    // POSIX ACLs, capabilities and security labels are extended attributes. Inode replacement is
-    // conservative when the filesystem cannot report them, including unsupported queries.
+    // POSIX ACLs, capabilities and security labels are extended attributes. Inode flags also
+    // carry policy, such as `NODUMP` or `NOATIME`. Extents describe storage layout and are the only
+    // permitted flag; unknown flags and unsupported queries require an in-place write.
     rustix::fs::flistxattr(file, &mut [0u8; 0]).is_ok_and(|length| length == 0)
+        && rustix::fs::ioctl_getflags(file)
+            .is_ok_and(|flags| flags.bits() & !linux_raw_sys::general::FS_EXTENT_FL == 0)
 }
 
 #[cfg(target_os = "macos")]
@@ -323,6 +326,9 @@ mod tests {
     use std::path::Path;
     #[cfg(target_os = "macos")]
     use std::process::Command;
+
+    #[cfg(target_os = "linux")]
+    use rustix::fs::{IFlags, ioctl_getflags, ioctl_setflags};
 
     use super::{FilePublication, write_file};
 
@@ -538,6 +544,35 @@ mod tests {
         let cleanup = Command::new("chmod").arg("-N").arg(&path).status()?;
         assert!(cleanup.success());
         assert!(String::from_utf8_lossy(&acl.stdout).contains("everyone deny delete"));
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_inode_flags_use_in_place_publication() -> io::Result<()> {
+        for flag in [IFlags::NODUMP, IFlags::NOATIME] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("pyproject.toml");
+            fs_err::write(&path, "original")?;
+            let file = fs_err::OpenOptions::new().write(true).open(&path)?;
+            let original = match ioctl_getflags(&file) {
+                Ok(flags) => flags,
+                Err(_) => {
+                    // Filesystems without flag queries must use the conservative fallback too.
+                    assert!(!FilePublication::new(&path)?.is_staged());
+                    write_file(&path, b"replacement")?;
+                    assert_eq!(fs_err::read(&path)?, b"replacement");
+                    return Ok(());
+                }
+            };
+            ioctl_setflags(&file, original | flag)?;
+            assert!(!FilePublication::new(&path)?.is_staged());
+            write_file(&path, b"replacement")?;
+            assert_eq!(fs_err::read(&path)?, b"replacement");
+            assert_eq!(ioctl_getflags(&file)?, original | flag);
+            let published = fs_err::File::open(&path)?;
+            assert_eq!(ioctl_getflags(&published)?, original | flag);
+        }
         Ok(())
     }
 
