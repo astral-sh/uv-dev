@@ -1607,10 +1607,11 @@ impl ParsedRunCommand {
             .send()
             .await?
             .error_for_status()
-            .map_err(|err| {
-                let mut safe_url = url.clone();
-                safe_url.set_query(None);
-                anyhow!("{} for url ({safe_url})", err.without_url())
+            .map_err(|mut error| {
+                if let Some(url) = error.url_mut() {
+                    sanitize_remote_script_url(url);
+                }
+                error
             })?;
 
         let gist_url;
@@ -1626,10 +1627,11 @@ impl ParsedRunCommand {
                 .send()
                 .await?
                 .error_for_status()
-                .map_err(|err| {
-                    let mut safe_url = url.clone();
-                    safe_url.set_query(None);
-                    anyhow!("{} for url ({safe_url})", err.without_url())
+                .map_err(|mut error| {
+                    if let Some(url) = error.url_mut() {
+                        sanitize_remote_script_url(url);
+                    }
+                    error
                 })?;
         }
 
@@ -1918,6 +1920,13 @@ impl std::fmt::Display for RunCommand {
             }
         }
     }
+}
+
+/// Remove secrets from the URL attached to a remote-script HTTP error.
+fn sanitize_remote_script_url(url: &mut Url) {
+    url.set_query(None);
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
 }
 
 /// Resolve a GitHub Gist URL to its raw file URL using the GitHub API.

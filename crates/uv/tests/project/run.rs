@@ -4784,6 +4784,31 @@ fn run_remote_pep723_script_with_nonexistent_ssl_cert_file() {
 }
 
 #[tokio::test]
+async fn run_remote_script_redirect_http_error() {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/script.py"))
+        .respond_with(ResponseTemplate::new(302).insert_header(
+            "Location",
+            format!("{}/download.py?token=private-token", server.uri()),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/download.py"))
+        .respond_with(ResponseTemplate::new(403).set_body_string("print('unexpected execution')"))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.run().arg(format!("{}/script.py", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/download.py)
+    ");
+}
+
+#[tokio::test]
 async fn run_remote_script_http_error() {
     let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
