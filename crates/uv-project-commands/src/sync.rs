@@ -58,7 +58,7 @@ pub struct SyncCheckError(uv_install_operations::Error);
 impl uv_errors::Hinted for SyncCheckError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         uv_errors::Hints::from(
-            "Rerun the same `uv sync` invocation without `--check` to update the environment.",
+            "Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.",
         )
     }
 }

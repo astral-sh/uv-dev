@@ -2050,7 +2050,7 @@ fn sync_json_check_outdated_environment() -> Result<()> {
      + iniconfig==2.0.0
     error: The environment is outdated
 
-    hint: Rerun the same `uv sync` invocation without `--check` to update the environment.
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
     "#);
 
     Ok(())
@@ -2639,7 +2639,7 @@ fn check_script_recovery_keeps_invocation() -> Result<()> {
             ----- stderr -----
             error: The environment is outdated
 
-            hint: Rerun the same `uv sync` invocation without `--check` to update the environment.
+            hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
             ");
         }
         command().assert().success();
@@ -2688,13 +2688,23 @@ fn check_project_group_recovery_keeps_invocation() -> Result<()> {
         ]);
         command
     };
+    uv_snapshot!(context.filters(), command().args(["--check", "--dry-run"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: The environment is outdated
+
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
+    ");
+    // Removing only `--check` still leaves the environment unchanged.
+    command().arg("--dry-run").assert().success();
     uv_snapshot!(context.filters(), command().arg("--check"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: The environment is outdated
 
-    hint: Rerun the same `uv sync` invocation without `--check` to update the environment.
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
     ");
+
     command().assert().success();
     uv_snapshot!(context.filters(), command().arg("--check"), @"
     exit_code: 0 (success)
@@ -2729,7 +2739,7 @@ fn check() -> Result<()> {
      + iniconfig==2.0.0
     error: The environment is outdated
 
-    hint: Rerun the same `uv sync` invocation without `--check` to update the environment.
+    hint: Rerun the same `uv sync` invocation without `--check` (and `--dry-run`, if supplied) to update the environment.
     ");
 
     // Sync the environment.
