@@ -8653,7 +8653,23 @@ fn remove_build_failure_reverts_project_without_lockfile() -> Result<()> {
     "#})?;
     let pyproject = context.read("pyproject.toml");
 
-    context.remove().arg("iniconfig").assert().code(1);
+    uv_snapshot!(context.filters(), context.remove().arg("iniconfig"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_editable` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/backend.py", line 5, in build_editable
+                 raise RuntimeError("build failed")
+             RuntimeError: build failed
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
     context
         .temp_dir
         .child("built")
@@ -8696,7 +8712,23 @@ fn remove_build_failure_reverts_project_with_lockfile() -> Result<()> {
     let pyproject = context.read("pyproject.toml");
     let lock = context.read("uv.lock");
 
-    context.remove().arg("iniconfig").assert().code(1);
+    uv_snapshot!(context.filters(), context.remove().arg("iniconfig"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_editable` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/backend.py", line 5, in build_editable
+                 raise RuntimeError("build failed")
+             RuntimeError: build failed
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
     context
         .temp_dir
         .child("built")
@@ -8734,7 +8766,23 @@ fn version_build_failure_reverts_project_without_lockfile() -> Result<()> {
     "#})?;
     let pyproject = context.read("pyproject.toml");
 
-    context.version().args(["--bump", "minor"]).assert().code(1);
+    uv_snapshot!(context.filters(), context.version().args(["--bump", "minor"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_editable` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/backend.py", line 5, in build_editable
+                 raise RuntimeError("build failed")
+             RuntimeError: build failed
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
     context
         .temp_dir
         .child("built")
@@ -8777,7 +8825,23 @@ fn version_build_failure_reverts_project_with_lockfile() -> Result<()> {
     let pyproject = context.read("pyproject.toml");
     let lock = context.read("uv.lock");
 
-    context.version().args(["--bump", "minor"]).assert().code(1);
+    uv_snapshot!(context.filters(), context.version().args(["--bump", "minor"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_editable` failed (exit status: 1)
+
+             [stderr]
+             Traceback (most recent call last):
+               File "<string>", line 11, in <module>
+               File "[TEMP_DIR]/backend.py", line 5, in build_editable
+                 raise RuntimeError("build failed")
+             RuntimeError: build failed
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    "#);
     context
         .temp_dir
         .child("built")
