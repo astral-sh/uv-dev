@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fmt::Debug;
 
 use same_file::is_same_file;
@@ -59,11 +58,9 @@ impl RequirementSatisfaction {
         // If the distribution was built with other settings, it is out of date.
         if let Some(build_settings) = build_settings
             && distribution.build_info().is_some_and(|dist_build_info| {
-                let config_settings = config_settings_for(
-                    name,
-                    build_settings.config_settings,
-                    build_settings.config_settings_package,
-                );
+                let config_settings = build_settings
+                    .config_settings_package
+                    .for_package(Some(name), build_settings.config_settings);
                 let extra_build_requires =
                     extra_build_requires_for(name, build_settings.extra_build_requires);
                 let extra_build_variables =
@@ -458,19 +455,6 @@ impl RequirementSatisfaction {
 
         // Otherwise, assume the requirement is up-to-date.
         Self::Satisfied
-    }
-}
-
-/// Determine the [`ConfigSettings`] for the given package name.
-fn config_settings_for<'settings>(
-    name: &PackageName,
-    config_settings: &'settings ConfigSettings,
-    config_settings_package: &PackageConfigSettings,
-) -> Cow<'settings, ConfigSettings> {
-    if let Some(package_settings) = config_settings_package.get(name) {
-        Cow::Owned(package_settings.clone().merge(config_settings.clone()))
-    } else {
-        Cow::Borrowed(config_settings)
     }
 }
 

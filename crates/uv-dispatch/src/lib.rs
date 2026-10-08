@@ -571,15 +571,10 @@ impl BuildContext for BuildDispatch<'_> {
         }
 
         // Get package-specific config settings if available; otherwise, use global settings.
-        let config_settings = if let Some(name) = dist_name {
-            if let Some(package_settings) = self.config_settings_package.get(name) {
-                package_settings.clone().merge(self.config_settings.clone())
-            } else {
-                self.config_settings.clone()
-            }
-        } else {
-            self.config_settings.clone()
-        };
+        let config_settings = self
+            .config_settings_package
+            .for_package(dist_name, self.config_settings)
+            .into_owned();
 
         // Get package-specific environment variables if available.
         let mut environment_variables = self.build_extra_env_vars.clone();
