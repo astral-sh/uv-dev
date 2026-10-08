@@ -20,9 +20,11 @@ use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
+pub use entrypoint_lock::ToolEntrypointLocks;
 pub(crate) use receipt::ToolReceipt;
 pub use tool::{Tool, ToolEntrypoint};
 
+mod entrypoint_lock;
 mod receipt;
 mod tool;
 
@@ -162,6 +164,10 @@ impl InstalledTools {
             else {
                 continue;
             };
+            // The executable directory may be configured to share the tool-store root.
+            if name == entrypoint_lock::ENTRYPOINT_LOCK_DIRECTORY {
+                continue;
+            }
             let Ok(name) = PackageName::from_str(name) else {
                 warn_user_once!(
                     "Ignoring tool directory `{}` with an invalid package name; move it outside the tool directory, or remove it if no longer needed",

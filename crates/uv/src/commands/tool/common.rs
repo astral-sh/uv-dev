@@ -47,7 +47,7 @@ use uv_resolver::{
 };
 use uv_settings::{PythonInstallMirrors, ToolOptions};
 use uv_shell::Shell;
-use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
+use uv_tool::{InstalledTools, Tool, ToolEntrypoint, ToolEntrypointLocks, entrypoint_paths};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user_once;
 use uv_workspace::WorkspaceCache;
@@ -59,6 +59,8 @@ use crate::commands::tool::recovery::{
     ToolEntrypointClaims, ToolEntrypointSnapshot, same_entrypoint_location,
     same_existing_entrypoint_location, same_planned_entrypoint_location,
 };
+#[cfg(windows)]
+use crate::commands::tool::self_removal::remove_running_entrypoint;
 use crate::commands::tool::uninstall::owned_entrypoints_by;
 
 /// An error raised when a tool package provides no executables.
@@ -281,7 +283,7 @@ pub(super) fn repair_tool_entrypoints(
             .as_ref()
             .is_some_and(|itself| std::path::absolute(&old).is_ok_and(|target| *itself == target))
         {
-            self_replace::self_delete().context("Failed to remove old executable")?;
+            remove_running_entrypoint(&old).context("Failed to remove old executable")?;
             continue;
         }
         match fs_err::remove_file(&old) {
@@ -888,7 +890,7 @@ pub(crate) async fn refine_interpreter(
 /// Installs tool executables for a given package, handling any conflicts.
 ///
 /// Adds a receipt for the tool.
-pub(super) fn finalize_tool_install(
+pub(super) async fn finalize_tool_install(
     environment: &PythonEnvironment,
     name: &PackageName,
     entrypoints: &[PackageName],
@@ -906,6 +908,12 @@ pub(super) fn finalize_tool_install(
     lock: Option<&ToolLock>,
     printer: Printer,
 ) -> anyhow::Result<()> {
+    // Resolution and environment installation are complete. Keep the destination guards through
+    // the final ownership checks, publication, and matching receipt; this interval has no await.
+    let _entrypoint_locks = ToolEntrypointLocks::for_installation(
+        previous.map_or(&[], ToolEntrypointSnapshot::entrypoints),
+    )
+    .await?;
     if let Some(previous) = previous {
         let installed_entrypoints = match previous.install(
             environment,

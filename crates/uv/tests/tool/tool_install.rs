@@ -3290,9 +3290,16 @@ fn tool_install_recovery_handles_bin_directory_aliases() -> Result<()> {
         .collect::<std::io::Result<Vec<_>>>()?;
     fs_err::remove_dir_all(bin_dir.path())?;
     install().assert().code(2).stderr(predicate::str::contains(
-        "Cannot compare missing executable directories",
+        "because it is also recorded for `basic-app`",
     ));
-    bin_dir.assert(predicate::path::missing());
+    // Destination admission creates the directory, so the aliases can now be compared. The
+    // competing receipt still prevents recovery; only the coordination sidecar is present.
+    assert_eq!(
+        fs_err::read_dir(bin_dir.path())?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<Vec<_>>>()?,
+        [OsString::from(".uv-tool-lock")]
+    );
     for (receipt, contents) in receipts.iter().zip(&receipt_contents) {
         assert_eq!(fs_err::read(receipt.path())?, *contents);
     }
@@ -4565,7 +4572,12 @@ fn tool_install_recovery_rejects_noop_short_name_aliases() -> Result<()> {
             ));
     };
     assert_refusal(empty_bin.path());
-    assert_eq!(fs_err::read_dir(empty_bin.path())?.count(), 0);
+    assert_eq!(
+        fs_err::read_dir(empty_bin.path())?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<std::io::Result<Vec<_>>>()?,
+        [OsString::from(".uv-tool-lock")]
+    );
     assert_eq!(fs_err::read(exported_long.path())?, export_bytes[0]);
     assert_eq!(fs_err::read(exported_short.path())?, export_bytes[1]);
     fs_err::remove_file(exported_long.path())?;

@@ -3,6 +3,7 @@ use std::fmt::Write;
 #[cfg(windows)]
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use itertools::Itertools;
@@ -11,11 +12,13 @@ use tracing::debug;
 
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
-use uv_tool::{InstalledTools, Tool, ToolEntrypoint};
+use uv_tool::{InstalledTools, Tool, ToolEntrypoint, ToolEntrypointLocks};
 #[cfg(windows)]
 use uv_trampoline_builder::{Launcher, LauncherKind};
 
 use crate::commands::ExitStatus;
+#[cfg(windows)]
+use crate::commands::tool::self_removal::remove_running_entrypoint;
 use crate::printer::Printer;
 
 /// Uninstall a tool.
@@ -125,6 +128,15 @@ async fn do_uninstall(
         }
     }
     receipts.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    let entrypoint_locks = Arc::new(
+        ToolEntrypointLocks::for_removal(
+            receipts
+                .iter()
+                .filter(|(name, _)| names.is_empty() || names.contains(name))
+                .flat_map(|(_, receipt)| receipt.entrypoints()),
+        )
+        .await?,
+    );
     let mut planned_entrypoints = BTreeMap::new();
     if names.is_empty() {
         for (name, receipt) in &receipts {
@@ -171,7 +183,8 @@ async fn do_uninstall(
             let Some(planned) = planned_entrypoints.get(&name) else {
                 bail!("Missing executable ownership plan for `{name}`");
             };
-            let removed_entrypoints = uninstall_tool(&name, planned, installed_tools).await?;
+            let removed_entrypoints =
+                uninstall_tool(&name, planned, installed_tools, &entrypoint_locks).await?;
             if removed_entrypoints.is_empty() {
                 removed_environment = true;
                 writeln!(printer.stderr(), "Removed environment for `{name}`")?;
@@ -207,7 +220,8 @@ async fn do_uninstall(
             let Some(planned) = planned_entrypoints.get(&name) else {
                 bail!("Missing executable ownership plan for `{name}`");
             };
-            let removed_entrypoints = uninstall_tool(&name, planned, installed_tools).await?;
+            let removed_entrypoints =
+                uninstall_tool(&name, planned, installed_tools, &entrypoint_locks).await?;
             if removed_entrypoints.is_empty() {
                 removed_environment = true;
                 writeln!(printer.stderr(), "Removed environment for `{name}`")?;
@@ -424,6 +438,7 @@ async fn uninstall_tool(
     name: &PackageName,
     entrypoints: &[ToolEntrypoint],
     tools: &InstalledTools,
+    entrypoint_locks: &Arc<ToolEntrypointLocks>,
 ) -> Result<Vec<ToolEntrypoint>> {
     // Remove the tool itself, after validating the other tool receipts.
     tools.remove_environment(name)?;
@@ -443,12 +458,20 @@ async fn uninstall_tool(
         if itself.as_ref().is_some_and(|itself| {
             std::path::absolute(&entrypoint.install_path).is_ok_and(|target| *itself == target)
         }) {
-            self_replace::self_delete()?;
+            remove_running_entrypoint(&entrypoint.install_path)?;
             removed_entrypoints.push(entrypoint.clone());
             continue;
         }
 
-        match fs_err::tokio::remove_file(&entrypoint.install_path).await {
+        let path = entrypoint.install_path.clone();
+        let locks = Arc::clone(entrypoint_locks);
+        let removed = tokio::task::spawn_blocking(move || {
+            // Cancellation of the waiter must not release admission while removal is active.
+            let _locks = locks;
+            fs_err::remove_file(path)
+        })
+        .await?;
+        match removed {
             Ok(()) => removed_entrypoints.push(entrypoint.clone()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 debug!(
