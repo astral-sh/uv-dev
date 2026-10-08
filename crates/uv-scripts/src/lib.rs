@@ -239,6 +239,9 @@ impl Pep723Script {
         };
         let metadata = Pep723Metadata::from_str(&default_metadata)?;
 
+        // A UTF-8 BOM is only valid at the start of a Python script, before generated metadata.
+        let contents = contents.strip_prefix(b"\xef\xbb\xbf").unwrap_or(contents);
+
         // Extract the shebang and script content.
         let (shebang, postlude) = extract_shebang(contents)?;
 

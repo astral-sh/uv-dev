@@ -38515,6 +38515,34 @@ fn lock_script_initialize() -> Result<()> {
     Ok(())
 }
 
+/// Initializing metadata for a BOM-prefixed script must leave it executable.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_script_initialize_utf8_bom() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str("\u{feff}print('Hello, world!')\n")?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run().arg("--locked").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello, world!
+
+    ----- stderr -----
+    Resolved in [TIME]
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Do not leave an unusable script lockfile behind if metadata cannot be persisted.
 #[cfg(all(feature = "test-universal", unix))]
 #[test]

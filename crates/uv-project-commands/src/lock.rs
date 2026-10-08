@@ -34,6 +34,7 @@ use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::ScriptPath;
+use crate::edit::ProjectEdit;
 
 /// Resolve the project requirements into a lockfile.
 pub async fn lock(
@@ -160,14 +161,12 @@ pub async fn lock(
     // Initialize any shared state.
     let state = UniversalState::default();
 
-    // Preserve the previous script lock in case writing the initialized metadata fails.
-    let previous_script_lock = if initialize_script && matches!(mode, LockMode::Write(_)) {
-        let lock_path = target.lock_path();
-        match fs_err::tokio::read(lock_path).await {
-            Ok(lock) => Some(Some(lock)),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(None),
-            Err(err) => return Err(err.into()),
-        }
+    // Persist newly initialized metadata and its lockfile as one edit.
+    let edit = if initialize_script
+        && matches!(mode, LockMode::Write(_))
+        && let Some(script) = script.as_ref()
+    {
+        Some(ProjectEdit::new([script.path.clone(), target.lock_path()])?)
     } else {
         None
     };
@@ -196,24 +195,11 @@ pub async fn lock(
     .await
     {
         Ok(lock) => {
-            if initialize_script
-                && matches!(mode, LockMode::Write(_))
-                && let Some(script) = script.as_ref()
-                && let Err(err) = script.write(&script.metadata.raw)
-            {
-                let lock_path = LockTarget::from(script).lock_path();
-                match previous_script_lock {
-                    Some(Some(lock)) => fs_err::write(lock_path, lock)?,
-                    Some(None) => {
-                        if let Err(remove_err) = fs_err::remove_file(lock_path)
-                            && remove_err.kind() != std::io::ErrorKind::NotFound
-                        {
-                            return Err(remove_err.into());
-                        }
-                    }
-                    None => {}
+            if let Some(edit) = edit {
+                if let Some(script) = script.as_ref() {
+                    script.write(&script.metadata.raw)?;
                 }
-                return Err(err.into());
+                edit.commit();
             }
 
             if let Some(frozen_source) = frozen {
