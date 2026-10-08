@@ -29,7 +29,7 @@ use url::Url;
 use zstd::stream::read::Decoder;
 
 use uv_cache::{Cache, CacheBucket};
-use uv_cache_key::{CanonicalUrl, cache_digest};
+use uv_cache_key::cache_digest;
 use uv_client::{
     BaseClient, BaseClientBuilder, CacheControl, CachedClient, CachedClientError, ClientBuildError,
     Connectivity, RetriableError, RetryState, WrappedReqwestError, fetch_with_url_fallback,
@@ -708,10 +708,7 @@ impl ManagedPythonDownload {
         let hash_prefix = match self.sha256.as_ref() {
             // Shorten the hash to avoid too-long-filename errors.
             Some(digest) => Cow::Borrowed(&digest.as_str()[..9]),
-            None => Cow::Owned(format!(
-                "none-{}",
-                cache_digest(&CanonicalUrl::new(url.clone()))
-            )),
+            None => Cow::Owned(format!("none-{}", cache_digest(&url.without_credentials()))),
         };
         format!("{hash_prefix}-{filename}")
     }
@@ -1293,12 +1290,34 @@ mod tests {
         assert!(second_cache_file.ends_with("-python.tar.gz"));
 
         let equivalent_url =
-            DisplaySafeUrl::parse("https://user:password@example.com/first/%70ython.tar.gz")
+            DisplaySafeUrl::parse("https://user:password@example.com/first/python.tar.gz")
                 .expect("URL should parse");
         assert_eq!(
             first.cache_filename(&equivalent_url, "python.tar.gz"),
             first_cache_file
         );
+    }
+
+    #[test]
+    fn python_download_cache_filename_preserves_archive_paths() {
+        for (first_url, second_url) in [
+            (
+                "file:///mirror/build.git@v1/python.tar.gz",
+                "file:///mirror/build@v1/python.tar.gz",
+            ),
+            (
+                "https://github.com/example/python/releases/download/V1/python.tar.gz",
+                "https://github.com/example/python/releases/download/v1/python.tar.gz",
+            ),
+        ] {
+            let first_url = DisplaySafeUrl::parse(first_url).expect("URL should parse");
+            let second_url = DisplaySafeUrl::parse(second_url).expect("URL should parse");
+            let download = cpython_download_for_url(first_url.as_str());
+            assert_ne!(
+                download.cache_filename(&first_url, "python.tar.gz"),
+                download.cache_filename(&second_url, "python.tar.gz"),
+            );
+        }
     }
 
     #[test]
