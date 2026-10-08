@@ -228,9 +228,10 @@ A dependency can come from a package registry or a URL. Registry dependencies us
 an optional version specifier. URL dependencies include requirements in the form `{name} @ {url}`
 and dependencies with a `git`, `url`, `path`, or `workspace` source.
 
-A package URL fixes both the package source and its implied version. Two different URLs for the same
-package produce a resolution error because each URL acts like an exact version pin. A
-[flat index](../../concepts/indexes.md#flat-indexes) can provide multiple URLs instead.
+A package URL fixes both the package source and its implied version. Incompatible URLs for the same
+package within one resolution fork produce a resolution error because each URL acts like an exact
+version pin. Different URLs are supported under disjoint markers. A
+[flat index](../../concepts/indexes.md#flat-indexes) can also provide multiple URLs.
 
 uv requires URLs to appear directly in the project, a
 [workspace member](../../concepts/projects/workspaces.md), in a
