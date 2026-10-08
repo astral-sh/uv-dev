@@ -57,6 +57,7 @@ use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
 use uv_command_support::Printer;
+use uv_command_support::command_header::{HeaderArgument, format_command_header};
 use uv_command_support::{ExitStatus, OutputWriter, UvError};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations::locked_requirements::{
@@ -820,104 +821,40 @@ fn cmd(
     if let Some(cmd_str) = custom_compile_command {
         return cmd_str;
     }
-    let args = env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().to_string())
-        .scan(None, move |skip_next, arg| {
-            if matches!(skip_next, Some(true)) {
-                // Reset state; skip this iteration.
-                *skip_next = None;
-                return Some(None);
+    format_command_header(env::args_os(), |arg| {
+        // Index locations are included only when their corresponding output option is enabled.
+        if !include_index_url {
+            if arg.starts_with("--extra-index-url=")
+                || arg.starts_with("--index-url=")
+                || arg.starts_with("-i=")
+                || arg.starts_with("--index=")
+                || arg.starts_with("--default-index=")
+            {
+                return HeaderArgument::Omit;
             }
-
-            // Skip any index URLs, unless requested.
-            if !include_index_url {
-                if arg.starts_with("--extra-index-url=")
-                    || arg.starts_with("--index-url=")
-                    || arg.starts_with("-i=")
-                    || arg.starts_with("--index=")
-                    || arg.starts_with("--default-index=")
-                {
-                    // Reset state; skip this iteration.
-                    *skip_next = None;
-                    return Some(None);
-                }
-
-                // Mark the next item as (to be) skipped.
-                if arg == "--index-url"
-                    || arg == "--extra-index-url"
-                    || arg == "-i"
-                    || arg == "--index"
-                    || arg == "--default-index"
-                {
-                    *skip_next = Some(true);
-                    return Some(None);
-                }
+            if [
+                "--index-url",
+                "--extra-index-url",
+                "-i",
+                "--index",
+                "--default-index",
+            ]
+            .contains(&arg)
+            {
+                return HeaderArgument::OmitWithValue;
             }
-
-            // Skip any `--find-links` URLs, unless requested.
-            if !include_find_links {
-                // Always skip the `--find-links` and mark the next item to be skipped
-                if arg == "--find-links" || arg == "-f" {
-                    *skip_next = Some(true);
-                    return Some(None);
-                }
-
-                // Skip only this argument if option and value are together
-                if arg.starts_with("--find-links=") || arg.starts_with("-f") {
-                    // Reset state; skip this iteration.
-                    *skip_next = None;
-                    return Some(None);
-                }
+        }
+        if !include_find_links {
+            if arg == "--find-links" || arg == "-f" {
+                return HeaderArgument::OmitWithValue;
             }
-
-            // Always skip the `--upgrade` flag.
-            if arg == "--upgrade" || arg == "-U" {
-                *skip_next = None;
-                return Some(None);
+            if arg.starts_with("--find-links=") || arg.starts_with("-f") {
+                return HeaderArgument::Omit;
             }
-
-            // Always skip the `--upgrade-package` and mark the next item to be skipped
-            if arg == "--upgrade-package" || arg == "-P" {
-                *skip_next = Some(true);
-                return Some(None);
-            }
-
-            // Skip only this argument if option and value are together
-            if arg.starts_with("--upgrade-package=") || arg.starts_with("-P") {
-                // Reset state; skip this iteration.
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--quiet` flag.
-            if arg == "--quiet" || arg == "-q" {
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--verbose` flag.
-            if arg == "--verbose" || arg == "-v" {
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--no-progress` flag.
-            if arg == "--no-progress" {
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--native-tls` flag.
-            if arg == "--native-tls" {
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Return the argument.
-            Some(Some(arg))
-        })
-        .flatten()
-        .join(" ");
-    format!("uv {args}")
+        }
+        if arg == "--no-progress" || arg == "--native-tls" {
+            return HeaderArgument::Omit;
+        }
+        HeaderArgument::Keep
+    })
 }
