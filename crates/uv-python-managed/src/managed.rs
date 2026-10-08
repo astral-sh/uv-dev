@@ -259,10 +259,10 @@ impl ManagedPythonInstallations {
     ///
     /// - The platform metadata cannot be read
     /// - A directory for the installation cannot be read
-    pub fn find_version<'a>(
-        &'a self,
-        version: &'a PythonVersion,
-    ) -> Result<impl DoubleEndedIterator<Item = ManagedPythonInstallation> + 'a, Error> {
+    #[cfg(test)]
+    fn find_version(
+        version: &PythonVersion,
+    ) -> Result<impl DoubleEndedIterator<Item = ManagedPythonInstallation>, Error> {
         let request = VersionRequest::from(version);
         Ok(Self::find_matching_current_platform()?
             .filter(move |installation| request.matches_installation_key(installation.key())))
@@ -1400,16 +1400,18 @@ mod tests {
             uv_static::EnvVars::UV_PYTHON_INSTALL_DIR,
             Some(temp_dir.path()),
             || {
-                let installations = ManagedPythonInstallations::from_settings(None).unwrap();
-
                 // Version 3.1 should NOT match 3.10
                 let v3_1 = PythonVersion::from_str("3.1").unwrap();
-                let matched: Vec<_> = installations.find_version(&v3_1).unwrap().collect();
+                let matched: Vec<_> = ManagedPythonInstallations::find_version(&v3_1)
+                    .unwrap()
+                    .collect();
                 assert_eq!(matched.len(), 0);
 
                 // Check that 3.10 matches
                 let v3_10 = PythonVersion::from_str("3.10").unwrap();
-                let matched: Vec<_> = installations.find_version(&v3_10).unwrap().collect();
+                let matched: Vec<_> = ManagedPythonInstallations::find_version(&v3_10)
+                    .unwrap()
+                    .collect();
                 assert_eq!(matched.len(), 1);
             },
         );
