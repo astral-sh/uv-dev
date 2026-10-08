@@ -2,6 +2,7 @@ use std::process::Command;
 
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
+use insta::allow_duplicates;
 use url::Url;
 use uv_static::EnvVars;
 
@@ -559,6 +560,472 @@ fn publish_resolved_settings() -> anyhow::Result<()> {
     ");
 
     Ok(())
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn publish_modes_follow_source_precedence() {
+    let context = uv_test::test_context!("3.12");
+    let command = || {
+        let mut command = add_shared_args(context.publish());
+        command.arg("--show-settings");
+        for name in [
+            EnvVars::UV_PUBLISH_TOKEN,
+            EnvVars::UV_PUBLISH_USERNAME,
+            EnvVars::UV_PUBLISH_PASSWORD,
+            EnvVars::UV_PUBLISH_INDEX,
+            EnvVars::UV_PUBLISH_URL,
+            EnvVars::UV_PUBLISH_CHECK_URL,
+        ] {
+            command.env_remove(name);
+        }
+        command
+    };
+
+    let password = capture_uv_snapshot!(context.filters(), command()
+        .args(["--username", "publisher", "--password", "fake-password"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+    PublishSettings {
+        files: [
+            "dist/*",
+        ],
+        username: Some(
+            "publisher",
+        ),
+        password: Some(
+            "****",
+        ),
+        index: None,
+        dry_run: false,
+        no_attestations: false,
+        publish_url: DisplaySafeUrl {
+            scheme: "https",
+            cannot_be_a_base: false,
+            username: "",
+            password: None,
+            host: Some(
+                Domain(
+                    "upload.pypi.org",
+                ),
+            ),
+            port: None,
+            path: "/legacy/",
+            query: None,
+            fragment: None,
+        },
+        trusted_publishing: Automatic,
+        keyring_provider: Disabled,
+        check_url: None,
+        index_locations: IndexLocations {
+            indexes: [],
+            flat_index: [],
+            no_index: false,
+        },
+    }
+    "#);
+    for (arguments, environment) in [
+        (
+            vec!["--username", "publisher", "--password", "fake-password"],
+            vec![],
+        ),
+        (
+            vec!["--username", "publisher"],
+            vec![(EnvVars::UV_PUBLISH_PASSWORD, "fake-password")],
+        ),
+        (
+            vec!["--password", "fake-password"],
+            vec![(EnvVars::UV_PUBLISH_USERNAME, "publisher")],
+        ),
+    ] {
+        allow_duplicates! {
+            diff_uv_snapshot!(context.filters(), &password, command()
+                .args(arguments)
+                .envs(environment)
+                .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token"), @"");
+        }
+    }
+    diff_uv_snapshot!(context.filters(), &password, command()
+        .env(EnvVars::UV_PUBLISH_USERNAME, "publisher")
+        .env(EnvVars::UV_PUBLISH_PASSWORD, "fake-password"), @"");
+
+    let token = diff_uv_snapshot!(context.filters(), &password, command()
+        .args(["--token", "fake-token"]), @r#"
+    ...
+             "dist/*",
+         ],
+         username: Some(
+    -        "publisher",
+    +        "__token__",
+         ),
+         password: Some(
+             "****",
+    ...
+    "#);
+    for value in ["fake-token", ""] {
+        allow_duplicates! {
+            diff_uv_snapshot!(context.filters(), &token, command()
+                .args(["--token", value])
+                .env(EnvVars::UV_PUBLISH_USERNAME, "ambient-user")
+                .env(EnvVars::UV_PUBLISH_PASSWORD, "ambient-password"), @"");
+        }
+        allow_duplicates! {
+            diff_uv_snapshot!(context.filters(), &token, command()
+                .env(EnvVars::UV_PUBLISH_TOKEN, value), @"");
+        }
+    }
+
+    let urls = diff_uv_snapshot!(context.filters(), &password, command()
+        .args(["--publish-url", "https://publish.example.org/legacy/", "--check-url", "https://check.example.org/simple/"]), @r#"
+    ...
+         files: [
+             "dist/*",
+         ],
+    -    username: Some(
+    -        "publisher",
+    -    ),
+    -    password: Some(
+    -        "****",
+    -    ),
+    +    username: None,
+    +    password: None,
+         index: None,
+         dry_run: false,
+         no_attestations: false,
+    ...
+             password: None,
+             host: Some(
+                 Domain(
+    -                "upload.pypi.org",
+    +                "publish.example.org",
+                 ),
+             ),
+             port: None,
+    ...
+         },
+         trusted_publishing: Automatic,
+         keyring_provider: Disabled,
+    -    check_url: None,
+    +    check_url: Some(
+    +        Url(
+    +            VerbatimUrl {
+    +                url: DisplaySafeUrl {
+    +                    scheme: "https",
+    +                    cannot_be_a_base: false,
+    +                    username: "",
+    +                    password: None,
+    +                    host: Some(
+    +                        Domain(
+    +                            "check.example.org",
+    +                        ),
+    +                    ),
+    +                    port: None,
+    +                    path: "/simple/",
+    +                    query: None,
+    +                    fragment: None,
+    +                },
+    +                given: Some(
+    +                    "https://check.example.org/simple/",
+    +                ),
+    +                expanded: false,
+    +                force_relative: false,
+    +            },
+    +        ),
+    +    ),
+         index_locations: IndexLocations {
+             indexes: [],
+             flat_index: [],
+    ...
+    "#);
+    for (arguments, environment) in [
+        (
+            vec![
+                "--publish-url",
+                "https://publish.example.org/legacy/",
+                "--check-url",
+                "https://check.example.org/simple/",
+            ],
+            vec![],
+        ),
+        (
+            vec!["--publish-url", "https://publish.example.org/legacy/"],
+            vec![(
+                EnvVars::UV_PUBLISH_CHECK_URL,
+                "https://check.example.org/simple/",
+            )],
+        ),
+        (
+            vec!["--check-url", "https://check.example.org/simple/"],
+            vec![(
+                EnvVars::UV_PUBLISH_URL,
+                "https://publish.example.org/legacy/",
+            )],
+        ),
+    ] {
+        allow_duplicates! {
+            diff_uv_snapshot!(context.filters(), &urls, command()
+                .args(arguments)
+                .envs(environment)
+                .env(EnvVars::UV_PUBLISH_INDEX, "ambient-index"), @"");
+        }
+    }
+    diff_uv_snapshot!(context.filters(), &urls, command()
+        .env(EnvVars::UV_PUBLISH_URL, "https://publish.example.org/legacy/")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/"), @"");
+
+    let index = diff_uv_snapshot!(context.filters(), &password, command()
+        .args(["--index", "private"]), @r#"
+    ...
+         files: [
+             "dist/*",
+         ],
+    -    username: Some(
+    -        "publisher",
+    +    username: None,
+    +    password: None,
+    +    index: Some(
+    +        "private",
+         ),
+    -    password: Some(
+    -        "****",
+    -    ),
+    -    index: None,
+         dry_run: false,
+         no_attestations: false,
+         publish_url: DisplaySafeUrl {
+    ...
+    "#);
+    diff_uv_snapshot!(context.filters(), &index, command()
+        .args(["--index", "private"])
+        .env(EnvVars::UV_PUBLISH_URL, "invalid URL")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/"), @"");
+    diff_uv_snapshot!(context.filters(), &index, command()
+        .env(EnvVars::UV_PUBLISH_INDEX, "private"), @"");
+}
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn publish_modes_reject_same_source_conflicts() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .args(["--show-settings", "--token", "fake-token", "--username", "publisher"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument '--token <TOKEN>' cannot be used with '--username <USERNAME>'
+
+    Usage: uv publish --cache-dir [CACHE_DIR] --token <TOKEN> [FILES]...
+
+    For more information, try '--help'.
+    ");
+    uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .args(["--show-settings", "--index", "private", "--publish-url", "https://publish.example.org/legacy/"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: the argument '--index <INDEX>' cannot be used with '--publish-url <PUBLISH_URL>'
+
+    Usage: uv publish --cache-dir [CACHE_DIR] --index <INDEX> [FILES]...
+
+    For more information, try '--help'.
+    ");
+    uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_TOKEN, "fake-token")
+        .env(EnvVars::UV_PUBLISH_USERNAME, "publisher"), @r#"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+
+    ----- stderr -----
+    error: `UV_PUBLISH_TOKEN` cannot be combined with `UV_PUBLISH_USERNAME` or `UV_PUBLISH_PASSWORD`
+    "#);
+    uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_INDEX, "private")
+        .env(EnvVars::UV_PUBLISH_CHECK_URL, "https://check.example.org/simple/"), @r#"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+
+    ----- stderr -----
+    error: `UV_PUBLISH_INDEX` cannot be combined with `UV_PUBLISH_URL` or `UV_PUBLISH_CHECK_URL`
+    "#);
+    uv_snapshot!(context.filters(), add_shared_args(context.publish())
+        .arg("--show-settings")
+        .env(EnvVars::UV_PUBLISH_URL, "invalid URL"), @r#"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    GlobalSettings {
+        required_version: None,
+        quiet: 0,
+        verbose: 0,
+        color: Auto,
+        network_settings: NetworkSettings {
+            connectivity: Online,
+            offline: Disabled,
+            system_certs: false,
+            custom_certificates: [CERTIFICATES],
+            http_proxy: None,
+            https_proxy: None,
+            no_proxy: None,
+            allow_insecure_host: [],
+            read_timeout: [TIME],
+            connect_timeout: [TIME],
+            retries: 3,
+            metadata_range_request: Fallback,
+        },
+        concurrency: Concurrency {
+            downloads: 50,
+            builds: 16,
+            installs: 8,
+            cache_reads: 2,
+        },
+        show_settings: true,
+        preview: Preview {
+            flags: [],
+        },
+        python_preference: Managed,
+        python_arch: None,
+        python_downloads: Automatic,
+        no_progress: false,
+        installer_metadata: true,
+    }
+    CacheSettings {
+        no_cache: false,
+        cache_dir: Some(
+            "[CACHE_DIR]/",
+        ),
+    }
+
+    ----- stderr -----
+    error: Invalid value for `UV_PUBLISH_URL`: expected a URL
+    "#);
 }
 
 #[test]

@@ -9,7 +9,7 @@ use std::process;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use rustc_hash::FxHashSet;
 
 use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
@@ -4984,8 +4984,44 @@ impl fmt::Debug for PublishSettings {
 }
 
 impl PublishSettings {
-    /// Resolve the [`PublishSettings`] from the CLI and filesystem configuration.
-    pub fn resolve(args: PublishArgs, filesystem: Option<FilesystemOptions>) -> Self {
+    /// Resolve the [`PublishSettings`] from the CLI, environment, and filesystem configuration.
+    pub fn resolve(mut args: PublishArgs, filesystem: Option<FilesystemOptions>) -> Result<Self> {
+        // An explicit credential flag selects which environment defaults can complete the mode.
+        let token_mode = args.token.is_some();
+        let password_mode = args.username.is_some() || args.password.is_some();
+        if !password_mode {
+            args.token = publish_env(args.token, EnvVars::UV_PUBLISH_TOKEN, "a string")?;
+        }
+        if !token_mode {
+            args.username = publish_env(args.username, EnvVars::UV_PUBLISH_USERNAME, "a string")?;
+            args.password = publish_env(args.password, EnvVars::UV_PUBLISH_PASSWORD, "a string")?;
+        }
+        if args.token.is_some() && (args.username.is_some() || args.password.is_some()) {
+            bail!(
+                "`UV_PUBLISH_TOKEN` cannot be combined with `UV_PUBLISH_USERNAME` or `UV_PUBLISH_PASSWORD`"
+            );
+        }
+
+        // Named indexes and explicit URLs are alternative endpoint modes.
+        let index_mode = args.index.is_some();
+        let url_mode = args.publish_url.is_some() || args.check_url.is_some();
+        if !url_mode {
+            args.index = publish_env(args.index, EnvVars::UV_PUBLISH_INDEX, "an index name")?;
+        }
+        if !index_mode {
+            args.publish_url = publish_env(args.publish_url, EnvVars::UV_PUBLISH_URL, "a URL")?;
+            args.check_url = publish_env(
+                args.check_url,
+                EnvVars::UV_PUBLISH_CHECK_URL,
+                "an index URL",
+            )?;
+        }
+        if args.index.is_some() && (args.publish_url.is_some() || args.check_url.is_some()) {
+            bail!(
+                "`UV_PUBLISH_INDEX` cannot be combined with `UV_PUBLISH_URL` or `UV_PUBLISH_CHECK_URL`"
+            );
+        }
+
         let Options {
             publish, top_level, ..
         } = filesystem
@@ -5012,7 +5048,7 @@ impl PublishSettings {
             (args.username, args.password)
         };
 
-        Self {
+        Ok(Self {
             files: args.files,
             username,
             password,
@@ -5042,8 +5078,24 @@ impl PublishSettings {
                 Vec::new(),
                 false,
             ),
-        }
+        })
     }
+}
+
+/// Read a publish environment value only when its command-line value is absent.
+fn publish_env<T: FromStr>(value: Option<T>, name: &str, expected: &str) -> Result<Option<T>> {
+    if value.is_some() {
+        return Ok(value);
+    }
+    let value = match std::env::var(name) {
+        Ok(value) => value,
+        Err(VarError::NotPresent) => return Ok(None),
+        Err(VarError::NotUnicode(_)) => bail!("Invalid value for `{name}`: expected {expected}"),
+    };
+    value
+        .parse()
+        .map(Some)
+        .map_err(|_| anyhow!("Invalid value for `{name}`: expected {expected}"))
 }
 
 /// The resolved settings to use for an invocation of the `uv auth logout` CLI.
