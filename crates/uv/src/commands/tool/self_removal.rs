@@ -41,7 +41,9 @@ mod tests {
             // The parent publishes a replacement before releasing this process. EOF also releases
             // the child if its parent goes away; the parent supervises the wait with a deadline.
             io::stdin().read_exact(&mut [0])?;
-            return Ok(());
+            // Use ordinary subprocess success when libtest invokes this fixture directly through
+            // its panic-abort entry point.
+            std::process::exit(0);
         }
 
         let directory = tempfile::tempdir()?;
