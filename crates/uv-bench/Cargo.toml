@@ -69,8 +69,8 @@ path = "benches/uv_settings.rs"
 harness = false
 
 [[bench]]
-name = "marker_dnf"
-path = "benches/marker_dnf.rs"
+name = "resolve_conflicting_extras"
+path = "benches/resolve_conflicting_extras.rs"
 harness = false
 
 [dev-dependencies]
