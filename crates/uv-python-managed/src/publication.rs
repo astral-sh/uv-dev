@@ -36,6 +36,19 @@ struct JournalDecodeError {
     source: serde_json::Error,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "failed to read Python replacement marker `{}`; predecessor retained at `{}`",
+    marker.user_display(),
+    previous.user_display()
+)]
+struct MarkerReadError {
+    marker: PathBuf,
+    previous: PathBuf,
+    #[source]
+    source: io::Error,
+}
+
 impl Recovery {
     fn new(destination: &Path, scratch: &Path) -> io::Result<Self> {
         let key = destination
@@ -164,9 +177,22 @@ impl Recovery {
             Ok(_) => {
                 // The staged marker identifies a replacement published before its journal was
                 // committed. An unrelated entry must not cause the predecessor to be discarded.
-                if !fs_err::read_to_string(self.destination.join(MARKER))
-                    .is_ok_and(|contents| contents == journal.marker)
-                {
+                let marker = self.destination.join(MARKER);
+                let matches = match fs_err::read_to_string(&marker) {
+                    Ok(contents) => contents == journal.marker,
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                    Err(source) => {
+                        return Err(io::Error::new(
+                            source.kind(),
+                            MarkerReadError {
+                                marker,
+                                previous: self.previous.clone(),
+                                source,
+                            },
+                        ));
+                    }
+                };
+                if !matches {
                     return Err(io::Error::other(format!(
                         "cannot recover Python replacement; predecessor retained at `{}`",
                         self.previous.user_display()
@@ -679,6 +705,44 @@ mod tests {
         assert_eq!(
             fs_err::read_to_string(recovery.previous.join("interpreter"))?,
             "old"
+        );
+        assert!(recovery.journal.is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn unreadable_replacement_marker_retains_the_backup_and_io_error() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let destination = root.path().join("installed");
+        let recovery = Recovery::new(&destination, root.path())?;
+        installation(&recovery.previous, "old")?;
+        installation(&destination, "new")?;
+        let marker = destination.join(MARKER);
+        fs_err::create_dir(&marker)?;
+        fs_err::write(marker.join("leave-alone"), "foreign marker contents")?;
+        recovery.save(&Journal {
+            version: 1,
+            marker: "transaction".to_string(),
+            committed: false,
+        })?;
+
+        let expected = fs_err::read_to_string(&marker).expect_err("marker is a directory");
+        let error = recovery.recover().expect_err("unreadable marker");
+        assert_eq!(error.kind(), expected.kind());
+        let message = error.to_string();
+        assert!(message.contains(&marker.display().to_string()));
+        assert!(message.contains(&recovery.previous.display().to_string()));
+        assert_eq!(
+            fs_err::read_to_string(recovery.previous.join("interpreter"))?,
+            "old"
+        );
+        assert_eq!(
+            fs_err::read_to_string(destination.join("interpreter"))?,
+            "new"
+        );
+        assert_eq!(
+            fs_err::read_to_string(marker.join("leave-alone"))?,
+            "foreign marker contents"
         );
         assert!(recovery.journal.is_file());
         Ok(())
