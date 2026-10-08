@@ -13,7 +13,7 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::DependencyGroupsWithDefaults;
 use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
-use uv_pep440::TildeVersionSpecifier;
+use uv_pep440::{TildeVersionSpecifier, Version};
 use uv_python_interpreter::Interpreter;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
@@ -171,6 +171,23 @@ impl ProjectPythonRequest {
             .map(|requirement| &requirement.requires_python)
     }
 
+    /// Reject a pinned Python request that cannot satisfy the project requirement.
+    pub fn validate_request(&self) -> Result<(), PythonSelectionError> {
+        if let Some(python_request) = self.python_request.as_ref()
+            && let Some(requirement) = self.requirement.as_ref()
+            && !python_request.intersects_specifiers(requirement.requires_python.specifiers())
+            && let Some(version) = python_request.as_pep440_version()
+        {
+            validate_project_requires_python_version(
+                &version,
+                &requirement.requires_python,
+                &self.source,
+                &requirement.source,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Check the interpreter against the stored project and selected group requirements.
     ///
     /// Unlike [`Self::validate`], this borrows the interpreter so warning-only commands can
@@ -213,6 +230,10 @@ impl ProjectPythonRequest {
         reporter: &PythonDownloadReporter,
         install_mirrors: &PythonInstallMirrors,
     ) -> Result<CompatibleProjectPython, PythonSelectionError> {
+        // Avoid downloading a pinned interpreter when its version range cannot satisfy the
+        // project's Python requirement.
+        self.validate_request()?;
+
         let interpreter = PythonInstallation::find_or_download(
             self.python_request.as_ref(),
             environment_preference,
@@ -399,7 +420,21 @@ fn validate_python_requirement(
     source: &PythonRequestSource,
     requirement_source: &PythonRequirementSource,
 ) -> Result<(), PythonSelectionError> {
-    if requires_python.contains(interpreter.python_version()) {
+    validate_project_requires_python_version(
+        interpreter.python_version(),
+        requires_python,
+        source,
+        requirement_source,
+    )
+}
+
+fn validate_project_requires_python_version(
+    version: &Version,
+    requires_python: &RequiresPython,
+    source: &PythonRequestSource,
+    requirement_source: &PythonRequirementSource,
+) -> Result<(), PythonSelectionError> {
+    if requires_python.contains(version) {
         return Ok(());
     }
 
@@ -410,7 +445,7 @@ fn validate_python_requirement(
         } => {
             let sources = sources
                 .iter()
-                .filter(|(.., requires)| !requires.contains(interpreter.python_version()))
+                .filter(|(.., requires)| !requires.contains(version))
                 .map(|(key, requires)| (key.clone(), requires.clone()))
                 .collect();
             PythonRequirementConflicts::Workspace {
@@ -419,14 +454,14 @@ fn validate_python_requirement(
             }
         }
         PythonRequirementSource::Lockfile { locked, groups } => {
-            let version = interpreter.python_version().only_release();
+            let release_version = version.only_release();
             let groups = groups
                 .iter()
-                .filter(|(_, requires)| !requires.contains(&version))
+                .filter(|(_, requires)| !requires.contains(&release_version))
                 .map(|(key, requires)| (key.clone(), requires.clone()))
                 .collect();
             PythonRequirementConflicts::Lockfile {
-                locked: (!locked.contains(interpreter.python_version())).then(|| locked.clone()),
+                locked: (!locked.contains(version)).then(|| locked.clone()),
                 groups,
             }
         }
@@ -435,7 +470,7 @@ fn validate_python_requirement(
     match source {
         PythonRequestSource::UserRequest => {
             Err(PythonSelectionError::RequestedPythonProjectIncompatibility(
-                interpreter.python_version().clone(),
+                version.clone(),
                 requires_python.clone(),
                 Box::new(conflicting_requires),
             ))
@@ -443,14 +478,14 @@ fn validate_python_requirement(
         PythonRequestSource::DotPythonVersion(file) => Err(
             PythonSelectionError::DotPythonVersionProjectIncompatibility {
                 python_request: file.path().user_display().to_string(),
-                version: interpreter.python_version().clone(),
+                version: version.clone(),
                 requires_python: requires_python.clone(),
                 requires_python_sources: Box::new(conflicting_requires),
             },
         ),
         PythonRequestSource::RequiresPython => {
             Err(PythonSelectionError::RequiresPythonProjectIncompatibility(
-                interpreter.python_version().clone(),
+                version.clone(),
                 requires_python.clone(),
                 Box::new(conflicting_requires),
             ))
