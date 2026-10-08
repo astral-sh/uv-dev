@@ -16,6 +16,7 @@ use owo_colors::OwoColorize;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::Deserialize;
 use tracing::{debug, instrument, trace};
 use url::Url;
 
@@ -4485,14 +4486,20 @@ impl Lock {
 
         // Validate that the lockfile was generated with the same static metadata.
         {
-            let expected = dependency_metadata
-                .values()
-                .filter(|entry| filter.includes_metadata(entry))
-                .cloned()
-                .collect::<BTreeSet<_>>();
+            let expected = collect_static_metadata(
+                dependency_metadata
+                    .values()
+                    .filter(|entry| filter.includes_metadata(entry))
+                    .cloned(),
+            );
             let actual = &self.manifest.dependency_metadata;
             if expected != *actual {
                 return Ok(SatisfiesResult::MismatchedStaticMetadata(expected, actual));
+            }
+            if !self.manifest.dependency_metadata_ordered
+                && has_duplicate_static_metadata_keys(actual)
+            {
+                return Ok(SatisfiesResult::MissingStaticMetadataOrder);
             }
         }
 
@@ -6157,7 +6164,9 @@ pub enum SatisfiesResult<'lock> {
         BTreeMap<GroupName, BTreeSet<Requirement>>,
     ),
     /// The lockfile uses different static metadata.
-    MismatchedStaticMetadata(BTreeSet<StaticMetadata>, &'lock BTreeSet<StaticMetadata>),
+    MismatchedStaticMetadata(Vec<StaticMetadata>, &'lock [StaticMetadata]),
+    /// The lockfile does not record declaration precedence for repeated static metadata keys.
+    MissingStaticMetadataOrder,
     /// The lockfile is missing a workspace member.
     MissingRoot(PackageName),
     /// The lockfile referenced a remote index that was not provided
@@ -6330,9 +6339,39 @@ pub struct ResolverManifest {
     /// The build constraints provided to the resolver.
     #[serde(default)]
     build_constraints: BTreeSet<NameRequirementSpecification>,
-    /// The static metadata provided to the resolver.
+    /// The static metadata provided to the resolver, retaining repeated-key precedence and counts.
+    #[serde(default, deserialize_with = "deserialize_static_metadata")]
+    dependency_metadata: Vec<StaticMetadata>,
+    /// Whether repeated keys record declaration order, which cannot be recovered from a sorted set.
     #[serde(default)]
-    dependency_metadata: BTreeSet<StaticMetadata>,
+    dependency_metadata_ordered: bool,
+}
+
+/// Group entries by name and version without reordering matching keys or removing duplicates.
+fn collect_static_metadata(
+    entries: impl IntoIterator<Item = StaticMetadata>,
+) -> Vec<StaticMetadata> {
+    let mut entries = entries.into_iter().collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.version.cmp(&right.version))
+    });
+    entries
+}
+
+fn deserialize_static_metadata<'de, D>(deserializer: D) -> Result<Vec<StaticMetadata>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Vec::<StaticMetadata>::deserialize(deserializer).map(collect_static_metadata)
+}
+
+fn has_duplicate_static_metadata_keys(entries: &[StaticMetadata]) -> bool {
+    entries
+        .iter()
+        .tuple_windows()
+        .any(|(left, right)| left.name == right.name && left.version == right.version)
 }
 
 /// Omit entries equivalent to the implicit `dev` default.
@@ -6398,6 +6437,8 @@ impl ResolverManifest {
         dependency_metadata: impl IntoIterator<Item = StaticMetadata>,
     ) -> Self {
         let normalize = uv_preview::is_enabled(PreviewFeature::LockfileNormalization);
+        let dependency_metadata = collect_static_metadata(dependency_metadata);
+        let dependency_metadata_ordered = has_duplicate_static_metadata_keys(&dependency_metadata);
         Self {
             members: members.into_iter().collect(),
             default_groups: None,
@@ -6423,7 +6464,8 @@ impl ResolverManifest {
                     )
                 })
                 .collect(),
-            dependency_metadata: dependency_metadata.into_iter().collect(),
+            dependency_metadata,
+            dependency_metadata_ordered,
         }
     }
 
@@ -6482,6 +6524,7 @@ impl ResolverManifest {
                 })
                 .collect::<Result<BTreeMap<_, _>, _>>()?,
             dependency_metadata: self.dependency_metadata,
+            dependency_metadata_ordered: self.dependency_metadata_ordered,
         })
     }
 }
