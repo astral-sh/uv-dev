@@ -971,11 +971,11 @@ impl SourceBuild {
         match self.build_kind {
             BuildKind::Wheel | BuildKind::Editable => {
                 BuiltFilename::<WheelFilename>::parse(filename)
-                    .map(|filename| filename.map(DistFilename::WheelFilename))
+                    .map(BuiltFilename::from)
                     .map_err(Error::InvalidBuiltWheelFilename)
             }
             BuildKind::Sdist => BuiltFilename::<SourceDistFilename>::parse(filename)
-                .map(|filename| filename.map(DistFilename::SourceDistFilename))
+                .map(BuiltFilename::from)
                 .map_err(Error::InvalidBuiltSourceDistFilename),
         }
     }

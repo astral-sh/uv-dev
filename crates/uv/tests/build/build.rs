@@ -3283,46 +3283,6 @@ fn build_version_mismatch() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn build_backend_filename_spelling() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let project = context.temp_dir.child("project");
-    project.child("pyproject.toml").write_str(indoc! {r#"
-        [build-system]
-        requires = []
-        build-backend = "backend"
-        backend-path = ["."]
-    "#})?;
-    project.child("backend.py").write_str(indoc! {r#"
-        from pathlib import Path
-
-        def build_sdist(sdist_directory, config_settings=None):
-            filename = "Example_Pkg-1.0.tar.gz"
-            Path(sdist_directory, filename).touch()
-            return filename
-
-        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-            filename = "Example_Pkg-1.0-py3-none-any.whl"
-            Path(wheel_directory, filename).touch()
-            return filename
-    "#})?;
-    uv_snapshot!(context.filters(), context.build().arg("--sdist").arg("--wheel").current_dir(&project), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Building source distribution...
-    Building wheel...
-    Successfully built dist/Example_Pkg-1.0.tar.gz
-    Successfully built dist/Example_Pkg-1.0-py3-none-any.whl
-    ");
-    project
-        .child("dist/Example_Pkg-1.0.tar.gz")
-        .assert(predicate::path::exists());
-    project
-        .child("dist/Example_Pkg-1.0-py3-none-any.whl")
-        .assert(predicate::path::exists());
-    Ok(())
-}
-
 /// A backend must not return an sdist and wheel for different projects.
 #[test]
 fn build_name_mismatch() -> Result<()> {

@@ -1,7 +1,9 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
-use crate::{SourceDistFilename, SourceDistFilenameError, WheelFilename, WheelFilenameError};
+use crate::{
+    DistFilename, SourceDistFilename, SourceDistFilenameError, WheelFilename, WheelFilenameError,
+};
 
 /// A built distribution's parsed filename and exact on-disk spelling.
 ///
@@ -28,12 +30,22 @@ impl<T> BuiltFilename<T> {
     pub fn into_parts(self) -> (T, String) {
         (self.parsed, self.raw)
     }
+}
 
-    /// Map the parsed value without changing the filename used on disk.
-    pub fn map<U>(self, map: impl FnOnce(T) -> U) -> BuiltFilename<U> {
-        BuiltFilename {
-            parsed: map(self.parsed),
-            raw: self.raw,
+impl From<BuiltFilename<WheelFilename>> for BuiltFilename<DistFilename> {
+    fn from(filename: BuiltFilename<WheelFilename>) -> Self {
+        Self {
+            parsed: DistFilename::WheelFilename(filename.parsed),
+            raw: filename.raw,
+        }
+    }
+}
+
+impl From<BuiltFilename<SourceDistFilename>> for BuiltFilename<DistFilename> {
+    fn from(filename: BuiltFilename<SourceDistFilename>) -> Self {
+        Self {
+            parsed: DistFilename::SourceDistFilename(filename.parsed),
+            raw: filename.raw,
         }
     }
 }
@@ -81,12 +93,12 @@ mod tests {
             BuiltFilename::<SourceDistFilename>::parse("Example_Pkg-1.0.tar.gz".to_owned())?;
         for (filename, raw, normalized) in [
             (
-                wheel.map(DistFilename::WheelFilename),
+                BuiltFilename::<DistFilename>::from(wheel),
                 "Example_Pkg-1.0-py3-none-any.whl",
                 "example_pkg-1.0-py3-none-any.whl",
             ),
             (
-                source.map(DistFilename::SourceDistFilename),
+                BuiltFilename::<DistFilename>::from(source),
                 "Example_Pkg-1.0.tar.gz",
                 "example_pkg-1.0.tar.gz",
             ),
