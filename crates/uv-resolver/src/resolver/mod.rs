@@ -89,8 +89,8 @@ use crate::yanks::AllowedYanks;
 use crate::{DependencyMode, Exclusions, FlatIndex, Options, ResolutionMode, VersionMap, marker};
 pub(crate) use provider::MetadataUnavailable;
 pub(crate) use resolution::{
-    Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionPackage, ResolvedFork,
-    SelectedDistribution,
+    Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionNodeId, ResolutionPackage,
+    ResolvedFork, SelectedDistribution,
 };
 use uv_configuration::ForkStrategy;
 
@@ -845,8 +845,8 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 if let Some(env) = resolution.env.end_user_fork_display() {
                     let packages: FxHashSet<_> = resolution
                         .nodes
-                        .keys()
-                        .map(|package| &package.name)
+                        .iter()
+                        .map(|(package, _)| &package.name)
                         .collect();
                     debug!(
                         "Distinct solution for {env} with {} package(s)",
@@ -3108,6 +3108,37 @@ impl<'index> ForkState<'index> {
 
     fn into_resolution(self) -> Resolution<'index> {
         let solution: FxHashMap<_, _> = self.pubgrub.partial_solution.extract_solution().collect();
+        let nodes: FxHashMap<_, _> = solution
+            .iter()
+            .filter_map(|(&package, version)| {
+                if let PubGrubPackageInner::Package {
+                    name,
+                    kind,
+                    marker: MarkerTree::TRUE,
+                } = &*self.pubgrub.package_store[package]
+                {
+                    let (url, index) = self.source(name, version);
+                    Some((
+                        ResolutionPackage {
+                            name: name.clone(),
+                            kind: kind.clone(),
+                            url: url.cloned(),
+                            index: index.cloned(),
+                        },
+                        version.clone(),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let nodes: Vec<_> = nodes.into_iter().collect();
+        let node_indices: FxHashMap<_, _> = nodes
+            .iter()
+            .enumerate()
+            .map(|(index, (package, version))| ((package, version), ResolutionNodeId(index)))
+            .collect();
+
         let edge_count: usize = solution
             .keys()
             .map(|package| self.pubgrub.incompatibilities[package].len())
@@ -3198,66 +3229,40 @@ impl<'index> ForkState<'index> {
                 };
                 let from = self_name.map(|name| {
                     let (url, index) = self.source(name, self_version);
-                    ResolutionNode {
-                        package: ResolutionPackage {
-                            name: name.clone(),
-                            kind: self_kind.clone(),
-                            url: url.cloned(),
-                            index: index.cloned(),
-                        },
-                        version: self_version.clone(),
-                    }
+                    let package = ResolutionPackage {
+                        name: name.clone(),
+                        kind: self_kind.clone(),
+                        url: url.cloned(),
+                        index: index.cloned(),
+                    };
+                    node_indices[&(&package, self_version)]
                 });
 
                 let (url, index) = self.source(name, dependency_version);
-                let to = ResolutionNode {
-                    package: ResolutionPackage {
-                        name: name.clone(),
-                        kind,
-                        url: url.cloned(),
-                        index: index.cloned(),
-                    },
-                    version: dependency_version.clone(),
+                let mut to = ResolutionPackage {
+                    name: name.clone(),
+                    kind,
+                    url: url.cloned(),
+                    index: index.cloned(),
                 };
-                let edge = ResolutionDependencyEdge { from, to, marker };
+                edges.push(ResolutionDependencyEdge {
+                    from,
+                    to: node_indices[&(&to, dependency_version)],
+                    marker,
+                });
 
                 // An extra proxy requires both the extra and its base package. A group proxy
                 // only requires the group itself.
                 if let PubGrubPackageInner::Extra { .. } = &**dependency_package {
-                    let mut base_edge = edge.clone();
-                    base_edge.to.package.kind = PackageNodeKind::Base;
-                    edges.push(edge);
-                    edges.push(base_edge);
-                } else {
-                    edges.push(edge);
+                    to.kind = PackageNodeKind::Base;
+                    edges.push(ResolutionDependencyEdge {
+                        from,
+                        to: node_indices[&(&to, dependency_version)],
+                        marker,
+                    });
                 }
             }
         }
-
-        let nodes = solution
-            .into_iter()
-            .filter_map(|(package, version)| {
-                if let PubGrubPackageInner::Package {
-                    name,
-                    kind,
-                    marker: MarkerTree::TRUE,
-                } = &*self.pubgrub.package_store[package]
-                {
-                    let (url, index) = self.source(name, &version);
-                    Some((
-                        ResolutionPackage {
-                            name: name.clone(),
-                            kind: kind.clone(),
-                            url: url.cloned(),
-                            index: index.cloned(),
-                        },
-                        version,
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
 
         Resolution {
             nodes,

@@ -53,45 +53,56 @@ pub(crate) fn from_state(
     // Add the root node.
     let root_index = graph.add_node(ResolutionGraphNode::Root);
 
+    let mut fork_nodes = Vec::with_capacity(resolutions.len());
     for resolution in &mut resolutions {
+        let mut node_indices = Vec::with_capacity(resolution.nodes.len());
         // Add every package to the graph.
         for (package, selected) in resolution.nodes.drain(..) {
             let node = ResolutionNode {
                 package,
                 version: selected.version().clone(),
             };
-            let Entry::Vacant(entry) = inverse.entry(node) else {
-                // Insert each node only once.
-                continue;
+            let node_index = match inverse.entry(node) {
+                Entry::Occupied(entry) => *entry.get(),
+                Entry::Vacant(entry) => {
+                    let package = &entry.key().package;
+                    let node = add_version(
+                        &mut graph,
+                        &mut diagnostics,
+                        preferences,
+                        hasher,
+                        index,
+                        package,
+                        selected,
+                        project == Some(&package.name) || workspace_members.contains(&package.name),
+                    );
+                    entry.insert(node);
+                    node
+                }
             };
-            let package = &entry.key().package;
-            let node = add_version(
-                &mut graph,
-                &mut diagnostics,
-                preferences,
-                hasher,
-                index,
-                package,
-                selected,
-                project == Some(&package.name) || workspace_members.contains(&package.name),
-            );
-            entry.insert(node);
+            node_indices.push(node_index);
         }
+        fork_nodes.push(node_indices);
     }
+    drop(inverse);
 
     let mut seen = FxHashSet::default();
-    for resolution in &resolutions {
+    for (resolution, node_indices) in resolutions.iter().zip(&fork_nodes) {
         let marker = resolution.env.try_universal_markers().unwrap_or_default();
 
         // Add every edge to the graph, propagating the marker for the current fork, if
         // necessary.
         for edge in &resolution.edges {
-            if !seen.insert((edge, marker)) {
-                // Insert each node only once.
+            let from_index = edge.from.map_or(root_index, |from| node_indices[from.0]);
+            let to_index = node_indices[edge.to.0];
+            // Local indices can denote different packages in different forks. Deduplicate only
+            // after translating both endpoints into the merged graph.
+            if !seen.insert((from_index, to_index, edge.marker, marker)) {
+                // Insert each edge only once.
                 continue;
             }
 
-            add_edge(&mut graph, &inverse, root_index, edge, marker);
+            add_edge(&mut graph, from_index, to_index, edge, marker);
         }
     }
 
@@ -191,14 +202,11 @@ pub(crate) fn from_state(
 
 fn add_edge(
     graph: &mut Graph<ResolutionGraphNode, UniversalMarker>,
-    inverse: &FxHashMap<ResolutionNode, NodeIndex>,
-    root_index: NodeIndex,
+    from_index: NodeIndex,
+    to_index: NodeIndex,
     edge: &ResolutionDependencyEdge,
     marker: UniversalMarker,
 ) {
-    let from_index = edge.from.as_ref().map_or(root_index, |from| inverse[from]);
-    let to_index = inverse[&edge.to];
-
     let edge_marker = {
         let mut edge_marker = edge.universal_marker();
         edge_marker.and(marker);
