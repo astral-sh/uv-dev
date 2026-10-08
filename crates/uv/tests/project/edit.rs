@@ -11564,6 +11564,46 @@ async fn add_index_empty_directory() -> Result<()> {
     Ok(())
 }
 
+/// Skipping an empty index must not turn a multiple-index request into a source pin.
+#[test]
+fn add_index_empty_directory_retains_multiple_index_selection() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context.temp_dir.child("empty").create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0")
+        .arg("--index").arg("private=https://example.com/simple")
+        .arg("--index").arg("./empty")
+        .arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Index directory `file://[TEMP_DIR]/empty` is empty, skipping
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig==2.0.0",
+    ]
+
+    [[tool.uv.index]]
+    name = "private"
+    url = "https://example.com/simple"
+    "#);
+    Ok(())
+}
+
 #[test]
 fn add_index_with_ambiguous_relative_path() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((r"\./|\.\\", r"[PREFIX]"));

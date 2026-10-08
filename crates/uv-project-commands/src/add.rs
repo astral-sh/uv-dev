@@ -575,7 +575,8 @@ pub async fn add(
     )?;
 
     // Validate any indexes that were provided on the command-line before modifying the workspace.
-    let mut valid_indexes = Vec::with_capacity(indexes.len());
+    let supplied_index_count = indexes.len();
+    let mut valid_indexes = Vec::with_capacity(supplied_index_count);
     for index in indexes {
         if let IndexUrl::Path(url) = &index.url {
             let path = url
@@ -598,7 +599,7 @@ pub async fn add(
         .first()
         .as_ref()
         .and_then(|index| index.name.as_ref())
-        .filter(|_| indexes.len() == 1)
+        .filter(|_| supplied_index_count == 1)
         .inspect(|index| {
             debug!("Pinning all requirements to index: `{index}`");
         });
