@@ -1539,56 +1539,6 @@ fn init_prefix(prefix: &Prefix, virtualenv: &Scheme) -> io::Result<()> {
     fs::create_dir_all(prefix.root().join(&virtualenv.purelib))
 }
 
-#[cfg(test)]
-mod prefix_tests {
-    use std::path::PathBuf;
-
-    use anyhow::Result;
-    use tempfile::tempdir;
-
-    use uv_pypi_types::Scheme;
-    use uv_python_types::Prefix;
-
-    use super::{init_prefix, prefix_site_packages};
-
-    #[test]
-    fn split_prefix_site_packages() -> Result<()> {
-        let temp_dir = tempdir()?;
-        let root = temp_dir.path().join("prefix");
-        let prefix = Prefix::from(root.clone());
-        let virtualenv = Scheme {
-            purelib: "lib/python3.12/site-packages".into(),
-            platlib: "lib64/python3.12/site-packages".into(),
-            scripts: "bin".into(),
-            data: PathBuf::new(),
-            include: "include".into(),
-        };
-
-        assert_eq!(
-            prefix_site_packages(&prefix, &virtualenv).collect::<Vec<_>>(),
-            [
-                root.join("lib/python3.12/site-packages"),
-                root.join("lib64/python3.12/site-packages")
-            ]
-        );
-
-        init_prefix(&prefix, &virtualenv)?;
-        assert!(root.join("lib/python3.12/site-packages").is_dir());
-        assert!(!root.join("lib64/python3.12/site-packages").exists());
-
-        let combined = Scheme {
-            platlib: virtualenv.purelib.clone(),
-            ..virtualenv
-        };
-        assert_eq!(
-            prefix_site_packages(&prefix, &combined).collect::<Vec<_>>(),
-            [root.join("lib/python3.12/site-packages")]
-        );
-
-        Ok(())
-    }
-}
-
 /// Find the Python executable that should be considered the "base" for a virtual environment.
 ///
 /// Assumes that the provided executable is that of a standalone Python interpreter.
@@ -1920,6 +1870,56 @@ mod tests {
             fs::read_to_string(&query_count)?,
             "..",
             "the updated interpreter metadata should be cached again"
+        );
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use std::path::PathBuf;
+
+    use anyhow::Result;
+    use tempfile::tempdir;
+
+    use uv_pypi_types::Scheme;
+    use uv_python_types::Prefix;
+
+    use super::{init_prefix, prefix_site_packages};
+
+    #[test]
+    fn split_prefix_site_packages() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let root = temp_dir.path().join("prefix");
+        let prefix = Prefix::from(root.clone());
+        let virtualenv = Scheme {
+            purelib: "lib/python3.12/site-packages".into(),
+            platlib: "lib64/python3.12/site-packages".into(),
+            scripts: "bin".into(),
+            data: PathBuf::new(),
+            include: "include".into(),
+        };
+
+        assert_eq!(
+            prefix_site_packages(&prefix, &virtualenv).collect::<Vec<_>>(),
+            [
+                root.join("lib/python3.12/site-packages"),
+                root.join("lib64/python3.12/site-packages")
+            ]
+        );
+
+        init_prefix(&prefix, &virtualenv)?;
+        assert!(root.join("lib/python3.12/site-packages").is_dir());
+        assert!(!root.join("lib64/python3.12/site-packages").exists());
+
+        let combined = Scheme {
+            platlib: virtualenv.purelib.clone(),
+            ..virtualenv
+        };
+        assert_eq!(
+            prefix_site_packages(&prefix, &combined).collect::<Vec<_>>(),
+            [root.join("lib/python3.12/site-packages")]
         );
 
         Ok(())
