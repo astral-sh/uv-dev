@@ -23,7 +23,7 @@ use uv_configuration::{
     DependencyGroupsWithDefaults, DependencyMode, DependencyModifiers, HashCheckingMode,
     IndexStrategy, KeyringProviderType, NoSources,
 };
-use uv_dispatch::{BuildDispatch, SharedState};
+use uv_dispatch::{BuildDispatch, SharedState, configured_tar_backend};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_filename::{
     DistFilename, SourceDistExtension, SourceDistFilename, WheelFilename,
@@ -655,6 +655,7 @@ async fn build_package(
     };
 
     prepare_output_directory(output_dir, gitignore).await?;
+    let tar_backend = configured_tar_backend();
 
     // Determine the build plan.
     let plan = BuildPlan::determine(&source, sdist, wheel)?;
@@ -838,13 +839,8 @@ async fn build_package(
             let ext = SourceDistExtension::from_path(path.as_path())
                 .map_err(|err| Error::InvalidSourceDistExt(path.user_display().to_string(), err))?;
             let temp_dir = tempfile::tempdir_in(cache.bucket(CacheBucket::SourceDistributions))?;
-            let (temp_dir, _) = uv_extract::stream::archive(
-                &mut reader,
-                ext,
-                temp_dir,
-                build_dispatch.tar_backend(),
-            )
-            .await?;
+            let (temp_dir, _) =
+                uv_extract::stream::archive(&mut reader, ext, temp_dir, tar_backend).await?;
             drop(reader);
 
             // Extract the top-level directory from the archive.
@@ -952,13 +948,8 @@ async fn build_package(
                 Error::InvalidSourceDistExt(source.path().user_display().to_string(), err)
             })?;
             let temp_dir = tempfile::tempdir_in(output_dir)?;
-            let (temp_dir, _) = uv_extract::stream::archive(
-                &mut reader,
-                ext,
-                temp_dir,
-                build_dispatch.tar_backend(),
-            )
-            .await?;
+            let (temp_dir, _) =
+                uv_extract::stream::archive(&mut reader, ext, temp_dir, tar_backend).await?;
             drop(reader);
 
             // If the source distribution has a normalized filename, check its identity.
@@ -1139,7 +1130,7 @@ async fn build_sdist(
             let source_tree = source_tree.to_path_buf();
             let output_dir_ = output_dir.to_path_buf();
             let sources_enabled = sources.is_none();
-            let tar_backend = build_dispatch.tar_backend();
+            let tar_backend = configured_tar_backend();
             let filename = tokio::task::spawn_blocking(move || {
                 uv_build_backend::build_source_dist(
                     &source_tree,

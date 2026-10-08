@@ -46,6 +46,11 @@ use uv_types::{
 };
 use uv_workspace::WorkspaceCache;
 
+/// Return the configured implementation for reading and writing tar archives.
+pub fn configured_tar_backend() -> TarBackend {
+    TarBackend::from_env()
+}
+
 #[derive(Debug, Error)]
 pub enum BuildDispatchError {
     #[error(transparent)]
@@ -236,7 +241,7 @@ impl<'a> BuildDispatch<'a> {
             workspace_cache,
             concurrency,
             preview,
-            tar_backend: TarBackend::from_env(),
+            tar_backend: configured_tar_backend(),
         }
     }
 

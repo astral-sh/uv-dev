@@ -2854,27 +2854,32 @@ async fn build_fast_path_skips_flat_index() -> Result<()> {
         .mount(&server)
         .await;
     let links = format!("{}/links", server.uri());
-    context
-        .build()
+    uv_snapshot!(context.filters(), context.build()
         .arg("--wheel")
         .arg("--find-links")
-        .arg(&links)
-        .assert()
-        .success();
+        .arg(&links), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/project-1.0.0-py3-none-any.whl
+    ");
     context
         .temp_dir
         .child("dist/project-1.0.0-py3-none-any.whl")
         .assert(predicate::path::is_file());
-    context
-        .build()
+    uv_snapshot!(context.filters(), context.build()
         .arg("--wheel")
         .arg("--list")
         .arg("--find-links")
-        .arg(&links)
-        .assert()
-        .success();
-    context
-        .build()
+        .arg(&links), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Building project-1.0.0-py3-none-any.whl will include the following files:
+    project/__init__.py (src/project/__init__.py)
+    project-1.0.0.dist-info/WHEEL (generated)
+    project-1.0.0.dist-info/METADATA (generated)
+    ");
+    uv_snapshot!(context.filters(), context.build()
         .args([
             "--wheel",
             "--no-build-isolation",
@@ -2883,11 +2888,13 @@ async fn build_fast_path_skips_flat_index() -> Result<()> {
         ])
         .arg("--find-links")
         .arg(&links)
-        .env(EnvVars::UV_HTTP_RETRIES, "0")
-        .assert()
-        .success();
-    context
-        .build()
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/project-1.0.0-py3-none-any.whl
+    ");
+    uv_snapshot!(context.filters(), context.build()
         .args([
             "--wheel",
             "--no-build-isolation",
@@ -2897,9 +2904,14 @@ async fn build_fast_path_skips_flat_index() -> Result<()> {
         .arg("--list")
         .arg("--find-links")
         .arg(&links)
-        .env(EnvVars::UV_HTTP_RETRIES, "0")
-        .assert()
-        .success();
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Building project-1.0.0-py3-none-any.whl will include the following files:
+    project/__init__.py (src/project/__init__.py)
+    project-1.0.0.dist-info/WHEEL (generated)
+    project-1.0.0.dist-info/METADATA (generated)
+    ");
 
     assert!(
         server
