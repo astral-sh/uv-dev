@@ -253,21 +253,6 @@ impl ManagedPythonInstallations {
         Ok(iter)
     }
 
-    /// Iterate over managed Python installations that satisfy the requested version on this platform.
-    ///
-    /// ## Errors
-    ///
-    /// - The platform metadata cannot be read
-    /// - A directory for the installation cannot be read
-    #[cfg(test)]
-    fn find_version(
-        version: &PythonVersion,
-    ) -> Result<impl DoubleEndedIterator<Item = ManagedPythonInstallation>, Error> {
-        let request = VersionRequest::from(version);
-        Ok(Self::find_matching_current_platform()?
-            .filter(move |installation| request.matches_installation_key(installation.key())))
-    }
-
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -1384,37 +1369,6 @@ mod tests {
         assert!(newer_patch_older_build.is_upgrade_of(&older_patch_newer_build));
         // Older patch version should not be an upgrade even with newer build
         assert!(!older_patch_newer_build.is_upgrade_of(&newer_patch_older_build));
-    }
-
-    #[test]
-    fn test_find_version_matching() {
-        use uv_python_types::PythonVersion;
-
-        let platform = Platform::from_env().unwrap();
-        let temp_dir = tempfile::tempdir().unwrap();
-
-        // Create mock installation directories
-        fs::create_dir(temp_dir.path().join(format!("cpython-3.10.0-{platform}"))).unwrap();
-
-        temp_env::with_var(
-            uv_static::EnvVars::UV_PYTHON_INSTALL_DIR,
-            Some(temp_dir.path()),
-            || {
-                // Version 3.1 should NOT match 3.10
-                let v3_1 = PythonVersion::from_str("3.1").unwrap();
-                let matched: Vec<_> = ManagedPythonInstallations::find_version(&v3_1)
-                    .unwrap()
-                    .collect();
-                assert_eq!(matched.len(), 0);
-
-                // Check that 3.10 matches
-                let v3_10 = PythonVersion::from_str("3.10").unwrap();
-                let matched: Vec<_> = ManagedPythonInstallations::find_version(&v3_10)
-                    .unwrap()
-                    .collect();
-                assert_eq!(matched.len(), 1);
-            },
-        );
     }
 
     #[test]

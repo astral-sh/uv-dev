@@ -2216,6 +2216,16 @@ mod tests {
     }
 
     #[test]
+    fn version_request_matches_minor_version() {
+        let version = PythonVersion::from_str("3.10.0").expect("valid Python version");
+        let earlier_minor = VersionRequest::from_str("3.1").expect("valid version request");
+        let same_minor = VersionRequest::from_str("3.10").expect("valid version request");
+
+        assert!(!earlier_minor.matches_version(&version));
+        assert!(same_minor.matches_version(&version));
+    }
+
+    #[test]
     fn version_request_from_str() {
         assert_eq!(
             VersionRequest::from_str("3").unwrap(),
