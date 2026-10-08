@@ -11,10 +11,12 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_cache::{Cache, CacheEntry};
 use uv_client::{
-    BaseClientBuilder, CacheControl, CachedClient, CachedClientError, Connectivity,
-    DataWithCachePolicy, ErrorKind, FlatIndexClient, RetryState,
+    CacheControl, CachedClient, CachedClientError, Connectivity, DataWithCachePolicy, ErrorKind,
+    FlatIndexClient, RetryState,
 };
 use uv_distribution_types::IndexUrl;
+
+use crate::http_util::local_client_builder;
 
 #[test]
 fn reject_invalid_cache_lengths() {
@@ -47,7 +49,7 @@ async fn cached_text(
 async fn flat_indexes_with_sensitive_queries_are_cached_separately() -> Result<()> {
     let server = MockServer::start().await;
     let cache = Cache::temp()?.init().await?;
-    let client = CachedClient::new(BaseClientBuilder::default().build()?);
+    let client = CachedClient::new(local_client_builder().build()?);
     let flat_index = FlatIndexClient::new(&client, Connectivity::Online, &cache);
     let first = IndexUrl::parse(&format!("{}/flat?sig=first", server.uri()), None)?;
     let second = IndexUrl::parse(&format!("{}/flat?sig=second", server.uri()), None)?;
@@ -84,7 +86,7 @@ async fn flat_indexes_with_sensitive_queries_are_cached_separately() -> Result<(
     server.verify().await;
 
     let client = CachedClient::new(
-        BaseClientBuilder::default()
+        local_client_builder()
             .connectivity(Connectivity::Offline)
             .build()?,
     );
@@ -111,7 +113,7 @@ async fn flat_indexes_with_sensitive_queries_are_cached_separately() -> Result<(
 #[tokio::test]
 async fn revalidation_updates_only_policy() -> Result<()> {
     let server = MockServer::start().await;
-    let client = CachedClient::new(BaseClientBuilder::default().build()?);
+    let client = CachedClient::new(local_client_builder().build()?);
     let temp_dir = tempfile::tempdir()?;
     let entry = CacheEntry::new(temp_dir.path(), "response");
     let body = "cached metadata".repeat(100_000);
@@ -175,7 +177,7 @@ async fn revalidation_updates_only_policy() -> Result<()> {
     server.reset().await;
 
     // A new client must honor the persisted freshness without another HTTP request.
-    let client = CachedClient::new(BaseClientBuilder::default().build()?);
+    let client = CachedClient::new(local_client_builder().build()?);
     assert_eq!(
         cached_text(&client, &server, &entry, CacheControl::None).await?,
         body
@@ -197,7 +199,7 @@ async fn revalidation_updates_only_policy() -> Result<()> {
 #[tokio::test]
 async fn revalidation_of_readonly_entry() -> Result<()> {
     let server = MockServer::start().await;
-    let client = CachedClient::new(BaseClientBuilder::default().build()?);
+    let client = CachedClient::new(local_client_builder().build()?);
     let temp_dir = tempfile::tempdir()?;
     let entry = CacheEntry::new(temp_dir.path(), "response");
     Mock::given(method("GET"))
@@ -253,7 +255,7 @@ async fn revalidation_of_readonly_entry() -> Result<()> {
 #[tokio::test]
 async fn overlapping_policy_updates_are_refetched() -> Result<()> {
     let server = MockServer::start().await;
-    let client = CachedClient::new(BaseClientBuilder::default().build()?);
+    let client = CachedClient::new(local_client_builder().build()?);
     let temp_dir = tempfile::tempdir()?;
     let entry = CacheEntry::new(temp_dir.path(), "response");
     Mock::given(method("GET"))
@@ -349,7 +351,7 @@ async fn overlapping_policy_updates_are_refetched() -> Result<()> {
 #[tokio::test]
 async fn delayed_revalidation_cannot_modify_replaced_payload() -> Result<()> {
     let server = MockServer::start().await;
-    let client = CachedClient::new(BaseClientBuilder::default().build()?);
+    let client = CachedClient::new(local_client_builder().build()?);
     let temp_dir = tempfile::tempdir()?;
     let entry = CacheEntry::new(temp_dir.path(), "response");
     let newer_entry = CacheEntry::new(temp_dir.path(), "newer");
@@ -411,7 +413,7 @@ async fn delayed_revalidation_cannot_modify_replaced_payload() -> Result<()> {
 #[tokio::test]
 async fn torn_policy_is_refetched() -> Result<()> {
     let server = MockServer::start().await;
-    let client = CachedClient::new(BaseClientBuilder::default().build()?);
+    let client = CachedClient::new(local_client_builder().build()?);
     let temp_dir = tempfile::tempdir()?;
     let entry = CacheEntry::new(temp_dir.path(), "response");
     Mock::given(method("GET"))
@@ -474,7 +476,7 @@ async fn assert_retry_budget(
         let cache = tempfile::tempdir()?;
         let entry = CacheEntry::new(cache.path(), "response.msgpack");
         let client = CachedClient::new(
-            BaseClientBuilder::default()
+            local_client_builder()
                 .retries(2)
                 .no_retry_delay(true)
                 .build()?,
@@ -549,7 +551,7 @@ async fn send_counts_middleware_retries() -> Result<()> {
         };
         mock.mount(&server).await;
 
-        let client = BaseClientBuilder::default()
+        let client = local_client_builder()
             .retries(2)
             .no_retry_delay(true)
             .build()?;
@@ -575,7 +577,7 @@ async fn revalidation_http_errors_share_retry_budget() -> Result<()> {
     let server = MockServer::start().await;
     let url = format!("{}/metadata", server.uri()).parse()?;
     let client = CachedClient::new(
-        BaseClientBuilder::default()
+        local_client_builder()
             .retries(2)
             .no_retry_delay(true)
             .build()?,
