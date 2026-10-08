@@ -19,6 +19,7 @@ PUBLISHER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PUBLISHER)
 BRANCH = "update-docs-0.12.23-200"
 HEAD = "a" * 40
+SOURCE = "b" * 40
 TITLE = "Update uv documentation for 0.12.23"
 
 
@@ -26,6 +27,7 @@ def pull(number=11, **changes):
     return {
         "number": number,
         "title": TITLE,
+        "body": f"Automated documentation update for 0.12.23\n\n<!-- uv-source: {SOURCE} -->",
         "baseRefName": "main",
         "headRefName": f"update-docs-0.12.23-{number}",
         "headRefOid": HEAD,
@@ -56,7 +58,7 @@ class PublishDocs(unittest.TestCase):
 
     def publish(self):
         with patch.object(PUBLISHER, "run", self.run_command):
-            PUBLISHER.publish(BRANCH, "0.12.23")
+            PUBLISHER.publish(BRANCH, "0.12.23", SOURCE)
 
     def closed(self):
         return [args[3] for args in self.commands if args[1:3] == ("pr", "close")]
@@ -112,6 +114,18 @@ class PublishDocs(unittest.TestCase):
         ]
         self.publish()
         self.assertEqual(self.closed(), ["11"])
+
+    def test_out_of_order_source_publications_remain_open(self):
+        self.predecessors = [
+            pull(11, body=f"<!-- uv-source: {'c' * 40} -->"),
+            pull(12),
+            pull(13, body="No recorded source"),
+            pull(
+                14, body=f"<!-- uv-source: {SOURCE} -->\n<!-- uv-source: {SOURCE} -->"
+            ),
+        ]
+        self.publish()
+        self.assertEqual(self.closed(), ["12"])
 
     def test_no_change_commit_is_a_successful_noop(self):
         workflow = (ROOT / ".github/workflows/publish-docs.yml").read_text()
