@@ -2479,16 +2479,20 @@ fn python_install_patch_dylib_warning() -> anyhow::Result<()> {
     tool.write_str(&format!(
         "#!/bin/sh\nprintf '%s' '{long_stderr}' >&2\nexit 17\n"
     ))?;
-    let output = context
-        .python_install()
+    let context = context.with_filter((r"(?m)^( *)é{4096}$", "$1[4096 'é' characters]"));
+    uv_snapshot!(context.filters(), context.python_install()
         .args(["3.13.1", "--no-bin"])
-        .env(EnvVars::PATH, tools.path())
-        .assert()
-        .success();
-    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
-    assert!(stderr.contains("[output truncated]"));
-    assert_eq!(stderr.matches('é').count(), 4096);
-    assert!(!stderr.contains("UNPRINTED_TAIL"));
+        .env(EnvVars::PATH, tools.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Failed to patch the install name of the dynamic library for `[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13`. This may cause issues when building Python native extensions.
+      cause: Failed to update the install name of the Python dynamic library located at `managed/cpython-3.13.1-[PLATFORM]/lib/libpython3.13.dylib`
+
+             [stderr]
+             [4096 'é' characters]
+             [output truncated]
+    Python 3.13.1 is already installed
+    ");
     Ok(())
 }
 
