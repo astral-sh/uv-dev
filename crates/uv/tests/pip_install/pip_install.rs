@@ -1566,21 +1566,29 @@ fn install_require_hashes_in_constraints_and_overrides() -> Result<()> {
         .child("hashes.txt")
         .write_str("--require-hashes")?;
 
-    allow_duplicates! {
-        for flag in ["--constraint", "--override"] {
-            uv_snapshot!(context.pip_install()
-                .arg("-r")
-                .arg("requirements.txt")
-                .arg(flag)
-                .arg("hashes.txt"), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--constraint")
+        .arg("hashes.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
 
-            hint: `--require-hashes` was enabled in `hashes.txt`
-            ");
-        }
-    }
+    hint: `--require-hashes` was enabled in `hashes.txt`
+    ");
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--override")
+        .arg("hashes.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled in `hashes.txt`
+    ");
 
     Ok(())
 }
