@@ -111,6 +111,16 @@ impl CompatibleDist<'_> {
         }
     }
 
+    /// Whether Python compatibility must be read from distribution metadata.
+    pub fn requires_python_metadata(&self) -> bool {
+        match self {
+            Self::InstalledDist(_) => false,
+            Self::SourceDist { .. }
+            | Self::CompatibleWheel { .. }
+            | Self::IncompatibleWheel { .. } => self.requires_python().is_none(),
+        }
+    }
+
     // For installable distributions, return the prioritized distribution it was derived from.
     pub fn prioritized(&self) -> Option<&PrioritizedDist> {
         match self {

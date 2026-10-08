@@ -233,39 +233,6 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
     Ok(())
 }
 
-fn write_incompatible_python_wheel(path: &Path) -> Result<()> {
-    let mut writer = ZipFileWriter::new(Vec::new());
-    let metadata = indoc! {"
-        Metadata-Version: 2.1
-        Name: incompatible-python
-        Version: 1.0.0
-        Requires-Python: >=3.30
-    "};
-    let wheel = indoc! {"
-        Wheel-Version: 1.0
-        Generator: uv-test
-        Root-Is-Purelib: true
-        Tag: py3-none-any
-    "};
-    let record = indoc! {"
-        incompatible_python.py,,
-        incompatible_python-1.0.0.dist-info/METADATA,,
-        incompatible_python-1.0.0.dist-info/WHEEL,,
-        incompatible_python-1.0.0.dist-info/RECORD,,
-    "};
-    for (name, contents) in [
-        ("incompatible_python.py", "VALUE = 1\n"),
-        ("incompatible_python-1.0.0.dist-info/METADATA", metadata),
-        ("incompatible_python-1.0.0.dist-info/WHEEL", wheel),
-        ("incompatible_python-1.0.0.dist-info/RECORD", record),
-    ] {
-        let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
-    }
-    fs_err::write(path, block_on(writer.close())?)?;
-    Ok(())
-}
-
 #[test]
 fn whitespace_only_requirement() {
     let context = uv_test::test_context_with_versions!(&[])
@@ -4724,7 +4691,16 @@ fn no_deps_validates_missing_index_requires_python() -> Result<()> {
     package.create_dir_all()?;
 
     let wheel = package.child("incompatible_python-1.0.0-py3-none-any.whl");
-    write_incompatible_python_wheel(wheel.path())?;
+    let (_, contents) = generate_wheel(
+        &"incompatible-python".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.30".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    fs_err::write(wheel.path(), contents)?;
     package.child("index.html").write_str(indoc! {r#"
         <!DOCTYPE html>
         <html>

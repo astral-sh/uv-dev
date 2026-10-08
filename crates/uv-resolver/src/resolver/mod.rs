@@ -1697,9 +1697,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         requests: &'index MetadataRequests,
     ) -> Result<(), ResolveError> {
         let request = if matches!(&**package, PubGrubPackageInner::Package { .. })
-            && (self.dependency_mode.is_transitive()
-                || (!matches!(dist, CompatibleDist::InstalledDist(_))
-                    && dist.requires_python().is_none()))
+            && (self.dependency_mode.is_transitive() || dist.requires_python_metadata())
         {
             Some(|| {
                 requests.request_metadata(

@@ -68,8 +68,7 @@ impl<'index> FilePins<'index> {
                 entry.insert(FilePin::Registry {
                     dist: dist.for_installation().to_owned(),
                     metadata,
-                    requires_python_metadata: !matches!(dist, CompatibleDist::InstalledDist(_))
-                        && dist.requires_python().is_none(),
+                    requires_python_metadata: dist.requires_python_metadata(),
                 });
             }
         }
