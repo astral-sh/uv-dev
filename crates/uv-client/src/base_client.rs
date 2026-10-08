@@ -1057,19 +1057,17 @@ fn request_into_redirect(
 
     // Check if there are credentials on the redirect location itself.
     // If so, move them to Authorization header.
-    if !redirect_url.username().is_empty() {
-        if let Some(credentials) =
-            Credentials::from_url(&redirect_url).map_err(reqwest_middleware::Error::middleware)?
-        {
-            let _ = redirect_url.set_username("");
-            let _ = redirect_url.set_password(None);
-            headers.insert(
-                AUTHORIZATION,
-                credentials
-                    .to_header_value()
-                    .map_err(reqwest_middleware::Error::middleware)?,
-            );
-        }
+    if let Some(credentials) =
+        Credentials::from_url(&redirect_url).map_err(reqwest_middleware::Error::middleware)?
+    {
+        let _ = redirect_url.set_username("");
+        let _ = redirect_url.set_password(None);
+        headers.insert(
+            AUTHORIZATION,
+            credentials
+                .to_header_value()
+                .map_err(reqwest_middleware::Error::middleware)?,
+        );
     }
 
     std::mem::swap(req.headers_mut(), &mut headers);
