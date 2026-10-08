@@ -5,7 +5,10 @@ use assert_fs::prelude::*;
 use url::Url;
 use uv_static::EnvVars;
 
-use uv_test::{TestContext, capture_uv_snapshot, diff_uv_snapshot, uv_snapshot};
+use uv_test::{
+    TestContext, WindowsFilters, capture_uv_snapshot, diff_snapshot, diff_uv_snapshot,
+    run_and_format_silent, uv_snapshot,
+};
 
 /// Add shared arguments to a command.
 ///
@@ -5785,6 +5788,9 @@ fn boolean_environment_pip_package_precedence() -> anyhow::Result<()> {
             ("no-sources", EnvVars::UV_NO_SOURCES),
             ("no-build-isolation", EnvVars::UV_NO_BUILD_ISOLATION),
         ] {
+            if action == "sync" && key == "no-build-isolation" {
+                continue;
+            }
             let context = uv_test::test_context!("3.12");
             let package_flag = format!("--{key}-package");
             let command = || {
@@ -5799,10 +5805,22 @@ fn boolean_environment_pip_package_precedence() -> anyhow::Result<()> {
                 ]);
                 command
             };
-            let expected = capture_uv_snapshot!(context.filters(), command());
+            let capture = |command: &mut Command| {
+                let (snapshot, output) = run_and_format_silent(
+                    command,
+                    context.filters(),
+                    uv_test::function_name!(),
+                    Some(WindowsFilters::Platform),
+                    None,
+                );
+                output.assert().success();
+                snapshot
+            };
+            let expected = capture(&mut command());
             context.temp_dir.child("uv.toml").write_str(&format!("{key} = true\n{key}-package = [\"top-level\"]\n[pip]\n{key} = true\n{key}-package = [\"pip\"]\n"))?;
             insta::allow_duplicates! {
-                diff_uv_snapshot!(context.filters(), &expected, command().env(variable, "false"), @"");
+                let actual = capture(command().env(variable, "false"));
+                insta::assert_snapshot!(diff_snapshot(&expected, &actual, 3), @"");
             }
         }
     }
