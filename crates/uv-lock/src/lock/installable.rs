@@ -306,6 +306,8 @@ pub trait Installable<'lock> {
                 continue;
             };
             let package = lock.package(index);
+            let mut root_marker = root_marker;
+            root_marker.and(UniversalMarker::from_combined(package.environment_marker()));
             if root_kind == InstallableRootKind::Production && groups.prod() {
                 if add_reachability(&mut reachability, (index, None), root_marker) {
                     queue.push_back((index, None));
