@@ -3918,6 +3918,66 @@ impl Lock {
         SatisfiesResult::Satisfied
     }
 
+    fn normalized_constraint_inputs(
+        &self,
+        normalizer: &RequirementNormalizer<'_>,
+        filter: &ManifestFilter,
+        constraints: &[Requirement],
+    ) -> Result<(NormalizedConstraints, NormalizedConstraints), LockError> {
+        let omit_constraints = uv_preview::is_enabled(PreviewFeature::ResolutionInputs);
+        let expected = normalizer.constraints(
+            constraints
+                .iter()
+                .filter(|entry| {
+                    filter.includes_constraint(entry)
+                        && (!omit_constraints || !self.can_omit_constraint(entry))
+                })
+                .cloned(),
+        )?;
+        let actual = normalizer.constraints(
+            self.manifest
+                .constraints
+                .iter()
+                .filter(|entry| !omit_constraints || !self.can_omit_constraint(entry))
+                .cloned(),
+        )?;
+        Ok((expected, actual))
+    }
+
+    fn filtered_dependency_metadata(
+        filter: &ManifestFilter,
+        dependency_metadata: &DependencyMetadata,
+    ) -> BTreeSet<StaticMetadata> {
+        dependency_metadata
+            .values()
+            .filter(|entry| filter.includes_metadata(entry))
+            .cloned()
+            .collect()
+    }
+
+    /// Propagate unlocked ancestors' activation without trusting their old dependency markers.
+    pub fn descendant_activation<'lock>(
+        &'lock self,
+        mut unlocked: Vec<(&'lock PackageName, MarkerTree)>,
+    ) -> BTreeMap<&'lock PackageName, MarkerTree> {
+        let mut activation = BTreeMap::new();
+        while let Some((name, marker)) = unlocked.pop() {
+            for package in self.packages_for_name(name) {
+                for dependency in package.all_dependencies() {
+                    let current = activation
+                        .entry(dependency.package_name())
+                        .or_insert(MarkerTree::FALSE);
+                    let combined = current.or(marker);
+                    if combined != *current {
+                        *current = combined;
+                        unlocked.push((dependency.package_name(), combined));
+                    }
+                }
+            }
+        }
+        activation
+    }
+
     /// Whether current root declarations retain the activation recorded in this lockfile.
     ///
     /// Changed declarations make old edge markers unreliable. Until resolution refreshes those
@@ -3929,9 +3989,11 @@ impl Lock {
         supported_environments: &[MarkerTree],
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         requirements: &[Requirement],
+        constraints: &[Requirement],
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
         overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
+        dependency_metadata: &DependencyMetadata,
         database: &DistributionDatabase<'_, Context>,
     ) -> Result<bool, LockError> {
         // Non-workspace mutable metadata is refreshed later during resolution. Its stored
@@ -3961,6 +4023,14 @@ impl Lock {
         }
         let normalizer = RequirementNormalizer::new(root, requires_python);
         let filter = ManifestFilter::from_lock(self);
+        let (expected_constraints, actual_constraints) =
+            self.normalized_constraint_inputs(&normalizer, &filter, constraints)?;
+        if expected_constraints != actual_constraints
+            || Self::filtered_dependency_metadata(&filter, dependency_metadata)
+                != self.manifest.dependency_metadata
+        {
+            return Ok(false);
+        }
         if normalizer.overrides(
             overrides
                 .iter()
@@ -4041,9 +4111,11 @@ impl Lock {
         supported_environments: &[MarkerTree],
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         requirements: &[Requirement],
+        constraints: &[Requirement],
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
         overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
+        dependency_metadata: &DependencyMetadata,
         database: &DistributionDatabase<'_, Context>,
     ) -> Result<Vec<(&'lock Package, MarkerTree)>, LockError> {
         let current_scope = requires_python.complexify_markers(
@@ -4060,9 +4132,11 @@ impl Lock {
                 supported_environments,
                 packages,
                 requirements,
+                constraints,
                 dependency_groups,
                 overrides,
                 excludes,
+                dependency_metadata,
                 database,
             )
             .await?
@@ -4599,25 +4673,10 @@ impl Lock {
         }
 
         let filter = ManifestFilter::from_lock(self);
-        let omit_constraints = uv_preview::is_enabled(PreviewFeature::ResolutionInputs);
 
         let normalized_constraints = {
-            let expected = normalizer.constraints(
-                constraints
-                    .iter()
-                    .filter(|entry| {
-                        filter.includes_constraint(entry)
-                            && (!omit_constraints || !self.can_omit_constraint(entry))
-                    })
-                    .cloned(),
-            )?;
-            let actual = normalizer.constraints(
-                self.manifest
-                    .constraints
-                    .iter()
-                    .filter(|entry| !omit_constraints || !self.can_omit_constraint(entry))
-                    .cloned(),
-            )?;
+            let (expected, actual) =
+                self.normalized_constraint_inputs(&normalizer, &filter, constraints)?;
             if expected != actual {
                 return Ok(SatisfiesResult::MismatchedConstraints(
                     expected.into_iter().collect(),
@@ -4735,11 +4794,7 @@ impl Lock {
 
         // Validate that the lockfile was generated with the same static metadata.
         {
-            let expected = dependency_metadata
-                .values()
-                .filter(|entry| filter.includes_metadata(entry))
-                .cloned()
-                .collect::<BTreeSet<_>>();
+            let expected = Self::filtered_dependency_metadata(&filter, dependency_metadata);
             let actual = &self.manifest.dependency_metadata;
             if expected != *actual {
                 return Ok(SatisfiesResult::MismatchedStaticMetadata(expected, actual));
@@ -7624,7 +7679,7 @@ impl Package {
     }
 
     /// Returns all production, optional, and development dependencies of the [`Package`].
-    pub fn all_dependencies(&self) -> impl Iterator<Item = &Dependency> {
+    fn all_dependencies(&self) -> impl Iterator<Item = &Dependency> {
         self.dependencies
             .iter()
             .chain(self.optional_dependencies.values().flatten())

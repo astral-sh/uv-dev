@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -153,30 +152,10 @@ pub fn read_lock_requirements(
     // An unlocked ancestor can replace conditional edges throughout its dependency subtree.
     // Propagate its activation without those old edge markers, while retaining the ancestor's
     // root and Python bounds.
-    let mut changed_activation = BTreeMap::new();
-    if !unlocked.is_empty() && !required_environments.is_empty() {
-        let mut packages_by_name = BTreeMap::<_, Vec<_>>::new();
-        for package in lock.packages() {
-            packages_by_name
-                .entry(package.name())
-                .or_default()
-                .push(package);
-        }
-        while let Some((name, activation)) = unlocked.pop() {
-            for package in packages_by_name.get(name).into_iter().flatten() {
-                for dependency in package.all_dependencies() {
-                    let current = changed_activation
-                        .entry(dependency.package_name())
-                        .or_insert(MarkerTree::FALSE);
-                    let combined = current.or(activation);
-                    if combined != *current {
-                        *current = combined;
-                        unlocked.push((dependency.package_name(), combined));
-                    }
-                }
-            }
-        }
+    if required_environments.is_empty() {
+        unlocked.clear();
     }
+    let changed_activation = lock.descendant_activation(unlocked);
     let preferences = candidates
         .into_iter()
         .filter_map(|(package, activation, preference)| {
