@@ -3409,7 +3409,7 @@ fn build_wheel_metadata_mismatch() -> Result<()> {
     Successfully built dist/alpha-1.0.0+local-py3-none-any.whl
     ");
 
-    // Preserve the setuptools fallback for source trees without project metadata.
+    // Setuptools can omit the name when the source tree has no project metadata.
     fs_err::remove_dir_all(project.child("__pycache__"))?;
     project.child("backend.py").write_str(indoc! {r#"
         from pathlib import Path
@@ -3430,6 +3430,19 @@ fn build_wheel_metadata_mismatch() -> Result<()> {
     ----- stderr -----
     Building wheel...
     Successfully built dist/UNKNOWN-0.0.0-py3-none-any.whl
+    ");
+
+    fs_err::remove_dir_all(project.child("__pycache__"))?;
+    let backend = project.child("backend.py");
+    let contents = fs_err::read_to_string(&backend)?;
+    backend.write_str(&contents.replace("Version: 0.0.0", "Version: 9.0.0"))?;
+    uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/project`
+      cause: Failed to validate the built wheel
+      cause: Package metadata version `9.0.0` does not match `0.0.0` from the wheel filename
     ");
 
     Ok(())
@@ -3523,13 +3536,13 @@ fn build_workspace_virtual_root() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context.build().arg("--no-build-logs"), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     Building source distribution...
     warning: `[TEMP_DIR]/` appears to be a workspace root without a Python project; consider using `uv sync` to install the workspace, or add a `[build-system]` table to `pyproject.toml`
     Building wheel from source distribution...
-    Successfully built dist/cache-0.0.0.tar.gz
-    Successfully built dist/UNKNOWN-0.0.0-py3-none-any.whl
+    error: Failed to build `[TEMP_DIR]/`
+      cause: The source distribution declares name cache, but the wheel declares name unknown
     ");
     Ok(())
 }
@@ -3549,13 +3562,13 @@ fn build_pyproject_toml_not_a_project() -> Result<()> {
     "})?;
 
     uv_snapshot!(context.filters(), context.build().arg("--no-build-logs"), @"
-    exit_code: 0 (success)
+    exit_code: 2 (failure)
     ----- stderr -----
     Building source distribution...
     warning: `[TEMP_DIR]/` does not appear to be a Python project, as the `pyproject.toml` does not include a `[build-system]` table, and neither `setup.py` nor `setup.cfg` are present in the directory
     Building wheel from source distribution...
-    Successfully built dist/cache-0.0.0.tar.gz
-    Successfully built dist/UNKNOWN-0.0.0-py3-none-any.whl
+    error: Failed to build `[TEMP_DIR]/`
+      cause: The source distribution declares name cache, but the wheel declares name unknown
     ");
     Ok(())
 }

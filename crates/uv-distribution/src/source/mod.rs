@@ -3685,30 +3685,37 @@ impl From<CachedMetadata> for ResolutionMetadata {
     }
 }
 
+/// Read the raw metadata from a built wheel.
+fn read_wheel_metadata_bytes(filename: &WheelFilename, wheel: &Path) -> Result<Vec<u8>, Error> {
+    let file = fs_err::File::open(wheel).map_err(Error::CacheRead)?;
+    let reader = std::io::BufReader::new(file);
+    read_archive_metadata(filename, reader)
+        .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))
+}
+
 /// Read the [`ResolutionMetadata`] from a built wheel.
 fn read_wheel_metadata(
     filename: &WheelFilename,
     wheel: &Path,
 ) -> Result<ResolutionMetadata, Error> {
-    let file = fs_err::File::open(wheel).map_err(Error::CacheRead)?;
-    let reader = std::io::BufReader::new(file);
-    let dist_info = read_archive_metadata(filename, reader)
-        .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))?;
-    Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
+    Ok(ResolutionMetadata::parse_metadata(
+        &read_wheel_metadata_bytes(filename, wheel)?,
+    )?)
 }
 
 /// Validate that a built wheel's filename matches its embedded metadata.
 pub fn validate_wheel_metadata(filename: &WheelFilename, wheel: &Path) -> Result<(), Error> {
-    let metadata = match read_wheel_metadata(filename, wheel) {
+    let contents = read_wheel_metadata_bytes(filename, wheel)?;
+    let metadata = match ResolutionMetadata::parse_metadata(&contents) {
         Ok(metadata) => metadata,
-        Err(Error::Metadata(MetadataError::FieldNotFound("Name")))
-            if filename.name.as_str() == "unknown" =>
-        {
-            // Setuptools can produce an `UNKNOWN` wheel without a name when the source tree has
-            // no project metadata.
-            return Ok(());
+        Err(MetadataError::FieldNotFound("Name")) if filename.name.as_str() == "unknown" => {
+            // Setuptools can omit the name for source trees without project metadata. Other
+            // metadata fields, including the version, must still match the filename.
+            let mut metadata = b"Name: unknown\n".to_vec();
+            metadata.extend_from_slice(&contents);
+            ResolutionMetadata::parse_metadata(&metadata)?
         }
-        Err(err) => return Err(err),
+        Err(err) => return Err(err.into()),
     };
     validate_filename(filename, &metadata)
 }
