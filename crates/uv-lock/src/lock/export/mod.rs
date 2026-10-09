@@ -402,7 +402,7 @@ fn validate_requested_conflicts<'lock>(
         let index = lock.by_id[&package.id];
         if kind == InstallableRootKind::Production && groups.prod() {
             known_conflicts.insert(ConflictItem::from(name.clone()), root_marker);
-            requests.push(requests.root, index, None, root_marker)?;
+            requests.push(requests.root, index, None, root_marker);
             for extra in extras
                 .extra_names(
                     package
@@ -416,7 +416,7 @@ fn validate_requested_conflicts<'lock>(
                     ConflictItem::from((name.clone(), extra.clone())),
                     root_marker,
                 );
-                requests.push(requests.root, index, Some(extra.clone()), root_marker)?;
+                requests.push(requests.root, index, Some(extra.clone()), root_marker);
             }
         }
         for (group, dependencies) in &package.dependency_groups {
@@ -444,14 +444,14 @@ fn validate_requested_conflicts<'lock>(
                     dependency.index,
                     None,
                     root_marker.and(marker),
-                )?;
+                );
                 for (extra, marker) in extras {
                     requests.push(
                         requests.root,
                         dependency.index,
                         Some(extra),
                         root_marker.and(marker),
-                    )?;
+                    );
                 }
             }
         }
@@ -478,14 +478,14 @@ fn validate_requested_conflicts<'lock>(
                 continue;
             };
             let index = lock.by_id[&package.id];
-            requests.push(requests.root, index, None, root_marker.and(marker))?;
+            requests.push(requests.root, index, None, root_marker.and(marker));
             for extra in &requirement.extras {
                 requests.push(
                     requests.root,
                     index,
                     Some(extra.clone()),
                     root_marker.and(marker),
-                )?;
+                );
             }
         }
     }
@@ -506,9 +506,9 @@ fn validate_requested_conflicts<'lock>(
             }
             let (marker, extras) =
                 dependency.activation(requirements.as_deref(), target.install_path())?;
-            requests.push(parent, dependency.index, None, marker)?;
+            requests.push(parent, dependency.index, None, marker);
             for (extra, marker) in extras {
-                requests.push(parent, dependency.index, Some(extra), marker)?;
+                requests.push(parent, dependency.index, Some(extra), marker);
             }
         }
     }
@@ -516,7 +516,8 @@ fn validate_requested_conflicts<'lock>(
         .iter()
         .map(|(item, marker)| (item.clone(), *marker))
         .collect::<BTreeMap<_, _>>();
-    for (index, extra, marker) in requests.finish(&known_conflicts) {
+    for request in requests.finish(&known_conflicts, None) {
+        let (index, extra, marker) = request?;
         let package = lock.package(index);
         if groups.prod() && lock.is_workspace_package(package) {
             activated

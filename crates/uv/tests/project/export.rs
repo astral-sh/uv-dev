@@ -14342,3 +14342,82 @@ fn requirements_txt_undefined_registry_extra_conflict() -> Result<()> {
     ");
     Ok(())
 }
+
+/// A registry parent retains requests for a declared empty conflicting extra.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_registry_parent_requests_empty_conflicting_extra() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "registry-parent-empty-conflict-extra"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.gateway.versions."1"]
+        requires = ["child[feature]"]
+        sdist = false
+        [packages.child.versions."1"]
+        extras = { feature = [], unselected = ["missing-leaf"] }
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["gateway"]
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        conflicts = [[{ group = "dev" }, { package = "child", extra = "feature" }]]
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--group", "dev", "--no-header", "--no-hashes",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Found conflicting selections `child[feature]` and `project:dev` enabled simultaneously
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting selections `child[feature]` and `project:dev` enabled simultaneously
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let child = lock["package"]
+        .as_array()
+        .expect("locked packages")
+        .iter()
+        .find(|package| package["name"].as_str() == Some("child"))
+        .expect("child package");
+    assert!(
+        child
+            .get("optional-dependencies")
+            .and_then(|extras| extras.get("unselected"))
+            .is_none()
+    );
+    context
+        .lock()
+        .args(["--upgrade", "--preview-features", "lock-without-metadata"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting selections `child[feature]` and `project:dev` enabled simultaneously
+    ");
+    Ok(())
+}
