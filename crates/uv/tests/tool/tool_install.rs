@@ -7625,9 +7625,9 @@ fn tool_install_with_build_hashes() -> Result<()> {
 #[test]
 fn tool_install_locked_no_config_ignores_project_settings() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
         .with_filtered_counts()
         .with_filtered_exe_suffix();
-    let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
     let project = context.temp_dir.child("foo");
 
@@ -7665,8 +7665,6 @@ fn tool_install_locked_no_config_ignores_project_settings() -> Result<()> {
         .arg("--locked")
         .arg("--no-config")
         .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -7684,9 +7682,9 @@ fn tool_install_locked_no_config_ignores_project_settings() -> Result<()> {
 #[test]
 fn tool_install_locked_explicit_config_precedes_project_settings() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
         .with_filtered_counts()
         .with_filtered_exe_suffix();
-    let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
     let project = context.temp_dir.child("foo");
 
@@ -7727,8 +7725,6 @@ fn tool_install_locked_explicit_config_precedes_project_settings() -> Result<()>
         .arg("--locked")
         .arg("--config-file").arg(configuration.path())
         .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -7746,7 +7742,7 @@ fn tool_install_locked_explicit_config_precedes_project_settings() -> Result<()>
 /// A named source requirement cannot select a different executable-bearing workspace package.
 #[test]
 fn tool_install_locked_rejects_source_name_mismatch() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let project = context.temp_dir.child("bar");
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -7794,7 +7790,7 @@ fn tool_install_locked_rejects_source_name_mismatch() -> Result<()> {
 /// A projectless source cannot use a named workspace member as its own project identity.
 #[test]
 fn tool_install_locked_rejects_projectless_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let workspace = context.temp_dir.child("workspace");
     workspace.child("pyproject.toml").write_str(indoc! {r#"
         [tool.uv.workspace]
@@ -7836,10 +7832,10 @@ fn tool_install_locked_rejects_projectless_source() -> Result<()> {
 #[test]
 fn tool_install_locked_extra_build_dependency_source() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
         .with_filtered_counts()
         .with_filtered_exe_suffix();
     let project = context.temp_dir.child("foo");
-    let tools = context.temp_dir.child("tools");
     let bin = context.temp_dir.child("bin");
     let (helper_name, helper) = generate_wheel_with_files(
         &"build-helper".parse()?,
@@ -7894,7 +7890,6 @@ fn tool_install_locked_extra_build_dependency_source() -> Result<()> {
         .success();
     uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
         .args(["--locked", "--offline", "--no-cache", "--preview-features", "tool-install-locks"])
-        .env(EnvVars::UV_TOOL_DIR, tools.path()).env(EnvVars::XDG_BIN_HOME, bin.path())
         .env(EnvVars::PATH, bin.path()), @r"
     exit_code: 0 (success)
     ----- stderr -----
@@ -7906,7 +7901,6 @@ fn tool_install_locked_extra_build_dependency_source() -> Result<()> {
     ");
     uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
         .args(["--locked", "--offline", "--no-cache", "--reinstall", "--preview-features", "tool-install-locks"])
-        .env(EnvVars::UV_TOOL_DIR, tools.path()).env(EnvVars::XDG_BIN_HOME, bin.path())
         .env(EnvVars::PATH, bin.path()), @r"
     exit_code: 0 (success)
     ----- stderr -----
@@ -7933,10 +7927,10 @@ fn tool_install_locked_extra_build_dependency_source() -> Result<()> {
 #[test]
 fn tool_install_locked_extra_build_dependency_matches_runtime() -> Result<()> {
     let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
         .with_filtered_counts()
         .with_filtered_exe_suffix();
     let project = context.temp_dir.child("foo");
-    let tools = context.temp_dir.child("tools");
     let bin = context.temp_dir.child("bin");
     let scenario = toml::from_str::<Scenario>(indoc! {r#"
         name = "tool-build-runtime-match"
@@ -7995,7 +7989,6 @@ fn tool_install_locked_extra_build_dependency_matches_runtime() -> Result<()> {
         .success();
     uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
         .args(["--locked", "--no-cache", "--preview-features", "tool-install-locks"])
-        .env(EnvVars::UV_TOOL_DIR, tools.path()).env(EnvVars::XDG_BIN_HOME, bin.path())
         .env(EnvVars::PATH, bin.path()), @r"
     exit_code: 0 (success)
     ----- stderr -----
@@ -8008,7 +8001,6 @@ fn tool_install_locked_extra_build_dependency_matches_runtime() -> Result<()> {
     ");
     uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
         .args(["--locked", "--no-cache", "--reinstall", "--preview-features", "tool-install-locks"])
-        .env(EnvVars::UV_TOOL_DIR, tools.path()).env(EnvVars::XDG_BIN_HOME, bin.path())
         .env(EnvVars::PATH, bin.path()), @r"
     exit_code: 0 (success)
     ----- stderr -----
@@ -8021,6 +8013,133 @@ fn tool_install_locked_extra_build_dependency_matches_runtime() -> Result<()> {
     Installed 1 executable: foo
     ");
     assert_snapshot!(fs_err::read_to_string(project.child("builds"))?, @"
+    built
+    built
+    ");
+    uv_snapshot!(context.filters(), Command::new("foo").env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from foo!
+    ");
+    Ok(())
+}
+
+/// Ordinary installs keep extra requirements needed to build a source-only backend.
+#[test]
+fn tool_install_preserves_build_only_extra_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let project = context.temp_dir.child("foo");
+    let backend = context.temp_dir.child("backend");
+    let bin = context.temp_dir.child("bin");
+    let (helper_filename, helper) = generate_wheel_with_files(
+        &"build-helper".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("build_helper/payload.py", "VALUE = 'build-only helper'\n")],
+    );
+    context
+        .temp_dir
+        .child(&helper_filename)
+        .write_binary(&helper)?;
+    let helper_url = Url::from_file_path(context.temp_dir.child(&helper_filename).path())
+        .map_err(|()| anyhow::anyhow!("invalid helper wheel URL"))?;
+    let (filename, wheel) = generate_wheel(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["foo".to_owned()],
+    );
+    let backend_module = formatdoc! {r#"
+        from pathlib import Path
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, "{filename}").write_bytes(bytes.fromhex("{}"))
+            return "{filename}"
+    "#, hex::encode(&wheel)};
+    let (backend_filename, backend_wheel) = generate_wheel_with_files(
+        &"build-backend".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("build_backend/api.py", backend_module.as_str())],
+    );
+    backend.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "build-backend"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "bootstrap"
+        backend-path = ["."]
+    "#})?;
+    backend.child("bootstrap.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            from build_helper import payload
+            assert payload.VALUE == "build-only helper"
+            with Path(__file__).with_name("builds").open("a") as marker:
+                marker.write("built\n")
+            Path(wheel_directory, "{backend_filename}").write_bytes(bytes.fromhex("{}"))
+            return "{backend_filename}"
+    "#, hex::encode(&backend_wheel)})?;
+    let backend_url = Url::from_directory_path(backend.path())
+        .map_err(|()| anyhow::anyhow!("invalid backend directory URL"))?;
+    project.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.scripts]
+        foo = "foo.cli:main"
+        [build-system]
+        requires = ["build-backend @ {backend_url}"]
+        build-backend = "build_backend.api"
+    "#})?;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        [extra-build-dependencies]
+        build-backend = ["build-helper @ {helper_url}"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
+        .args(["--offline", "--no-cache"])
+        .arg("--config-file").arg(context.temp_dir.child("uv.toml").path())
+        .env(EnvVars::PATH, bin.path()), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    ");
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
+        .args(["--offline", "--no-cache", "--reinstall", "--preview-features", "tool-install-locks"])
+        .arg("--config-file").arg(context.temp_dir.child("uv.toml").path())
+        .env(EnvVars::PATH, bin.path()), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared [N] packages in [TIME]
+    Uninstalled [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     ~ foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    ");
+    assert_snapshot!(fs_err::read_to_string(backend.child("builds"))?, @"
     built
     built
     ");
