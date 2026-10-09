@@ -674,18 +674,18 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         source: &BuildableSource<'data>,
         url: &'data DisplaySafeUrl,
         index: Option<&'data IndexUrl>,
-        cache_shard: &CacheShard,
+        source_cache_shard: &CacheShard,
         subdirectory: Option<&'data Path>,
         ext: SourceDistExtension,
         tags: &Tags,
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<BuiltWheelMetadata, Error> {
-        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
+        let _lock = source_cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
         let revision = self
-            .url_revision(source, ext, url, index, cache_shard, hashes, client)
+            .url_revision(source, ext, url, index, source_cache_shard, hashes, client)
             .await?;
 
         // Before running the build, check that the hashes match.
@@ -699,9 +699,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
-        let cache_shard = cache_shard.shard(revision.id());
+        let cache_shard =
+            authority_build_shard(client.unmanaged, source_cache_shard.shard(revision.id()));
         let source_dist_entry = cache_shard.entry(SOURCE);
-        let cache_shard = authority_build_shard(client.unmanaged, cache_shard);
 
         // We don't track any cache information for URL-based source distributions; they're assumed
         // to be immutable.
@@ -749,6 +749,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 ext,
                 url,
                 index,
+                &source_cache_shard.entry(HTTP_REVISION),
                 &source_dist_entry,
                 revision,
                 hashes,
@@ -819,17 +820,17 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         source: &BuildableSource<'data>,
         url: &'data DisplaySafeUrl,
         index: Option<&'data IndexUrl>,
-        cache_shard: &CacheShard,
+        source_cache_shard: &CacheShard,
         subdirectory: Option<&'data Path>,
         ext: SourceDistExtension,
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<ArchiveMetadata, Error> {
-        let _lock = cache_shard.lock().await.map_err(Error::CacheLock)?;
+        let _lock = source_cache_shard.lock().await.map_err(Error::CacheLock)?;
 
         // Fetch the revision for the source distribution.
         let revision = self
-            .url_revision(source, ext, url, index, cache_shard, hashes, client)
+            .url_revision(source, ext, url, index, source_cache_shard, hashes, client)
             .await?;
 
         // Before running the build, check that the hashes match.
@@ -843,9 +844,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // Scope all operations to the revision. Within the revision, there's no need to check for
         // freshness, since entries have to be fresher than the revision itself.
-        let cache_shard = cache_shard.shard(revision.id());
+        let cache_shard =
+            authority_build_shard(client.unmanaged, source_cache_shard.shard(revision.id()));
         let source_dist_entry = cache_shard.entry(SOURCE);
-        let cache_shard = authority_build_shard(client.unmanaged, cache_shard);
 
         // If the metadata is static, return it.
         let dynamic =
@@ -910,6 +911,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 ext,
                 url,
                 index,
+                &source_cache_shard.entry(HTTP_REVISION),
                 &source_dist_entry,
                 revision,
                 hashes,
@@ -1059,7 +1061,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
                 // Download the source distribution.
                 debug!("Downloading source distribution: {source}");
-                let entry = cache_shard.shard(revision.id()).entry(SOURCE);
+                let entry =
+                    authority_build_shard(client.unmanaged, cache_shard.shard(revision.id()))
+                        .entry(SOURCE);
                 let (hashes, size) = self
                     .download_archive(
                         response,
@@ -2845,13 +2849,13 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         ext: SourceDistExtension,
         url: &DisplaySafeUrl,
         index: Option<&IndexUrl>,
-        entry: &CacheEntry,
+        revision_entry: &CacheEntry,
+        source_entry: &CacheEntry,
         revision: Revision,
         hashes: ArchiveHashPolicy<'_>,
         client: &ManagedClient<'_>,
     ) -> Result<Revision, Error> {
         warn!("Re-downloading missing source distribution: {source}");
-        let cache_entry = entry.shard().entry(HTTP_REVISION);
         let authority = client
             .unmanaged
             .checksum_authority_record(
@@ -2874,7 +2878,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             Connectivity::Online => CacheControl::from(
                 self.build_context
                     .cache()
-                    .freshness(&cache_entry, source.name(), source.source_tree())
+                    .freshness(revision_entry, source.name(), source.source_tree())
                     .map_err(Error::CacheRead)?,
             ),
             Connectivity::Offline => CacheControl::AllowStale,
@@ -2888,7 +2892,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                         source,
                         ext,
                         authority.as_ref(),
-                        entry.path(),
+                        source_entry.path(),
                         hashes,
                         revision.hashes(),
                     )
@@ -2907,7 +2911,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     .cached_client()
                     .skip_cache_with_retry(
                         Self::request(url.clone(), client)?,
-                        &cache_entry,
+                        revision_entry,
                         cache_control.clone(),
                         download,
                     )

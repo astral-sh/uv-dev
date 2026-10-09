@@ -22,10 +22,11 @@ struct BuildReceipt {
     authorizations: VerificationReceipt,
 }
 
-/// Keep backend-produced artifacts separate from builds made without authority verification.
+/// Keep source workspaces and backend artifacts separate from unverified builds.
 pub(super) fn authority_build_shard(client: &RegistryClient, shard: CacheShard) -> CacheShard {
     if let Some(authority) = client.checksum_authority() {
-        shard.shard(format!("authority-{}", authority.public_key()))
+        // Unversioned namespaces can contain outputs from shared mutable source workspaces.
+        shard.shard(format!("authority-v2-{}", authority.public_key()))
     } else {
         shard
     }

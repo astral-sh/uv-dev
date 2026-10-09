@@ -66,11 +66,6 @@ impl CacheEntry {
         Self(path.into())
     }
 
-    /// Return the cache entry's parent directory.
-    pub fn shard(&self) -> CacheShard {
-        CacheShard(self.dir().to_path_buf())
-    }
-
     /// Convert the [`CacheEntry`] into a [`PathBuf`].
     #[inline]
     pub fn into_path_buf(self) -> PathBuf {
@@ -792,14 +787,33 @@ impl Cache {
                     }
 
                     let entries = fs_err::read_dir(entry.path())?.collect::<Result<Vec<_>, _>>()?;
-                    let authority_revision = entries.iter().any(|child| {
-                        child
-                            .file_name()
-                            .to_string_lossy()
-                            .starts_with("authority-")
-                            && child.path().is_dir()
-                    });
-                    if !entry.path().join("metadata.msgpack").exists() && !authority_revision {
+                    // Authority namespaces live directly inside an HTTP source revision. Package
+                    // names in the enclosing index can also begin with `authority-`.
+                    let http_revision = entry
+                        .path()
+                        .parent()
+                        .is_some_and(|parent| parent.join("revision.http").is_file());
+                    let authority_revision = http_revision
+                        && entries.iter().any(|child| {
+                            child
+                                .file_name()
+                                .to_string_lossy()
+                                .starts_with("authority-")
+                                && child.path().is_dir()
+                        });
+                    let authority_namespace = entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("authority-")
+                        && entry
+                            .path()
+                            .parent()
+                            .and_then(Path::parent)
+                            .is_some_and(|parent| parent.join("revision.http").is_file());
+                    if !entry.path().join("metadata.msgpack").exists()
+                        && !authority_revision
+                        && !authority_namespace
+                    {
                         continue;
                     }
 
@@ -819,10 +833,11 @@ impl Cache {
                         if entry.file_name() != "src"
                             && entry.file_type()?.is_dir()
                             && (path.join("metadata.msgpack").exists()
-                                || entry
-                                    .file_name()
-                                    .to_string_lossy()
-                                    .starts_with("authority-"))
+                                || (http_revision
+                                    && entry
+                                        .file_name()
+                                        .to_string_lossy()
+                                        .starts_with("authority-")))
                         {
                             continue;
                         }
