@@ -85,7 +85,8 @@ impl CachedEnvironment {
             source_settings.resolver.index_locations = source_settings
                 .resolver
                 .index_locations
-                .with_source_indexes(spec.requirements.indexes.clone());
+                .with_source_indexes(spec.requirements.indexes.clone())
+                .map_err(anyhow::Error::from)?;
             &source_settings
         };
 
