@@ -31043,7 +31043,7 @@ fn lock_unsupported_version() -> Result<()> {
     // Validate schema, invalid version.
     context.temp_dir.child("uv.lock").write_str(
         r#"
-        version = 2
+        version = 3
         requires-python = ">=3.12"
 
         [options]
@@ -31074,13 +31074,13 @@ fn lock_unsupported_version() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--frozen"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: The lockfile at `uv.lock` uses an unsupported schema version (v2, but only v1 is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`.
+    error: The lockfile at `uv.lock` uses an unsupported schema version (v3, supported versions are v1 through v2). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`.
     ");
 
     // Invalid schema (`iniconfig` is referenced, but missing), invalid version.
     context.temp_dir.child("uv.lock").write_str(
         r#"
-        version = 2
+        version = 3
         requires-python = ">=3.12"
 
         [options]
@@ -31102,7 +31102,7 @@ fn lock_unsupported_version() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock().arg("--frozen"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to parse `uv.lock`, which uses an unsupported schema version (v2, but only v1 is supported). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`.
+    error: Failed to parse `uv.lock`, which uses an unsupported schema version (v3, supported versions are v1 through v2). Downgrade to a compatible uv version, or remove the `uv.lock` prior to running `uv lock` or `uv sync`.
       cause: Dependency `iniconfig` has missing `source` field but has more than one matching package
     ");
 
@@ -48947,7 +48947,7 @@ fn lock_workspace_nonproject_group_include_conflicts() -> Result<()> {
     "#);
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(context.read("uv.lock"), @r#"
-    version = 1
+    version = 2
     revision = 5
     requires-python = ">=3.12"
     conflicts = [[
@@ -49164,6 +49164,81 @@ fn lock_workspace_nonproject_group_include_markers() -> Result<()> {
 
     ----- stderr -----
     Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    "#);
+    Ok(())
+}
+
+/// Imported members do not inherit a selected project's unrelated group names.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_workspace_group_include_selected_member_scope() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "selected-member-group-includes"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        [packages.unrelated.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["tools", "child"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example"]
+        lint = ["unrelated"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_snapshot!(lock["version"].to_string(), @"2");
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--package", "child", "--only-group", "lint", "--no-hashes", "--no-header", "--no-annotate"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--package", "child", "--only-group", "lint"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
     "#);
     Ok(())
 }

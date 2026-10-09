@@ -95,19 +95,23 @@ mod tree;
 #[cfg(test)]
 mod windows_emulation_tests;
 
-/// The current version of the lockfile format.
+/// The base version of the lockfile format.
 const VERSION: u32 = 1;
+// Reference-only workspace groups require readers that understand their activation context.
+const WORKSPACE_GROUP_VERSION: u32 = 2;
 
 /// An error returned when parsing a lockfile.
 #[derive(Debug, thiserror::Error)]
 pub enum LockParseError {
     /// The lockfile uses an unsupported schema version.
-    #[error("unsupported lockfile schema version (v{version}, but only v{supported} is supported)")]
+    #[error(
+        "unsupported lockfile schema version (v{version}, supported versions are v1 through v{supported})"
+    )]
     UnsupportedVersion { supported: u32, version: u32 },
 
     /// The lockfile cannot be parsed and uses an unsupported schema version.
     #[error(
-        "failed to parse lockfile using an unsupported schema version (v{version}, but only v{supported} is supported)"
+        "failed to parse lockfile using an unsupported schema version (v{version}, supported versions are v1 through v{supported})"
     )]
     UnparsableVersion {
         supported: u32,
@@ -313,12 +317,9 @@ pub(crate) struct HashedDist {
 pub struct Lock {
     /// The (major) version of the lockfile format.
     ///
-    /// Changes to the major version indicate backwards- and forwards-incompatible changes to the
-    /// lockfile format. A given uv version only supports a single major version of the lockfile
-    /// format.
-    ///
-    /// In other words, a version of uv that supports version 2 of the lockfile format will not be
-    /// able to read lockfiles generated under version 1 or 3.
+    /// Version 1 represents the base format. Version 2 additionally supports reference-only
+    /// workspace dependency groups, which older readers must reject instead of silently omitting
+    /// their dependencies. This reader supports both versions.
     version: u32,
     /// The revision of the lockfile format.
     ///
@@ -2674,6 +2675,11 @@ impl Lock {
         required_environments: Vec<MarkerTree>,
         fork_markers: Vec<UniversalMarker>,
     ) -> Result<Self, LockError> {
+        let version = if version == VERSION && !manifest.dependency_group_includes.is_empty() {
+            WORKSPACE_GROUP_VERSION
+        } else {
+            version
+        };
         // Put all dependencies for each package in a canonical order and
         // check for duplicates.
         for package in &mut packages {
@@ -3865,10 +3871,10 @@ impl Lock {
                 Ok(lock) => lock,
                 Err(source) => {
                     if let Ok(lock) = toml::from_str::<LockVersion>(input)
-                        && lock.version() != VERSION
+                        && !matches!(lock.version(), VERSION | WORKSPACE_GROUP_VERSION)
                     {
                         return Err(LockParseError::UnparsableVersion {
-                            supported: VERSION,
+                            supported: WORKSPACE_GROUP_VERSION,
                             version: lock.version(),
                             source,
                         });
@@ -3878,9 +3884,9 @@ impl Lock {
             },
         };
 
-        if lock.version() != VERSION {
+        if !matches!(lock.version(), VERSION | WORKSPACE_GROUP_VERSION) {
             return Err(LockParseError::UnsupportedVersion {
-                supported: VERSION,
+                supported: WORKSPACE_GROUP_VERSION,
                 version: lock.version(),
             });
         }

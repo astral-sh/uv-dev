@@ -211,6 +211,15 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
             return false;
         }
 
+        // Included members contribute only their referenced groups. Direct selection applies to
+        // the original targets and, when present, the inherited workspace-root project.
+        if package.is_some_and(|package| {
+            !self.roots().any(|root| root == package)
+                && self.lock().root().is_none_or(|root| root.name() != package)
+        }) {
+            return false;
+        }
+
         let Some((name, workspace)) = self.selected_project() else {
             return true;
         };
