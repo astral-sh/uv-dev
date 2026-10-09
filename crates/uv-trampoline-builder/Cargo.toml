@@ -38,6 +38,8 @@ futures-lite = { workspace = true }
 windows = { workspace = true }
 
 [dev-dependencies]
+async_zip = { workspace = true }
+futures-lite = { workspace = true }
 assert_cmd = { workspace = true }
 assert_fs = { workspace = true }
 anyhow = { workspace = true }

@@ -1608,6 +1608,46 @@ pub async fn sync_environment(
     printer: Printer,
     preview: Preview,
 ) -> Result<PythonEnvironment, EnvironmentError> {
+    sync_environment_with_platform(
+        venv,
+        None,
+        SourceTreeEditablePolicy::Project,
+        resolution,
+        hasher,
+        modifications,
+        build_constraints,
+        settings,
+        client_builder,
+        state,
+        logger,
+        installer_metadata,
+        concurrency,
+        cache,
+        printer,
+        preview,
+    )
+    .await
+}
+
+/// Sync using the requested platform and source-tree editability policy.
+pub async fn sync_environment_with_platform(
+    venv: PythonEnvironment,
+    python_platform: Option<&TargetTriple>,
+    source_tree_editable_policy: SourceTreeEditablePolicy,
+    resolution: &Resolution,
+    hasher: HashStrategy,
+    modifications: Modifications,
+    build_constraints: Constraints,
+    settings: InstallerSettingsRef<'_>,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &PlatformState,
+    logger: Box<dyn InstallLogger>,
+    installer_metadata: bool,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    printer: Printer,
+    preview: Preview,
+) -> Result<PythonEnvironment, EnvironmentError> {
     let InstallerSettingsRef {
         index_locations,
         index_strategy,
@@ -1633,7 +1673,7 @@ pub async fn sync_environment(
 
     // Determine the markers tags to use for resolution.
     let interpreter = venv.interpreter();
-    let tags = venv.interpreter().tags()?;
+    let tags = uv_resolve_operations::resolution_tags(None, python_platform, interpreter)?;
 
     // Initialize the registry client.
     let client = RegistryClientBuilder::new(client_builder, cache.clone())
@@ -1691,7 +1731,7 @@ pub async fn sync_environment(
         &build_hasher,
         exclude_newer.clone(),
         sources,
-        SourceTreeEditablePolicy::Project,
+        source_tree_editable_policy,
         workspace_cache,
         concurrency.clone(),
         preview,
@@ -1708,7 +1748,7 @@ pub async fn sync_environment(
         link_mode,
         compile_bytecode.then_some(uv_install_operations::BytecodeCompilation::All),
         &hasher,
-        tags,
+        &tags,
         &client,
         state.in_flight(),
         concurrency,
@@ -1759,6 +1799,58 @@ pub async fn update_environment(
     dry_run: DryRun,
     printer: Printer,
     preview: Preview,
+) -> Result<EnvironmentUpdate, EnvironmentError> {
+    update_environment_with_preflight(
+        venv,
+        spec,
+        modifications,
+        python_platform,
+        source_tree_editable_policy,
+        build_constraints,
+        extra_build_requires,
+        settings,
+        client_builder,
+        state,
+        resolve,
+        install,
+        installer_metadata,
+        concurrency,
+        cache,
+        workspace_cache,
+        dry_run,
+        printer,
+        preview,
+        async |_, _, _| Ok(()),
+    )
+    .await
+}
+
+/// Update an environment, checking its resolved packages before modifying installed files.
+pub async fn update_environment_with_preflight(
+    venv: PythonEnvironment,
+    spec: RequirementsSpecification,
+    modifications: Modifications,
+    python_platform: Option<&TargetTriple>,
+    source_tree_editable_policy: SourceTreeEditablePolicy,
+    build_constraints: Constraints,
+    extra_build_requires: ExtraBuildRequires,
+    settings: &ResolverInstallerSettings,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &SharedState,
+    resolve: Box<dyn ResolveLogger>,
+    install: Box<dyn InstallLogger>,
+    installer_metadata: bool,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    dry_run: DryRun,
+    printer: Printer,
+    preview: Preview,
+    preflight: impl AsyncFnOnce(
+        &PythonEnvironment,
+        &Resolution,
+        &HashStrategy,
+    ) -> Result<(), EnvironmentError>,
 ) -> Result<EnvironmentUpdate, EnvironmentError> {
     warn_on_requirements_txt_setting(&spec, &settings.resolver);
 
@@ -1985,6 +2077,8 @@ pub async fn update_environment(
         Ok((resolution, hasher)) => (Resolution::from(resolution), hasher),
         Err(err) => return Err(err.into()),
     };
+    preflight(&venv, &resolution, &hasher).await?;
+
     // Sync the environment.
     let changelog = uv_install_operations::install(
         &resolution,

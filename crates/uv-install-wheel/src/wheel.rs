@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Display;
 use std::io;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -19,6 +19,8 @@ use uv_normalize::PackageName;
 use uv_pypi_types::DirectUrl;
 use uv_shell::escape_posix_for_single_quotes;
 use uv_trampoline_builder::windows_script_launcher;
+#[cfg(windows)]
+use uv_trampoline_builder::{Launcher, LauncherKind, relocate_distlib_script};
 use uv_warnings::warn_user_once;
 
 use crate::record::RecordEntry;
@@ -101,6 +103,8 @@ fn copy_and_hash(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<
     ))
 }
 
+const SHELL_WRAPPER_SUFFIX: &str = " \"$0\" \"$@\"\n' '''";
+
 /// Format the shebang for a given Python executable.
 ///
 /// Like pip, if a shebang is non-simple (too long or contains spaces), we use `/bin/sh` as the
@@ -131,7 +135,7 @@ fn format_shebang(executable: impl AsRef<Path>, os_name: &str, relocatable: bool
                 prefix,
                 escape_posix_for_single_quotes(&executable)
             );
-            return format!("#!/bin/sh\n'''exec' {executable} \"$0\" \"$@\"\n' '''");
+            return format!("#!/bin/sh\n'''exec' {executable}{SHELL_WRAPPER_SUFFIX}");
         }
     }
 
@@ -324,6 +328,361 @@ impl<'script> ValidatedScript<'script> {
             )))
         })
     }
+}
+
+/// Relocate an installed distribution's Python scripts to the current interpreter.
+pub fn relocate_installed_scripts(
+    previous_layout: &Layout,
+    layout: &Layout,
+    relocatable: bool,
+    dist_info: &Path,
+) -> Result<(), Error> {
+    let EntryPoints {
+        console_scripts,
+        gui_scripts,
+    } = EntryPoints::read(dist_info.join("entry_points.txt"), layout.python_version.1)?;
+    let site_packages = dist_info.parent().ok_or_else(|| {
+        Error::InvalidWheel(format!(
+            "Invalid installed metadata path: {}",
+            dist_info.display()
+        ))
+    })?;
+    let prefix = dist_info
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".dist-info"))
+        .ok_or_else(|| {
+            Error::InvalidWheel(format!(
+                "Invalid installed metadata path: {}",
+                dist_info.display()
+            ))
+        })?;
+    let record = match File::open(dist_info.join("RECORD")) {
+        Ok(record) => Some(read_record(record)?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let mut paths = BTreeSet::new();
+    for script in console_scripts.iter().chain(&gui_scripts) {
+        paths.insert(
+            ValidatedScript::try_from_script(script, layout)?
+                .as_path()
+                .to_path_buf(),
+        );
+    }
+    if let Some(record) = &record {
+        paths.extend(record.iter().filter_map(|entry| {
+            normalize_path_under(site_packages.join(&entry.path), &layout.scheme.scripts)
+        }));
+    }
+    let mut generated = Vec::new();
+    relocate_scripts(
+        previous_layout,
+        layout,
+        relocatable,
+        site_packages,
+        paths,
+        &mut generated,
+    )?;
+    if let Some(mut record) = record {
+        if generated.is_empty() {
+            return Ok(());
+        }
+        record.retain(|entry| {
+            !generated
+                .iter()
+                .any(|generated| generated.path == entry.path)
+        });
+        record.extend(generated);
+        write_record(site_packages, prefix, record)?;
+    }
+    Ok(())
+}
+
+/// Rewrite installed script interpreters while retaining their actual bodies and modes.
+fn relocate_scripts(
+    previous_layout: &Layout,
+    layout: &Layout,
+    relocatable: bool,
+    site_packages: &Path,
+    paths: BTreeSet<PathBuf>,
+    generated: &mut Vec<RecordEntry>,
+) -> Result<(), Error> {
+    let mut prefixes = Vec::new();
+    for is_gui in [false, true] {
+        let previous = get_script_executable(&previous_layout.sys_executable, is_gui);
+        let current = get_relocatable_executable(
+            get_script_executable(&layout.sys_executable, is_gui),
+            layout,
+            relocatable,
+        )?;
+        let current = format_shebang(current, &layout.os_name, relocatable);
+        let previous_shebang = format_shebang(&previous, &previous_layout.os_name, false);
+        let (previous_prefix, shell) = previous_shebang
+            .strip_suffix(SHELL_WRAPPER_SUFFIX)
+            .map_or_else(
+                || (previous_shebang.clone(), false),
+                |prefix| (prefix.to_owned(), true),
+            );
+        prefixes.push((previous_prefix, shell, current.clone()));
+        let executable = previous.simplified_display().to_string();
+        prefixes.push((format!("#!{executable}"), false, current.clone()));
+        if previous_layout.os_name == "posix" {
+            // pip uses a different shell quoting convention and platform-specific shebang limits.
+            let executable = if executable.contains(' ') {
+                format!("\"{executable}\"")
+            } else {
+                executable
+            };
+            prefixes.push((format!("#!/bin/sh\n'''exec' {executable}"), true, current));
+        }
+    }
+    let prefix_limit = prefixes
+        .iter()
+        .map(|(prefix, _, _)| prefix.len() + 1)
+        .max()
+        .unwrap_or_default();
+    for path in paths {
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let mut reader = BufReader::new(file);
+        let mut prefix = Vec::new();
+        reader
+            .by_ref()
+            .take(prefix_limit as u64)
+            .read_to_end(&mut prefix)?;
+        let permissions = reader.get_ref().metadata()?.permissions();
+        // Encoded shell wrappers place the Python cookie between the shebang and exec line.
+        let mut encoding = None;
+        if let Some(second_line) = prefix.strip_prefix(b"#!/bin/sh\n") {
+            if !second_line.contains(&b'\n') {
+                reader.read_until(b'\n', &mut prefix)?;
+            }
+            let start = b"#!/bin/sh\n".len();
+            let end = prefix[start..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(prefix.len(), |end| start + end + 1);
+            if let Some(cookie) = python_encoding(&prefix[start..end]) {
+                encoding = Some(cookie.to_owned());
+                prefix.drain(start..end);
+                reader
+                    .by_ref()
+                    .take((end - start) as u64)
+                    .read_to_end(&mut prefix)?;
+            }
+        }
+        let contents = if let Some((previous, shell, current)) =
+            prefixes.iter().find(|(previous, _, _)| {
+                prefix
+                    .strip_prefix(previous.as_bytes())
+                    .is_some_and(|suffix| {
+                        suffix
+                            .first()
+                            .is_none_or(|byte| matches!(byte, b'\n' | b'\r' | b' ' | b'\t'))
+                    })
+            }) {
+            let mut remaining = prefix[previous.len()..].to_vec();
+            reader.read_to_end(&mut remaining)?;
+            let Some(contents) =
+                relocate_script_body(&remaining, *shell, current, encoding.as_deref())
+            else {
+                continue;
+            };
+            contents
+        } else {
+            #[cfg(windows)]
+            {
+                let Some(contents) =
+                    relocate_windows_launcher(&path, previous_layout, layout, relocatable)?
+                else {
+                    continue;
+                };
+                contents
+            }
+            #[cfg(not(windows))]
+            {
+                continue;
+            }
+        };
+        drop(reader);
+        let relative = pathdiff::diff_paths(&path, site_packages).ok_or_else(|| {
+            Error::Io(io::Error::other(format!(
+                "Could not find relative path for {}",
+                path.display()
+            )))
+        })?;
+        write_file_recorded(site_packages, &relative, contents, generated)?;
+        fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
+/// Attach interpreter arguments to the command that executes Python, retaining the script body.
+/// Return the ASCII codec name from a Python encoding declaration without decoding the script.
+fn python_encoding(line: &[u8]) -> Option<&str> {
+    static ENCODING: std::sync::LazyLock<regex::bytes::Regex> = std::sync::LazyLock::new(|| {
+        regex::bytes::Regex::new(r"(?-u)^[ \t\x0c]*#.*?coding[:=][ \t]*([-_.a-zA-Z0-9]+)")
+            .expect("valid Python encoding declaration regex")
+    });
+    let name = ENCODING.captures(line)?.get(1)?.as_bytes();
+    std::str::from_utf8(name).ok()
+}
+
+fn relocate_script_body(
+    remaining: &[u8],
+    previous_shell: bool,
+    current: &str,
+    encoding: Option<&str>,
+) -> Option<Vec<u8>> {
+    let (arguments, body) = if previous_shell {
+        let end = remaining
+            .windows(SHELL_WRAPPER_SUFFIX.len())
+            .position(|part| part == SHELL_WRAPPER_SUFFIX.as_bytes())?;
+        let arguments = remaining.get(..end)?;
+        if arguments.contains(&b'\n') {
+            return None;
+        }
+        (
+            arguments,
+            remaining.get(end + SHELL_WRAPPER_SUFFIX.len()..)?,
+        )
+    } else {
+        let line_end = remaining
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .unwrap_or(remaining.len());
+        let line = remaining.get(..line_end)?;
+        let arguments = line.strip_suffix(b"\r").unwrap_or(line);
+        (arguments, remaining.get(arguments.len()..)?)
+    };
+    // Keep shell argument splitting when the installed script already used a shell wrapper.
+    let forced_shell = if previous_shell && !current.ends_with(SHELL_WRAPPER_SUFFIX) {
+        let executable = current.strip_prefix("#!")?;
+        Some(format!(
+            "#!/bin/sh\n'''exec' '{}'{}",
+            escape_posix_for_single_quotes(executable),
+            SHELL_WRAPPER_SUFFIX,
+        ))
+    } else {
+        None
+    };
+    let current = forced_shell.as_deref().unwrap_or(current);
+    let mut contents = Vec::new();
+    if let Some(command) = current.strip_suffix(SHELL_WRAPPER_SUFFIX) {
+        let encoding = encoding.or_else(|| {
+            if previous_shell {
+                return None;
+            }
+            let body = body
+                .strip_prefix(b"\r\n")
+                .or_else(|| body.strip_prefix(b"\n"))
+                .or_else(|| body.strip_prefix(b"\r"))?;
+            let line = body.split(|byte| matches!(byte, b'\r' | b'\n')).next()?;
+            python_encoding(line)
+        });
+        if let Some(encoding) = encoding {
+            let (shebang, command) = command.split_once('\n')?;
+            contents.extend_from_slice(shebang.as_bytes());
+            contents.extend_from_slice(format!("\n# coding: {encoding}\n").as_bytes());
+            contents.extend_from_slice(command.as_bytes());
+        } else {
+            contents.extend_from_slice(command.as_bytes());
+        }
+        if previous_shell {
+            contents.extend_from_slice(arguments);
+        } else {
+            // Linux passes the complete optional suffix as one argument; Darwin splits words.
+            #[cfg(target_os = "macos")]
+            for argument in arguments
+                .split(|byte| *byte == b'#')
+                .next()
+                .unwrap_or_default()
+                .split(|byte| matches!(byte, b' ' | b'\t'))
+            {
+                append_quoted_shell_argument(&mut contents, argument);
+            }
+            #[cfg(not(target_os = "macos"))]
+            if let Some(start) = arguments
+                .iter()
+                .position(|byte| !matches!(byte, b' ' | b'\t'))
+            {
+                let end = arguments
+                    .iter()
+                    .rposition(|byte| !matches!(byte, b' ' | b'\t'))?;
+                append_quoted_shell_argument(&mut contents, &arguments[start..=end]);
+            }
+        }
+        contents.extend_from_slice(SHELL_WRAPPER_SUFFIX.as_bytes());
+    } else {
+        contents.extend_from_slice(current.as_bytes());
+        contents.extend_from_slice(arguments);
+    }
+    contents.extend_from_slice(body);
+    Some(contents)
+}
+
+/// Quote bytes literally without treating original shebang text as shell syntax.
+fn append_quoted_shell_argument(contents: &mut Vec<u8>, argument: &[u8]) {
+    if argument.is_empty() {
+        return;
+    }
+    contents.extend_from_slice(b" '");
+    for byte in argument {
+        if *byte == b'\'' {
+            contents.extend_from_slice(br#"'"'"'"#);
+        } else {
+            contents.push(*byte);
+        }
+    }
+    contents.push(b'\'');
+}
+
+/// Retain the installed launcher payload so overlapping entrypoint declarations keep their provider.
+#[cfg(windows)]
+fn relocate_windows_launcher(
+    path: &Path,
+    previous_layout: &Layout,
+    layout: &Layout,
+    relocatable: bool,
+) -> Result<Option<Vec<u8>>, Error> {
+    let Some(launcher) = Launcher::try_from_path(path)? else {
+        let contents = fs::read(path)?;
+        for is_gui in [false, true] {
+            let previous = get_script_executable(&previous_layout.sys_executable, is_gui);
+            let current = get_relocatable_executable(
+                get_script_executable(&layout.sys_executable, is_gui),
+                layout,
+                relocatable,
+            )?;
+            if let Some(contents) = relocate_distlib_script(&contents, &previous, &current) {
+                return Ok(Some(contents));
+            }
+        }
+        return Ok(None);
+    };
+    match launcher.kind {
+        LauncherKind::Script => {}
+        LauncherKind::Python => return Ok(None),
+    }
+    let is_gui = launcher.python_path.ends_with("pythonw.exe");
+    let previous = get_script_executable(&previous_layout.sys_executable, is_gui);
+    if launcher.python_path.simplified() != previous.simplified() {
+        return Ok(None);
+    }
+    let current = get_relocatable_executable(
+        get_script_executable(&layout.sys_executable, is_gui),
+        layout,
+        relocatable,
+    )?;
+    let mut contents = Vec::new();
+    launcher
+        .with_python_path(current)
+        .write_to_file(&mut contents, is_gui)?;
+    Ok(Some(contents))
 }
 
 /// Create the wrapper scripts in the bin folder of the venv for launching console scripts.
@@ -1232,8 +1591,67 @@ mod test {
 
     use super::{
         Error, RecordEntry, Script, WheelFile, format_shebang, get_script_executable,
-        parse_email_message_file, parse_scripts, read_record, write_installer_metadata,
+        parse_email_message_file, parse_scripts, read_record, relocate_script_body,
+        write_installer_metadata,
     };
+
+    #[test]
+    fn relocated_simple_shebang_retains_interpreter_arguments() -> Result<()> {
+        let current = format_shebang("/new path/python", "posix", false);
+        let contents = relocate_script_body(b" -O\nprint('body')\n", false, &current, None)
+            .ok_or_else(|| anyhow::anyhow!("simple shebang should be relocated"))?;
+        assert_eq!(
+            contents.as_slice(),
+            b"#!/bin/sh\n'''exec' '/new path/python' '-O' \"$0\" \"$@\"\n' '''\nprint('body')\n",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn relocated_shell_shebang_retains_interpreter_arguments() -> Result<()> {
+        let current = format_shebang("/new/python", "posix", false);
+        let contents = relocate_script_body(
+            b" -O -B \"$0\" \"$@\"\n' '''\nprint('body')\n",
+            true,
+            &current,
+            None,
+        )
+        .ok_or_else(|| anyhow::anyhow!("shell shebang should be relocated"))?;
+        assert_eq!(
+            contents.as_slice(),
+            b"#!/bin/sh\n'''exec' '/new/python' -O -B \"$0\" \"$@\"\n' '''\nprint('body')\n",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn relocated_simple_shebang_retains_source_encoding() -> Result<()> {
+        let current = format_shebang("/new path/python", "posix", false);
+        let contents = relocate_script_body(
+            b"\n# coding: latin-1\nprint('\xe9')\n",
+            false,
+            &current,
+            None,
+        )
+        .ok_or_else(|| anyhow::anyhow!("encoded script should be relocated"))?;
+        assert_eq!(contents.as_slice(), b"#!/bin/sh\n# coding: latin-1\n'''exec' '/new path/python' \"$0\" \"$@\"\n' '''\n# coding: latin-1\nprint('\xe9')\n");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn relocated_simple_shebang_quotes_optional_argument() -> Result<()> {
+        let current = format_shebang("/new path/python", "posix", false);
+        let contents = relocate_script_body(
+            b" -W ignore:deprecated message's:UserWarning\nprint('body')\n",
+            false,
+            &current,
+            None,
+        )
+        .ok_or_else(|| anyhow::anyhow!("simple shebang should be relocated"))?;
+        assert_eq!(contents.as_slice(), b"#!/bin/sh\n'''exec' '/new path/python' '-W ignore:deprecated message'\"'\"'s:UserWarning' \"$0\" \"$@\"\n' '''\nprint('body')\n");
+        Ok(())
+    }
 
     #[test]
     fn test_parse_email_message_file() {

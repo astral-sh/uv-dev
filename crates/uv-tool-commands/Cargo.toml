@@ -36,6 +36,7 @@ uv-errors = { workspace = true }
 uv-fs = { workspace = true }
 uv-git = { workspace = true }
 uv-install-operations = { workspace = true }
+uv-install-wheel = { workspace = true }
 uv-installer = { workspace = true }
 uv-lock = { workspace = true }
 uv-lock-operations = { workspace = true }
@@ -67,10 +68,15 @@ futures = { workspace = true }
 itertools = { workspace = true }
 owo-colors = { workspace = true }
 rustc-hash = { workspace = true }
+same-file = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 self-replace = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true }

@@ -1,16 +1,21 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::Utf8Error;
+#[cfg(any(windows, test))]
+use std::str::from_utf8;
 
 #[cfg(windows)]
 use editpe::{
     Image, ResourceData, ResourceDirectory, ResourceEntry, ResourceEntryName, ResourceTable,
 };
-use fs_err::File;
+#[cfg(any(windows, test))]
+use goblin::pe::PE;
 use thiserror::Error;
 
 use uv_fs::Simplified;
 
+#[cfg(test)]
+mod distlib_tests;
 #[cfg(all(test, windows))]
 mod resource_tests;
 
@@ -132,19 +137,18 @@ impl Launcher {
         result
     }
 
-    /// Write this trampoline launcher to a file.
+    /// Write this trampoline launcher to a writer.
     ///
     /// On Unix, this always returns [`Error::NotWindows`]. Trampolines are a Windows-specific
     /// feature and cannot be written on other platforms.
     #[cfg(not(windows))]
-    pub fn write_to_file(self, _file: &mut File, _is_gui: bool) -> Result<(), Error> {
+    pub fn write_to_file(self, _writer: &mut impl io::Write, _is_gui: bool) -> Result<(), Error> {
         Err(Error::NotWindows)
     }
 
-    /// Write this trampoline launcher to a file.
+    /// Write this trampoline launcher to a writer.
     #[cfg(windows)]
-    pub fn write_to_file(self, file: &mut File, is_gui: bool) -> Result<(), Error> {
-        use std::io::Write;
+    pub fn write_to_file(self, writer: &mut impl io::Write, is_gui: bool) -> Result<(), Error> {
         use uv_fs::Simplified;
 
         let python_path = self.python_path.simplified_display().to_string();
@@ -163,7 +167,7 @@ impl Launcher {
         }
 
         let output = write_resources(launcher_bin, &resources)?;
-        file.write_all(&output)?;
+        writer.write_all(&output)?;
 
         Ok(())
     }
@@ -176,6 +180,84 @@ impl Launcher {
             script_data: self.script_data,
         }
     }
+}
+
+/// Repoint a distlib script launcher without changing its PE stub or ZIP payload.
+///
+/// distlib appends an interpreter shebang and a ZIP containing `__main__.py` directly after the
+/// PE image. Other executable layouts and interpreter paths are left untouched.
+#[cfg(windows)]
+pub fn relocate_distlib_script(
+    contents: &[u8],
+    previous_executable: &Path,
+    python_executable: &Path,
+) -> Option<Vec<u8>> {
+    relocate_distlib_script_inner(contents, previous_executable, python_executable)
+}
+
+#[cfg(any(windows, test))]
+fn relocate_distlib_script_inner(
+    contents: &[u8],
+    previous_executable: &Path,
+    python_executable: &Path,
+) -> Option<Vec<u8>> {
+    let image = PE::parse(contents).ok()?;
+    let image_end = image.sections.iter().try_fold(0usize, |end, section| {
+        let start = usize::try_from(section.pointer_to_raw_data).ok()?;
+        let size = usize::try_from(section.size_of_raw_data).ok()?;
+        Some(end.max(start.checked_add(size)?))
+    })?;
+    let appended = contents.get(image_end..)?;
+    let line_end = appended.iter().position(|byte| *byte == b'\n')?;
+    let shebang = appended.get(..line_end)?.strip_prefix(b"#!")?;
+    let (executable, arguments) = if let Some(quoted) = shebang.strip_prefix(b"\"") {
+        let end = quoted.iter().position(|byte| *byte == b'"')?;
+        (quoted.get(..end)?, quoted.get(end + 1..)?)
+    } else {
+        let end = shebang
+            .iter()
+            .position(u8::is_ascii_whitespace)
+            .unwrap_or(shebang.len());
+        (shebang.get(..end)?, shebang.get(end..)?)
+    };
+    let executable = Path::new(from_utf8(executable).ok()?);
+    if executable.simplified() != previous_executable.simplified() {
+        return None;
+    }
+    if arguments
+        .first()
+        .is_some_and(|byte| !matches!(byte, b' ' | b'\t' | b'\r'))
+    {
+        return None;
+    }
+    let after_shebang = appended.get(line_end + 1..)?;
+    // pip can append CRLF to a shebang that already ends with LF on Windows.
+    let separator_length = after_shebang
+        .iter()
+        .take_while(|byte| matches!(byte, b'\r' | b'\n'))
+        .count();
+    let (line_endings, payload) = after_shebang.split_at(separator_length);
+    if !payload.starts_with(b"PK\x03\x04") {
+        return None;
+    }
+    let filename_length = usize::from(u16::from_le_bytes(payload.get(26..28)?.try_into().ok()?));
+    if payload.get(30..30usize.checked_add(filename_length)?)? != b"__main__.py" {
+        return None;
+    }
+    let executable = python_executable.simplified_display().to_string();
+    let executable = if executable.contains(' ') {
+        format!("\"{executable}\"")
+    } else {
+        executable
+    };
+    let mut relocated = contents.get(..image_end)?.to_vec();
+    relocated.extend_from_slice(b"#!");
+    relocated.extend_from_slice(executable.as_bytes());
+    relocated.extend_from_slice(arguments);
+    relocated.push(b'\n');
+    relocated.extend_from_slice(line_endings);
+    relocated.extend_from_slice(payload);
+    Some(relocated)
 }
 
 /// The window mode of a Windows trampoline launcher.

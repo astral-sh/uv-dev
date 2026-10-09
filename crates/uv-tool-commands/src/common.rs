@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, Bound},
+    collections::{BTreeMap, BTreeSet, Bound, HashMap, HashSet},
     ffi::OsString,
     fmt::Write,
     io,
@@ -735,6 +735,166 @@ pub(super) async fn refine_interpreter(
     Ok(Some(interpreter))
 }
 
+/// Enumerate a package's executable sources and configured destinations.
+fn package_entrypoint_targets(
+    site_packages: &SitePackages,
+    package: &PackageName,
+    executable_directory: &Path,
+) -> anyhow::Result<Option<BTreeSet<(String, PathBuf, PathBuf)>>> {
+    let installed = site_packages.get_packages(package);
+    let Some(dist) = installed.first() else {
+        return Ok(None);
+    };
+    Ok(Some(
+        entrypoint_paths(site_packages, dist.name(), dist.version())?
+            .into_iter()
+            .map(|(name, source)| {
+                let target = executable_directory.join(
+                    source
+                        .file_name()
+                        .map(std::borrow::ToOwned::to_owned)
+                        .unwrap_or_else(|| OsString::from(name.clone())),
+                );
+                (name, source, target)
+            })
+            .collect(),
+    ))
+}
+
+/// Collect executable destinations for the requested packages in an environment.
+fn collect_tool_entrypoint_targets<'a>(
+    environment: &PythonEnvironment,
+    packages: impl IntoIterator<Item = &'a PackageName>,
+) -> anyhow::Result<Vec<(PackageName, PathBuf)>> {
+    let executable_directory = uv_tool::tool_executable_dir()?;
+    let site_packages = SitePackages::from_environment(environment)?;
+    let mut targets = Vec::new();
+    for package in packages.into_iter().collect::<BTreeSet<_>>() {
+        let Some(entrypoints) =
+            package_entrypoint_targets(&site_packages, package, &executable_directory)?
+        else {
+            continue;
+        };
+        targets.extend(
+            entrypoints
+                .into_iter()
+                .map(|(_, _, target)| (package.clone(), target)),
+        );
+    }
+    Ok(targets)
+}
+
+/// Check all prospective targets before changing installed packages or executables.
+fn check_tool_entrypoint_targets(
+    targets: Vec<(PackageName, PathBuf)>,
+    existing_tool: &Tool,
+) -> anyhow::Result<()> {
+    let Some((_, target)) = targets.first() else {
+        return Ok(());
+    };
+    let executable_directory = target
+        .parent()
+        .context("Executable destination has no parent")?;
+    fs_err::create_dir_all(executable_directory)?;
+    // Probe complete filenames on the destination filesystem, including its Unicode and case rules.
+    let probes = tempfile::tempdir_in(executable_directory)?;
+    #[cfg(target_os = "linux")]
+    {
+        // WSL 1 does not inherit this per-directory attribute when creating a child directory.
+        let mut value = [0_u8; 4];
+        match rustix::fs::getxattr(
+            executable_directory,
+            "system.wsl_case_sensitive",
+            &mut value[..],
+        ) {
+            Ok(length) => rustix::fs::setxattr(
+                probes.path(),
+                "system.wsl_case_sensitive",
+                &value[..length],
+                rustix::fs::XattrFlags::empty(),
+            )?,
+            Err(rustix::io::Errno::NODATA | rustix::io::Errno::NOTSUP) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let probe = |filename: &std::ffi::OsStr| -> io::Result<same_file::Handle> {
+        let path = probes.path().join(filename);
+        match fs_err::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        same_file::Handle::from_path(path)
+    };
+    let mut existing_paths = HashSet::new();
+    for entrypoint in existing_tool.entrypoints() {
+        if let Some(parent) = entrypoint.install_path.parent()
+            && uv_fs::is_same_file_allow_missing(parent, executable_directory) == Some(true)
+            && let Some(filename) = entrypoint.install_path.file_name()
+        {
+            existing_paths.insert(probe(filename)?);
+        }
+    }
+    let mut owners = HashMap::new();
+    let mut conflicts = BTreeSet::new();
+    for (package, target) in targets {
+        let filename = target
+            .file_name()
+            .context("Executable destination has no filename")?;
+        let destination = probe(filename)?;
+        let owned = existing_paths.contains(&destination);
+        if let Some(previous) = owners.insert(destination, package.clone())
+            && previous != package
+        {
+            let executable = target
+                .file_name()
+                .unwrap_or(target.as_os_str())
+                .to_string_lossy();
+            bail!(
+                "Packages `{previous}` and `{package}` provide the same executable: {executable}"
+            );
+        }
+        if target.exists()
+            && !owned
+            && let Some(filename) = target.file_name()
+        {
+            conflicts.insert(filename.to_string_lossy().into_owned());
+        }
+    }
+    if !conflicts.is_empty() {
+        let (suffix, exists) = if conflicts.len() == 1 {
+            ("", "exists")
+        } else {
+            ("s", "exist")
+        };
+        bail!(
+            "Executable{suffix} already {exists}: {} (use `--force` to overwrite)",
+            conflicts.iter().map(|name| name.bold()).join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Check whether installing a tool would overwrite executables not owned by the existing tool.
+pub(crate) fn check_tool_entrypoint_conflicts(
+    environment: &PythonEnvironment,
+    name: &PackageName,
+    entrypoints: &[PackageName],
+    existing_tool: &Tool,
+) -> anyhow::Result<()> {
+    check_tool_entrypoint_targets(
+        collect_tool_entrypoint_targets(
+            environment,
+            entrypoints.iter().chain(std::iter::once(name)),
+        )?,
+        existing_tool,
+    )
+}
+
 /// Finalizes a tool installation, after creation of an environment.
 ///
 /// Installs tool executables for a given package, handling any conflicts.
@@ -782,8 +942,9 @@ pub(super) fn finalize_tool_install(
             debug!("Installing entrypoints for `{package}` as part of tool `{name}`");
         }
 
-        let installed = site_packages.get_packages(package);
-        let Some(dist) = installed.first() else {
+        let Some(target_entrypoints) =
+            package_entrypoint_targets(&site_packages, package, &executable_directory)?
+        else {
             if package != name {
                 bail!("Expected package `{package}` to be installed");
             }
@@ -806,22 +967,6 @@ pub(super) fn finalize_tool_install(
             }
             .into());
         };
-        let dist_entrypoints = entrypoint_paths(&site_packages, dist.name(), dist.version())?;
-
-        // Determine the entry points targets. Use a sorted collection for deterministic output.
-        let target_entrypoints = dist_entrypoints
-            .into_iter()
-            .map(|(name, source_path)| {
-                let target_path = executable_directory.join(
-                    source_path
-                        .file_name()
-                        .map(std::borrow::ToOwned::to_owned)
-                        .unwrap_or_else(|| OsString::from(name.clone())),
-                );
-                (name, source_path, target_path)
-            })
-            .collect::<BTreeSet<_>>();
-
         if target_entrypoints.is_empty() {
             let err = if package != name {
                 NoExecutablesError::Dependency {
