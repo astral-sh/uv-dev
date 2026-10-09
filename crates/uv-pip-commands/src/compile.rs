@@ -610,76 +610,46 @@ pub async fn pip_compile(
         })
         .build();
 
-    // Save the original inputs so discovered build requirements can be resolved together with the
-    // runtime requirements without changing the default compile path.
-    let build_resolution_inputs = include_build_dependencies.then(|| {
-        (
-            requirements.clone(),
-            constraints.clone(),
+    // All passes share resolver configuration; only requirements and constraints change.
+    let resolve = async |requirements, constraints| {
+        uv_resolve_operations::resolve(
+            requirements,
+            constraints,
             overrides.clone(),
             override_dependencies.clone(),
             excludes.clone(),
             source_trees.clone(),
             project.clone(),
+            BTreeMap::default(),
+            &extras,
+            &groups,
             preferences.clone(),
+            None,
+            &hasher,
+            &Reinstall::None,
+            &upgrade,
+            tags.as_deref(),
+            resolver_env.clone(),
             python_requirement.clone(),
+            interpreter.markers(),
+            Conflicts::empty(),
+            &client,
+            &flat_index,
+            &top_level_index,
+            &build_dispatch,
+            &concurrency,
             options.clone(),
+            None,
+            Box::new(DefaultResolveLogger),
+            printer,
         )
-    });
-
-    // Resolve the requirements.
-    let mut resolution = match uv_resolve_operations::resolve(
-        requirements,
-        constraints,
-        overrides,
-        override_dependencies,
-        excludes,
-        source_trees,
-        project,
-        BTreeMap::default(),
-        &extras,
-        &groups,
-        preferences,
-        None,
-        &hasher,
-        &Reinstall::None,
-        &upgrade,
-        tags.as_deref(),
-        resolver_env.clone(),
-        python_requirement,
-        interpreter.markers(),
-        Conflicts::empty(),
-        &client,
-        &flat_index,
-        &top_level_index,
-        &build_dispatch,
-        &concurrency,
-        options,
-        None,
-        Box::new(DefaultResolveLogger),
-        printer,
-    )
-    .await
-    {
-        Ok((resolution, _)) => resolution,
-        Err(err) => {
-            return Err(UvError::from(err).into());
-        }
+        .await
+        .map(|(resolution, _)| resolution)
+        .map_err(UvError::from)
     };
+    let mut resolution = resolve(requirements.clone(), constraints.clone()).await?;
 
-    if let Some((
-        requirements,
-        constraints,
-        overrides,
-        override_dependencies,
-        excludes,
-        source_trees,
-        project,
-        preferences,
-        python_requirement,
-        options,
-    )) = build_resolution_inputs
-    {
+    if include_build_dependencies {
         let mut requirements_by_source = FxHashMap::default();
         let mut previous_requirements = (FxHashSet::default(), FxHashSet::default());
         let mut requirement_states = Vec::new();
@@ -756,7 +726,7 @@ pub async fn pip_compile(
             requirement_states.push(previous_requirements);
             previous_requirements = active_state;
 
-            resolution = match uv_resolve_operations::resolve(
+            resolution = resolve(
                 requirements
                     .iter()
                     .cloned()
@@ -767,41 +737,8 @@ pub async fn pip_compile(
                     .cloned()
                     .chain(active_constraints)
                     .collect(),
-                overrides.clone(),
-                override_dependencies.clone(),
-                excludes.clone(),
-                source_trees.clone(),
-                project.clone(),
-                BTreeMap::default(),
-                &extras,
-                &groups,
-                preferences.clone(),
-                None,
-                &hasher,
-                &Reinstall::None,
-                &upgrade,
-                tags.as_deref(),
-                resolver_env.clone(),
-                python_requirement.clone(),
-                interpreter.markers(),
-                Conflicts::empty(),
-                &client,
-                &flat_index,
-                &top_level_index,
-                &build_dispatch,
-                &concurrency,
-                options.clone(),
-                None,
-                Box::new(DefaultResolveLogger),
-                printer,
             )
-            .await
-            {
-                Ok((resolution, _)) => resolution,
-                Err(err) => {
-                    return Err(UvError::from(err).into());
-                }
-            };
+            .await?;
         }
     }
 
