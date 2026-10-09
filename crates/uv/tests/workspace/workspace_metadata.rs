@@ -1,4 +1,6 @@
 use std::path::Path;
+#[cfg(all(unix, feature = "test-python"))]
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
@@ -8,6 +10,10 @@ use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use url::Url;
+#[cfg(all(unix, feature = "test-python"))]
+use wiremock::matchers::{method, path};
+#[cfg(all(unix, feature = "test-python"))]
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
 use uv_test::{copy_dir_ignore, uv_snapshot};
@@ -784,7 +790,7 @@ fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
     uv_snapshot!(context.filters(), context.workspace_metadata()
         .arg("--script").arg(script.path())
         .arg("--preview-features").arg("workspace-metadata")
-        .env(EnvVars::RUST_LOG, "uv_python::environment=debug"), @r#"
+        .env(EnvVars::RUST_LOG, "uv_python::environment=debug,uv_python_interpreter::environment=debug"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -826,7 +832,7 @@ fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
         .arg("--script").arg(script.path())
         .arg("--sync")
         .arg("--preview-features").arg("workspace-metadata")
-        .env(EnvVars::RUST_LOG, "uv_python::environment=debug"), @r#"
+        .env(EnvVars::RUST_LOG, "uv_python::environment=debug,uv_python_interpreter::environment=debug"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -862,6 +868,7 @@ fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
     ----- stderr -----
     DEBUG Checking for Python environment at: [CACHE_DIR]/environments-v2/script-[HASH]
     Resolved in [TIME]
+    DEBUG Checking for Python environment at: [CACHE_DIR]/environments-v2/script-[HASH]
     "#);
 
     Ok(())
@@ -1739,7 +1746,7 @@ dependencies = []
 
     uv_snapshot!(context.filters(), context.workspace_metadata()
         .arg("--preview-features").arg("workspace-metadata")
-        .env(EnvVars::RUST_LOG, "uv_python::environment=debug"), @r#"
+        .env(EnvVars::RUST_LOG, "uv_python::environment=debug,uv_python_interpreter::environment=debug"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -1796,7 +1803,7 @@ dependencies = []
     uv_snapshot!(context.filters(), context.workspace_metadata()
         .arg("--sync")
         .arg("--preview-features").arg("workspace-metadata")
-        .env(EnvVars::RUST_LOG, "uv_python::environment=debug"), @r#"
+        .env(EnvVars::RUST_LOG, "uv_python::environment=debug,uv_python_interpreter::environment=debug"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -1848,6 +1855,7 @@ dependencies = []
     ----- stderr -----
     DEBUG Checking for Python environment at: .venv
     Resolved 1 package in [TIME]
+    DEBUG Checking for Python environment at: .venv
     "#);
 
     Ok(())
@@ -3820,6 +3828,157 @@ fn workspace_metadata_centralized_read_only_uses_linked_environment() -> Result<
 
     ----- stderr -----
     Resolved 1 package in [TIME]
+    "#);
+    Ok(())
+}
+
+/// A project environment replaced during resolution is revalidated before synchronization.
+#[cfg(all(unix, feature = "test-python"))]
+#[tokio::test]
+async fn workspace_metadata_project_revalidates_replaced_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    context.venv().args(["--python", "3.12"]).assert().success();
+    let replacement = context.temp_dir.child("replacement");
+    context
+        .venv()
+        .arg(replacement.path())
+        .args(["--python", "3.11"])
+        .assert()
+        .success();
+    let wheel = context
+        .temp_dir
+        .child("changing_python-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "changing-python",
+        "changing_python-0.1.0",
+        &[("changing_python.py", "")],
+    )?;
+    let wheel_bytes = fs_err::read(wheel.path())?;
+    let server = MockServer::start().await;
+    let replaced = Arc::new(OnceLock::new());
+    let replace_once = Arc::clone(&replaced);
+    let environment = context.venv.path().to_path_buf();
+    let replacement = replacement.path().to_path_buf();
+    Mock::given(method("GET"))
+        .and(path("/changing_python-0.1.0-py3-none-any.whl"))
+        .respond_with(move |_: &wiremock::Request| {
+            let result = replace_once.get_or_init(|| {
+                fs_err::remove_dir_all(&environment)
+                    .and_then(|()| fs_err::rename(&replacement, &environment))
+                    .map_err(|error| error.to_string())
+            });
+            if let Err(error) = result {
+                return ResponseTemplate::new(500).set_body_string(error.clone());
+            }
+            ResponseTemplate::new(200).set_body_bytes(wheel_bytes.clone())
+        })
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = ["changing-python @ {server}/changing_python-0.1.0-py3-none-any.whl"]
+    "#, server = server.uri()})?;
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .args(["--sync", "--python", "3.12", "--preview-features", "workspace-metadata"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.11",
+      "conflicts": {
+        "sets": []
+      },
+      "module_owners": {
+        "changing_python": [
+          {
+            "package_id": "changing-python==0.1.0@direct+http://[LOCALHOST]/changing_python-0.1.0-py3-none-any.whl"
+          }
+        ]
+      },
+      "members": [
+        {
+          "name": "project",
+          "path": "[TEMP_DIR]/",
+          "id": "project==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "changing-python==0.1.0@direct+http://[LOCALHOST]/changing_python-0.1.0-py3-none-any.whl": {
+          "name": "changing-python",
+          "version": "0.1.0",
+          "source": {
+            "url": "http://[LOCALHOST]/changing_python-0.1.0-py3-none-any.whl",
+            "subdirectory": null
+          },
+          "kind": "package",
+          "dependencies": [],
+          "wheels": [
+            {
+              "url": "http://[LOCALHOST]/changing_python-0.1.0-py3-none-any.whl",
+              "hashes": {
+                "sha256": "fc5624372ccacf726dd9bbef87d48da3a068abc20a66e147cde107a89f96cbef"
+              },
+              "filename": "changing_python-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "project==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "project",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": [
+            {
+              "id": "changing-python==0.1.0@direct+http://[LOCALHOST]/changing_python-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    "#);
+    assert!(replaced.get().is_some_and(Result::is_ok));
+    uv_snapshot!(context.filters(), context.python_command()
+        .args(["-c", "import sys; print(sys.version_info[:2])"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 12)
     "#);
     Ok(())
 }
