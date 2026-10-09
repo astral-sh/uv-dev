@@ -1084,3 +1084,77 @@ fn lock_json_invalid_registry_structure() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Ignored metadata HTTP errors become resolver hints rather than an error source chain.
+#[tokio::test]
+async fn lock_json_registry_metadata_authentication() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(path("/simple/a/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(r#"<a href="{}/a-1.0.0-py3-none-any.whl" data-core-metadata="true" data-upload-time="2023-01-01T00:00:00Z">a-1.0.0-py3-none-any.whl</a>"#, server.uri()),
+            "text/html",
+        ))
+        .mount(&server).await;
+    Mock::given(path("/a-1.0.0-py3-none-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [tool.uv]
+        package = false
+        [[tool.uv.index]]
+        name = "metadata"
+        url = "{}/simple"
+        authenticate = "never"
+        ignore-error-codes = [401]
+        default = true
+    "#, server.uri()})?;
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--output-format", "json", "--preview-features", "json-output", "--no-cache",
+    ]), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "path": "[TEMP_DIR]/uv.lock",
+      "status": "stale",
+      "dry_run": false,
+      "reason": {
+        "code": "missing_lockfile"
+      },
+      "error": {
+        "code": "authentication",
+        "package": "a",
+        "http_status": 401,
+        "message": "Because a==1.0.0 could not be fetched from the network (`401 Unauthorized`) and only a==1.0.0 is available, we can conclude that all versions of a cannot be used./nAnd because your project depends on a, we can conclude that your project's requirements are unsatisfiable.",
+        "hints": [
+          "Metadata for `a` (v1.0.0) could not be fetched; the server returned: `401 Unauthorized`"
+        ]
+      }
+    }
+
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 could not be fetched from the network (`401 Unauthorized`) and only a==1.0.0 is available, we can conclude that all versions of a cannot be used.
+             And because your project depends on a, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Metadata for `a` (v1.0.0) could not be fetched; the server returned: `401 Unauthorized`
+    "#);
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicates::path::missing());
+    Ok(())
+}

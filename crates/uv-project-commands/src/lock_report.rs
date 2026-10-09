@@ -487,6 +487,15 @@ impl ErrorReport {
 
     fn resolver_hints(&mut self, error: &NoSolutionError) {
         for hint in error.resolution_hints() {
+            if let PubGrubHint::InvalidPackageNetwork { package, status }
+            | PubGrubHint::InvalidVersionNetwork {
+                package, status, ..
+            } = &hint
+            {
+                self.package = Some(package.clone());
+                self.network_status(Some(status.as_u16()));
+                break;
+            }
             if let PubGrubHint::InvalidPackageMetadata { package, .. }
             | PubGrubHint::InvalidPackageStructure { package, .. }
             | PubGrubHint::InvalidVersionMetadata { package, .. }
@@ -576,8 +585,12 @@ impl ErrorReport {
     }
 
     fn network(&mut self, error: &WrappedReqwestError) {
-        self.http_status = error.status().map(|status| status.as_u16());
-        self.code = match self.http_status {
+        self.network_status(error.status().map(|status| status.as_u16()));
+    }
+
+    fn network_status(&mut self, status: Option<u16>) {
+        self.http_status = status;
+        self.code = match status {
             Some(401) => ErrorCode::Authentication,
             Some(403) => ErrorCode::AccessDenied,
             Some(_) => ErrorCode::Http,
