@@ -188,6 +188,14 @@ impl<'lock> LockTarget<'lock> {
         }
     }
 
+    /// Returns the workspace requirements that seed resolution.
+    pub(crate) fn resolution_root_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
+        match self {
+            Self::Workspace(workspace) => Either::Left(workspace.resolution_root_requirements()),
+            Self::Script(_) => Either::Right(std::iter::empty()),
+        }
+    }
+
     /// Returns the set of all dependency groups within the target.
     pub(crate) fn group_requirements(self) -> impl Iterator<Item = Requirement> + 'lock {
         match self {

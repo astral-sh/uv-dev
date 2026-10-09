@@ -367,8 +367,8 @@ fn explicit_roots_validate_non_root_python_requirement() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and shared==0.1.0 depends on Python>=3.13, we can conclude that shared==0.1.0 cannot be used.
-             And because only shared==0.1.0 is available and your project depends on shared, we can conclude that your project's requirements are unsatisfiable.
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and shared depends on Python>=3.13, we can conclude that shared's requirements are unsatisfiable.
+             And because app depends on shared and your workspace requires app, we can conclude that your workspace's requirements are unsatisfiable.
 
     hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., shared==0.1.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
     "#);
@@ -470,7 +470,7 @@ fn explicit_roots_conditional_python_requirement_and_legacy_metadata() -> Result
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.13')
       cause: Because only shared{python_full_version >= '3.13'}==0.1.0 is available and the requested Python version (>=3.12) does not satisfy Python>=3.14, we can conclude that all versions of shared{python_full_version >= '3.13'} cannot be used.
-             And because your project depends on shared{python_full_version >= '3.13'}, we can conclude that your project's requirements are unsatisfiable.
+             And because app depends on shared{python_full_version >= '3.13'} and your workspace requires app, we can conclude that your workspace's requirements are unsatisfiable.
 
     hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
     "#);
@@ -1466,5 +1466,203 @@ fn explicit_roots_pylock_matches_selected_python_domain() -> Result<()> {
     name = "shared"
     directory = { path = "shared", editable = true }
     "#);
+    Ok(())
+}
+
+/// Registry dependencies retain the local identity of non-root workspace members.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_transitive_registry_workspace_source() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "explicit-roots-workspace-source"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.bridge.versions."1.0.0"]
+        requires = ["shared>=1"]
+        sdist = false
+        [packages.shared.versions."2.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
+    let index = server.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["bridge"]
+        [tool.uv]
+        package = false
+        [tool.uv.workspace]
+        members = ["shared", "unused"]
+        roots = ["app"]
+        [[tool.uv.index]]
+        url = "{index}"
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/src/shared/__init__.py")
+        .touch()?;
+    context
+        .temp_dir
+        .child("unused/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "unused"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["missing-package"]
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--only-emit-workspace", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./shared
+    ");
+    let locked = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    assert_eq!(locked, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--format", "cyclonedx1.5",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "bomFormat": "CycloneDX",
+      "specVersion": "1.5",
+      "version": 1,
+      "serialNumber": "[SERIAL_NUMBER]",
+      "metadata": {
+        "timestamp": "[TIMESTAMP]",
+        "tools": [
+          {
+            "vendor": "Astral Software Inc.",
+            "name": "uv",
+            "version": "[VERSION]"
+          }
+        ],
+        "component": {
+          "type": "library",
+          "bom-ref": "app-1@0.1.0",
+          "name": "app",
+          "version": "0.1.0",
+          "properties": [
+            {
+              "name": "uv:package:is_project_root",
+              "value": "true"
+            }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "library",
+          "bom-ref": "bridge-2@1.0.0",
+          "name": "bridge",
+          "version": "1.0.0",
+          "purl": "pkg:pypi/bridge@1.0.0?repository_url=http://[LOCALHOST]/simple/",
+          "externalReferences": [
+            {
+              "type": "distribution",
+              "url": "http://[LOCALHOST]/files/bridge-1.0.0-py3-none-any.whl",
+              "hashes": [
+                {
+                  "alg": "SHA-256",
+                  "content": "b0aeb6ee8c8b30dba556dc6b3103ed87bc682cc043d6088cfb6205f63d3277f3"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "shared-3@1.0.0",
+          "name": "shared",
+          "version": "1.0.0",
+          "properties": [
+            {
+              "name": "uv:workspace:path",
+              "value": "shared"
+            }
+          ]
+        }
+      ],
+      "dependencies": [
+        {
+          "ref": "app-1@0.1.0",
+          "dependsOn": [
+            "bridge-2@1.0.0"
+          ]
+        },
+        {
+          "ref": "bridge-2@1.0.0",
+          "dependsOn": [
+            "shared-3@1.0.0"
+          ]
+        },
+        {
+          "ref": "shared-3@1.0.0"
+        }
+      ]
+    }
+    ----- stderr -----
+    warning: `uv export --format=cyclonedx1.5` is experimental and may change without warning. Pass `--preview-features sbom-export` to disable this warning.
+    "#);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--only-install-workspace",
+    ]), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + shared @ file://[TEMP_DIR]/shared
+    ");
+
+    // A published version cannot satisfy a requirement that excludes the local member.
+    context.temp_dir.child("shared/pyproject.toml").write_str(
+        &context
+            .read("shared/pyproject.toml")
+            .replace(r#"version = "1.0.0""#, r#"version = "0.1.0""#),
+    )?;
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    uv_snapshot!(context.filters(), context.lock(), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because all versions of bridge depend on shared and app depends on bridge, we can conclude that app's requirements are unsatisfiable.
+             And because your workspace requires app, we can conclude that your workspace's requirements are unsatisfiable.
+
+    hint: The package `bridge` depends on the package `shared` but the name is shadowed by one of your workspace members. Consider changing the name of the workspace member.
+    ");
     Ok(())
 }
