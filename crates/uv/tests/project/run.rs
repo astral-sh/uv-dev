@@ -3762,7 +3762,7 @@ fn run_isolated_incompatible_python() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--isolated").arg("main.py"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: The Python request from `.python-version` resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
+    error: The Python request from `.python-version` resolved to Python 3.9, which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
     ");
 
@@ -5551,7 +5551,7 @@ fn run_groups_requires_python_errors() -> Result<()> {
         [project]
         name = "project"
         version = "0.1.0"
-        requires-python = ">=3.12"
+        requires-python = ">=3.12.5"
         dependencies = []
 
         [dependency-groups]
@@ -5580,7 +5580,7 @@ fn run_groups_requires_python_errors() -> Result<()> {
         .arg("python").arg("--version"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.dev.requires-python`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.dev.requires-python`).
     ");
 
     // Enabling foo we can't find an interpreter

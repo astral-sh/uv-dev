@@ -183,6 +183,7 @@ impl ProjectPythonRequest {
                 &requirement.requires_python,
                 &self.source,
                 &requirement.source,
+                Some(python_request),
             )?;
         }
         Ok(())
@@ -425,6 +426,7 @@ fn validate_python_requirement(
         requires_python,
         source,
         requirement_source,
+        None,
     )
 }
 
@@ -433,8 +435,12 @@ fn validate_project_requires_python_version(
     requires_python: &RequiresPython,
     source: &PythonRequestSource,
     requirement_source: &PythonRequirementSource,
+    request: Option<&PythonRequest>,
 ) -> Result<(), PythonSelectionError> {
-    if requires_python.contains(version) {
+    if request.map_or_else(
+        || requires_python.contains(version),
+        |request| request.intersects_specifiers(requires_python.specifiers()),
+    ) {
         return Ok(());
     }
 
@@ -445,7 +451,12 @@ fn validate_project_requires_python_version(
         } => {
             let sources = sources
                 .iter()
-                .filter(|(.., requires)| !requires.contains(version))
+                .filter(|(.., requires)| {
+                    !request.map_or_else(
+                        || requires.contains(version),
+                        |request| request.intersects_specifiers(requires),
+                    )
+                })
                 .map(|(key, requires)| (key.clone(), requires.clone()))
                 .collect();
             PythonRequirementConflicts::Workspace {
@@ -457,11 +468,20 @@ fn validate_project_requires_python_version(
             let release_version = version.only_release();
             let groups = groups
                 .iter()
-                .filter(|(_, requires)| !requires.contains(&release_version))
+                .filter(|(_, requires)| {
+                    !request.map_or_else(
+                        || requires.contains(&release_version),
+                        |request| request.intersects_specifiers(requires),
+                    )
+                })
                 .map(|(key, requires)| (key.clone(), requires.clone()))
                 .collect();
             PythonRequirementConflicts::Lockfile {
-                locked: (!locked.contains(version)).then(|| locked.clone()),
+                locked: (!request.map_or_else(
+                    || locked.contains(version),
+                    |request| request.intersects_specifiers(locked.specifiers()),
+                ))
+                .then(|| locked.clone()),
                 groups,
             }
         }

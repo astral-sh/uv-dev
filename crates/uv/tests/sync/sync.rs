@@ -790,8 +790,7 @@ fn sync_lockfile_incompatible_python() -> Result<()> {
         .args(["--frozen", "--preview-features", "frozen-lockfile", "--no-default-groups", "--python", "3.12", "--offline"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `requires-python` in `uv.lock`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from `requires-python` in `uv.lock`).
     ");
     Ok(())
 }
@@ -828,8 +827,7 @@ fn sync_lockfile_group_python_requirement() -> Result<()> {
         .args(["--frozen", "--only-group", "newer", "--python", "3.12", "--offline"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.newer.requires-python`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.newer.requires-python`).
     ");
 
     // Remove the manifest to enforce both direct and inherited group requirements from the lockfile.
@@ -839,16 +837,14 @@ fn sync_lockfile_group_python_requirement() -> Result<()> {
         .args(["--frozen", "--preview-features", "frozen-lockfile", "--only-group", "newer", "--python", "3.12", "--offline"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `root:newer` in `uv.lock`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from `root:newer` in `uv.lock`).
     ");
 
     uv_snapshot!(context.filters(), context.sync()
         .args(["--frozen", "--preview-features", "frozen-lockfile", "--only-group", "included", "--python", "3.12", "--offline"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `root:included` in `uv.lock`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from `root:included` in `uv.lock`).
     ");
 
     uv_snapshot!(context.filters(), context.sync()
@@ -2985,8 +2981,7 @@ fn sync_frozen_member_default_groups_requires_python() -> Result<()> {
         .args(["--frozen", "--package", "member", "--python", "3.12", "--offline", "--dry-run"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `member:docs` in `uv.lock`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from `member:docs` in `uv.lock`).
     ");
 
     // The diagnostic still identifies the member's group without its manifest.
@@ -2996,8 +2991,7 @@ fn sync_frozen_member_default_groups_requires_python() -> Result<()> {
         .args(["--frozen", "--package", "member", "--python", "3.12", "--offline", "--dry-run"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `member:docs` in `uv.lock`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from `member:docs` in `uv.lock`).
     ");
 
     // Disabling the default groups removes the member group's requirement.
@@ -3015,8 +3009,7 @@ fn sync_frozen_member_default_groups_requires_python() -> Result<()> {
         .args(["--frozen", "--group", "docs", "--python", "3.12", "--offline", "--dry-run"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.14` (from `tool.uv.dependency-groups.docs.requires-python`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.14` (from `tool.uv.dependency-groups.docs.requires-python`).
     ");
 
     Ok(())
@@ -3077,8 +3070,7 @@ fn sync_frozen_member_default_groups_python_sources() -> Result<()> {
         .args(["--frozen", "--package", "member", "--no-default-groups", "--python", "3.12", "--offline", "--dry-run"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `requires-python` in `uv.lock`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from `requires-python` in `uv.lock`).
     ");
 
     // Report all incompatible lockfile requirements when both groups are selected.
@@ -3086,8 +3078,7 @@ fn sync_frozen_member_default_groups_python_sources() -> Result<()> {
         .args(["--frozen", "--package", "member", "--all-groups", "--python", "3.12", "--offline", "--dry-run"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.14`.
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.14`.
     The following requirements in `uv.lock` do not permit this version:
     - lockfile: >=3.13
     - member:docs: >=3.14
@@ -3104,8 +3095,7 @@ fn sync_frozen_member_default_groups_python_sources() -> Result<()> {
         .args(["--frozen", "--package", "member", "--offline", "--dry-run"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The Python request from `.python-version` resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.14`.
+    error: The Python request from `.python-version` resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.14`.
     The following requirements in `uv.lock` do not permit this version:
     - lockfile: >=3.13
     - member:docs: >=3.14
@@ -3191,8 +3181,7 @@ fn sync_frozen_member_default_groups_revision_4() -> Result<()> {
         .args(["--frozen", "--package", "member", "--python", "3.12", "--offline", "--dry-run"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from workspace member `root`'s `tool.uv.dependency-groups.root-group.requires-python`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from workspace member `root`'s `tool.uv.dependency-groups.root-group.requires-python`).
     ");
 
     // The same defaults apply when the member manifest is missing.
@@ -3202,8 +3191,7 @@ fn sync_frozen_member_default_groups_revision_4() -> Result<()> {
         .args(["--frozen", "--package", "member", "--python", "3.12", "--offline", "--dry-run"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.root-group.requires-python`).
+    error: The requested interpreter resolved to Python 3.12, which is incompatible with the project's Python requirement: `>=3.13` (from `tool.uv.dependency-groups.root-group.requires-python`).
     ");
 
     // Explicitly disabling defaults allows Python 3.12.
