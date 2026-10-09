@@ -42,7 +42,7 @@ use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
-use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget, MetadataLock};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
@@ -88,6 +88,7 @@ struct GistFile {
 /// Run a command.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn run(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     script: Option<Pep723Item>,
     command: Option<RunCommand>,
@@ -183,6 +184,30 @@ pub async fn run(
     // Determine whether the command to execute is a PEP 723 script.
     let temp_dir;
     let script_interpreter = if let Some(script) = script {
+        let metadata_lock;
+        let script = if frozen.is_none() && matches!(lock_check, LockCheck::Disabled) {
+            match script {
+                Pep723Item::Script(script) => {
+                    let (script, lock) =
+                        MetadataLock::read_script(admission.take(), &script.path).await?;
+                    metadata_lock = Some(lock);
+                    Pep723Item::Script(
+                        script.context("Script metadata was removed while waiting for its lock")?,
+                    )
+                }
+                Pep723Item::Stdin(metadata) => {
+                    metadata_lock = None;
+                    Pep723Item::Stdin(metadata)
+                }
+                Pep723Item::Remote(metadata, url) => {
+                    metadata_lock = None;
+                    Pep723Item::Remote(metadata, url)
+                }
+            }
+        } else {
+            metadata_lock = None;
+            script
+        };
         match &script {
             Pep723Item::Script(script) => {
                 debug!(
@@ -263,7 +288,9 @@ pub async fn run(
                     printer,
                     preview,
                 )
-                .execute(target),
+                .execute_with_writer(target, |path, contents| {
+                    MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+                }),
             )
             .await
             {
@@ -596,6 +623,26 @@ pub async fn run(
             }
         };
 
+        let metadata_lock;
+        let project = if !no_sync
+            && !no_project
+            && !isolated
+            && frozen.is_none()
+            && matches!(lock_check, LockCheck::Disabled)
+        {
+            if let Some(project) = project {
+                let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
+                metadata_lock = Some(lock);
+                Some(project)
+            } else {
+                metadata_lock = None;
+                None
+            }
+        } else {
+            metadata_lock = None;
+            project
+        };
+
         if no_project {
             // If the user ran with `--no-project` and provided a project-only setting, warn.
             for flag in extras.history().as_flags_pretty() {
@@ -778,7 +825,12 @@ pub async fn run(
                         printer,
                         preview,
                     )
-                    .execute(project.workspace().into()),
+                    .execute_with_writer(
+                        project.workspace().into(),
+                        |path, contents| {
+                            MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+                        },
+                    ),
                 )
                 .await
                 {
@@ -1225,6 +1277,7 @@ pub async fn run(
         return Ok(ExitStatus::Error);
     };
 
+    drop(admission);
     debug!("Running `{command}`");
     let mut process = command.as_command(interpreter);
     process.envs(env_file_environment);

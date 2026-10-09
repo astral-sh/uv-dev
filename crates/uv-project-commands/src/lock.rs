@@ -16,7 +16,7 @@ use uv_environment_operations::{
 use uv_git_types::GitOid;
 use uv_lock::{Lock, Package};
 use uv_lock_operations::{
-    LockError, LockMode, LockOperation, LockResult, LockTarget, MissingLockfileSource,
+    LockError, LockMode, LockOperation, LockResult, LockTarget, MetadataLock, MissingLockfileSource,
 };
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -37,6 +37,7 @@ use crate::ScriptPath;
 
 /// Resolve the project requirements into a lockfile.
 pub async fn lock(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -57,6 +58,25 @@ pub async fn lock(
     printer: Printer,
     preview: Preview,
 ) -> anyhow::Result<ExitStatus> {
+    let writable =
+        frozen.is_none() && matches!(lock_check, LockCheck::Disabled) && !dry_run.enabled();
+    let mut metadata_lock = None;
+    let script = if writable {
+        if let Some(script) = script {
+            let path = match script {
+                ScriptPath::Script(script) => script.path,
+                ScriptPath::Path(path) => path,
+            };
+            let (script, lock) = MetadataLock::read_script(admission.take(), &path).await?;
+            metadata_lock = Some(lock);
+            Some(script.map_or_else(|| ScriptPath::Path(path), ScriptPath::Script))
+        } else {
+            None
+        }
+    } else {
+        script
+    };
+
     // If necessary, initialize the PEP 723 script.
     let script = match script {
         Some(ScriptPath::Path(path)) => {
@@ -86,13 +106,20 @@ pub async fn lock(
     let target = if let Some(script) = script.as_ref() {
         LockTarget::Script(script)
     } else {
-        workspace = VirtualProject::discover(
+        let project = VirtualProject::discover(
             project_dir,
             &DiscoveryOptions::default(),
             cache,
             workspace_cache,
         )
         .await?;
+        workspace = if writable {
+            let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
+            metadata_lock = Some(lock);
+            project
+        } else {
+            project
+        };
         LockTarget::Workspace(workspace.workspace())
     };
 
@@ -178,7 +205,9 @@ pub async fn lock(
             matches!(&refresh, Refresh::All(..))
                 && preview.is_enabled(PreviewFeature::LockfileFormatCheck),
         )
-        .execute(target),
+        .execute_with_writer(target, |path, contents| {
+            MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+        }),
     )
     .await
     {

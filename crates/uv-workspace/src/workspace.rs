@@ -356,6 +356,9 @@ pub struct DiscoveryOptions {
     pub stop_discovery_at: Option<PathBuf>,
     /// The strategy to use when discovering workspace members.
     pub members: MemberDiscovery,
+    /// Suppress warnings during preliminary discovery that will be repeated authoritatively.
+    /// Use a separate cache so later discovery can report its complete member list.
+    pub suppress_warnings: bool,
 }
 
 /// The declaration contributing a workspace Python requirement.
@@ -1168,7 +1171,7 @@ impl Workspace {
                     .map(|_| format!("`{}`", member.root().join("pyproject.toml").user_display()))
             })
             .join(", ");
-        if !dev_dependencies_members.is_empty() {
+        if !options.suppress_warnings && !dev_dependencies_members.is_empty() {
             warn_user_once!(
                 "The `tool.uv.dev-dependencies` field (used in {}) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead",
                 dev_dependencies_members

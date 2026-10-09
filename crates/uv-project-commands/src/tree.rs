@@ -2,7 +2,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 use anstream::print;
-use anyhow::{Error, Result, bail};
+use anyhow::{Context, Error, Result, bail};
 use futures::StreamExt;
 
 use uv_cache::{Cache, Refresh};
@@ -19,7 +19,9 @@ use uv_environment_operations::{
     EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
 use uv_lock::{PackageMap, TreeDisplay, TreeJsonTarget};
-use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{
+    DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget, MetadataLock,
+};
 use uv_normalize::{DefaultGroups, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -48,6 +50,7 @@ enum TreeSource<'a> {
 /// Display the dependency tree for a project, script, or frozen workspace.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn tree(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     groups: DependencyGroups,
     lock_check: LockCheck,
@@ -85,12 +88,26 @@ pub async fn tree(
         );
     }
 
+    let writable = frozen.is_none() && matches!(lock_check, LockCheck::Disabled);
+    let mut metadata_lock = None;
+    let script = if writable {
+        if let Some(script) = script {
+            let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
+            metadata_lock = Some(lock);
+            Some(script.context("Script metadata was removed while waiting for its lock")?)
+        } else {
+            None
+        }
+    } else {
+        script
+    };
+
     // Find the project requirements.
     let project;
     let source = if let Some(script) = script.as_ref() {
         TreeSource::Manifest(LockTarget::Script(script))
     } else {
-        project = DiscoveredProject::discover(
+        let discovered = DiscoveredProject::discover(
             project_dir,
             &DiscoveryOptions::default(),
             None,
@@ -100,6 +117,14 @@ pub async fn tree(
             workspace_cache,
         )
         .await?;
+        project = match discovered {
+            DiscoveredProject::Manifest(project) if writable => {
+                let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
+                metadata_lock = Some(lock);
+                DiscoveredProject::Manifest(project)
+            }
+            discovered => discovered,
+        };
         match &project {
             DiscoveredProject::Manifest(project) => {
                 TreeSource::Manifest(LockTarget::Workspace(project.workspace()))
@@ -244,7 +269,9 @@ pub async fn tree(
                     printer,
                     preview,
                 )
-                .execute(target),
+                .execute_with_writer(target, |path, contents| {
+                    MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+                }),
             )
             .await
             {
@@ -254,6 +281,8 @@ pub async fn tree(
             &resolved_lock
         }
     };
+
+    drop(metadata_lock);
 
     // Determine the markers to use for resolution.
     let markers = (!universal).then(|| {

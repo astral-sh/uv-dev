@@ -56,14 +56,14 @@ use uv_workspace::pyproject::{DependencyType, ExtraBuildDependencies, OverrideDe
 use crate::comma::CommaSeparatedRequirements;
 use crate::{
     AddArgs, AuditArgs, AuditCommonArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs,
-    AuthTokenArgs, ColorChoice, ExternalCommand, GlobalArgs, InitArgs, ListFormat, LockArgs, Maybe,
-    MetadataArgs, PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs, PipInstallFormat,
-    PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs, PipUninstallArgs,
-    ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs, PythonListArgs,
+    AuthTokenArgs, ColorChoice, Commands, ExternalCommand, GlobalArgs, InitArgs, ListFormat,
+    LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs, PipFreezeArgs, PipInstallArgs,
+    PipInstallFormat, PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs, PipUninstallArgs,
+    ProjectCommand, ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs, PythonListArgs,
     PythonListFormat, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs, RemoveArgs, RunArgs,
     SyncArgs, SyncFormat, ToolAuditArgs, ToolDirArgs, ToolInstallArgs, ToolListArgs, ToolRunArgs,
     ToolUninstallArgs, TreeArgs, TreeFormat, UpgradeArgs, VenvArgs, VersionArgs, VersionBumpSpec,
-    VersionFormat,
+    VersionFormat, WorkspaceCommand,
 };
 use crate::{
     AuthorFrom, BuildArgs, BuildOptionsArgs, CheckArgs, ExcludeNewerArgs, ExportArgs, FormatArgs,
@@ -74,6 +74,146 @@ use crate::{
         resolver_installer_options, resolver_options, upgrade_options,
     },
 };
+
+/// The metadata resource a command can publish, before filesystem settings are resolved.
+#[derive(Clone, Copy)]
+pub enum MetadataTarget<'a> {
+    Project,
+    ProjectEdit(Option<&'a PackageName>),
+    Workspace,
+    Script(&'a Path),
+    ParentWorkspace(Option<&'a Path>),
+    InitializeScript(&'a Path),
+}
+
+/// Select admission using CLI and environment flags, independently of filesystem configuration.
+pub fn metadata_target<'a>(
+    command: &'a Commands,
+    environment: &EnvironmentOptions,
+    has_run_metadata: bool,
+    run_script: Option<&'a Path>,
+) -> Option<MetadataTarget<'a>> {
+    let writable = |locked, no_locked, frozen, no_frozen| {
+        matches!(
+            resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked),
+            LockCheck::Disabled
+        ) && resolve_frozen(frozen, no_frozen, FrozenFlag::Frozen, environment.frozen).is_none()
+    };
+    let target = |script: Option<&'a PathBuf>| {
+        script.map_or(MetadataTarget::Project, |path| MetadataTarget::Script(path))
+    };
+    match command {
+        Commands::Project(command) => match &**command {
+            ProjectCommand::Init(args) => {
+                if args.script {
+                    args.path.as_deref().map(MetadataTarget::InitializeScript)
+                } else if args.no_workspace {
+                    None
+                } else {
+                    Some(MetadataTarget::ParentWorkspace(args.path.as_deref()))
+                }
+            }
+            ProjectCommand::Add(args) => Some(
+                args.script
+                    .as_ref()
+                    .map_or(MetadataTarget::ProjectEdit(args.package.as_ref()), |path| {
+                        MetadataTarget::Script(path)
+                    }),
+            ),
+            ProjectCommand::Remove(args) => Some(
+                args.script
+                    .as_ref()
+                    .map_or(MetadataTarget::ProjectEdit(args.package.as_ref()), |path| {
+                        MetadataTarget::Script(path)
+                    }),
+            ),
+            ProjectCommand::Upgrade(_) => Some(MetadataTarget::ProjectEdit(None)),
+            ProjectCommand::Version(args) => (!args.dry_run
+                && (args.value.is_some() || !args.bump.is_empty()))
+            .then_some(MetadataTarget::ProjectEdit(args.package.as_ref())),
+            ProjectCommand::Run(args) => {
+                if !writable(args.locked, args.no_locked, args.frozen, args.no_frozen) {
+                    None
+                } else if has_run_metadata {
+                    run_script.map(MetadataTarget::Script)
+                } else if args.no_project
+                    || args.isolated
+                    || environment.isolated.value == Some(true)
+                    || resolve_flag(args.no_sync, "no-sync", environment.no_sync).is_enabled()
+                {
+                    None
+                } else {
+                    Some(MetadataTarget::Project)
+                }
+            }
+            ProjectCommand::Lock(args) => (!args.dry_run
+                && writable(
+                    args.locked || args.check,
+                    args.no_locked,
+                    args.frozen || args.check_exists,
+                    args.no_frozen,
+                ))
+            .then(|| target(args.script.as_ref())),
+            ProjectCommand::Sync(args) => {
+                (resolve_sync_dry_run(args.dry_run, args.check, args.no_check)
+                    .is_ok_and(|dry_run| !dry_run.enabled())
+                    && writable(args.locked, args.no_locked, args.frozen, args.no_frozen))
+                .then(|| target(args.script.as_ref()))
+            }
+            ProjectCommand::Tree(args) => {
+                writable(args.locked, args.no_locked, args.frozen, args.no_frozen)
+                    .then(|| target(args.script.as_ref()))
+            }
+            ProjectCommand::Export(args) => {
+                writable(args.locked, args.no_locked, args.frozen, args.no_frozen)
+                    .then(|| target(args.script.as_ref()))
+            }
+            ProjectCommand::Audit(args) => {
+                writable(args.locked, args.no_locked, args.frozen, args.no_frozen).then(|| {
+                    args.script
+                        .as_ref()
+                        .map_or(MetadataTarget::Workspace, |path| {
+                            MetadataTarget::Script(path)
+                        })
+                })
+            }
+            ProjectCommand::Check(args) => (!args.isolated
+                && environment.isolated.value != Some(true)
+                && (args.script.is_some() || !args.no_project)
+                && writable(args.locked, args.no_locked, args.frozen, args.no_frozen))
+            .then(|| target(args.script.as_ref())),
+            ProjectCommand::Format(_) => None,
+        },
+        Commands::Workspace(namespace) => match &namespace.command {
+            WorkspaceCommand::Metadata(args) => (args.sync
+                && writable(args.locked, args.no_locked, args.frozen, args.no_frozen))
+            .then(|| target(args.script.as_ref())),
+            WorkspaceCommand::Dir(_) | WorkspaceCommand::List(_) => None,
+        },
+        Commands::Auth(_)
+        | Commands::Tool(_)
+        | Commands::Python(_)
+        | Commands::Pip(_)
+        | Commands::Venv(_)
+        | Commands::Build(_)
+        | Commands::Publish(_)
+        | Commands::BuildBackend { .. }
+        | Commands::Cache(_)
+        | Commands::Self_(_)
+        | Commands::Clean(_)
+        | Commands::GenerateShellCompletion(_)
+        | Commands::Help(_) => None,
+    }
+}
+
+/// Resolve both non-writing sync modes before selecting metadata admission or command settings.
+fn resolve_sync_dry_run(dry_run: bool, check: bool, no_check: bool) -> anyhow::Result<DryRun> {
+    Ok(if flag(check, no_check, "check")?.unwrap_or_default() {
+        DryRun::Check
+    } else {
+        DryRun::from_args(dry_run)
+    })
+}
 
 /// The default publish URL.
 const PYPI_PUBLISH_URL: &str = "https://upload.pypi.org/legacy/";
@@ -1889,12 +2029,7 @@ impl SyncSettings {
         let settings =
             resolve_resolver_installer_settings(installer, build, filesystem, &environment)?;
 
-        let check = flag(check, no_check, "check")?.unwrap_or_default();
-        let dry_run = if check {
-            DryRun::Check
-        } else {
-            DryRun::from_args(dry_run)
-        };
+        let dry_run = resolve_sync_dry_run(dry_run, check, no_check)?;
 
         // Resolve flags from CLI and environment variables.
         let locked = resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked);

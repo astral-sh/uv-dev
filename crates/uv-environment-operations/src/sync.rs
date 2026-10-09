@@ -110,6 +110,7 @@ pub async fn sync_from_lock(
                     &DiscoveryOptions {
                         members: MemberDiscovery::Existing,
                         stop_discovery_at: Some(root.to_path_buf()),
+                        ..DiscoveryOptions::default()
                     },
                     cache,
                     workspace_cache,

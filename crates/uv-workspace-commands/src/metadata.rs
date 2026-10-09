@@ -18,6 +18,7 @@ use uv_environment_operations::{
 use uv_lock::{Lock, Metadata, Package};
 use uv_lock_operations::{
     DiscoveredProject, FrozenWorkspace, LockError, LockMode, LockOperation, LockTarget,
+    MetadataLock,
 };
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -42,6 +43,7 @@ enum MetadataSource<'a> {
 
 /// Display metadata about the workspace.
 pub async fn metadata(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -71,11 +73,25 @@ pub async fn metadata(
         );
     }
 
+    let writable = sync.is_some() && frozen.is_none() && matches!(lock_check, LockCheck::Disabled);
+    let mut metadata_lock = None;
+    let script = if writable {
+        if let Some(script) = script {
+            let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
+            metadata_lock = Some(lock);
+            Some(script.context("Script metadata was removed while waiting for its lock")?)
+        } else {
+            None
+        }
+    } else {
+        script
+    };
+
     let project;
     let source = if let Some(script) = script.as_ref() {
         MetadataSource::Manifest(LockTarget::Script(script))
     } else {
-        project = DiscoveredProject::discover(
+        let discovered = DiscoveredProject::discover(
             project_dir,
             &DiscoveryOptions::default(),
             None,
@@ -85,6 +101,14 @@ pub async fn metadata(
             workspace_cache,
         )
         .await?;
+        project = match discovered {
+            DiscoveredProject::Manifest(project) if writable => {
+                let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
+                metadata_lock = Some(lock);
+                DiscoveredProject::Manifest(project)
+            }
+            discovered => discovered,
+        };
         match &project {
             DiscoveredProject::Manifest(project) => {
                 MetadataSource::Manifest(LockTarget::Workspace(project.workspace()))
@@ -179,7 +203,9 @@ pub async fn metadata(
                     preview,
                 )
                 .with_refresh(&refresh)
-                .execute(target),
+                .execute_with_writer(target, |path, contents| {
+                    MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+                }),
             )
             .await
             {
@@ -190,6 +216,8 @@ pub async fn metadata(
             &resolved_lock
         }
     };
+
+    drop(metadata_lock);
 
     let install_target = match &source {
         MetadataSource::Manifest(LockTarget::Workspace(workspace)) => InstallTarget::Workspace {

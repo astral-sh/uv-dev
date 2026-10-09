@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
@@ -35,11 +35,12 @@ use uv_errors::HintOrdering;
 use uv_fs::Simplified;
 use uv_git::store_credentials;
 use uv_install_operations::loggers::DefaultInstallLogger;
-use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget, MetadataLock};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, ExtraName, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
 use uv_project_edit::{ArrayEdit, DependencyTarget, PyProjectTomlMut};
+use uv_pypi_types::ParsedUrl;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -95,6 +96,7 @@ impl uv_errors::Hinted for AddDependencyError {
 /// Add one or more packages to the project requirements.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn add(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -135,6 +137,7 @@ pub async fn add(
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
+    workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
@@ -194,6 +197,11 @@ pub async fn add(
     // Default groups we need the actual project for, interpreter discovery will use this!
     let defaulted_groups;
 
+    let requirements_client_builder = client_builder
+        .clone()
+        .keyring(settings.resolver.keyring_provider);
+    let mut specification = None;
+    let _metadata_lock;
     let (mut target, python_target) = if let Some(script) = script {
         // If we found a PEP 723 script and the user provided a project-only setting, warn.
         if package.is_some() {
@@ -219,25 +227,30 @@ pub async fn add(
 
         // If we found a script, add to the existing metadata. Otherwise, create a new inline
         // metadata tag.
-        let script = match script {
-            ScriptPath::Script(script) => script,
-            ScriptPath::Path(path) => {
-                let requires_python = init_script_python_requirement(
-                    python.as_deref(),
-                    &install_mirrors,
-                    project_dir,
-                    false,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    config_discovery,
-                    &client_builder,
-                    cache,
-                    &reporter,
-                )
-                .await?;
-                Pep723Script::init(&path, requires_python.specifiers()).await?
-            }
+        let path = match script {
+            ScriptPath::Script(script) => script.path,
+            ScriptPath::Path(path) => path,
+        };
+        let (script, lock) = MetadataLock::read_script(admission.take(), &path).await?;
+        _metadata_lock = lock;
+        let script = if let Some(script) = script {
+            script
+        } else {
+            let requires_python = init_script_python_requirement(
+                python.as_deref(),
+                &install_mirrors,
+                project_dir,
+                false,
+                python_preference,
+                python_arch,
+                python_downloads,
+                config_discovery,
+                &client_builder,
+                cache,
+                &reporter,
+            )
+            .await?;
+            Pep723Script::init(&path, requires_python.specifiers()).await?
         };
 
         // Scripts don't actually have groups
@@ -267,14 +280,14 @@ pub async fn add(
         )
     } else {
         // Find the project in the workspace.
-        // No workspace caching since `uv add` changes the workspace definition.
-        let project = if let Some(package) = package {
+        // Reuse the admitted discovery until the first metadata edit.
+        let project = if let Some(package) = package.as_ref() {
             VirtualProject::discover_with_package(
                 project_dir,
                 &DiscoveryOptions::default(),
                 cache,
-                &WorkspaceCache::default(),
-                package,
+                workspace_cache,
+                package.clone(),
             )
             .await?
         } else {
@@ -282,10 +295,12 @@ pub async fn add(
                 project_dir,
                 &DiscoveryOptions::default(),
                 cache,
-                &WorkspaceCache::default(),
+                workspace_cache,
             )
             .await?
         };
+
+        let (project, mut lock) = MetadataLock::admitted_project(admission.take(), project)?;
 
         // For non-project workspace roots, allow dev dependencies, but nothing else.
         // TODO(charlie): Automatically "upgrade" the project by adding a `[project]` table.
@@ -307,6 +322,46 @@ pub async fn add(
                 DependencyType::Dev => (),
             }
         }
+
+        // Requirements can introduce workspace members. Admit their previous metadata resources
+        // before environment creation or interpreter locking, which can itself wait on a writer.
+        let parsed = RequirementsSpecification::from_sources(
+            &requirements,
+            &constraints,
+            &[],
+            &[],
+            None,
+            &requirements_client_builder,
+        )
+        .await?;
+        let mut members = Vec::new();
+        for requirement in &parsed.requirements {
+            let install_path = match &requirement.requirement {
+                UnresolvedRequirement::Named(requirement) => {
+                    if let RequirementSource::Directory { install_path, .. } = &requirement.source {
+                        Some(install_path)
+                    } else {
+                        None
+                    }
+                }
+                UnresolvedRequirement::Unnamed(requirement) => {
+                    if let ParsedUrl::Directory(directory) = &requirement.url.parsed_url {
+                        Some(&directory.install_path)
+                    } else {
+                        None
+                    }
+                }
+            };
+            let Some(install_path) = install_path else {
+                continue;
+            };
+            if let Some(path) = workspace_member_path(&project, install_path, workspace)? {
+                members.push(path);
+            }
+        }
+        lock.admit_members(&members, cache).await?;
+        _metadata_lock = lock;
+        specification = Some(parsed);
 
         // Enable the default groups of the project
         defaulted_groups = groups.with_defaults(project.default_groups()?);
@@ -381,24 +436,26 @@ pub async fn add(
         })
         .ok();
 
-    let client_builder = client_builder
-        .clone()
-        .keyring(settings.resolver.keyring_provider);
+    let client_builder = requirements_client_builder;
 
     // Read the requirements.
     let RequirementsSpecification {
         requirements,
         constraints,
         ..
-    } = RequirementsSpecification::from_sources(
-        &requirements,
-        &constraints,
-        &[],
-        &[],
-        None,
-        &client_builder,
-    )
-    .await?;
+    } = if let Some(specification) = specification {
+        specification
+    } else {
+        RequirementsSpecification::from_sources(
+            &requirements,
+            &constraints,
+            &[],
+            &[],
+            None,
+            &client_builder,
+        )
+        .await?
+    };
 
     // Initialize any shared state.
     let state = PlatformState::default();
@@ -515,7 +572,7 @@ pub async fn add(
                 settings.resolver.exclude_newer.clone(),
                 sources,
                 SourceTreeEditablePolicy::Project,
-                // No workspace caching since `uv add` changes the workspace definition.
+                // Reuse the admitted discovery until the first metadata edit.
                 WorkspaceCache::default(),
                 concurrency.clone(),
                 preview,
@@ -626,25 +683,10 @@ pub async fn add(
         // Check each requirement to see if it's a path dependency
         for requirement in &requirements {
             if let RequirementSource::Directory { install_path, .. } = &requirement.source {
-                let absolute_path = if install_path.is_absolute() {
-                    install_path.to_path_buf()
-                } else {
-                    project.root().join(install_path)
+                let Some(absolute_path) = workspace_member_path(&project, install_path, workspace)?
+                else {
+                    continue;
                 };
-
-                // Either `--workspace` was provided explicitly, or it was omitted but the path is
-                // within the workspace root.
-                let use_workspace = workspace.unwrap_or_else(|| {
-                    absolute_path.starts_with(project.workspace().install_path())
-                });
-                if !use_workspace {
-                    continue;
-                }
-
-                // If the project is already a member of the workspace, skip it.
-                if project.workspace().includes(&absolute_path)? {
-                    continue;
-                }
 
                 let relative_path = absolute_path
                     .strip_prefix(project.workspace().install_path())
@@ -783,7 +825,7 @@ pub async fn add(
     };
 
     // Update the `pypackage.toml` in-memory.
-    let target = target.update(&content, &WorkspaceCache::default())?;
+    let target = target.update(&content, workspace_cache)?;
 
     // Use separate state for locking and syncing.
     let lock_state = state.fork();
@@ -852,6 +894,25 @@ pub async fn add(
                 .into())
         }
     }
+}
+
+/// Select a new member using its declared spelling; canonicalization only identifies locks.
+fn workspace_member_path(
+    project: &VirtualProject,
+    install_path: &Path,
+    workspace: Option<bool>,
+) -> Result<Option<PathBuf>> {
+    let path = if install_path.is_absolute() {
+        install_path.to_path_buf()
+    } else {
+        project.root().join(install_path)
+    };
+    if !workspace.unwrap_or_else(|| path.starts_with(project.workspace().install_path()))
+        || project.workspace().includes(&path)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(path))
 }
 
 fn standard_library_package(

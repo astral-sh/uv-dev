@@ -22,9 +22,9 @@ use uv_test::packse::scenario::Scenario;
 use uv_test::{READ_ONLY_GITHUB_SSH_DEPLOY_KEY, READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{TestContext, apply_filters, uv_snapshot};
 
-/// The workspace discovered while resolving settings is reused by a normal `uv export`.
+/// Settings and export reuse the complete workspace discovery made under metadata admission.
 #[test]
-fn export_reuses_settings_workspace_discovery() -> Result<()> {
+fn export_reuses_admitted_workspace_discovery() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -55,6 +55,10 @@ fn export_reuses_settings_workspace_discovery() -> Result<()> {
     #    uv export --cache-dir [CACHE_DIR] --no-hashes
 
     ----- stderr -----
+    DEBUG Found workspace root: [TEMP_DIR]/
+    TRACE Discovering workspace members for: [TEMP_DIR]/
+    DEBUG Adding root workspace member: [TEMP_DIR]/
+    DEBUG Ignoring workspace member: [TEMP_DIR]/member
     DEBUG Found workspace root: [TEMP_DIR]/
     TRACE Discovering workspace members for: [TEMP_DIR]/
     DEBUG Adding root workspace member: [TEMP_DIR]/

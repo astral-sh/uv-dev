@@ -56,9 +56,9 @@ fn audit_invalid_service_url() {
     ");
 }
 
-/// The workspace discovered while resolving settings is reused by `uv audit`.
+/// Writable audit reloads workspace declarations before publishing its lockfile.
 #[test]
-fn audit_reuses_settings_workspace_discovery() -> Result<()> {
+fn audit_reuses_admitted_workspace_discovery() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -86,6 +86,10 @@ fn audit_reuses_settings_workspace_discovery() -> Result<()> {
         .env(EnvVars::RUST_LOG, "uv_workspace=trace"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    DEBUG Found workspace root: [TEMP_DIR]/
+    TRACE Discovering workspace members for: [TEMP_DIR]/
+    DEBUG Adding root workspace member: [TEMP_DIR]/
+    DEBUG Ignoring workspace member: [TEMP_DIR]/member
     DEBUG Found workspace root: [TEMP_DIR]/
     TRACE Discovering workspace members for: [TEMP_DIR]/
     DEBUG Adding root workspace member: [TEMP_DIR]/
@@ -2830,5 +2834,25 @@ async fn audit_sarif_project_artifact_uri() -> Result<()> {
     ]
     "#);
 
+    Ok(())
+}
+
+#[test]
+fn audit_rejects_dependency_groups_without_workspace() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r"
+        [dependency-groups]
+        dev = []
+    "})?;
+    uv_snapshot!(context.filters(), context.audit()
+        .args(["--preview-features", "audit-command"]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No `project` table found in: [TEMP_DIR]/pyproject.toml
+    ");
+    assert!(!context.temp_dir.child("uv.lock").exists());
     Ok(())
 }

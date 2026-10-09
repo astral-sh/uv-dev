@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
 use uv_audit_operations::{AuditResults, artifact_uri, audit_lock, warn_unmatched_ignores};
@@ -15,7 +15,7 @@ use uv_dispatch::UniversalState;
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
-use uv_lock_operations::{LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockMode, LockOperation, LockTarget, MetadataLock};
 use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -31,6 +31,7 @@ use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
 pub async fn audit(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     extras: ExtrasSpecification,
     groups: DependencyGroups,
@@ -77,17 +78,38 @@ pub async fn audit(
         );
     }
 
+    let writable = frozen.is_none() && matches!(lock_check, LockCheck::Disabled);
+    let mut metadata_lock = None;
+    let script = if writable {
+        if let Some(script) = script {
+            let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
+            metadata_lock = Some(lock);
+            Some(script.context("Script metadata was removed while waiting for its lock")?)
+        } else {
+            None
+        }
+    } else {
+        script
+    };
+
     let workspace;
     let target = if let Some(script) = script.as_ref() {
         LockTarget::Script(script)
     } else {
-        workspace = Workspace::discover(
+        let discovered = Workspace::discover(
             project_dir,
             &DiscoveryOptions::default(),
             &cache,
             workspace_cache,
         )
         .await?;
+        workspace = if writable {
+            let (workspace, lock) = MetadataLock::admitted_workspace(admission.take(), discovered)?;
+            metadata_lock = Some(lock);
+            workspace
+        } else {
+            discovered
+        };
         LockTarget::Workspace(&workspace)
     };
 
@@ -186,13 +208,17 @@ pub async fn audit(
             printer,
             preview,
         )
-        .execute(target),
+        .execute_with_writer(target, |path, contents| {
+            MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+        }),
     )
     .await
     {
         Ok(result) => result.into_lock(),
         Err(err) => return Err(UvError::from(err).into()),
     };
+
+    drop(metadata_lock);
 
     // Determine the markers to use for resolution.
     let _markers = (!universal).then(|| {

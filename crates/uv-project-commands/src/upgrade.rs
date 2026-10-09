@@ -20,7 +20,7 @@ use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
 use uv_lock::implicit_constraints_marker;
-use uv_lock_operations::{LockMode, LockOperation, LockResult, LockTarget};
+use uv_lock_operations::{LockMode, LockOperation, LockResult, LockTarget, MetadataLock};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Pep508ErrorSource, Requirement, VerbatimUrl, VersionOrUrl};
@@ -163,6 +163,7 @@ impl UpgradableRequirement {
 }
 
 pub async fn upgrade(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     packages: Vec<PackageName>,
     exclude: Vec<PackageName>,
@@ -200,6 +201,11 @@ pub async fn upgrade(
             bail!("`uv upgrade` requires a project with a `[project]` table");
         }
         Err(err) => return Err(err.into()),
+    };
+    let (project, _metadata_lock) =
+        MetadataLock::admitted_project(admission.take(), VirtualProject::Project(project))?;
+    let VirtualProject::Project(project) = project else {
+        bail!("`uv upgrade` requires a project with a `[project]` table");
     };
     // Locking defaults a missing `requires-python` to the discovered interpreter's minor version.
     // Use that same bound when deciding whether selected declarations and sources can apply.

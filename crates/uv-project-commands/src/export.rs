@@ -25,7 +25,9 @@ use uv_environment_operations::{
 };
 use uv_fs::CWD;
 use uv_lock::{Lock, PylockToml, RequirementsTxtExport, cyclonedx_json};
-use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{
+    DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget, MetadataLock,
+};
 use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -153,6 +155,7 @@ fn resolve_lockfile_groups(
 /// Export the project's `uv.lock` in an alternate format.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn export(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     format: Option<ExportFormat>,
     all_packages: bool,
@@ -199,6 +202,20 @@ pub async fn export(
         None
     };
 
+    let writable = frozen.is_none() && matches!(lock_check, LockCheck::Disabled);
+    let mut metadata_lock = None;
+    let script = if writable {
+        if let Some(script) = script {
+            let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
+            metadata_lock = Some(lock);
+            Some(script.context("Script metadata was removed while waiting for its lock")?)
+        } else {
+            None
+        }
+    } else {
+        script
+    };
+
     // Identify the target.
     let manifest_target;
     let frozen_workspace;
@@ -238,6 +255,14 @@ pub async fn export(
         .await?
         {
             DiscoveredProject::Manifest(project) => {
+                let project = if writable {
+                    let (project, lock) =
+                        MetadataLock::admitted_project(admission.take(), project)?;
+                    metadata_lock = Some(lock);
+                    project
+                } else {
+                    project
+                };
                 if frozen.is_none() {
                     for name in &package {
                         if !project.workspace().packages().contains_key(name) {
@@ -356,7 +381,9 @@ pub async fn export(
                     printer,
                     preview,
                 )
-                .execute((*target).into()),
+                .execute_with_writer((*target).into(), |path, contents| {
+                    MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+                }),
             )
             .await
             {
@@ -366,6 +393,8 @@ pub async fn export(
             &resolved_lock
         }
     };
+
+    drop(metadata_lock);
 
     if let Some(batch) = &batch {
         let mut writers = Vec::with_capacity(batch.export.len());

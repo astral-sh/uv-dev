@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::debug;
 
 use uv_cache::Cache;
@@ -21,7 +21,7 @@ use uv_environment_operations::{
 };
 use uv_fs::normalize_path;
 use uv_install_operations::loggers::SummaryInstallLogger;
-use uv_lock_operations::{LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockMode, LockOperation, LockTarget, MetadataLock};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -48,6 +48,7 @@ mod ty;
 /// Run project checks.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn check(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     ty_path: Option<PathBuf>,
     fix: bool,
@@ -88,6 +89,20 @@ pub async fn check(
             PreviewFeature::CheckCommand
         );
     }
+
+    let writable = !isolated && frozen.is_none() && matches!(lock_check, LockCheck::Disabled);
+    let mut metadata_lock = None;
+    let script = if writable {
+        if let Some(script) = script {
+            let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
+            metadata_lock = Some(lock);
+            Some(script.context("Script metadata was removed while waiting for its lock")?)
+        } else {
+            None
+        }
+    } else {
+        script
+    };
 
     // Discover the project.
     let project = if no_project || script.is_some() {
@@ -140,6 +155,18 @@ pub async fn check(
                 }
             }
         }
+    };
+
+    let project = if writable {
+        if let Some(project) = project {
+            let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
+            metadata_lock = Some(lock);
+            Some(project)
+        } else {
+            None
+        }
+    } else {
+        project
     };
 
     if no_project {
@@ -415,7 +442,9 @@ pub async fn check(
                 printer,
                 preview,
             )
-            .execute(lock_target),
+            .execute_with_writer(lock_target, |path, contents| {
+                MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+            }),
         )
         .await
         {
@@ -598,7 +627,9 @@ pub async fn check(
                 project.project_name(),
                 &install_options,
             ))
-            .execute(project.workspace().into()),
+            .execute_with_writer(project.workspace().into(), |path, contents| {
+                MetadataLock::write_lockfile(metadata_lock.as_ref(), path, contents)
+            }),
         )
         .await
         {
@@ -707,6 +738,9 @@ pub async fn check(
     } else {
         isolated_venv
     };
+
+    drop(metadata_lock);
+    drop(admission);
 
     // Forward the user's explicit Python request so ty can apply its own version selection rules.
     let python_version = if let Some(python) = python {

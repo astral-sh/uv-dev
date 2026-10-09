@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use tracing::warn;
 
@@ -21,7 +21,7 @@ use uv_environment_operations::{
 };
 use uv_fs::Simplified;
 use uv_install_operations::loggers::DefaultInstallLogger;
-use uv_lock_operations::{LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockMode, LockOperation, LockTarget, MetadataLock};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
@@ -42,6 +42,7 @@ use crate::edit::{EditTarget, ProjectEdit, PythonTarget};
 
 /// Remove one or more packages from the project requirements.
 pub async fn remove(
+    mut admission: Option<MetadataLock>,
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -62,10 +63,12 @@ pub async fn remove(
     concurrency: Concurrency,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
+    workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
     malware_settings: MalwareCheckSettings,
 ) -> Result<ExitStatus> {
+    let _metadata_lock;
     let target = if let Some(script) = script {
         // If we found a PEP 723 script and the user provided a project-only setting, warn.
         if package.is_some() {
@@ -88,16 +91,20 @@ pub async fn remove(
                 "`--no-sync` is a no-op for Python scripts with inline metadata, which always run in isolation"
             );
         }
-        EditTarget::Script(script)
+        let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
+        _metadata_lock = lock;
+        EditTarget::Script(
+            script.context("Script metadata was removed while waiting for its lock")?,
+        )
     } else {
         // Find the project in the workspace.
         // No workspace caching since `uv remove` changes the workspace definition.
-        let project = if let Some(package) = package {
+        let project = if let Some(package) = package.as_ref() {
             VirtualProject::discover_with_package(
                 project_dir,
                 &DiscoveryOptions::default(),
                 cache,
-                &WorkspaceCache::default(),
+                workspace_cache,
                 package.clone(),
             )
             .await?
@@ -106,11 +113,13 @@ pub async fn remove(
                 project_dir,
                 &DiscoveryOptions::default(),
                 cache,
-                &WorkspaceCache::default(),
+                workspace_cache,
             )
             .await?
         };
 
+        let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
+        _metadata_lock = lock;
         EditTarget::Project(project)
     };
 
@@ -228,7 +237,7 @@ pub async fn remove(
     }
 
     // Update the `pypackage.toml` in-memory.
-    let target = target.update(&content, &WorkspaceCache::default())?;
+    let target = target.update(&content, workspace_cache)?;
 
     // Determine enabled groups and extras
     let default_groups = match &target {
