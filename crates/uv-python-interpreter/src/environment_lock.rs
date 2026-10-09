@@ -51,8 +51,14 @@ impl Key {
 impl EnvironmentLock {
     /// Claim logical slots and canonical destinations in one order, then verify their resolution.
     pub async fn acquire(paths: &[PathBuf], cache: &Cache) -> Result<Arc<Self>, LockedFileError> {
+        // Replacing the current directory can invalidate `current_dir`; retain absolute inputs
+        // before any caller mutates the destination.
+        let paths = paths
+            .iter()
+            .map(std::path::absolute)
+            .collect::<io::Result<Vec<_>>>()?;
         loop {
-            let keys = destination_keys(paths)?;
+            let keys = destination_keys(&paths)?;
             let mut files = Vec::with_capacity(keys.len());
             for claim in &keys {
                 let file = LockedFile::acquire(
@@ -67,9 +73,9 @@ impl EnvironmentLock {
                 .await?;
                 files.push((claim.clone(), file));
             }
-            if keys == destination_keys(paths)? {
+            if keys == destination_keys(&paths)? {
                 return Ok(Arc::new(Self {
-                    paths: paths.to_vec(),
+                    paths,
                     keys,
                     files,
                     _cache: cache.clone(),

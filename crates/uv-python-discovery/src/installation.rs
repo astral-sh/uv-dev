@@ -388,7 +388,7 @@ impl PythonInstallation {
     }
 
     /// Return the [`LenientImplementationName`] of the Python installation as reported by its interpreter.
-    pub fn implementation(&self) -> LenientImplementationName {
+    pub(crate) fn implementation(&self) -> LenientImplementationName {
         LenientImplementationName::from(self.interpreter.implementation_name())
     }
 

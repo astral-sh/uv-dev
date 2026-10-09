@@ -198,12 +198,85 @@ pub enum ProjectEnvironmentPolicy {
     Preserve,
 }
 
+enum EnvironmentDiscoveryWarning {
+    BrokenLink {
+        path: PathBuf,
+        target: Option<PathBuf>,
+    },
+    Incompatible {
+        root: PathBuf,
+        centralized: bool,
+        reason: EnvironmentIncompatibilityError,
+    },
+}
+
+impl EnvironmentDiscoveryWarning {
+    fn report(self) {
+        match self {
+            Self::BrokenLink { path, target } => {
+                if let Some(target) = target {
+                    warn_user!(
+                        "Ignoring existing virtual environment linked to non-existent Python interpreter: `{}` -> `{}`",
+                        path.user_display().cyan(),
+                        target.user_display().cyan(),
+                    );
+                } else {
+                    warn_user!(
+                        "Ignoring existing virtual environment linked to non-existent Python interpreter: {}",
+                        path.user_display().cyan(),
+                    );
+                }
+            }
+            Self::Incompatible {
+                root,
+                centralized,
+                reason,
+            } => {
+                if centralized {
+                    warn_user!(
+                        "Using incompatible environment (`{}`) due to `--no-sync` ({reason})",
+                        root.file_name()
+                            .unwrap_or(root.as_os_str())
+                            .to_string_lossy()
+                            .cyan(),
+                    );
+                } else {
+                    warn_user!(
+                        "Using incompatible environment (`{}`) due to `--no-sync` ({reason})",
+                        root.user_display().cyan(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct ProjectDiscoveryReport {
+    installation: Option<PythonInstallation>,
+    warnings: Vec<EnvironmentDiscoveryWarning>,
+}
+
+impl ProjectDiscoveryReport {
+    /// Report only the discovery accepted after destination admission.
+    fn report(self, printer: Printer) -> Result<(), EnvironmentError> {
+        for warning in self.warnings {
+            warning.report();
+        }
+        if let Some(installation) = self.installation {
+            report_interpreter(&installation, false, printer)?;
+        }
+        Ok(())
+    }
+}
+
 /// Discover an existing project environment at `root` without validating its compatibility.
 fn existing_project_environment(
     root: &Path,
     centralized: bool,
     policy: ProjectEnvironmentPolicy,
     cache: &Cache,
+    warnings: &mut Vec<EnvironmentDiscoveryWarning>,
 ) -> Result<Option<PythonEnvironment>, EnvironmentError> {
     let environment = match PythonEnvironment::from_root(root, cache) {
         Ok(environment) => environment,
@@ -248,19 +321,8 @@ fn existing_project_environment(
                 venv: _,
             }),
         )) => {
-            if unix {
-                let target_path = fs_err::read_link(&path)?;
-                warn_user!(
-                    "Ignoring existing virtual environment linked to non-existent Python interpreter: `{}` -> `{}`",
-                    path.user_display().cyan(),
-                    target_path.user_display().cyan(),
-                );
-            } else {
-                warn_user!(
-                    "Ignoring existing virtual environment linked to non-existent Python interpreter: {}",
-                    path.user_display().cyan(),
-                );
-            }
+            let target = unix.then(|| fs_err::read_link(&path)).transpose()?;
+            warnings.push(EnvironmentDiscoveryWarning::BrokenLink { path, target });
             return Ok(None);
         }
         Err(err) => return Err(err.into()),
@@ -279,8 +341,11 @@ fn discover_project_environment(
     policy: ProjectEnvironmentPolicy,
     centralized: bool,
     cache: &Cache,
+    warnings: &mut Vec<EnvironmentDiscoveryWarning>,
 ) -> Result<Option<PythonEnvironment>, EnvironmentError> {
-    let Some(environment) = existing_project_environment(root, centralized, policy, cache)? else {
+    let Some(environment) =
+        existing_project_environment(root, centralized, policy, cache, warnings)?
+    else {
         return Ok(None);
     };
 
@@ -316,21 +381,11 @@ fn discover_project_environment(
     match compatibility {
         Ok(()) => Ok(Some(environment)),
         Err(err) if matches!(policy, ProjectEnvironmentPolicy::Preserve) => {
-            if centralized {
-                let root = environment.root();
-                warn_user!(
-                    "Using incompatible environment (`{}`) due to `--no-sync` ({err})",
-                    root.file_name()
-                        .unwrap_or(root.as_os_str())
-                        .to_string_lossy()
-                        .cyan(),
-                );
-            } else {
-                warn_user!(
-                    "Using incompatible environment (`{}`) due to `--no-sync` ({err})",
-                    environment.root().user_display().cyan(),
-                );
-            }
+            warnings.push(EnvironmentDiscoveryWarning::Incompatible {
+                root: environment.root().to_path_buf(),
+                centralized,
+                reason: err,
+            });
             Ok(Some(environment))
         }
         Err(err) => {
@@ -609,12 +664,18 @@ impl ProjectInterpreter {
             root
         };
 
-        existing_project_environment(
+        let mut warnings = Vec::new();
+        let environment = existing_project_environment(
             &root,
             centralized,
             ProjectEnvironmentPolicy::Optional,
             cache,
-        )
+            &mut warnings,
+        );
+        for warning in warnings {
+            warning.report();
+        }
+        environment
     }
 
     /// Discover an interpreter for a workspace or frozen lockfile.
@@ -631,7 +692,7 @@ impl ProjectInterpreter {
         cache: &Cache,
         printer: Printer,
     ) -> Result<Self, EnvironmentError> {
-        let (selected, installation) = Self::discover_unreported(
+        let (selected, report) = Self::discover_unreported(
             target,
             project_python,
             client_builder,
@@ -645,9 +706,7 @@ impl ProjectInterpreter {
             printer,
         )
         .await?;
-        if let Some(installation) = installation {
-            report_interpreter(&installation, false, printer)?;
-        }
+        report.report(printer)?;
         Ok(selected)
     }
 
@@ -663,32 +722,93 @@ impl ProjectInterpreter {
         active: ActiveEnvironment,
         cache: &Cache,
         printer: Printer,
-    ) -> Result<(Self, Option<PythonInstallation>), EnvironmentError> {
-        let python_request = project_python.python_request.as_ref();
-        let requires_python = project_python.requires_python();
+    ) -> Result<(Self, ProjectDiscoveryReport), EnvironmentError> {
+        let mut report = ProjectDiscoveryReport::default();
+        let result: Result<Self, EnvironmentError> = async {
+            let python_request = project_python.python_request.as_ref();
+            let requires_python = project_python.requires_python();
 
-        let environment_selection =
-            ProjectEnvironmentSelection::from_install_path(target.install_path(), active);
-        let centralized = centralized_environments_enabled(&environment_selection, cache);
-        let upgradeable = python_request.is_none_or(|request| !request.includes_patch());
+            let environment_selection =
+                ProjectEnvironmentSelection::from_install_path(target.install_path(), active);
+            let centralized = centralized_environments_enabled(&environment_selection, cache);
+            let upgradeable = python_request.is_none_or(|request| !request.includes_patch());
 
-        // Prefer `.venv`'s interpreter to keep its compatible cached environment selected; derive
-        // the cache root instead of trusting the link target.
-        if centralized {
-            let project_environment_path = target.install_path().join(".venv");
-            if let Ok(candidate) = PythonEnvironment::from_root(
-                read_environment_path_file(&project_environment_path)
-                    .ok()
-                    .as_deref()
-                    .unwrap_or(&project_environment_path),
-                cache,
-            ) {
-                let root = centralized_environment_root(
-                    target,
-                    candidate.interpreter(),
-                    upgradeable,
+            // Prefer `.venv`'s interpreter to keep its compatible cached environment selected; derive
+            // the cache root instead of trusting the link target.
+            if centralized {
+                let project_environment_path = target.install_path().join(".venv");
+                if let Ok(candidate) = PythonEnvironment::from_root(
+                    read_environment_path_file(&project_environment_path)
+                        .ok()
+                        .as_deref()
+                        .unwrap_or(&project_environment_path),
                     cache,
-                );
+                ) {
+                    let root = centralized_environment_root(
+                        target,
+                        candidate.interpreter(),
+                        upgradeable,
+                        cache,
+                    );
+                    if let Some(environment) = discover_project_environment(
+                        &root,
+                        python_request,
+                        python_preference,
+                        python_arch,
+                        requires_python,
+                        policy,
+                        centralized,
+                        cache,
+                        &mut report.warnings,
+                    )? {
+                        return Ok(Self::Environment(environment));
+                    }
+                }
+            } else {
+                let project_environment_path = environment_selection
+                    .explicit_path()
+                    .map_or_else(|| target.install_path().join(".venv"), Path::to_path_buf);
+                // TODO(tk): Revisit after PEP 832.
+                // A centralized path file is not a local environment; let initialization replace it.
+                if !(environment_selection.is_default()
+                    && read_environment_path_file(&project_environment_path)
+                        .is_ok_and(|target| is_centralized_environment_path(&target, cache)))
+                    && let Some(environment) = discover_project_environment(
+                        &project_environment_path,
+                        python_request,
+                        python_preference,
+                        python_arch,
+                        requires_python,
+                        policy,
+                        centralized,
+                        cache,
+                        &mut report.warnings,
+                    )?
+                {
+                    return Ok(Self::Environment(environment));
+                }
+            }
+
+            let reporter = PythonDownloadReporter::single(printer);
+
+            // Locate the Python interpreter to use in the environment.
+            let python = PythonInstallation::find_or_download(
+                python_request,
+                EnvironmentPreference::OnlySystem,
+                python_preference,
+                python_arch,
+                python_downloads,
+                client_builder,
+                cache,
+                Some(&reporter),
+                install_mirrors.mirrors(),
+                install_mirrors.python_downloads_json_url.as_deref(),
+            )
+            .await?;
+
+            if centralized {
+                let root =
+                    centralized_environment_root(target, python.interpreter(), upgradeable, cache);
                 if let Some(environment) = discover_project_environment(
                     &root,
                     python_request,
@@ -698,76 +818,24 @@ impl ProjectInterpreter {
                     policy,
                     centralized,
                     cache,
+                    &mut report.warnings,
                 )? {
-                    return Ok((Self::Environment(environment), None));
+                    return Ok(Self::Environment(environment));
                 }
             }
-        } else {
-            let project_environment_path = environment_selection
-                .explicit_path()
-                .map_or_else(|| target.install_path().join(".venv"), Path::to_path_buf);
-            // TODO(tk): Revisit after PEP 832.
-            // A centralized path file is not a local environment; let initialization replace it.
-            if !(environment_selection.is_default()
-                && read_environment_path_file(&project_environment_path)
-                    .is_ok_and(|target| is_centralized_environment_path(&target, cache)))
-                && let Some(environment) = discover_project_environment(
-                    &project_environment_path,
-                    python_request,
-                    python_preference,
-                    python_arch,
-                    requires_python,
-                    policy,
-                    centralized,
-                    cache,
-                )?
-            {
-                return Ok((Self::Environment(environment), None));
-            }
+
+            let interpreter = project_python.validate(python.interpreter().clone());
+            report.installation = Some(python);
+            Ok(Self::Interpreter(interpreter?))
         }
-
-        let reporter = PythonDownloadReporter::single(printer);
-
-        // Locate the Python interpreter to use in the environment.
-        let python = PythonInstallation::find_or_download(
-            python_request,
-            EnvironmentPreference::OnlySystem,
-            python_preference,
-            python_arch,
-            python_downloads,
-            client_builder,
-            cache,
-            Some(&reporter),
-            install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url.as_deref(),
-        )
-        .await?;
-
-        if centralized {
-            let root =
-                centralized_environment_root(target, python.interpreter(), upgradeable, cache);
-            if let Some(environment) = discover_project_environment(
-                &root,
-                python_request,
-                python_preference,
-                python_arch,
-                requires_python,
-                policy,
-                centralized,
-                cache,
-            )? {
-                return Ok((Self::Environment(environment), None));
-            }
-        }
-
-        let interpreter = match project_python.validate(python.interpreter().clone()) {
-            Ok(interpreter) => interpreter,
+        .await;
+        match result {
+            Ok(selected) => Ok((selected, report)),
             Err(error) => {
-                report_interpreter(&python, false, printer)?;
-                return Err(error.into());
+                report.report(printer)?;
+                Err(error)
             }
-        };
-        Ok((Self::Interpreter(interpreter), Some(python)))
+        }
     }
 
     /// Convert the [`ProjectInterpreter`] into an [`Interpreter`].
@@ -976,7 +1044,7 @@ impl ProjectEnvironment {
             .inspect_err(|err| warn!("Failed to acquire environment lock: {err}"))
             .ok();
         loop {
-            let (selected, installation) = ProjectInterpreter::discover_unreported(
+            let (selected, report) = ProjectInterpreter::discover_unreported(
                 target,
                 project_python.clone(),
                 client_builder,
@@ -1009,9 +1077,20 @@ impl ProjectEnvironment {
                 }
                 SelectedEnvironment::Create(_) => reference.clone(),
             };
-            if let Some(lock) = destination_lock.as_ref()
-                && !lock.matches(&environment_destinations(&reference, &destination, cache))?
-            {
+            let needs_admission = if let Some(lock) = destination_lock.as_ref() {
+                match lock.matches(&environment_destinations(&reference, &destination, cache)) {
+                    Ok(matches) => !matches,
+                    Err(error) => {
+                        for warning in report.warnings {
+                            warning.report();
+                        }
+                        return Err(error.into());
+                    }
+                }
+            } else {
+                false
+            };
+            if needs_admission {
                 drop(destination_lock.take());
                 destination_lock = lock_environment_destination(&reference, &destination, cache)
                     .await
@@ -1019,9 +1098,7 @@ impl ProjectEnvironment {
                     .ok();
                 continue;
             }
-            if let Some(installation) = installation {
-                report_interpreter(&installation, false, printer)?;
-            }
+            report.report(printer)?;
             return match selected {
                 // Use the environment accepted by the compatibility policy.
                 SelectedEnvironment::Existing(environment) => {
