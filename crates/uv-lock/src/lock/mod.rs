@@ -3985,58 +3985,6 @@ impl Lock {
             ));
         }
 
-        // The metadata can remain unchanged even if a resolved edge is removed or narrowed in
-        // the lockfile. Verify that every production, optional, and group requirement is still
-        // covered by an edge with the expected extras and marker. Sources can legitimately be
-        // replaced by overrides, so source identity is not part of this generic edge check.
-        if let Some(requirement) = self.uncovered_dependency(
-            &package.metadata.requires_dist,
-            &package.dependencies,
-            None,
-            package,
-        ) {
-            return Ok(SatisfiesResult::UncoveredPackageDependency(
-                &package.id.name,
-                package.id.version.as_ref(),
-                Box::new(requirement),
-            ));
-        }
-
-        for extra in &package.metadata.provides_extra {
-            let dependencies = package
-                .optional_dependencies
-                .get(extra)
-                .map_or(&[][..], Vec::as_slice);
-            if let Some(requirement) = self.uncovered_dependency(
-                &package.metadata.requires_dist,
-                dependencies,
-                Some(extra),
-                package,
-            ) {
-                return Ok(SatisfiesResult::UncoveredPackageDependency(
-                    &package.id.name,
-                    package.id.version.as_ref(),
-                    Box::new(requirement),
-                ));
-            }
-        }
-
-        for (group, requirements) in &package.metadata.dependency_groups {
-            let dependencies = package
-                .dependency_groups
-                .get(group)
-                .map_or(&[][..], Vec::as_slice);
-            if let Some(requirement) =
-                self.uncovered_dependency(requirements, dependencies, None, package)
-            {
-                return Ok(SatisfiesResult::UncoveredPackageDependency(
-                    &package.id.name,
-                    package.id.version.as_ref(),
-                    Box::new(requirement),
-                ));
-            }
-        }
-
         // Validate the `dependency-groups` metadata.
         let expected_groups = dependency_groups
             .into_iter()
@@ -4069,32 +4017,51 @@ impl Lock {
                     .collect(),
             ));
         }
-        if allow_missing_package_metadata {
-            let expected_requirements = expected_requirements.into_iter().collect();
-            let flattened = flattened.map(|requirements| requirements.into_iter().collect());
-            let expected_groups = expected_groups
+        let expected_requirements: BTreeSet<Requirement> =
+            expected_requirements.into_iter().collect();
+        let flattened = flattened.map(|requirements| requirements.into_iter().collect());
+        let expected_groups = expected_groups
+            .into_iter()
+            .map(|(group, requirements)| (group, requirements.into_iter().collect()))
+            .collect();
+        let effective_requirements = if allow_missing_package_metadata {
+            None
+        } else {
+            Some(
+                Self::preprocess_requirements(
+                    &package.id.name,
+                    package_version,
+                    &expected_requirements.iter().cloned().collect::<Vec<_>>(),
+                    DependencyContext::Production,
+                    modifiers,
+                )
                 .into_iter()
-                .map(|(group, requirements)| (group, requirements.into_iter().collect()))
-                .collect();
-            let declarations = flattened.as_ref().unwrap_or(&expected_requirements);
-            let package_activated_extras = activated_extras
-                .get(&package.id)
-                .cloned()
-                .unwrap_or_default();
-            let expected = ExpectedPackageDependencies::new(
-                self,
-                declarations,
-                provides_extra,
-                &expected_groups,
-                source_requirements,
-                modifiers,
-                package_requires_python,
-                package_version,
-                package,
-                package_activated_extras,
-                root,
-                missing_metadata,
-            );
+                .collect(),
+            )
+        };
+        let declarations = effective_requirements
+            .as_ref()
+            .or(flattened.as_ref())
+            .unwrap_or(&expected_requirements);
+        let package_activated_extras = activated_extras
+            .get(&package.id)
+            .cloned()
+            .unwrap_or_default();
+        let expected = ExpectedPackageDependencies::new(
+            self,
+            declarations,
+            provides_extra,
+            &expected_groups,
+            source_requirements,
+            modifiers,
+            package_requires_python,
+            package_version,
+            package,
+            package_activated_extras,
+            root,
+            missing_metadata || !allow_missing_package_metadata,
+        );
+        if allow_missing_package_metadata {
             match self.satisfied_no_metadata(
                 package,
                 activated_extras,
@@ -4103,6 +4070,39 @@ impl Lock {
             )? {
                 SatisfiesResult::Satisfied => {}
                 dissatisfied => return Ok(dissatisfied),
+            }
+        } else {
+            // Metadata declarations precede overrides, exclusions, and recursive-extra flattening.
+            // Compare effective requirements in the same contexts used to construct dependency edges.
+            let empty_requirements = BTreeSet::new();
+            for context in expected.contexts() {
+                if let DependencyContext::Extra(extra) = context
+                    && !self.is_workspace_package(package)
+                    && !expected.activated_extras.contains_key(extra)
+                {
+                    continue;
+                }
+                let requirements = match context {
+                    DependencyContext::Production | DependencyContext::Extra(_) => {
+                        &expected.declarations
+                    }
+                    DependencyContext::Group(group) => expected
+                        .dependency_groups
+                        .get(group)
+                        .unwrap_or(&empty_requirements),
+                };
+                if let Some(requirement) = self.uncovered_dependency(
+                    requirements,
+                    context.dependencies(package),
+                    context,
+                    expected.context_parent_marker(context).pep508(),
+                ) {
+                    return Ok(SatisfiesResult::UncoveredPackageDependency(
+                        &package.id.name,
+                        package.id.version.as_ref(),
+                        Box::new(requirement),
+                    ));
+                }
             }
         }
 
@@ -4254,39 +4254,38 @@ impl Lock {
         &self,
         requirements: &BTreeSet<Requirement>,
         dependencies: &[Dependency],
-        extra: Option<&ExtraName>,
-        package: &Package,
+        context: DependencyContext<'_>,
+        parent_marker: MarkerTree,
     ) -> Option<Requirement> {
-        let package_marker = package
-            .fork_markers
-            .iter()
-            .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508()));
-
         for requirement in requirements {
-            let required = self
-                .requires_python
-                .simplify_markers(requirement.marker)
-                .simplify_extras_with(|candidate| extra.is_some_and(|extra| extra == candidate));
-            let required = if package.fork_markers.is_empty() {
-                required
-            } else {
-                required.and(package_marker)
-            };
+            let required = self.requires_python.simplify_markers(
+                context
+                    .requirement_marker(requirement.marker)
+                    .and(parent_marker),
+            );
             if required.is_false() {
                 continue;
             }
 
             let mut covered = MarkerTree::FALSE;
             for dependency in dependencies {
+                let target = self.package(self.by_id[&dependency.package_id]);
                 if dependency.package_id.name != requirement.name
                     || !requirement
                         .extras
                         .iter()
+                        // Lock construction removes requested extras that the target does not provide.
+                        .filter(|extra| {
+                            target.optional_dependencies.contains_key(*extra)
+                                || target.metadata.provides_extra.contains(*extra)
+                        })
                         .all(|extra| dependency.extra.contains(extra))
                 {
                     continue;
                 }
-                covered = covered.or(dependency.simplified_marker.as_simplified_marker_tree());
+                covered = covered.or(self
+                    .requires_python
+                    .simplify_markers(dependency.complexified_marker.pep508().and(parent_marker)));
             }
 
             if !required.implies(covered).is_true() {
@@ -4597,15 +4596,11 @@ impl Lock {
             }
         }
 
-        let dependency_modifiers = if allow_missing_package_metadata {
-            DependencyModifiers::new(
-                Overrides::from_entries(normalized_overrides)
-                    .map_err(LockErrorKind::InvalidScopedOverride)?,
-                Excludes::from_entries(excludes.iter().cloned()),
-            )
-        } else {
-            DependencyModifiers::default()
-        };
+        let dependency_modifiers = DependencyModifiers::new(
+            Overrides::from_entries(normalized_overrides)
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(excludes.iter().cloned()),
+        );
         // Projectless workspace groups and scripts are root declarations, so apply only
         // global overrides and exclusions before using them for sources or validation.
         let root_requirements = dependency_modifiers
@@ -5096,6 +5091,17 @@ impl Lock {
                     .unwrap_or_default(),
             );
             for dependency in package.all_dependencies() {
+                if !allow_missing_package_metadata {
+                    let activated = activated_extras
+                        .entry(dependency.package_id.clone())
+                        .or_default();
+                    for extra in &dependency.extra {
+                        activated
+                            .entry(extra.clone())
+                            .and_modify(|marker| marker.or(dependency.complexified_marker))
+                            .or_insert(dependency.complexified_marker);
+                    }
+                }
                 let needs_extra_validation = validated_extras
                     .get(&dependency.index)
                     .zip(activated_extras.get(&dependency.package_id))
@@ -10878,8 +10884,8 @@ source = { registry = "https://example.com/simple" }
             lock.uncovered_dependency(
                 &package.metadata.requires_dist,
                 &package.dependencies,
-                None,
-                package,
+                DependencyContext::Production,
+                lock.fork_markers_union(),
             )
             .is_none()
         );

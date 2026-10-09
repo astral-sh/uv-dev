@@ -4888,19 +4888,13 @@ fn lock_dependency_edges_accept_source_replacement() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
     ");
@@ -5755,7 +5749,7 @@ fn lock_dependency_non_existent_extra() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 9 packages in [TIME]
@@ -19840,6 +19834,84 @@ fn check_unformatted_lock() -> Result<()> {
     Ok(())
 }
 
+/// Excluded requirements and unrequested dependency extras do not make a valid lock stale.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_dependency_edges_respect_exclusions_and_extra_activation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("library/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "library"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        test = ["idna==3.6"]
+    "#})?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["library", "iniconfig==2.0.0", "excluded"]
+
+        [tool.uv]
+        exclude-dependencies = ["excluded"]
+
+        [tool.uv.sources]
+        library = { path = "library" }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    // Once requested, the extra's dependency section is part of coverage validation.
+    pyproject.write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("\"library\",", "\"library[test]\","),
+    )?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Added idna v3.6
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    let locked = context.read("uv.lock");
+    let missing = locked.replace(
+        "[package.optional-dependencies]\ntest = [\n    { name = \"idna\" },\n]",
+        "[package.optional-dependencies]\ntest = []",
+    );
+    assert_ne!(locked, missing);
+    context.temp_dir.child("uv.lock").write_str(&missing)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
 /// A lock with unchanged metadata but missing, narrowed, or incomplete dependency edges is stale.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -19863,69 +19935,83 @@ fn lock_rejects_incomplete_dependency_edges() -> Result<()> {
     )?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
     ");
 
     // An unchanged lock remains valid before the dependency edges are modified.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
     ");
 
     let lockfile = context.temp_dir.child("uv.lock");
     let lock = context.read("uv.lock");
-    let incomplete = [
-        // The group metadata is present, but its resolved edge has been removed.
-        lock.replace(
-            "[package.dev-dependencies]\ndev = [\n    { name = \"iniconfig\" },\n]",
-            "[package.dev-dependencies]\ndev = []",
-        ),
-        // The optional-dependency metadata is present, but its resolved edge has been removed.
-        lock.replace(
-            "[package.optional-dependencies]\ntest = [\n    { name = \"idna\" },\n]",
-            "[package.optional-dependencies]\ntest = []",
-        ),
-        // The resolved edge no longer activates the requested downstream extra.
-        lock.replace(
-            "{ name = \"requests\", extra = [\"socks\"], marker = \"sys_platform == 'darwin'\" }",
-            "{ name = \"requests\", marker = \"sys_platform == 'darwin'\" }",
-        ),
-        // The resolved edge covers a narrower environment than the metadata requirement.
-        lock.replace(
-            "{ name = \"requests\", extra = [\"socks\"], marker = \"sys_platform == 'darwin'\" }",
-            "{ name = \"requests\", extra = [\"socks\"], marker = \"sys_platform == 'win32'\" }",
-        ),
-    ];
+    // The group declaration remains present, but its resolved edge is removed.
+    let missing_group = lock.replace(
+        "[package.dev-dependencies]\ndev = [\n    { name = \"iniconfig\" },\n]",
+        "[package.dev-dependencies]\ndev = []",
+    );
+    assert_ne!(lock, missing_group);
+    lockfile.write_str(&missing_group)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    insta::allow_duplicates! {
-        for incomplete in incomplete {
-            assert_ne!(lock, incomplete);
-            lockfile
-                .write_str(&incomplete)
-                .expect("write incomplete lockfile");
+    hint: To update the lockfile, run `uv lock`.
+    ");
 
-            uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
-            success: false
-            exit_code: 1
-            ----- stdout -----
+    // The optional declaration remains present, but its resolved edge is removed.
+    let missing_optional = lock.replace(
+        "[package.optional-dependencies]\ntest = [\n    { name = \"idna\" },\n]",
+        "[package.optional-dependencies]\ntest = []",
+    );
+    assert_ne!(lock, missing_optional);
+    lockfile.write_str(&missing_optional)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-            ----- stderr -----
-            Resolved 8 packages in [TIME]
-            error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+    hint: To update the lockfile, run `uv lock`.
+    ");
 
-            hint: To update the lockfile, run `uv lock`.
-            ");
-        }
-    }
+    // The resolved edge no longer activates the requested downstream extra.
+    let missing_extra = lock.replace(
+        "{ name = \"requests\", extra = [\"socks\"], marker = \"sys_platform == 'darwin'\" }",
+        "{ name = \"requests\", marker = \"sys_platform == 'darwin'\" }",
+    );
+    assert_ne!(lock, missing_extra);
+    lockfile.write_str(&missing_extra)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    // The resolved edge covers a different environment than the declaration.
+    let missing_marker = lock.replace(
+        "{ name = \"requests\", extra = [\"socks\"], marker = \"sys_platform == 'darwin'\" }",
+        "{ name = \"requests\", extra = [\"socks\"], marker = \"sys_platform == 'win32'\" }",
+    );
+    assert_ne!(lock, missing_marker);
+    lockfile.write_str(&missing_marker)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
 
     Ok(())
 }
