@@ -3114,13 +3114,15 @@ impl Lock {
                 continue;
             };
 
-            // Flat-index artifacts do not have upload times and bypass `exclude-newer` during
-            // resolution. An artifact with a timestamp came from a Simple API response and must
-            // still satisfy the cutoff even if the package's index is also configured via
-            // `--find-links`.
-            let flat_index = index_locations.is_flat_index(&index);
+            // Flat indexes bypass cutoffs during resolution, including when their HTML lists
+            // upload times. A URL also configured as a Simple index has ambiguous provenance.
+            if index_locations.is_flat_index(&index) {
+                continue;
+            }
             let mismatched = |upload_time: Option<Timestamp>| {
-                upload_time.map_or(!flat_index, |upload_time| upload_time >= cutoff)
+                upload_time.is_none_or(|upload_time| {
+                    upload_time.as_millisecond() >= cutoff.as_millisecond()
+                })
             };
 
             if package

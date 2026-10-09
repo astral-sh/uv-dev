@@ -19767,6 +19767,110 @@ fn check_unformatted_lock() -> Result<()> {
     Ok(())
 }
 
+/// A flat index can expose upload times while remaining exempt from cutoffs.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_exclude_newer_timestamped_flat_index() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "timestamped-flat-index"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-03-27T00:00:00Z" }
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let flat_index = MockServer::start().await;
+    Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{}" data-upload-time="2024-03-27T00:00:00Z">a-1.0.0-py3-none-any.whl</a>"#,
+                server.file_url("a-1.0.0-py3-none-any.whl"),
+            ),
+            "text/html",
+        ))
+        .mount(&flat_index)
+        .await;
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-26T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--no-index")
+        .arg("--find-links").arg(format!("{}/links", flat_index.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--locked", "--offline", "--no-cache", "--no-index"])
+        .arg("--find-links").arg(format!("{}/links", flat_index.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+/// Lock validation uses the same millisecond cutoff boundary as resolution.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_submillisecond_cutoff() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "submillisecond-cutoff"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-01-01T00:00:00.122Z" }
+        [packages.a.versions."2.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-01-01T00:00:00.123Z" }
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-01-02T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--index-url").arg(server.index_url())
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-01-01T00:00:00.123456Z"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolving despite existing lockfile because package `a` contains artifacts that do not satisfy the `exclude-newer` cutoff of `2024-01-01T00:00:00.123456Z`
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
 /// Checks that changing `exclude-newer` does not invalidate a lock whose artifacts satisfy the
 /// cutoff until a refresh occurs.
 #[cfg(feature = "test-universal")]
