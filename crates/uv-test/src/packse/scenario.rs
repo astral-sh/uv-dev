@@ -16,7 +16,7 @@ use uv_distribution_filename::WheelFilename;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{MarkerTree, Requirement};
-use uv_pypi_types::Identifier;
+use uv_pypi_types::{Identifier, ModuleName};
 use uv_python_types::PythonVersion;
 
 /// A complete packse scenario definition.
@@ -146,12 +146,12 @@ pub struct PackageMetadata {
 /// A console-script target supported by the Packse package generator.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScriptTarget {
-    module: String,
+    module: ModuleName,
     function: Identifier,
 }
 
 impl ScriptTarget {
-    pub(super) fn module(&self) -> &str {
+    pub(super) fn module(&self) -> &ModuleName {
         &self.module
     }
 
@@ -176,7 +176,8 @@ impl FromStr for ScriptTarget {
         let function = script_identifier(function)
             .map_err(|error| format!("invalid callable in script target `{value}`: {error}"))?;
         Ok(Self {
-            module: module.to_string(),
+            module: ModuleName::from_str(module)
+                .map_err(|error| format!("invalid module in script target `{value}`: {error}"))?,
             function,
         })
     }
@@ -554,7 +555,7 @@ extra_c = ["c"]
         .expect("script metadata should parse");
         assert_eq!(metadata.scripts["example"].to_string(), "example.cli:main");
         assert_eq!(metadata.scripts["alias"], metadata.scripts["example"]);
-        assert_eq!(metadata.scripts["example"].module(), "example.cli");
+        assert_eq!(metadata.scripts["example"].module().as_ref(), "example.cli");
         assert_eq!(metadata.scripts["example"].function(), "main");
     }
 
