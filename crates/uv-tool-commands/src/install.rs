@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::path::Path;
 use std::str::FromStr;
@@ -18,7 +19,7 @@ use uv_configuration::{
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ExtraBuildRequires, IndexCapabilities, Name, NameRequirementSpecification, Requirement,
+    ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
     RequirementSource, ResolvedDist, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
@@ -40,9 +41,8 @@ use uv_workspace::WorkspaceCache;
 use uv_lock_operations::LockValidationError;
 
 use crate::common::{
-    ToolLock, ToolPython, check_tool_entrypoint_conflicts, check_tool_entrypoint_targets,
-    collect_tool_entrypoint_targets, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    tool_environment_spec,
+    ToolLock, ToolPython, check_tool_entrypoint_conflicts, finalize_tool_install,
+    refine_interpreter, remove_entrypoints, tool_environment_spec,
 };
 use crate::error::ToolLockError;
 use crate::requirements::resolve_names;
@@ -50,7 +50,7 @@ use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
     EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
-    sync_environment, sync_environment_with_build_environment, update_environment_with_preflight,
+    sync_environment, update_environment_with_preflight,
 };
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_resolve_operations as operations;
@@ -833,26 +833,23 @@ pub async fn install(
                 )?;
                 return Ok(ExitStatus::Success);
             }
-            let environment = if plan.is_empty() && !settings.compile_bytecode {
-                if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
+            if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
+                if plan.is_empty() {
                     check_tool_entrypoint_conflicts(
                         &environment,
                         package_name,
                         entrypoints,
                         existing_receipt,
                     )?;
-                }
-                environment
-            } else {
-                if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
+                } else {
                     let (_temp_dir, preflight) = create_preflight_environment(
                         package_name,
                         environment.interpreter().clone(),
                         &cache,
-                    )?;
-                    let preflight = sync_environment_with_build_environment(
-                        preflight,
                         Some(&environment),
+                    )?;
+                    let preflight = sync_environment(
+                        preflight,
                         &resolution,
                         hash_strategy.clone(),
                         Modifications::Exact,
@@ -875,7 +872,10 @@ pub async fn install(
                         existing_receipt,
                     )?;
                 }
-
+            }
+            let environment = if plan.is_empty() && !settings.compile_bytecode {
+                environment
+            } else {
                 sync_environment(
                     environment,
                     &resolution,
@@ -918,41 +918,20 @@ pub async fn install(
                 preview,
                 async |environment, resolution, hash_strategy| {
                     if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
-                        // Retained distributions already have the exact entrypoint metadata that
-                        // will be used by the update. Inspect them in their existing environment.
-                        let retained_entrypoints = entrypoints
-                            .iter()
-                            .chain(std::iter::once(package_name))
-                            .filter(|package| {
-                                resolution.distributions().any(|dist| {
-                                    dist.name() == *package
-                                        && match dist {
-                                            ResolvedDist::Installed { .. } => true,
-                                            ResolvedDist::Installable { .. } => false,
-                                        }
-                                })
-                            })
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        let mut targets =
-                            collect_tool_entrypoint_targets(environment, &retained_entrypoints)?;
-
-                        // Install only changed distributions into the temporary environment.
-                        // Installed distributions reference files in the original environment.
-                        let pending = resolution.clone().filter(|dist| match dist {
+                        let changes_packages = resolution.distributions().any(|dist| match dist {
                             ResolvedDist::Installed { .. } => false,
                             ResolvedDist::Installable { .. } => true,
                         });
-                        if !pending.is_empty() {
+                        if changes_packages {
                             let (_temp_dir, preflight) = create_preflight_environment(
                                 package_name,
                                 environment.interpreter().clone(),
                                 &cache,
-                            )?;
-                            let preflight = sync_environment_with_build_environment(
-                                preflight,
                                 Some(environment),
-                                &pending,
+                            )?;
+                            let preflight = sync_environment(
+                                preflight,
+                                resolution,
                                 hash_strategy.clone(),
                                 Modifications::Exact,
                                 Constraints::from_specifications(
@@ -969,12 +948,20 @@ pub async fn install(
                                 preview,
                             )
                             .await?;
-                            targets.extend(collect_tool_entrypoint_targets(
+                            check_tool_entrypoint_conflicts(
                                 &preflight,
-                                entrypoints.iter().chain(std::iter::once(package_name)),
-                            )?);
+                                package_name,
+                                entrypoints,
+                                existing_receipt,
+                            )?;
+                        } else {
+                            check_tool_entrypoint_conflicts(
+                                environment,
+                                package_name,
+                                entrypoints,
+                                existing_receipt,
+                            )?;
                         }
-                        check_tool_entrypoint_targets(targets, existing_receipt)?;
                     }
                     Ok(())
                 },
@@ -1132,7 +1119,7 @@ pub async fn install(
         };
         if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
             let (_temp_dir, preflight) =
-                create_preflight_environment(package_name, interpreter.clone(), &cache)?;
+                create_preflight_environment(package_name, interpreter.clone(), &cache, None)?;
             let preflight = sync_environment(
                 preflight,
                 &resolution,
@@ -1224,11 +1211,52 @@ fn create_preflight_environment(
     name: &PackageName,
     interpreter: Interpreter,
     cache: &Cache,
+    existing: Option<&PythonEnvironment>,
 ) -> Result<(impl AsRef<Path>, PythonEnvironment)> {
     let temp_dir = cache.venv_dir()?;
     let tools = InstalledTools::from_path(temp_dir.path());
     let environment = tools.create_environment(name, interpreter, cache)?;
+    if let Some(existing) = existing {
+        copy_preflight_contents(
+            existing.root(),
+            environment.root(),
+            Path::new(""),
+            &mut HashSet::new(),
+        )?;
+    }
     Ok((temp_dir, environment))
+}
+
+/// Seed a private environment without sharing mutable installed files.
+fn copy_preflight_contents(
+    source_root: &Path,
+    target_root: &Path,
+    relative: &Path,
+    ancestors: &mut HashSet<std::path::PathBuf>,
+) -> std::io::Result<()> {
+    let source = source_root.join(relative);
+    let canonical = fs_err::canonicalize(&source)?;
+    if !ancestors.insert(canonical.clone()) {
+        return Err(std::io::Error::other(format!(
+            "Directory symlink cycle while staging `{}`",
+            source.display(),
+        )));
+    }
+    fs_err::create_dir_all(target_root.join(relative))?;
+    for entry in fs_err::read_dir(source)? {
+        let entry = entry?;
+        let relative = relative.join(entry.file_name());
+        let target = target_root.join(&relative);
+        if entry.path().is_dir() {
+            copy_preflight_contents(source_root, target_root, &relative, ancestors)?;
+        } else if fs_err::symlink_metadata(&target).is_ok() {
+            // Keep the fresh interpreter, activation scripts and virtualenv configuration.
+        } else {
+            fs_err::copy(entry.path(), target)?;
+        }
+    }
+    ancestors.remove(&canonical);
+    Ok(())
 }
 
 fn existing_environment_usable(
@@ -1277,4 +1305,52 @@ fn existing_environment_usable(
     }
 
     true
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    use anyhow::Result;
+    use uv_cache::Cache;
+
+    use super::copy_preflight_contents;
+
+    #[test]
+    fn preflight_copies_directory_symlinks_without_sharing_files() -> Result<()> {
+        let cache = Cache::temp()?;
+        let source = cache.root().join("source");
+        let target = cache.root().join("target");
+        let external = cache.root().join("external");
+        fs_err::create_dir_all(&source)?;
+        fs_err::create_dir_all(&external)?;
+        fs_err::write(external.join("module.py"), "original")?;
+        fs_err::os::unix::fs::symlink(&external, source.join("package"))?;
+        copy_preflight_contents(&source, &target, Path::new(""), &mut HashSet::new())?;
+        fs_err::write(target.join("package/module.py"), "changed")?;
+        assert_eq!(
+            fs_err::read_to_string(external.join("module.py"))?,
+            "original"
+        );
+        assert!(
+            !fs_err::symlink_metadata(target.join("package"))?
+                .file_type()
+                .is_symlink()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn preflight_rejects_directory_symlink_cycles() -> Result<()> {
+        let cache = Cache::temp()?;
+        let source = cache.root().join("source");
+        let target = cache.root().join("target");
+        fs_err::create_dir_all(&source)?;
+        fs_err::os::unix::fs::symlink(&source, source.join("cycle"))?;
+        let error = copy_preflight_contents(&source, &target, Path::new(""), &mut HashSet::new())
+            .expect_err("cycle is rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        Ok(())
+    }
 }

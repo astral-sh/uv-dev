@@ -582,7 +582,6 @@ fn tool_install_python_from_global_version_file() {
     ----- stderr -----
     Ignoring existing environment for `flask`: the requested Python interpreter does not match the environment interpreter
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + blinker==1.7.0
      + click==8.1.7
@@ -1830,7 +1829,6 @@ fn tool_install_editable() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 6 packages in [TIME]
-    Prepared 6 packages in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 6 packages in [TIME]
      - black==0.1.0 (from file://[WORKSPACE]/test/packages/black_editable)
@@ -3111,7 +3109,7 @@ fn tool_install_conflict_with_retained_root_executable() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    error: Packages `tool` and `dep` provide the same executable: tool
+    error: Packages `dep` and `tool` provide the same executable: tool
     ");
     assert_eq!(fs_err::read(directory.child("uv-receipt.toml"))?, receipt);
     Command::new(
@@ -3387,6 +3385,254 @@ fn tool_install_preflight_retains_shared_package_build_environment() -> Result<(
             "bin/python"
         });
     Command::new(python.path()).args(["-c", "import backend_helper; import importlib.metadata; assert importlib.metadata.version('tool') == '2.0.0'"]).assert().success();
+    Ok(())
+}
+
+/// Shared preflight builds see isolated dependency upgrades in the same private environment.
+#[test]
+fn tool_install_preflight_upgrades_shared_build_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "tool-shared-build-environment"
+        [root]
+        requires = ["tool", "backend-helper"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+        [packages.backend-helper.versions."1.0.0"]
+        sdist = false
+        [packages.backend-helper.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let bin = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .arg("tool")
+        .arg("--with")
+        .arg("backend-helper==1.0.0")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let project = context.temp_dir.child("tool");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "tool"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [build-system]
+        requires = ["backend-helper"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"tool".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["tool".to_owned()],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        import shutil
+        import zipfile
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            with zipfile.ZipFile(Path(__file__).parent / "{filename}") as wheel:
+                for name in wheel.namelist():
+                    if name.startswith("tool-2.0.0.dist-info/"):
+                        wheel.extract(name, metadata_directory)
+            return "tool-2.0.0.dist-info"
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            import backend_helper
+            assert backend_helper.__version__ == "2.0.0"
+            source = Path(__file__).parent / "{filename}"
+            shutil.copyfile(source, Path(wheel_directory) / source.name)
+            return source.name
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
+        .arg("--with").arg("backend-helper==2.0.0").arg("--no-build-isolation-package").arg("tool")
+        .arg("--default-index").arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+    Prepared 1 package without build isolation in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - backend-helper==1.0.0
+     + backend-helper==2.0.0
+     - tool==1.0.0
+     + tool==2.0.0 (from file://[TEMP_DIR]/tool)
+    Installed 1 executable: tool
+    ");
+    let python = context
+        .temp_dir
+        .child("tools/tool")
+        .child(if cfg!(windows) {
+            "Scripts/python.exe"
+        } else {
+            "bin/python"
+        });
+    Command::new(python.path()).args(["-c", "import backend_helper; assert backend_helper.__version__ == '2.0.0'; import importlib.metadata; assert importlib.metadata.version('tool') == '2.0.0'"]).assert().success();
+    Ok(())
+}
+
+/// Shared preflight builds see isolated dependency upgrades in the same private environment.
+#[test]
+fn tool_install_preflight_upgrades_shared_build_dependency_with_locks() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "tool-shared-build-environment"
+        [root]
+        requires = ["tool", "backend-helper"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+        [packages.backend-helper.versions."1.0.0"]
+        sdist = false
+        [packages.backend-helper.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let bin = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .args(["--preview-features", "tool-install-locks"])
+        .arg("tool")
+        .arg("--with")
+        .arg("backend-helper==1.0.0")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let project = context.temp_dir.child("tool");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "tool"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [build-system]
+        requires = ["backend-helper"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"tool".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["tool".to_owned()],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        import shutil
+        import zipfile
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            with zipfile.ZipFile(Path(__file__).parent / "{filename}") as wheel:
+                for name in wheel.namelist():
+                    if name.startswith("tool-2.0.0.dist-info/"):
+                        wheel.extract(name, metadata_directory)
+            return "tool-2.0.0.dist-info"
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            import backend_helper
+            assert backend_helper.__version__ == "2.0.0"
+            source = Path(__file__).parent / "{filename}"
+            shutil.copyfile(source, Path(wheel_directory) / source.name)
+            return source.name
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_install().args(["--preview-features", "tool-install-locks"]).arg(project.path())
+        .arg("--with").arg("backend-helper==2.0.0").arg("--no-build-isolation-package").arg("tool")
+        .arg("--default-index").arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+    Prepared 1 package without build isolation in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - backend-helper==1.0.0
+     + backend-helper==2.0.0
+     - tool==1.0.0
+     + tool==2.0.0 (from file://[TEMP_DIR]/tool)
+    Installed 1 executable: tool
+    ");
+    let python = context
+        .temp_dir
+        .child("tools/tool")
+        .child(if cfg!(windows) {
+            "Scripts/python.exe"
+        } else {
+            "bin/python"
+        });
+    Command::new(python.path()).args(["-c", "import backend_helper; assert backend_helper.__version__ == '2.0.0'; import importlib.metadata; assert importlib.metadata.version('tool') == '2.0.0'"]).assert().success();
+    Ok(())
+}
+
+/// Bytecode-only locked updates use the installed files after the wheel cache is removed.
+#[test]
+fn tool_install_lock_compiles_bytecode_offline_without_cached_wheels() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_filtered_compiled_file_count()
+        .with_tool_dirs();
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "tool-bytecode-only"
+        [root]
+        requires = ["tool"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let bin = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .args(["--preview-features", "tool-install-locks"])
+        .arg("tool")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    context.clean().assert().success();
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["--preview-features", "tool-install-locks"])
+        .arg("tool").arg("--compile-bytecode").arg("--offline")
+        .arg("--default-index").arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Bytecode compiled [COUNT] files in [TIME]
+    Installed 1 executable: tool
+    ");
     Ok(())
 }
 
@@ -4105,7 +4351,6 @@ fn tool_install_git_lfs() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
      - test-lfs-repo==0.1.0 (from git+https://github.com/astral-sh/test-lfs-repo@e282f5be233e3f1d44934164895a043fc534b8aa#lfs=true)
@@ -4427,7 +4672,6 @@ fn tool_install_with_dependencies_from_script() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + iniconfig==2.0.0
     Installed 2 executables: black, blackd
@@ -4523,7 +4767,6 @@ fn tool_install_requirements_txt() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Uninstalled [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + idna==3.6
@@ -4750,7 +4993,6 @@ fn tool_install_upgrade() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
     Installed 2 executables: black, blackd
@@ -4862,7 +5104,6 @@ fn tool_install_python_requests() {
     ----- stderr -----
     Ignoring existing environment for `black`: the requested Python interpreter does not match the environment interpreter
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Installed [N] packages in [TIME]
      + black==24.3.0
      + click==8.1.7
@@ -5714,7 +5955,6 @@ fn tool_install_constraints() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Uninstalled [N] packages in [TIME]
     Installed [N] packages in [TIME]
      - platformdirs==4.2.0
@@ -6345,7 +6585,6 @@ fn tool_install_python_platform() {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
     Uninstalled [N] packages in [TIME]
     Installed [N] packages in [TIME]
      ~ black==24.3.0
@@ -6677,7 +6916,6 @@ fn tool_install_lock_refreshes_local_directory_constraint() -> Result<()> {
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared [N] packages in [TIME]
     Uninstalled [N] packages in [TIME]
     Installed [N] packages in [TIME]
      - simple-launcher==1.0.0 (from file://[TEMP_DIR]/simple-launcher)
@@ -6750,7 +6988,6 @@ fn tool_install_lock_revalidates_changed_constraints() -> Result<()> {
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared [N] packages in [TIME]
     Uninstalled [N] packages in [TIME]
     Installed [N] packages in [TIME]
      - platformdirs==4.2.0
