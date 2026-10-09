@@ -5486,6 +5486,34 @@ fn target_system() -> Result<()> {
     Ok(())
 }
 
+/// Initialize the prefix even when no packages need to be installed.
+#[test]
+fn sync_empty_requirements_creates_prefix() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("requirements.txt").write_str("")?;
+    let prefix = context.temp_dir.child("prefix");
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--offline")
+        .arg("requirements.txt")
+        .arg("--allow-empty-requirements")
+        .arg("--prefix")
+        .arg(prefix.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Requirements file `requirements.txt` does not contain any dependencies
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Resolved in [TIME]
+    Checked in [TIME]
+    ");
+
+    assert!(site_packages_path(prefix.path(), "python3.12").is_dir());
+    Ok(())
+}
+
 /// Sync to a `--prefix` directory.
 #[test]
 fn prefix() -> Result<()> {

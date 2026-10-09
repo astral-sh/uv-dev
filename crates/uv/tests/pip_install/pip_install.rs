@@ -510,6 +510,33 @@ fn compile_bytecode_for_relative_install_root() {
     assert_eq!(compiled, 5);
 }
 
+/// Initialize the target even when no packages need to be installed.
+#[test]
+fn install_empty_requirements_creates_target() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("requirements.txt").write_str("")?;
+    let target = context.temp_dir.child("target");
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--offline")
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--target")
+        .arg(target.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Requirements file `requirements.txt` does not contain any dependencies
+    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
+    Checked in [TIME]
+    ");
+
+    assert!(target.is_dir());
+    Ok(())
+}
+
 /// Install into the current directory via `--target`.
 #[test]
 fn install_target_current_directory() {

@@ -158,22 +158,34 @@ impl Interpreter {
         }
     }
 
-    /// Return a new [`Interpreter`] to install into the given `--target` directory.
-    pub(crate) fn with_target(self, target: Target) -> io::Result<Self> {
-        fs::create_dir_all(target.root())?;
-        Ok(Self {
+    /// Select the given `--target` directory without creating it.
+    pub(crate) fn with_target(self, target: Target) -> Self {
+        Self {
             target: Some(target),
             ..self
-        })
+        }
     }
 
-    /// Return a new [`Interpreter`] to install into the given `--prefix` directory.
-    pub(crate) fn with_prefix(self, prefix: Prefix) -> io::Result<Self> {
-        fs::create_dir_all(prefix.root().join(&self.virtualenv.purelib))?;
-        Ok(Self {
+    /// Select the given `--prefix` directory without creating it.
+    pub(crate) fn with_prefix(self, prefix: Prefix) -> Self {
+        Self {
             prefix: Some(prefix),
             ..self
-        })
+        }
+    }
+
+    /// Create the selected `--target` or `--prefix` installation directory.
+    ///
+    /// Package inspection can read missing directories as empty; commands that modify the
+    /// environment initialize them before making changes.
+    pub fn initialize_target_or_prefix(&self) -> io::Result<()> {
+        if let Some(target) = &self.target {
+            fs::create_dir_all(target.root())?;
+        }
+        if let Some(prefix) = &self.prefix {
+            fs::create_dir_all(prefix.root().join(&self.virtualenv.purelib))?;
+        }
+        Ok(())
     }
 
     /// Return the base Python executable; that is, the Python executable that should be

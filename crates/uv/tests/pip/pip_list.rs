@@ -722,6 +722,22 @@ fn list_ignores_quiet_flag_format_freeze() {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
+fn list_missing_target_does_not_create_directory() {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("missing").child("target");
+
+    uv_snapshot!(context.filters(), context.pip_list()
+        .arg("--offline")
+        .arg("--target")
+        .arg(target.path()), @"
+    exit_code: 0 (success)
+    ");
+
+    assert!(!context.temp_dir.child("missing").exists());
+}
+
+#[test]
 #[cfg(feature = "test-pypi")]
 fn list_target() -> Result<()> {
     let context = uv_test::test_context!("3.12");
