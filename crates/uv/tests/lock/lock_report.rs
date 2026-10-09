@@ -984,3 +984,103 @@ fn lock_json_overlapping_environment() -> Result<()> {
     "#);
     Ok(())
 }
+
+#[test]
+fn lock_json_invalid_registry_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["validation==2.0.0"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links"])
+        .arg(context.workspace_root.join("test/links"))
+        .args(["--output-format", "json", "--preview-features", "json-output"]), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "path": "[TEMP_DIR]/uv.lock",
+      "status": "stale",
+      "dry_run": false,
+      "reason": {
+        "code": "missing_lockfile"
+      },
+      "error": {
+        "code": "metadata_unavailable",
+        "package": "validation",
+        "message": "Because validation==2.0.0 has invalid metadata and your project depends on validation==2.0.0, we can conclude that your project's requirements are unsatisfiable.",
+        "hints": [
+          "Metadata for `validation` (v2.0.0) could not be parsed:/n  Failed to parse version: Unexpected end of version specifier, expected operator. Did you mean `==12`?:/n  12/n  ^^/n"
+        ]
+      }
+    }
+
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because validation==2.0.0 has invalid metadata and your project depends on validation==2.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Metadata for `validation` (v2.0.0) could not be parsed:
+      Failed to parse version: Unexpected end of version specifier, expected operator. Did you mean `==12`?:
+      12
+      ^^
+    "#);
+    Ok(())
+}
+
+#[test]
+fn lock_json_invalid_registry_structure() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["validation==3.0.0"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index", "--find-links"])
+        .arg(context.workspace_root.join("test/links"))
+        .args(["--output-format", "json", "--preview-features", "json-output"]), @r#"
+    exit_code: 1 (failure)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "path": "[TEMP_DIR]/uv.lock",
+      "status": "stale",
+      "dry_run": false,
+      "reason": {
+        "code": "missing_lockfile"
+      },
+      "error": {
+        "code": "metadata_unavailable",
+        "package": "validation",
+        "message": "Because validation==3.0.0 has an invalid package format and your project depends on validation==3.0.0, we can conclude that your project's requirements are unsatisfiable.",
+        "hints": [
+          "The structure of `validation` (v3.0.0) was invalid:/n  Multiple .dist-info directories found: validation-2.0.0, validation-3.0.0"
+        ]
+      }
+    }
+
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because validation==3.0.0 has an invalid package format and your project depends on validation==3.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The structure of `validation` (v3.0.0) was invalid:
+      Multiple .dist-info directories found: validation-2.0.0, validation-3.0.0
+    "#);
+    Ok(())
+}

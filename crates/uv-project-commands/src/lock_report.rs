@@ -13,6 +13,7 @@ use uv_configuration::{DryRun, ExcludeNewerChange, ExcludeNewerPackageChange};
 use uv_distribution_types::{Name, RequirementSource};
 use uv_errors::Hinted;
 use uv_fs::PortablePathBuf;
+use uv_install_operations::report::SchemaReport;
 use uv_lock_operations::{
     LockError, LockMode, LockReporter, LockResult, LockValidationError, LockValidationReason,
     LockValidationReasonCode, LockValidationValues,
@@ -20,12 +21,6 @@ use uv_lock_operations::{
 use uv_normalize::PackageName;
 use uv_resolver::{NoSolutionError, PubGrubHint};
 use uv_settings::{FrozenSource, LockCheck};
-
-/// This schema is intentionally experimental, like the `uv sync` JSON report.
-#[derive(Debug, Serialize)]
-struct Schema {
-    version: &'static str,
-}
 
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -51,7 +46,7 @@ enum Action {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct LockReport {
-    schema: Schema,
+    schema: SchemaReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<PortablePathBuf>,
     status: Status,
@@ -85,7 +80,7 @@ impl LockReport {
             }
         };
         Self {
-            schema: Schema { version: "preview" },
+            schema: SchemaReport::default(),
             path: None,
             status: Status::Indeterminate,
             action,
@@ -492,6 +487,15 @@ impl ErrorReport {
 
     fn resolver_hints(&mut self, error: &NoSolutionError) {
         for hint in error.resolution_hints() {
+            if let PubGrubHint::InvalidPackageMetadata { package, .. }
+            | PubGrubHint::InvalidPackageStructure { package, .. }
+            | PubGrubHint::InvalidVersionMetadata { package, .. }
+            | PubGrubHint::InconsistentVersionMetadata { package, .. }
+            | PubGrubHint::InvalidVersionStructure { package, .. } = &hint
+            {
+                self.code = ErrorCode::MetadataUnavailable;
+                self.package = Some(package.clone());
+            }
             if let PubGrubHint::Offline = hint {
                 self.code = ErrorCode::OfflineCacheMiss;
             }
