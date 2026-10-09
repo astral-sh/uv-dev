@@ -38543,6 +38543,67 @@ fn lock_script_initialize_utf8_bom() -> Result<()> {
     Ok(())
 }
 
+/// Lock initialization must retain the source encoding even when its bytes are also valid UTF-8.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_script_initialize_encoding_declaration() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str("# coding: latin-1\nprint('é')\n")?;
+    uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    uv_snapshot!(context.python_command().arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Ã©
+    ");
+    insta::assert_snapshot!(context.read("script.py"), @r#"
+    # coding: latin-1
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = []
+    # ///
+    print('é')
+    "#);
+    Ok(())
+}
+
+/// A shebang and second-line encoding cookie retain their physical-line positions.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_script_initialize_shebang_encoding_declaration() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str("#!/usr/bin/env python\r\n# coding: latin-1\r\nprint('é')\r\n")?;
+    uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    uv_snapshot!(context.python_command().arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Ã©
+    ");
+    insta::assert_snapshot!(context.read("script.py"), @r#"
+    #!/usr/bin/env python
+    # coding: latin-1
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = []
+    # ///
+    print('é')
+    "#);
+    Ok(())
+}
+
 /// Existing metadata immediately after a BOM must be reused without adding a second block.
 #[cfg(feature = "test-universal")]
 #[test]

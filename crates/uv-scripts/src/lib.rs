@@ -242,8 +242,8 @@ impl Pep723Script {
         // A UTF-8 BOM is only valid at the start of a Python script, before generated metadata.
         let contents = contents.strip_prefix(b"\xef\xbb\xbf").unwrap_or(contents);
 
-        // Extract the shebang and script content.
-        let (shebang, postlude) = extract_shebang(contents)?;
+        // Keep Python's shebang and encoding declaration before generated metadata.
+        let (prelude, postlude) = extract_prelude(contents)?;
 
         // Add a newline to the beginning if it starts with a valid metadata comment line.
         let postlude = if postlude.strip_prefix('#').is_some_and(|postlude| {
@@ -257,15 +257,7 @@ impl Pep723Script {
             postlude
         };
 
-        Ok((
-            if shebang.is_empty() {
-                String::new()
-            } else {
-                format!("{shebang}\n")
-            },
-            metadata,
-            postlude,
-        ))
+        Ok((prelude, metadata, postlude))
     }
 
     /// Create a PEP 723 script at the given path.
@@ -680,35 +672,53 @@ impl ScriptTag {
 /// content.
 fn extract_shebang(contents: &[u8]) -> Result<(String, String), Pep723Error> {
     let contents = std::str::from_utf8(contents)?;
-
     if contents.starts_with("#!") {
-        // Find the first newline.
-        let bytes = contents.as_bytes();
-        let index = bytes
-            .iter()
-            .position(|&b| b == b'\r' || b == b'\n')
-            .unwrap_or(bytes.len());
-
-        // Support `\r`, `\n`, and `\r\n` line endings.
-        let width = match bytes.get(index) {
-            Some(b'\r') => {
-                if bytes.get(index + 1) == Some(&b'\n') {
-                    2
-                } else {
-                    1
-                }
-            }
-            Some(b'\n') => 1,
-            _ => 0,
-        };
-
-        // Extract the shebang line.
-        let shebang = contents[..index].to_string();
-        let script = contents[index + width..].to_string();
-
-        Ok((shebang, script))
+        let (shebang, script) = split_python_line(contents);
+        Ok((shebang.to_string(), script.to_string()))
     } else {
         Ok((String::new(), contents.to_string()))
+    }
+}
+
+/// Split a Python source line, accepting LF, CRLF, and CR terminators.
+fn split_python_line(contents: &str) -> (&str, &str) {
+    let index = contents.find(['\r', '\n']).unwrap_or(contents.len());
+    let (line, remainder) = contents.split_at(index);
+    let remainder = remainder
+        .strip_prefix("\r\n")
+        .or_else(|| remainder.strip_prefix('\r'))
+        .or_else(|| remainder.strip_prefix('\n'))
+        .unwrap_or(remainder);
+    (line, remainder)
+}
+
+/// Keep an encoding declaration in one of Python's first two physical lines.
+fn extract_prelude(contents: &[u8]) -> Result<(String, String), Pep723Error> {
+    let contents = std::str::from_utf8(contents)?;
+    let encoding = regex::regex!(r"^[ \t\x0c]*#.*?coding[:=][ \t]*[-_.a-zA-Z0-9]+");
+    let (first, remainder) = split_python_line(contents);
+    let postlude = if encoding.is_match(first) {
+        Some(remainder)
+    } else if regex::regex!(r"^[ \t\x0c]*(?:#|$)").is_match(first) {
+        let (second, remainder) = split_python_line(remainder);
+        encoding.is_match(second).then_some(remainder)
+    } else {
+        None
+    };
+    if let Some(postlude) = postlude {
+        let mut prelude = contents[..contents.len() - postlude.len()].to_string();
+        if !prelude.ends_with(['\r', '\n']) {
+            prelude.push('\n');
+        }
+        Ok((prelude, postlude.to_string()))
+    } else {
+        let (shebang, postlude) = extract_shebang(contents.as_bytes())?;
+        let prelude = if shebang.is_empty() {
+            String::new()
+        } else {
+            format!("{shebang}\n")
+        };
+        Ok((prelude, postlude))
     }
 }
 
