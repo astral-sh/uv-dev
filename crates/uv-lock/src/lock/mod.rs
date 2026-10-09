@@ -50,7 +50,8 @@ use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{
-    MarkerEnvironment, MarkerTree, Scheme, VerbatimUrl, VerbatimUrlError, split_scheme,
+    MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueVersion, Scheme, VerbatimUrl,
+    VerbatimUrlError, split_scheme,
 };
 use uv_platform_tags::{
     AbiTag, IncompatibleTag, LanguageTag, PlatformTag, TagCompatibility, TagPriority, Tags,
@@ -3918,52 +3919,82 @@ impl Lock {
         SatisfiesResult::Satisfied
     }
 
-    /// Recover the marker environments in which a locked package is reachable.
-    fn package_reachability_marker(&self, target: &Package) -> MarkerTree {
-        let mut package_markers = FxHashMap::default();
+    /// Recover package reachability while retaining the activation markers of requested extras.
+    fn package_reachability_marker(
+        &self,
+        target: &Package,
+        root: &Path,
+    ) -> Result<MarkerTree, LockError> {
+        let mut package_markers = PackageMarkers::default();
         let mut pending = VecDeque::new();
+        let root_marker = self.fork_markers_union();
 
-        for name in self.members() {
-            let Some(package) = self.find_by_name(name).ok().flatten() else {
-                continue;
-            };
-            package_markers.insert(&package.id, MarkerTree::TRUE);
-            pending.push_back(package);
+        for package in self.workspace_packages() {
+            pending.push_back((package, None, root_marker));
+            for extra in package.optional_dependencies.keys() {
+                pending.push_back((package, Some(extra), root_marker));
+            }
         }
-        if let Some(package) = self.root()
-            && package_markers
-                .insert(&package.id, MarkerTree::TRUE)
-                .is_none()
+
+        // Scripts and projectless roots keep their direct requirements in the manifest.
+        for requirement in self
+            .manifest
+            .requirements
+            .iter()
+            .chain(self.manifest.dependency_groups.values().flatten())
         {
-            pending.push_back(package);
-        }
-
-        while let Some(package) = pending.pop_front() {
-            let package_marker = package_markers
-                .get(&package.id)
-                .copied()
-                .unwrap_or(MarkerTree::FALSE);
-            for dependency in package.all_dependencies() {
-                let marker = package_marker.and(dependency.complexified_marker.pep508());
-                if marker.is_false() {
+            let requirement = requirement.clone().into_absolute(root);
+            for package in self.packages_for_name(&requirement.name) {
+                if !Self::package_satisfies_requirement(package, &requirement, root)? {
                     continue;
                 }
-
-                let dependency_marker = package_markers
-                    .entry(&dependency.package_id)
-                    .or_insert(MarkerTree::FALSE);
-                let expanded_marker = dependency_marker.or(marker);
-                if expanded_marker != *dependency_marker {
-                    *dependency_marker = expanded_marker;
-                    pending.push_back(self.package(dependency.index));
+                let Some(marker) = self.root_requirement_marker(&requirement, package) else {
+                    continue;
+                };
+                let marker = root_marker.and(marker);
+                pending.push_back((package, None, marker));
+                for extra in &requirement.extras {
+                    if let Some((extra, _)) = package.optional_dependencies.get_key_value(extra) {
+                        pending.push_back((package, Some(extra), marker));
+                    }
                 }
             }
         }
 
-        package_markers
-            .get(&target.id)
-            .copied()
-            .unwrap_or(MarkerTree::FALSE)
+        while let Some((package, extra, marker)) = pending.pop_front() {
+            let Some(marker) = package_markers.merge(&package.id, extra, marker) else {
+                continue;
+            };
+            if extra.is_some() {
+                pending.push_back((package, None, marker));
+            }
+            let context = extra
+                .map(DependencyContext::Extra)
+                .unwrap_or(DependencyContext::Production);
+            for context in iter::once(context).chain(
+                package
+                    .dependency_groups
+                    .keys()
+                    .filter(|_| extra.is_none())
+                    .map(DependencyContext::Group),
+            ) {
+                for dependency in context.dependencies(package) {
+                    let marker = marker.and(dependency.complexified_marker.pep508());
+                    if marker.is_false() {
+                        continue;
+                    }
+                    let child = self.package(dependency.index);
+                    pending.push_back((child, None, marker));
+                    for extra in &dependency.extra {
+                        if let Some((extra, _)) = child.optional_dependencies.get_key_value(extra) {
+                            pending.push_back((child, Some(extra), marker));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(package_markers.get(&target.id).unwrap_or(MarkerTree::FALSE))
     }
 
     /// Return a [`SatisfiesResult`] if the given requirements do not match the [`Package`] metadata.
@@ -3984,14 +4015,25 @@ impl Lock {
         allow_missing_package_metadata: bool,
     ) -> Result<SatisfiesResult<'lock>, LockError> {
         if let Some(requires_python) = package_requires_python {
-            let package_python_marker =
-                RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree();
+            // Dependency compatibility follows the resolver's lower-bound policy.
+            let requires_python_range = RequiresPython::from_specifiers(requires_python.clone());
+            let package_python_marker = requires_python_range
+                .range()
+                .lower()
+                .specifier()
+                .map(|specifier| {
+                    MarkerTree::expression(MarkerExpression::Version {
+                        key: MarkerValueVersion::PythonFullVersion,
+                        specifier,
+                    })
+                })
+                .unwrap_or(MarkerTree::TRUE);
             let unsupported_marker = self
                 .fork_markers_union()
                 .and(package_python_marker.negate());
             if !unsupported_marker.is_false()
                 && !self
-                    .package_reachability_marker(package)
+                    .package_reachability_marker(package, root)?
                     .and(unsupported_marker)
                     .is_false()
             {

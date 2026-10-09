@@ -43166,7 +43166,7 @@ fn lock_path_dependency_marker_gated_requires_python() -> Result<()> {
     ");
 
     // Validating the existing lock must preserve the dependency's Python activation marker.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -48775,5 +48775,206 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
+    Ok(())
+}
+
+/// Dependency upper bounds do not force re-resolution when the resolver accepts the lower bound.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_upper_bound_reuses_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "local-python-upper-bound"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["local"]
+        [tool.uv.sources]
+        local = { path = "local" }
+    "#})?;
+    context
+        .temp_dir
+        .child("local/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.12,<4"
+        dependencies = ["example==1.0.0"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Optional dependencies inherit the Python marker that activates their requested extra.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_extra_activation_reuses_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "local-python-extra-activation"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["middle", "middle[new]; python_version >= '3.13'"]
+        [tool.uv.sources]
+        middle = { path = "middle" }
+    "#})?;
+    context
+        .temp_dir
+        .child("middle/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "middle"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        new = ["leaf"]
+        [tool.uv.sources]
+        leaf = { path = "../leaf" }
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["example==1.0.0"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Script manifest requirements seed local-package compatibility checks.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_script_dependency_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["local"]
+        # [tool.uv.sources]
+        # local = { path = "local" }
+        # ///
+    "#})?;
+    let local = context.temp_dir.child("local/pyproject.toml");
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .lock()
+        .args(["--script", "script.py", "--offline"])
+        .assert()
+        .success();
+    local.write_str(&fs_err::read_to_string(local.path())?.replace(">=3.12", ">=3.13"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--script", "script.py", "--locked", "--offline"]), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==0.1.0 depends on Python>=3.13, we can conclude that local==0.1.0 cannot be used.
+             And because only local==0.1.0 is available and you require local, we can conclude that your requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==0.1.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    ");
+    Ok(())
+}
+
+/// Projectless workspace groups seed local-package compatibility checks.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_projectless_group_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["local"]
+        [tool.uv.workspace]
+        members = []
+        [tool.uv.sources]
+        local = { path = "local" }
+    "#})?;
+    let local = context.temp_dir.child("local/pyproject.toml");
+    local.write_str(indoc! {r#"
+        [project]
+        name = "local"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    local.write_str(&fs_err::read_to_string(local.path())?.replace(">=3.12", ">=3.13"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--locked", "--offline"]), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13 and local==0.1.0 depends on Python>=3.13, we can conclude that local==0.1.0 cannot be used.
+             And because only local==0.1.0 is available and you require local, we can conclude that your requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., local==0.1.0 only supports >=3.13). Consider using a more restrictive `requires-python` value (like >=3.13).
+    ");
     Ok(())
 }
