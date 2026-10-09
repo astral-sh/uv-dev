@@ -837,6 +837,10 @@ impl CandidateSelector {
             // return the first _compatible_ candidate across all indexes, if such a candidate
             // exists.
             if matches!(candidate.dist(), CandidateDist::Incompatible { .. }) {
+                // Soft ranking must leave hard incompatibilities to the unfiltered pass.
+                if required_environments.is_some() {
+                    continue;
+                }
                 if incompatible.is_none() {
                     incompatible = Some(candidate);
                 }
