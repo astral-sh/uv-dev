@@ -7,6 +7,7 @@ import os
 import platform
 import plistlib
 import secrets
+import shlex
 import shutil
 import struct
 import subprocess
@@ -48,6 +49,7 @@ class Experiment:
         self.work = work
         self.reports = reports
         self.keychain = work / "identity.keychain-db"
+        self.original_keychains = None
         self.identity = ""
         self.report = {
             "design": design,
@@ -186,6 +188,25 @@ class Experiment:
         self.identity = hashlib.sha1(certificate_der.read_bytes()).hexdigest()
         self.certificate_sha256 = sha256(certificate_der)
         self.report["certificate_sha256"] = self.certificate_sha256
+        # codesign's private-key lookup uses the user search list even when its
+        # certificate lookup is restricted with --keychain.
+        self.original_keychains = shlex.split(
+            self.run(["security", "list-keychains", "-d", "user"]).stdout
+        )
+        self.run(
+            [
+                "security",
+                "list-keychains",
+                "-d",
+                "user",
+                "-s",
+                self.keychain,
+                *self.original_keychains,
+            ]
+        )
+        self.run(
+            ["security", "find-identity", "-v", "-p", "codesigning", self.keychain]
+        )
 
     def download(self):
         architecture, expected = INPUTS[platform.machine()]
@@ -400,7 +421,7 @@ class Experiment:
                 metadata.as_uri(),
             ]
         )
-        [runtime] = list(installation.glob("cpython-*"))
+        [runtime] = list(installation.glob(f"cpython-{VERSION}-*"))
         actual = self.manifest(runtime)
         changed = [name for name in expected if expected[name] != actual.get(name)]
         self.report["observations"]["uv_install_changed_native_files"] = changed
@@ -512,6 +533,18 @@ def main():
             experiment.report["error"] = traceback.format_exc()
             raise
         finally:
+            if experiment.original_keychains is not None:
+                subprocess.run(
+                    [
+                        "security",
+                        "list-keychains",
+                        "-d",
+                        "user",
+                        "-s",
+                        *experiment.original_keychains,
+                    ],
+                    check=False,
+                )
             if experiment.keychain.exists():
                 subprocess.run(
                     ["security", "delete-keychain", str(experiment.keychain)],
