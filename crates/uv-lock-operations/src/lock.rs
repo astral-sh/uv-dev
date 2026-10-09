@@ -73,6 +73,8 @@ pub enum LockMode<'env> {
     Write(&'env Interpreter),
     /// Perform a resolution, but don't write the lockfile to disk.
     DryRun(&'env Interpreter),
+    /// Resolve without reading or writing a lockfile.
+    Ephemeral(&'env Interpreter),
     /// Error if the lockfile is not up-to-date with the project requirements.
     Locked(&'env Interpreter, LockedSource),
     /// Use the existing lockfile without performing a resolution.
@@ -86,7 +88,6 @@ pub struct LockOperation<'env> {
     first_party_exclusions: BTreeSet<PackageName>,
     refresh: Option<&'env Refresh>,
     check_lockfile_contents: bool,
-    use_existing_lockfile: bool,
     settings: &'env ResolverSettings,
     client_builder: &'env BaseClientBuilder<'env>,
     state: &'env UniversalState,
@@ -118,7 +119,6 @@ impl<'env> LockOperation<'env> {
             first_party_exclusions: BTreeSet::new(),
             refresh: None,
             check_lockfile_contents: false,
-            use_existing_lockfile: true,
             settings,
             client_builder,
             state,
@@ -149,13 +149,6 @@ impl<'env> LockOperation<'env> {
     #[must_use]
     pub fn with_refresh(mut self, refresh: &'env Refresh) -> Self {
         self.refresh = Some(refresh);
-        self
-    }
-
-    /// Control whether existing lockfile contents are used during resolution.
-    #[must_use]
-    pub fn with_existing_lockfile(mut self, enabled: bool) -> Self {
-        self.use_existing_lockfile = enabled;
         self
     }
 
@@ -232,9 +225,13 @@ impl<'env> LockOperation<'env> {
 
                 Ok(result)
             }
-            LockMode::Write(interpreter) | LockMode::DryRun(interpreter) => {
+            LockMode::Write(interpreter)
+            | LockMode::DryRun(interpreter)
+            | LockMode::Ephemeral(interpreter) => {
                 // Read the existing lockfile.
-                let (existing, existing_contents) = if self.use_existing_lockfile {
+                let (existing, existing_contents) = if let LockMode::Ephemeral(_) = self.mode {
+                    (None, None)
+                } else {
                     match target.read_with_contents().await {
                         Ok(Some((existing, existing_contents))) => {
                             (Some(existing), Some(existing_contents))
@@ -248,8 +245,6 @@ impl<'env> LockOperation<'env> {
                         }
                         Err(err) => return Err(err),
                     }
-                } else {
-                    (None, None)
                 };
 
                 let check_lockfile_contents = if self.check_lockfile_contents {
@@ -281,10 +276,10 @@ impl<'env> LockOperation<'env> {
                 .await?;
 
                 // If the lockfile changed, write it to disk.
-                if !matches!(self.mode, LockMode::DryRun(_)) {
-                    if let LockResult::Changed(_, lock) = &result {
-                        target.commit(lock).await?;
-                    }
+                if let LockMode::Write(_) = self.mode
+                    && let LockResult::Changed(_, lock) = &result
+                {
+                    target.commit(lock).await?;
                 }
 
                 Ok(result)
@@ -689,7 +684,9 @@ async fn do_lock(
     // explicit unlocked upgrade releases the selected packages' hashes.
     let hash_upgrade = match mode {
         LockMode::Locked(..) => &Upgrade::default(),
-        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Frozen(_) => upgrade,
+        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Ephemeral(_) | LockMode::Frozen(_) => {
+            upgrade
+        }
     };
     let resolution_hasher = if hash_upgrade.is_none() {
         locked_hasher.clone()
@@ -712,7 +709,9 @@ async fn do_lock(
     // Explicit build constraints apply even when fresh resolution can replace lockfile hashes.
     let resolution_build_hasher = match mode {
         LockMode::Locked(..) => locked_hasher.with_constraint_hashes(&build_hasher)?,
-        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Frozen(_) => build_hasher,
+        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Ephemeral(_) | LockMode::Frozen(_) => {
+            build_hasher
+        }
     };
 
     // TODO(charlie): These are all default values. We should consider whether we want to make them

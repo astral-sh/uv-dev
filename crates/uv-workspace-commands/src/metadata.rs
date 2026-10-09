@@ -183,8 +183,9 @@ pub async fn metadata(
 
                 if let LockCheck::Enabled(lock_check) = lock_check {
                     LockMode::Locked(&interpreter, lock_check)
-                } else if stdin
-                    || sync.is_none()
+                } else if stdin {
+                    LockMode::Ephemeral(&interpreter)
+                } else if sync.is_none()
                     || (matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file())
                 {
                     LockMode::DryRun(&interpreter)
@@ -207,7 +208,6 @@ pub async fn metadata(
                     preview,
                 )
                 .with_refresh(&refresh)
-                .with_existing_lockfile(!stdin)
                 .execute(target),
             )
             .await
