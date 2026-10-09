@@ -504,15 +504,15 @@ mod tests {
         let record_path = "my_package-1.2.3.dist-info/RECORD";
         let record = &wheel_files[record_path];
         assert_eq!(record.lines().count(), wheel_files.len());
-        for (path, contents) in &wheel_files {
-            let expected = if path == record_path {
-                format!("{path},,")
-            } else {
-                let hash = base64.encode(Sha256::digest(contents.as_bytes()));
-                format!("{path},sha256={hash},{}", contents.len())
-            };
-            assert!(record.lines().any(|line| line == expected), "{path}");
-        }
+        insta::assert_snapshot!(record, @"
+        my_package/__init__.py,sha256=E44EfoNEJVgS_HVAsgNak4PUm0EnxS5Gn23Psivt3xA,95
+        my_package-1.2.3.dist-info/METADATA,sha256=9XdufOc_mUApNOOke1zP114TooYlmh_JbUPWvIxbVVY,54
+        my_package-1.2.3.dist-info/WHEEL,sha256=ujr00BDMtYYidJ71ulklWmNFpiGqy5NyjK1fX-JwFO4,78
+        my_package/commands/__init__.py,sha256=C-D_WWrVkBDmQmApLcm0sWNh2CgIrwWfc8_sB5vvU-Q,22
+        my_package/commands/cli/__init__.py,sha256=WjcWAel2D_BC9c32M8BKlvl1WFAvOXorIUPMs2Aqizw,96
+        my_package-1.2.3.dist-info/entry_points.txt,sha256=oNS6X4b0V73FXIK3xiOr7Mkviu88GGmHfdFrU8WXSUA,116
+        my_package-1.2.3.dist-info/RECORD,,
+        ");
 
         let (_, sdist) =
             generate_sdist_with_scripts(&name, &version, &[], &BTreeMap::new(), None, &scripts);
