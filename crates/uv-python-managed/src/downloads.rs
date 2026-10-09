@@ -534,9 +534,11 @@ impl ManagedPythonDownloadList {
                 Source::Path(Cow::Borrowed(Path::new(url_or_path)))
             }
         } else if uv_preview::is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata) {
-            Source::Preview(SafeUrl::parse(
-                "https://raw.githubusercontent.com/astral-sh/versions/refs/heads/main/v1/python-build-standalone.ndjson",
-            )?)
+            let custom_astral_mirror = astral_mirror_url_from_env();
+            let mirror_base = astral_mirror_base_url(custom_astral_mirror.as_deref());
+            Source::Preview(SafeUrl::parse(&format!(
+                "{mirror_base}/github/versions/main/v1/python-build-standalone.ndjson",
+            ))?)
         } else {
             Source::BuiltIn
         };
@@ -722,6 +724,7 @@ async fn fetch_ndjson_from_url(
         .get(url.clone())
         .build()
         .map_err(|err| Error::NetworkError(url.clone(), WrappedReqwestError::from(err)))?;
+    let source = url.to_string();
     let response_callback = async |response: Response, _: &mut RetryState| {
         let start = Instant::now();
         let mut stream = response.bytes_stream();
@@ -731,13 +734,13 @@ async fn fetch_ndjson_from_url(
             let chunk = chunk.map_err(|err| Error::from_reqwest(url.clone(), err, None, start))?;
             buffer.extend_from_slice(&chunk);
             while let Some(newline) = buffer.iter().position(|&byte| byte == b'\n') {
-                if let Some(version) = parse_ndjson_line(url.as_str(), &buffer[..newline])? {
+                if let Some(version) = parse_ndjson_line(&source, &buffer[..newline])? {
                     versions.push(version);
                 }
                 buffer.drain(..=newline);
             }
         }
-        if let Some(version) = parse_ndjson_line(url.as_str(), &buffer)? {
+        if let Some(version) = parse_ndjson_line(&source, &buffer)? {
             versions.push(version);
         }
         Ok::<_, Error>(versions)

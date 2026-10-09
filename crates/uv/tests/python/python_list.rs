@@ -1011,6 +1011,9 @@ async fn python_list_remote_ndjson_metadata() -> Result<()> {
         .arg("--python-downloads-json-url")
         .arg(format!("{}/python.ndjson?token=test", server.uri()))
         .arg("cpython-3.13")
+        .arg("--preview-features")
+        .arg("remote-python-download-metadata")
+        .env("UV_ASTRAL_MIRROR_URL", "http://127.0.0.1:1")
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -1030,6 +1033,88 @@ async fn python_list_remote_ndjson_metadata() -> Result<()> {
     ----- stdout -----
     cpython-3.13.9-[PLATFORM]    <download available>
     ");
+
+    Ok(())
+}
+
+/// Preview metadata uses the configured Astral mirror.
+#[tokio::test]
+async fn python_list_preview_metadata_mirror() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_keys();
+    let server = MockServer::start().await;
+    let platform = uv_platform::Platform::from_env()?.as_cargo_dist_triple();
+    let metadata = serde_json::json!({
+        "version": "3.13.9+20260101",
+        "artifacts": [{
+            "platform": platform,
+            "variant": "install_only",
+            "url": "https://example.com/cpython.tar.gz",
+            "sha256": null,
+        }],
+    });
+    Mock::given(method("GET"))
+        .and(path(
+            "/github/versions/main/v1/python-build-standalone.ndjson",
+        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(metadata.to_string(), "application/x-ndjson"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("cpython-3.13")
+        .arg("--preview-features")
+        .arg("remote-python-download-metadata")
+        .env("UV_ASTRAL_MIRROR_URL", format!("{}/", server.uri()))
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.13.9-[PLATFORM]    <download available>
+    "#);
+
+    Ok(())
+}
+
+/// Parse errors redact credentials and signed query values in both NDJSON paths.
+#[tokio::test]
+async fn python_list_ndjson_parse_error_redacts_url() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/line.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not-json\n"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/buffer.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not-json"))
+        .mount(&server)
+        .await;
+    let authority = server.uri().replace("http://", "http://user:secret@");
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("--python-downloads-json-url")
+        .arg(format!("{authority}/line.ndjson?X-Amz-Signature=secret"))
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Error while fetching remote python downloads NDJSON from 'http://user:****@[LOCALHOST]/line.ndjson?X-Amz-Signature=****'
+      cause: Unable to parse NDJSON line at http://user:****@[LOCALHOST]/line.ndjson?X-Amz-Signature=****
+      cause: expected ident at line 1 column 2
+    "#);
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("--python-downloads-json-url")
+        .arg(format!("{authority}/buffer.ndjson?X-Amz-Signature=secret"))
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Error while fetching remote python downloads NDJSON from 'http://user:****@[LOCALHOST]/buffer.ndjson?X-Amz-Signature=****'
+      cause: Unable to parse NDJSON line at http://user:****@[LOCALHOST]/buffer.ndjson?X-Amz-Signature=****
+      cause: expected ident at line 1 column 2
+    "#);
 
     Ok(())
 }
