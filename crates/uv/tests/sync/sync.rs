@@ -19899,7 +19899,7 @@ fn sync_boolean_environment_source_and_bytecode_policy() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Bytecode compiled 2 files in [TIME]
+    Bytecode compiled 1 file in [TIME]
     ");
     assert!(context.site_packages().join("ok/__pycache__").exists());
     Ok(())
