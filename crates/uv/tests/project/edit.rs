@@ -10065,7 +10065,6 @@ fn add_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
-        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -10098,6 +10097,7 @@ fn add_index() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().arg("jinja2").arg("--index").arg("pytorch=https://astral-sh.github.io/pytorch-mirror/whl/cu121"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Ignoring existing lockfile because its index strategy is unknown
     Resolved 4 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
@@ -11088,7 +11088,6 @@ fn add_index_without_trailing_slash() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
-        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]

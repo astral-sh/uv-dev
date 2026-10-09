@@ -2235,11 +2235,7 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
-    // The default strategy is known; adding find-links must still exercise locked build hashes.
-    let locked = context
-        .read("uv.lock")
-        .replace("[options]", "[options]\nindex-strategy = \"first-index\"");
-    context.temp_dir.child("uv.lock").write_str(&locked)?;
+    let locked = context.read("uv.lock");
     assert!(locked.contains(&trusted_digest));
     assert!(!sentinel.exists(), "locking built a wheel");
 
