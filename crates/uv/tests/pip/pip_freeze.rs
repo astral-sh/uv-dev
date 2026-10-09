@@ -1,14 +1,14 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
-use async_zip::base::write::ZipFileWriter;
-use async_zip::{Compression, ZipEntryBuilder};
 use fs_err as fs;
-use futures::executor::block_on;
 use insta::allow_duplicates;
 use url::Url;
 
+use uv_test::packse::generate_wheel;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -676,25 +676,16 @@ fn freeze_and_list_exclude_comma_separated() -> Result<()> {
     links.create_dir_all()?;
     let names = ["tiny-alpha", "tiny-beta", "tiny-gamma"];
     for name in names {
-        let normalized = name.replace('-', "_");
-        let dist_info = format!("{normalized}-1.0.0.dist-info");
-        let metadata = format!("Metadata-Version: 2.3\nName: {name}\nVersion: 1.0.0\n");
-        let wheel = "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n";
-        let mut archive = ZipFileWriter::new(Vec::new());
-        for (path, contents) in [
-            (format!("{dist_info}/METADATA"), metadata.as_bytes()),
-            (format!("{dist_info}/WHEEL"), wheel.as_bytes()),
-            (format!("{dist_info}/RECORD"), b""),
-        ] {
-            let entry = ZipEntryBuilder::new(path.into(), Compression::Stored);
-            block_on(archive.write_entry_whole(entry, contents))?;
-        }
-        fs::write(
-            links
-                .child(format!("{normalized}-1.0.0-py3-none-any.whl"))
-                .path(),
-            block_on(archive.close())?,
-        )?;
+        let (filename, wheel) = generate_wheel(
+            &name.parse()?,
+            &"1.0.0".parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        fs::write(links.child(filename).path(), wheel)?;
     }
     context
         .pip_install()
