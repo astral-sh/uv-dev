@@ -328,6 +328,12 @@ async fn do_lock(
 
     // Collect the requirements, etc.
     let members = target.members();
+    let workspace_member_names = match target {
+        LockTarget::Workspace(workspace) => workspace
+            .resolution_roots()
+            .map(|_| workspace.packages().keys().cloned().collect()),
+        LockTarget::Script(_) => None,
+    };
     let packages = target.packages();
     let required_members = target.required_members();
     let workspace_default_groups = match target {
@@ -779,6 +785,7 @@ async fn do_lock(
             target.install_path(),
             packages,
             &members,
+            workspace_member_names.as_ref(),
             required_members,
             &requirements,
             &dependency_groups,
@@ -989,6 +996,7 @@ async fn do_lock(
                 dependency_groups,
                 dependency_metadata.values().cloned(),
             )
+            .with_workspace_members(workspace_member_names)
             .relative_to(target.install_path())?;
 
             let previous = existing_lock.map(ValidatedLock::into_lock);

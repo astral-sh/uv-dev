@@ -863,7 +863,7 @@ impl<'lock> InstallTarget<'lock> {
                 }
 
                 while let Some((package_name, extra)) = queue.pop_front() {
-                    if lock.members().contains(package_name) {
+                    if lock.workspace_members().contains(package_name) {
                         required_members.insert(package_name);
                     }
 
@@ -900,7 +900,10 @@ impl<'lock> InstallTarget<'lock> {
             }
             Some(PackageSelection::Workspace | PackageSelection::NonProjectWorkspace) => {
                 // Return all workspace members
-                self.lock().members().iter().collect()
+                self.lock()
+                    .workspace_member_paths()
+                    .map(|(name, _)| name)
+                    .collect()
             }
             None => {
                 // Scripts don't have workspace members

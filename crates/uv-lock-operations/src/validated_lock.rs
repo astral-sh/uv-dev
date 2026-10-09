@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::Path;
 
@@ -44,6 +44,7 @@ impl ValidatedLock {
         install_path: &Path,
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         members: &[PackageName],
+        workspace_members: Option<&BTreeSet<PackageName>>,
         required_members: &BTreeMap<PackageName, Editability>,
         requirements: &[Requirement],
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
@@ -217,6 +218,13 @@ impl ValidatedLock {
             } else {
                 Ok(Self::Versions(lock))
             };
+        }
+
+        if let Some(members) = workspace_members
+            && lock.workspace_members() != members
+        {
+            debug!("Resolving despite existing lockfile due to change in workspace membership");
+            return Ok(Self::Versions(lock));
         }
 
         // If the pre-release mode has changed, we have to re-resolve, but can retain the existing

@@ -2731,8 +2731,8 @@ impl Lock {
             }
 
             // A single-project lockfile can omit its root from the manifest's member list.
-            let is_member = manifest.members.contains(&dist.id.name)
-                || (manifest.members.is_empty()
+            let is_member = manifest.workspace_members().contains(&dist.id.name)
+                || (manifest.workspace_members().is_empty()
                     && workspace_members.is_empty()
                     && dist.id.source.is_implicit_root());
             if is_member {
@@ -2901,7 +2901,7 @@ impl Lock {
                     .entry(extra.clone())
                     .or_default();
             }
-            if self.manifest.members.contains(&package.id.name)
+            if self.manifest.workspace_members().contains(&package.id.name)
                 || workspace_root.as_ref().is_some_and(|id| id == &package.id)
             {
                 for group in package.metadata.dependency_groups.keys() {
@@ -3155,9 +3155,14 @@ impl Lock {
         &self.required_environments
     }
 
-    /// Returns the workspace members that were used to generate this lock.
+    /// Returns the workspace members selected as resolution roots for this lock.
     pub fn members(&self) -> &BTreeSet<PackageName> {
         &self.manifest.members
+    }
+
+    /// Return all workspace members, including reachable members that are not resolution roots.
+    pub fn workspace_members(&self) -> &BTreeSet<PackageName> {
+        self.manifest.workspace_members()
     }
 
     /// Return the recorded default groups for workspace members, if supported by the lockfile.
@@ -3674,7 +3679,7 @@ impl Lock {
     pub fn root(&self) -> Option<&Package> {
         self.packages.iter().find(|package| {
             if let Source::Directory(path) = &package.id.source {
-                self.members().contains(package.name()) && path.as_ref() == Path::new("")
+                self.workspace_members().contains(package.name()) && path.as_ref() == Path::new("")
             } else {
                 package.id.source.is_implicit_root()
             }
@@ -3832,7 +3837,7 @@ impl Lock {
 
     /// Return whether a source tree belongs to the workspace or represents its root.
     fn is_workspace_package(&self, package: &Package) -> bool {
-        self.members().contains(&package.id.name) || package.id.source.is_implicit_root()
+        self.workspace_members().contains(&package.id.name) || package.id.source.is_implicit_root()
     }
 
     /// Returns the package with the given name. If there are multiple
@@ -6307,9 +6312,12 @@ impl From<ExcludeNewer> for ExcludeNewerWire {
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct ResolverManifest {
-    /// The workspace members included in the lockfile.
+    /// The workspace members selected as resolution roots.
     #[serde(default)]
     members: BTreeSet<PackageName>,
+    /// All workspace members when resolution roots are configured separately.
+    #[serde(default)]
+    workspace_members: Option<BTreeSet<PackageName>>,
     /// Default dependency groups for a workspace root without a `[project]` table.
     #[serde(default)]
     default_groups: Option<DefaultGroups>,
@@ -6396,6 +6404,17 @@ fn collect_member_group_metadata(
 }
 
 impl ResolverManifest {
+    fn workspace_members(&self) -> &BTreeSet<PackageName> {
+        self.workspace_members.as_ref().unwrap_or(&self.members)
+    }
+
+    /// Record full membership when it differs from the explicitly selected resolution roots.
+    #[must_use]
+    pub fn with_workspace_members(mut self, members: Option<BTreeSet<PackageName>>) -> Self {
+        self.workspace_members = members.filter(|members| *members != self.members);
+        self
+    }
+
     /// Initialize a [`ResolverManifest`] with the given members, requirements, constraints, and
     /// overrides.
     pub fn new(
@@ -6411,6 +6430,7 @@ impl ResolverManifest {
         let normalize = uv_preview::is_enabled(PreviewFeature::LockfileNormalization);
         Self {
             members: members.into_iter().collect(),
+            workspace_members: None,
             default_groups: None,
             group_requires_python: BTreeMap::new(),
             requirements: normalize_collection::<_, NormalizedRequirements>(
@@ -6442,6 +6462,7 @@ impl ResolverManifest {
     pub fn relative_to(self, root: &Path) -> Result<Self, io::Error> {
         Ok(Self {
             members: self.members,
+            workspace_members: self.workspace_members,
             default_groups: self.default_groups,
             group_requires_python: self.group_requires_python,
             requirements: self

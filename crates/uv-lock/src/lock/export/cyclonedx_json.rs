@@ -371,7 +371,11 @@ pub fn from_lock<'lock>(
     let workspace_member_ids = nodes
         .iter()
         .filter_map(|node| {
-            if target.lock().members().contains(&node.package.id.name) {
+            if target
+                .lock()
+                .workspace_members()
+                .contains(&node.package.id.name)
+            {
                 Some(&node.package.id)
             } else {
                 None
