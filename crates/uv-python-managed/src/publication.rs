@@ -49,6 +49,18 @@ struct MarkerReadError {
     source: io::Error,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "{publication}; could not restore the previous Python: {restoration}; predecessor retained at `{}`",
+    previous.user_display()
+)]
+struct PublicationRestoreError {
+    previous: PathBuf,
+    #[source]
+    publication: io::Error,
+    restoration: io::Error,
+}
+
 impl Recovery {
     fn new(destination: &Path, scratch: &Path) -> io::Result<Self> {
         let key = destination
@@ -290,26 +302,30 @@ fn publish_inner(
         match fs_err::symlink_metadata(destination) {
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             current => {
-                let context = match current {
-                    Ok(_) => "destination is occupied".to_string(),
-                    Err(err) => err.to_string(),
+                let restoration = match current {
+                    Ok(_) => {
+                        io::Error::new(io::ErrorKind::AlreadyExists, "destination is occupied")
+                    }
+                    Err(err) => err,
                 };
                 return Err(io::Error::new(
                     publication.kind(),
-                    format!(
-                        "{publication}; {context}; predecessor retained at `{}`",
-                        recovery.previous.user_display()
-                    ),
+                    PublicationRestoreError {
+                        previous: recovery.previous,
+                        publication,
+                        restoration,
+                    },
                 ));
             }
         }
         if let Err(restoration) = rename(&recovery.previous, destination) {
             return Err(io::Error::new(
                 publication.kind(),
-                format!(
-                    "{publication}; failed to restore the previous Python: {restoration}; predecessor retained at `{}`",
-                    recovery.previous.user_display()
-                ),
+                PublicationRestoreError {
+                    previous: recovery.previous,
+                    publication,
+                    restoration,
+                },
             ));
         }
         recovery.discard_failed_journal();
@@ -444,7 +460,9 @@ mod tests {
 
     use uv_fs::{LockedFile, LockedFileMode};
 
-    use super::{Journal, MARKER, Recovery, publish_inner, publish_with, rename};
+    use super::{
+        Journal, MARKER, PublicationRestoreError, Recovery, publish_inner, publish_with, rename,
+    };
 
     fn unavailable(_from: &Path, _to: &Path) -> io::Result<()> {
         Err(io::Error::from(io::ErrorKind::Unsupported))
@@ -588,16 +606,39 @@ mod tests {
             "transaction",
             unavailable,
             |from, to| {
-                if to == old {
-                    Err(io::Error::other("destination unavailable"))
+                if from == staged {
+                    Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "publication delayed",
+                    ))
+                } else if to == old {
+                    Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "restoration denied",
+                    ))
                 } else {
                     rename(from, to)
                 }
             },
         );
-        assert!(result.is_err());
+        let error = result.expect_err("publication and restoration both fail");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let detail = error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<PublicationRestoreError>())
+            .expect("retain structured restoration context");
+        assert_eq!(detail.publication.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(detail.restoration.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            std::error::Error::source(detail)
+                .and_then(|error| error.downcast_ref::<io::Error>())
+                .expect("retain the publication source")
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
         assert!(!old.exists());
         let recovery = Recovery::new(&old, root.path())?;
+        assert_eq!(detail.previous, recovery.previous);
         assert_eq!(
             fs_err::read_to_string(recovery.previous.join("interpreter"))?,
             "old"
@@ -606,6 +647,53 @@ mod tests {
         assert_eq!(fs_err::read_to_string(old.join("interpreter"))?, "old");
         assert!(!recovery.previous.exists());
         assert!(!recovery.journal.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn occupied_destination_retains_publication_error_and_backup() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let destination = root.path().join("installed");
+        let staged = root.path().join("staged");
+        installation(&destination, "old")?;
+        installation(&staged, "new")?;
+        let error = publish_inner(
+            &staged,
+            &destination,
+            root.path(),
+            "transaction",
+            unavailable,
+            |from, to| {
+                if from == staged {
+                    installation(&destination, "foreign")?;
+                    Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "publication delayed",
+                    ))
+                } else {
+                    rename(from, to)
+                }
+            },
+        )
+        .expect_err("a foreign destination prevents restoration");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let detail = error
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<PublicationRestoreError>())
+            .expect("retain structured occupied-destination context");
+        assert_eq!(detail.publication.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(detail.restoration.kind(), io::ErrorKind::AlreadyExists);
+        let recovery = Recovery::new(&destination, root.path())?;
+        assert_eq!(detail.previous, recovery.previous);
+        assert_eq!(
+            fs_err::read_to_string(recovery.previous.join("interpreter"))?,
+            "old"
+        );
+        assert_eq!(
+            fs_err::read_to_string(destination.join("interpreter"))?,
+            "foreign"
+        );
+        assert!(recovery.journal.is_file());
         Ok(())
     }
 
@@ -828,19 +916,28 @@ mod tests {
         let staged = root.path().join("staged");
         installation(&destination, "old")?;
         installation(&staged, "new")?;
+        let mut exchanged = false;
         publish_inner(
             &staged,
             &destination,
             root.path(),
             "transaction",
-            super::exchange,
+            |from, to| {
+                let result = super::exchange(from, to);
+                exchanged = result.is_ok();
+                result
+            },
             rename,
         )?;
         assert_eq!(
             fs_err::read_to_string(destination.join("interpreter"))?,
             "new"
         );
-        assert_eq!(fs_err::read_to_string(staged.join("interpreter"))?, "old");
+        if exchanged {
+            assert_eq!(fs_err::read_to_string(staged.join("interpreter"))?, "old");
+        } else {
+            assert!(!staged.try_exists()?);
+        }
         assert!(!Recovery::new(&destination, root.path())?.journal.exists());
         Ok(())
     }
