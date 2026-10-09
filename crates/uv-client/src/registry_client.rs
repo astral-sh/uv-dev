@@ -1153,15 +1153,14 @@ impl RegistryClient {
             ..
         } = wheel;
 
-        if let Some(metadata) = self
-            .packed_wheel_metadata(filename, url, Some(index))
-            .await?
-        {
-            return Ok(metadata);
-        }
-
         // If the metadata file is available at its own url (PEP 658), download it from there.
         if let Some(hashes) = &file.dist_info_metadata {
+            if let Some(metadata) = self
+                .packed_wheel_metadata(filename, url, Some(index))
+                .await?
+            {
+                return Ok(metadata);
+            }
             let mut url = url.clone();
             let path = format!("{}.metadata", url.path());
             url.set_path(&path);
