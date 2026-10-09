@@ -7,6 +7,7 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+#[cfg(feature = "test-python-managed")]
 use std::collections::BTreeMap;
 use std::path::Path;
 use uv_fs::copy_dir_all;
@@ -15,11 +16,9 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use uv_test::{
-    TestContext,
-    packse::{PackseServer, generate_wheel_with_files},
-    uv_snapshot,
-};
+#[cfg(feature = "test-python-managed")]
+use uv_test::packse::generate_wheel_with_files;
+use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -1954,6 +1953,7 @@ fn run_with_overlay_interpreter() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-managed")]
 #[test]
 fn run_with_overlay_startup_files() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();

@@ -19,7 +19,7 @@ use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 #[cfg(windows)]
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
-use uv_test::{site_packages_path, uv_snapshot};
+use uv_test::{site_packages_path, uv_snapshot, venv_bin_path};
 
 #[test]
 fn create_venv() {
@@ -176,6 +176,55 @@ fn create_venv_caches_upgradeable_interpreter() -> Result<()> {
     Ok(())
 }
 
+/// Activating a new environment tolerates a legacy module that installed its hook on import.
+#[test]
+#[cfg(feature = "test-python-eol")]
+fn activate_venv_from_legacy_virtualenv_module() -> Result<()> {
+    let context = uv_test::test_context!("3.9");
+    let modern = context.temp_dir.child("modern");
+    context
+        .venv()
+        .arg(modern.path())
+        .arg("--python")
+        .arg("3.9")
+        .assert()
+        .success();
+
+    let legacy_site_packages = site_packages_path(&context.venv, "python3.9");
+    let hook = legacy_site_packages.join("_virtualenv.py");
+    let contents = fs_err::read_to_string(&hook)?;
+    fs_err::write(&hook, format!("{contents}\npatch()\ndel patch\n"))?;
+    fs_err::write(
+        legacy_site_packages.join("_virtualenv.pth"),
+        "import _virtualenv\n",
+    )?;
+    fs_err::remove_file(legacy_site_packages.join("_virtualenv.start"))?;
+    let startup = legacy_site_packages.join("_virtualenv_startup.py");
+    if startup.is_file() {
+        fs_err::remove_file(startup)?;
+    }
+
+    let activate = venv_bin_path(modern.path()).join("activate_this.py");
+    uv_snapshot!(context.filters(), context.python_command().arg("-c").arg(indoc! {r#"
+        from pathlib import Path
+        import runpy
+        import sys
+        import _virtualenv
+
+        print(hasattr(_virtualenv, "patch"))
+        runpy.run_path(sys.argv[1])
+        print(Path(sys.prefix) == Path(sys.argv[2]))
+        print(sum(isinstance(finder, _virtualenv._Finder) for finder in sys.meta_path))
+    "#}).arg(activate).arg(modern.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    False
+    True
+    1
+    ");
+    Ok(())
+}
+
 #[test]
 fn create_venv_skips_distutils_patch_on_py310() {
     let context = uv_test::test_context_with_versions!(&["3.10"]);
@@ -195,13 +244,14 @@ fn create_venv_skips_distutils_patch_on_py310() {
     context.venv.assert(predicates::path::is_dir());
     let site_packages = site_packages_path(context.venv.path(), "python3.10");
     assert!(!site_packages.join("_virtualenv.py").exists());
+    assert!(!site_packages.join("_virtualenv_startup.py").exists());
     assert!(!site_packages.join("_virtualenv.pth").exists());
     assert!(!site_packages.join("_virtualenv.start").exists());
 }
 
 #[test]
 #[cfg(feature = "test-python-eol")]
-fn create_venv_keeps_distutils_patch_on_py39() {
+fn create_venv_keeps_distutils_patch_on_py39() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9"]);
 
     uv_snapshot!(context.filters(), context.venv()
@@ -219,8 +269,16 @@ fn create_venv_keeps_distutils_patch_on_py39() {
     context.venv.assert(predicates::path::is_dir());
     let site_packages = site_packages_path(context.venv.path(), "python3.9");
     assert!(site_packages.join("_virtualenv.py").is_file());
-    assert!(site_packages.join("_virtualenv.pth").is_file());
-    assert!(site_packages.join("_virtualenv.start").is_file());
+    assert!(site_packages.join("_virtualenv_startup.py").is_file());
+    assert_eq!(
+        fs_err::read_to_string(site_packages.join("_virtualenv.pth"))?,
+        "import _virtualenv_startup; _virtualenv_startup.patch()\n"
+    );
+    assert_eq!(
+        fs_err::read_to_string(site_packages.join("_virtualenv.start"))?,
+        "_virtualenv_startup:patch\n"
+    );
+    Ok(())
 }
 
 #[test]
