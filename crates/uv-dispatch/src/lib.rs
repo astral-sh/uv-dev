@@ -38,8 +38,8 @@ use uv_pypi_types::Conflicts;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::LookaheadResolver;
 use uv_resolver::{
-    ExcludeNewer, FlatIndex, Flexibility, InMemoryIndex, Manifest, OptionsBuilder,
-    PythonRequirement, Resolver, ResolverEnvironment,
+    ExcludeNewer, FlatIndex, Flexibility, InMemoryIndex, Manifest, OptionsBuilder, Preference,
+    Preferences, PythonRequirement, Resolver, ResolverEnvironment,
 };
 use uv_static::TarBackend;
 use uv_types::{
@@ -181,6 +181,7 @@ pub struct BuildDispatch<'a> {
     preview: Preview,
     tar_backend: TarBackend,
     build_requirements: Option<Arc<Mutex<Vec<Requirement>>>>,
+    build_preferences: Vec<Preference>,
 }
 
 impl<'a> BuildDispatch<'a> {
@@ -241,6 +242,7 @@ impl<'a> BuildDispatch<'a> {
             preview,
             tar_backend: TarBackend::from_env(),
             build_requirements: None,
+            build_preferences: Vec::new(),
         }
     }
 
@@ -249,9 +251,19 @@ impl<'a> BuildDispatch<'a> {
         &self,
         source: &SourceDist,
         hashes: MetadataHashPolicy<'_>,
+        constraints: &Constraints,
+        preferences: Vec<Preference>,
     ) -> Result<Vec<Requirement>, uv_distribution::Error> {
         let requirements = Arc::new(Mutex::new(Vec::new()));
-        let dispatch = Self {
+        let constraints = Constraints::from_specifications(
+            self.constraints
+                .specifications()
+                .cloned()
+                .chain(constraints.specifications().cloned()),
+        );
+        let dispatch = BuildDispatch {
+            constraints: &constraints,
+            build_preferences: preferences,
             build_requirements: Some(requirements.clone()),
             source_build_context: SourceBuildContext::new(
                 self.concurrency.builds_semaphore.clone(),
@@ -437,6 +449,10 @@ impl BuildContext for BuildDispatch<'_> {
         .await?;
 
         let manifest = Manifest::simple(requirements.to_vec())
+            .with_preferences(Preferences::from_iter(
+                self.build_preferences.iter().cloned(),
+                &resolver_env,
+            ))
             .with_constraints(self.constraints.clone())
             .with_lookaheads(lookaheads);
 

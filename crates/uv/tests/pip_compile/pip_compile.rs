@@ -21068,7 +21068,6 @@ fn include_build_dependencies_constraints_follow_selected_backend() -> Result<()
     ----- stderr -----
     Resolved 1 package in [TIME]
     Resolved 3 packages in [TIME]
-    Resolved 3 packages in [TIME]
     ");
     Ok(())
 }
@@ -21258,8 +21257,218 @@ fn include_build_dependencies_retains_constraints_after_backtracking() -> Result
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Resolved 4 packages in [TIME]
     Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Backtracking removes a build constraint when the same helper remains only a runtime root.
+#[test]
+fn include_build_dependencies_constraints_allow_runtime_overlap() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "build-constraint-runtime-overlap"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.backend.versions."1.0.0"]
+        sdist = false
+        [packages.backend.versions."2.0.0"]
+        sdist = false
+        requires = ["helper>=2"]
+        [packages.helper.versions."1.0.0"]
+        sdist = false
+        [packages.helper.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = ["backend>=1"]
+        build-backend = "custom"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+    "#})?;
+    context
+        .temp_dir
+        .child("project/custom.py")
+        .write_str(indoc! {r"
+        def get_requires_for_build_wheel(config_settings=None):
+            return []
+    "})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project\nhelper>=2\n")?;
+    context
+        .temp_dir
+        .child("build-constraints.txt")
+        .write_str("helper==1\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies",
+        "--build-constraint", "build-constraints.txt", "--no-header", "--no-annotate",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    backend==1.0.0
+    helper==2.0.0
+    ./project
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Hook output must come from the backend version selected by the compile constraints.
+#[test]
+fn include_build_dependencies_hook_matches_selected_backend() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "build-hook-selected-backend"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.backend.versions."1.0.0"]
+        sdist = false
+        [packages.backend.versions."2.0.0"]
+        sdist = false
+        [packages.helper.versions."1.0.0"]
+        sdist = false
+        [packages.helper.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = ["backend>=1"]
+        build-backend = "custom"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+    "#})?;
+    context
+        .temp_dir
+        .child("project/custom.py")
+        .write_str(indoc! {r#"
+        import backend
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return [f"helper=={backend.__version__}"]
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project\n")?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("backend==1\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies",
+        "--constraint", "constraints.txt", "--no-header", "--no-annotate",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    backend==1.0.0
+    helper==1.0.0
+    ./project
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A second source can change the selected backend after another source's hook was probed.
+#[test]
+fn include_build_dependencies_rediscovers_changed_backend_hook() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "rediscover-changed-build-backend-hook"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.backend.versions."1.0.0"]
+        sdist = false
+        [packages.backend.versions."2.0.0"]
+        sdist = false
+        [packages.helper.versions."1.0.0"]
+        sdist = false
+        [packages.helper.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("project-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = ["backend>=1"]
+        build-backend = "custom"
+        backend-path = ["."]
+        [project]
+        name = "project-a"
+        version = "1.0.0"
+    "#})?;
+    context
+        .temp_dir
+        .child("project-a/custom.py")
+        .write_str(indoc! {r#"
+        import backend
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return [f"helper=={backend.__version__}"]
+    "#})?;
+    context
+        .temp_dir
+        .child("project-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = ["backend==1"]
+        build-backend = "custom"
+        backend-path = ["."]
+        [project]
+        name = "project-b"
+        version = "1.0.0"
+    "#})?;
+    context
+        .temp_dir
+        .child("project-b/custom.py")
+        .write_str(indoc! {r"
+        def get_requires_for_build_wheel(config_settings=None):
+            return []
+    "})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project-a\n./project-b\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies",
+        "--no-header", "--no-annotate",
+    ]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    backend==1.0.0
+    helper==1.0.0
+    ./project-a
+    ./project-b
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Resolved 4 packages in [TIME]
+    Resolved 4 packages in [TIME]
     ");
     Ok(())
 }

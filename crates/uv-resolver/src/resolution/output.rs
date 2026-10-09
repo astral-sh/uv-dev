@@ -25,7 +25,9 @@ use crate::resolver::{
     ResolutionDependencyEdge, ResolutionNode, ResolutionPackage, ResolvedFork, SelectedDistribution,
 };
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
-use crate::{InMemoryIndex, MetadataResponse, Options, ResolveError, VersionsResponse};
+use crate::{
+    BuildDependencies, InMemoryIndex, MetadataResponse, Options, ResolveError, VersionsResponse,
+};
 
 /// Create a new [`ResolverOutput`] from the resolved PubGrub state.
 pub(crate) fn from_state(
@@ -34,6 +36,7 @@ pub(crate) fn from_state(
     workspace_members: &BTreeSet<PackageName>,
     requirements: Vec<Requirement>,
     constraints: Constraints,
+    build_dependencies: BuildDependencies,
     modifiers: DependencyModifiers,
     preferences: &Preferences,
     hasher: &HashStrategy,
@@ -144,6 +147,7 @@ pub(crate) fn from_state(
         diagnostics,
         requirements,
         constraints,
+        build_dependencies,
         modifiers,
         options,
     };

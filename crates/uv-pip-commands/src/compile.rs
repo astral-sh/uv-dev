@@ -23,9 +23,9 @@ use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, Dist, ExtraBuildVariables, HashCollection, Identifier,
-    Index, IndexLocations, MinimumLibcVersion, NameRequirementSpecification, Origin,
-    PackageConfigSettings, Requirement, RequiresPython, ResolvedDist,
-    UnresolvedRequirementSpecification, Verbatim,
+    Index, IndexLocations, MinimumLibcVersion, Name, NameRequirementSpecification, Origin,
+    PackageConfigSettings, Requirement, RequirementScope, RequirementSource, RequiresPython,
+    ResolvedDist, UnresolvedRequirementSpecification, Verbatim,
 };
 use uv_fs::{CWD, Simplified};
 use uv_git::ResolvedRepositoryReference;
@@ -33,6 +33,7 @@ use uv_install_wheel::LinkMode;
 use uv_lock::PylockToml;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
+use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{Conflicts, SupportedEnvironments};
 use uv_python_discovery::PythonInstallation;
@@ -45,9 +46,9 @@ use uv_requirements::{
     GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
 };
 use uv_resolver::{
-    AnnotationStyle, DependencyMode, DisplayResolutionGraph, ExcludeNewer, FlatIndex, ForkStrategy,
-    InMemoryIndex, OptionsBuilder, Prerelease, PythonRequirement, ResolutionMode,
-    ResolverEnvironment,
+    AnnotationStyle, BuildDependencies, DependencyMode, DisplayResolutionGraph, ExcludeNewer,
+    FlatIndex, ForkStrategy, InMemoryIndex, OptionsBuilder, Preference, Prerelease,
+    PythonRequirement, ResolutionMode, ResolverEnvironment,
 };
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
@@ -610,11 +611,15 @@ pub async fn pip_compile(
         })
         .build();
 
-    // All passes share resolver configuration; only requirements and constraints change.
-    let resolve = async |requirements, constraints| {
+    // All passes share resolver configuration; build roots retain their own constraint context.
+    let resolve = async |requirements, build_requirements: Vec<Requirement>| {
         uv_resolve_operations::resolve(
             requirements,
-            constraints,
+            constraints.clone(),
+            (!build_requirements.is_empty()).then(|| BuildDependencies {
+                requirements: build_requirements,
+                constraints: build_constraints.clone(),
+            }),
             overrides.clone(),
             override_dependencies.clone(),
             excludes.clone(),
@@ -647,18 +652,41 @@ pub async fn pip_compile(
         .map(|(resolution, _)| resolution)
         .map_err(UvError::from)
     };
-    let mut resolution = resolve(requirements.clone(), constraints.clone()).await?;
+    let mut resolution = resolve(requirements.clone(), Vec::new()).await?;
 
     if include_build_dependencies {
         let mut requirements_by_source = FxHashMap::default();
-        let mut build_packages_by_source = FxHashMap::default();
-        let mut previous_requirements = (FxHashSet::default(), FxHashSet::default());
+        let mut previous_requirements = FxHashSet::default();
         let mut requirement_states = Vec::new();
 
         loop {
             let mut active_requirements = Vec::new();
             let mut active_seen = FxHashSet::default();
-            let mut active_build_packages = FxHashSet::default();
+            let selection = resolution
+                .distributions()
+                .map(|distribution| Requirement {
+                    name: distribution.name().clone(),
+                    extras: Box::new([]),
+                    groups: Box::new([]),
+                    marker: MarkerTree::TRUE,
+                    source: RequirementSource::from(distribution),
+                    scope: RequirementScope::Global,
+                    origin: None,
+                })
+                .collect::<FxHashSet<_>>();
+            let discovery_constraints =
+                Constraints::from_specifications(constraints.iter().cloned());
+            let preferences = resolution
+                .base_dists()
+                .map(|(_, distribution)| {
+                    Preference::from_locked(
+                        distribution.name.clone(),
+                        distribution.version.clone(),
+                        distribution.index().cloned(),
+                        Vec::new(),
+                    )
+                })
+                .collect::<Vec<_>>();
             for distribution in resolution.distributions() {
                 let ResolvedDist::Installable { dist, .. } = distribution else {
                     continue;
@@ -667,9 +695,17 @@ pub async fn pip_compile(
                     continue;
                 };
                 let id = source.distribution_id();
-                if !requirements_by_source.contains_key(&id) {
+                if requirements_by_source
+                    .get(&id)
+                    .is_none_or(|(previous, _)| previous != &selection)
+                {
                     let discovered = build_dispatch
-                        .discover_build_requirements(source, hasher.metadata_policy(source))
+                        .discover_build_requirements(
+                            source,
+                            hasher.metadata_policy(source),
+                            &discovery_constraints,
+                            preferences.clone(),
+                        )
                         .await
                         .map_err(|err| {
                             if err.is_user_failure() {
@@ -678,43 +714,18 @@ pub async fn pip_compile(
                                 UvError::Unexpected(err.into())
                             }
                         })?;
-                    requirements_by_source.insert(id.clone(), discovered);
+                    requirements_by_source.insert(id.clone(), (selection.clone(), discovered));
                 }
-                if let Some(build_requirements) = requirements_by_source.get(&id) {
-                    // A constrained dependency can disappear after backend backtracking. Retain
-                    // candidate package names for this source so its constraint remains available.
-                    // Unselected source releases do not contribute their remembered packages.
-                    let packages = build_packages_by_source
-                        .entry(id)
-                        .or_insert_with(FxHashSet::default);
-                    let active = build_requirements
-                        .iter()
-                        .filter(|requirement| {
-                            requirement.evaluate_markers(Some(interpreter.markers()), &[])
-                        })
-                        .collect::<Vec<_>>();
-                    packages.extend(resolution.dependency_closure(active.iter().copied()));
-                    packages.extend(active.iter().map(|requirement| requirement.name.clone()));
-                    active_build_packages.extend(packages.iter().cloned());
+                if let Some((_, build_requirements)) = requirements_by_source.get(&id) {
                     active_requirements.extend(
                         build_requirements
                             .iter()
                             .filter(|requirement| active_seen.insert((*requirement).clone()))
-                            .cloned()
-                            .map(UnresolvedRequirementSpecification::from),
+                            .cloned(),
                     );
                 }
             }
-            let active_constraints = build_constraints
-                .specifications()
-                .filter(|constraint| active_build_packages.contains(&constraint.requirement.name))
-                .cloned()
-                .collect::<Vec<_>>();
-            let constraints_seen = active_constraints
-                .iter()
-                .map(|constraint| constraint.requirement.clone())
-                .collect::<FxHashSet<_>>();
-            let active_state = (active_seen, constraints_seen);
+            let active_state = active_seen;
 
             // Requirements belong to selected sources; replaced source releases cannot retain
             // their backend requirements in the next resolution.
@@ -733,13 +744,14 @@ pub async fn pip_compile(
                 requirements
                     .iter()
                     .cloned()
-                    .chain(active_requirements)
+                    .chain(
+                        active_requirements
+                            .iter()
+                            .cloned()
+                            .map(UnresolvedRequirementSpecification::from),
+                    )
                     .collect(),
-                constraints
-                    .iter()
-                    .cloned()
-                    .chain(active_constraints)
-                    .collect(),
+                active_requirements,
             )
             .await?;
         }

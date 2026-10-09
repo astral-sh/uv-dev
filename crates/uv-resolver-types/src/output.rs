@@ -35,10 +35,19 @@ pub struct ResolverOutput {
     pub requirements: Vec<Requirement>,
     /// The constraints that were used to build the graph.
     pub constraints: Constraints,
+    /// Build roots and their conditional constraints, retained for output annotations.
+    pub build_dependencies: BuildDependencies,
     /// The dependency modifiers that were used to build the graph.
     pub modifiers: DependencyModifiers,
     /// The options that were used to build the graph.
     pub options: Options,
+}
+
+/// Additional roots whose transitive closure is constrained independently of runtime usage.
+#[derive(Debug, Clone, Default)]
+pub struct BuildDependencies {
+    pub requirements: Vec<Requirement>,
+    pub constraints: Constraints,
 }
 
 #[derive(Debug, Clone)]
