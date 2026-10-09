@@ -360,7 +360,7 @@ impl<'a> Planner<'a> {
                     [] => {}
                     [installed] => {
                         let source = RequirementSource::from(dist);
-                        match RequirementSatisfaction::check(
+                        let mut satisfaction = RequirementSatisfaction::check(
                             dist.name(),
                             installed,
                             &source,
@@ -373,7 +373,16 @@ impl<'a> Planner<'a> {
                                 extra_build_requires,
                                 extra_build_variables,
                             }),
-                        ) {
+                        );
+                        if matches!(satisfaction, RequirementSatisfaction::Satisfied)
+                            && cache.must_revalidate_package(dist.name())
+                            && let ResolvedDist::Installable { dist, .. } = dist
+                            && let Dist::Built(BuiltDist::Registry(wheels)) = dist.as_ref()
+                            && installed.is_local_wheel_out_of_date(wheels.best_wheel())
+                        {
+                            satisfaction = RequirementSatisfaction::OutOfDate;
+                        }
+                        match satisfaction {
                             RequirementSatisfaction::Mismatch => {
                                 debug!(
                                     "Requirement installed, but mismatched:\n  Installed: {installed:?}\n  Requested: {source:?}"

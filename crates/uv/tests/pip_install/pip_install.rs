@@ -36,9 +36,7 @@ use uv_test::archive::write_tar_gz;
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
 use uv_test::package_server::PackageServer;
-#[cfg(windows)]
-use uv_test::packse::generate_wheel_with_files;
-use uv_test::packse::{PackseServer, generate_wheel};
+use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 use uv_test::{
     DEFAULT_PYTHON_VERSION, TestContext, apply_filters, download_to_disk, get_bin, uv_snapshot,
     venv_bin_path,
@@ -8640,6 +8638,22 @@ fn find_links_local_html() -> Result<()> {
     "
     );
 
+    // A local HTML index can also link to remote wheels.
+    let server = FindLinksServer::new(wheels.path());
+    index.write_str(&format!(
+        r#"<a href="{}/{wheel_filename}">{wheel_filename}</a>"#,
+        server.url()
+    ))?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("tqdm==1000.0.0")
+        .arg("--upgrade"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    "
+    );
+
     Ok(())
 }
 
@@ -8827,6 +8841,170 @@ fn find_links_relative_to_working_directory() -> Result<()> {
       cause: relative URL without a base
     "
     );
+
+    Ok(())
+}
+
+/// Upgrade rebuilt direct and transitive wheels without changing their versions.
+#[tokio::test]
+async fn upgrade_rebuilt_find_links_wheels() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+
+    let (filename, wheel) = generate_wheel_with_files(
+        &"direct".parse()?,
+        &"1.0.0".parse()?,
+        &["transitive==1.0.0".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("direct/value.py", "VALUE = 'before'\n")],
+    );
+    let direct = links.child(filename);
+    fs::write(&direct, wheel)?;
+    filetime::set_file_mtime(
+        &direct,
+        filetime::FileTime::from_unix_time(1_700_000_000, 0),
+    )?;
+
+    let (filename, wheel) = generate_wheel_with_files(
+        &"transitive".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("transitive/value.py", "VALUE = 'before'\n")],
+    );
+    let transitive = links.child(filename);
+    fs::write(&transitive, wheel)?;
+    filetime::set_file_mtime(
+        &transitive,
+        filetime::FileTime::from_unix_time(1_700_000_000, 0),
+    )?;
+
+    let (filename, wheel) = generate_wheel(
+        &"added".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    fs::write(links.child(filename), wheel)?;
+
+    // Remote find-links pages can point to local files, which still need timestamp validation.
+    let server = MockServer::start().await;
+    let links_url = Url::from_directory_path(links.path())
+        .map_err(|()| anyhow!("Failed to convert wheel directory to URL"))?;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{links_url}direct-1.0.0-py3-none-any.whl">direct</a>
+<a href="{links_url}transitive-1.0.0-py3-none-any.whl">transitive</a>
+<a href="{links_url}added-1.0.0-py3-none-any.whl">added</a>"#
+            ),
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("direct")
+        .arg("--no-index")
+        .arg("--find-links").arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + direct==1.0.0
+     + transitive==1.0.0
+    ");
+
+    let (_, wheel) = generate_wheel_with_files(
+        &"direct".parse()?,
+        &"1.0.0".parse()?,
+        &["transitive==1.0.0".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("direct/value.py", "VALUE = 'after'\n")],
+    );
+    fs::write(&direct, wheel)?;
+    filetime::set_file_mtime(
+        &direct,
+        filetime::FileTime::from_unix_time(1_800_000_000, 0),
+    )?;
+
+    let (_, wheel) = generate_wheel_with_files(
+        &"transitive".parse()?,
+        &"1.0.0".parse()?,
+        &["added==1.0.0".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("transitive/value.py", "VALUE = 'after'\n")],
+    );
+    fs::write(&transitive, wheel)?;
+    filetime::set_file_mtime(
+        &transitive,
+        filetime::FileTime::from_unix_time(1_800_000_000, 0),
+    )?;
+
+    // Without an upgrade, installed versions continue to satisfy named requirements.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("direct")
+        .arg("--no-index")
+        .arg("--find-links").arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked 1 package in [TIME]
+    ");
+    context
+        .assert_command("from direct.value import VALUE; assert VALUE == 'before'")
+        .success();
+    context
+        .assert_command("from transitive.value import VALUE; assert VALUE == 'before'")
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("direct")
+        .arg("--upgrade")
+        .arg("--no-index")
+        .arg("--find-links").arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Uninstalled 2 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + added==1.0.0
+     ~ direct==1.0.0
+     ~ transitive==1.0.0
+    ");
+    context
+        .assert_command("from direct.value import VALUE; assert VALUE == 'after'")
+        .success();
+    context
+        .assert_command("from transitive.value import VALUE; assert VALUE == 'after'")
+        .success();
+
+    context.assert_installed("added", "1.0.0");
+
+    // An unchanged wheel does not need another installation.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("direct")
+        .arg("--upgrade")
+        .arg("--no-index")
+        .arg("--find-links").arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Checked 3 packages in [TIME]
+    ");
 
     Ok(())
 }
