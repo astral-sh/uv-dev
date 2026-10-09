@@ -975,31 +975,84 @@ async fn download_source_shards() -> Result<()> {
         "{}/simple",
         server.uri()
     ))?);
-    let shards = [
-        (
-            "registry = \"https://pypi.org/simple\"".to_string(),
-            cache.bucket(CacheBucket::Packed).join("pypi/basic-package"),
-        ),
-        (
-            format!("registry = \"{}/simple\"", server.uri()),
-            cache
-                .bucket(CacheBucket::Packed)
-                .join(WheelCache::Index(&index).wheel_dir("basic-package")),
-        ),
-        (
-            format!("url = \"{url}\""),
-            packed_url_shard(&context, &url)?,
-        ),
-    ];
-    for (source, shard) in &shards {
-        write_locked_wheel(&context, source, &url, &hash)?;
-        download(&context).arg("--offline").assert().failure();
-        download(&context).assert().success();
-        assert_eq!(fs_err::read(shard.join(&hash))?, bytes);
-        assert!(shard.join("0.1.0-py3-none-any.whl.http").is_file());
-        assert!(!shard.join("package").exists());
-        download(&context).arg("--offline").assert().success();
-    }
+    let pypi_shard = cache.bucket(CacheBucket::Packed).join("pypi/basic-package");
+    write_locked_wheel(
+        &context,
+        "registry = \"https://pypi.org/simple\"",
+        &url,
+        &hash,
+    )?;
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+    ");
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    assert_eq!(fs_err::read(pypi_shard.join(&hash))?, bytes);
+    assert!(pypi_shard.join("0.1.0-py3-none-any.whl.http").is_file());
+    assert!(!pypi_shard.join("package").exists());
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 0 distributions (1 total)
+    ");
+
+    let custom_shard = cache
+        .bucket(CacheBucket::Packed)
+        .join(WheelCache::Index(&index).wheel_dir("basic-package"));
+    write_locked_wheel(
+        &context,
+        &format!("registry = \"{}/simple\"", server.uri()),
+        &url,
+        &hash,
+    )?;
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+    ");
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    assert_eq!(fs_err::read(custom_shard.join(&hash))?, bytes);
+    assert!(custom_shard.join("0.1.0-py3-none-any.whl.http").is_file());
+    assert!(!custom_shard.join("package").exists());
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 0 distributions (1 total)
+    ");
+
+    let direct_shard = packed_url_shard(&context, &url)?;
+    write_locked_wheel(&context, &format!("url = \"{url}\""), &url, &hash)?;
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to download `basic-package` from http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/basic_package-0.1.0-py3-none-any.whl
+    ");
+    uv_snapshot!(context.filters(), download(&context), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    assert_eq!(fs_err::read(direct_shard.join(&hash))?, bytes);
+    assert!(direct_shard.join("0.1.0-py3-none-any.whl.http").is_file());
+    assert!(!direct_shard.join("package").exists());
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 0 distributions (1 total)
+    ");
+
     server.verify().await;
     drop(server);
     // The explicitly prefetched direct URL supplies wheel metadata and installation bytes.
@@ -1011,21 +1064,13 @@ async fn download_source_shards() -> Result<()> {
         .success();
     // Pruning drops the incompatible prototype bucket without removing packed-v1 artifacts.
     context.cache_dir.child("packed-v0/old").create_dir_all()?;
-    context
-        .command()
-        .args(["cache", "prune"])
-        .assert()
-        .success();
+    context.prune().assert().success();
     assert!(!context.cache_dir.join("packed-v0").exists());
     download(&context).arg("--offline").assert().success();
-    context
-        .command()
-        .args(["cache", "clean", "basic-package"])
-        .assert()
-        .success();
-    for (_, shard) in shards {
-        assert!(!shard.exists());
-    }
+    context.clean().arg("basic-package").assert().success();
+    assert!(!pypi_shard.exists());
+    assert!(!custom_shard.exists());
+    assert!(!direct_shard.exists());
     Ok(())
 }
 
