@@ -275,7 +275,16 @@ impl FileSnapshot {
                 self.path.user_display()
             )));
         }
-        let mut publication = FilePublication::new(&self.path)?;
+        let publication = FilePublication::new(&self.path)?;
+        self.write_publication(publication, contents)
+    }
+
+    fn write_publication(
+        &mut self,
+        mut publication: FilePublication,
+        contents: &[u8],
+    ) -> io::Result<()> {
+        let expected = self.written.as_ref().or(self.original.as_ref());
         let identity = publication
             .original()
             .map(|file| Handle::from_file(file.file().try_clone()?))
@@ -284,34 +293,34 @@ impl FileSnapshot {
             return Err(io::Error::other("file was replaced before publication"));
         }
         if publication.is_staged() {
+            drop(identity);
             publication.writer().write_all(contents)?;
-            let identity = Handle::from_file(publication.writer().file().try_clone()?)?;
             let contents = contents.to_vec();
             let created_path = publication.creation_path().map(Path::to_path_buf);
             if read_file(&self.path)?.as_ref() != expected {
                 return Err(io::Error::other("file changed before publication"));
             }
-            publication.publish()?;
+            let identity = publication.publish()?;
             self.written = Some(FileContents { identity, contents });
             if let Some(created_path) = created_path {
                 self.created_path = Some(created_path);
             }
             Ok(())
         } else {
-            self.write_opened(publication.writer(), contents)
+            self.write_opened(
+                publication.writer(),
+                identity.expect("in-place writers have an original identity"),
+                contents,
+            )
         }
     }
 
-    fn write_opened(&mut self, file: &mut fs_err::File, contents: &[u8]) -> io::Result<()> {
-        let identity = Handle::from_file(file.file().try_clone()?)?;
-        if let Some(expected) = self.written.as_ref().or(self.original.as_ref())
-            && identity != expected.identity
-        {
-            return Err(io::Error::other(format!(
-                "refusing to overwrite `{}` because it was replaced before publication",
-                self.path.user_display()
-            )));
-        }
+    fn write_opened(
+        &mut self,
+        file: &mut fs_err::File,
+        identity: Handle,
+        contents: &[u8],
+    ) -> io::Result<()> {
         if !file.metadata()?.is_file() {
             // Devices do not retain a file version that can be restored.
             return file.write_all(contents);
@@ -599,7 +608,7 @@ mod tests {
         while let Ok(file) = fs_err::File::open("/dev/null") {
             descriptors.push(file);
         }
-        // Creation can take the final descriptor, but duplicating it for identity tracking fails.
+        // Staging can take the final descriptor. Later ownership checks must fail before publishing.
         drop(descriptors.pop());
         let result = state.write_file(&path, b"lock contents");
         state.finish(false);
@@ -608,7 +617,9 @@ mod tests {
         let Err(error) = result else {
             bail!("descriptor exhaustion did not fail handle setup");
         };
-        assert_eq!(error.raw_os_error(), Some(24)); // EMFILE on Unix.
+        let exhausted = io::Error::from_raw_os_error(24); // EMFILE on Unix.
+        assert_eq!(error.kind(), exhausted.kind());
+        assert!(error.to_string().contains(&exhausted.to_string()));
         assert!(
             !exists,
             "setup failure left the newly created lockfile behind"
@@ -631,10 +642,35 @@ mod tests {
         // Replace the path after the initial comparison, before opening it for publication.
         let replacement = directory.path().join("replacement");
         fs_err::write(&replacement, "external")?;
+        // The hard link requires an in-place writer, whose identity check precedes truncation.
+        let alias = directory.path().join("alias");
+        fs_err::hard_link(&replacement, &alias)?;
         fs_err::rename(replacement, &path)?;
-        let mut opened = fs_err::OpenOptions::new().write(true).open(&path)?;
-        assert!(snapshot.write_opened(&mut opened, b"edited").is_err());
+        let publication = uv_fs::FilePublication::new(&path)?;
+        assert!(snapshot.write_publication(publication, b"edited").is_err());
         assert_eq!(fs_err::read_to_string(&path)?, "external");
+        assert_eq!(fs_err::read_to_string(&alias)?, "external");
+        assert!(snapshot.written.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn appearing_file_is_rejected_before_in_place_write() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let alias = directory.path().join("alias");
+        let mut snapshot = FileSnapshot {
+            path: path.clone(),
+            original: None,
+            written: None,
+            created_path: None,
+        };
+        fs_err::write(&path, "external")?;
+        fs_err::hard_link(&path, &alias)?;
+        let publication = uv_fs::FilePublication::new(&path)?;
+        assert!(snapshot.write_publication(publication, b"edited").is_err());
+        assert_eq!(fs_err::read_to_string(&path)?, "external");
+        assert_eq!(fs_err::read_to_string(&alias)?, "external");
         assert!(snapshot.written.is_none());
         Ok(())
     }

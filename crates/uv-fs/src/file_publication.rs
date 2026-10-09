@@ -1,6 +1,6 @@
 //! Publication of user-owned files without replacing their link or access semantics.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
@@ -8,11 +8,15 @@ use std::os::macos::fs::MetadataExt as _;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::OpenOptionsExt as _;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+#[cfg(unix)]
+use fs_err::os::unix::fs::OpenOptionsExt as _;
 
 #[cfg(target_os = "linux")]
 use rustix::fs::{CWD, Mode, OFlags, ResolveFlags, openat2};
-#[cfg(not(unix))]
 use same_file::Handle;
 use tempfile::TempPath;
 
@@ -148,10 +152,23 @@ impl FilePublication {
         &mut self.writer
     }
 
-    /// Publish the completed bytes, returning the descriptor of the resulting file.
+    /// Publish the completed bytes, returning the identity of the resulting file.
     ///
     /// The identity check detects replaced paths but is not a filesystem compare-and-swap.
-    pub fn publish(self) -> io::Result<fs_err::File> {
+    /// Filesystems without no-clobber persistence use exclusive creation; readers can observe
+    /// that newly created file while its contents are written.
+    pub fn publish(self) -> io::Result<Handle> {
+        self.publish_with(
+            |temporary, target| temporary.persist_noclobber(target),
+            |writer, contents| writer.write_all(contents),
+        )
+    }
+
+    fn publish_with(
+        self,
+        persist_new: impl FnOnce(TempPath, &Path) -> Result<(), tempfile::PathPersistError>,
+        write_new: impl FnOnce(&mut dyn Write, &[u8]) -> io::Result<()>,
+    ) -> io::Result<Handle> {
         if let Some(staging) = self.staging {
             if destination(&self.path)? != staging.target {
                 return Err(io::Error::other("file target changed before publication"));
@@ -169,24 +186,145 @@ impl FilePublication {
                         "file access metadata no longer permits replacement",
                     ));
                 }
-                staging.temporary.persist(verbatim_path(&staging.target))
-            } else {
+                // Obtain identity before changing the directory entry, without duplicating its
+                // descriptor after publication has already succeeded.
+                let identity = Handle::from_file(self.writer.into_file())?;
                 staging
                     .temporary
-                    .persist_noclobber(verbatim_path(&staging.target))
+                    .persist(verbatim_path(&staging.target))
+                    .map_err(|error| publication_error(&self.path, error.error))?;
+                Ok(identity)
+            } else {
+                let identity = Handle::from_file(self.writer.into_file())?;
+                match persist_new(staging.temporary, &verbatim_path(&staging.target)) {
+                    Ok(()) => Ok(identity),
+                    Err(error) if unsupported_persistence(&error.error) => {
+                        // Retain the private staging path until copying or its cleanup finishes.
+                        let _temporary = error.path;
+                        create_from_staging(identity, &staging.target, write_new)
+                            .map_err(|error| publication_error(&self.path, error))
+                    }
+                    Err(error) => Err(publication_error(&self.path, error.error)),
+                }
             }
-            .map_err(|err| {
-                io::Error::new(
-                    err.error.kind(),
-                    PublicationError {
-                        path: self.path.clone(),
-                        source: err.error,
-                    },
-                )
-            })?;
+        } else {
+            Handle::from_file(self.writer.into_file())
         }
-        Ok(self.writer)
     }
+}
+
+fn publication_error(path: &Path, source: io::Error) -> io::Error {
+    io::Error::new(
+        source.kind(),
+        PublicationError {
+            path: path.to_owned(),
+            source,
+        },
+    )
+}
+
+fn unsupported_persistence(error: &io::Error) -> bool {
+    if error.kind() == io::ErrorKind::Unsupported {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        // Match the filesystem fallback used by LockedFile::create, including macOS ENOTSUP.
+        matches!(
+            rustix::io::Errno::from_io_error(error),
+            Some(rustix::io::Errno::NOTSUP | rustix::io::Errno::INVAL)
+        )
+    }
+    #[cfg(not(unix))]
+    false
+}
+
+fn create_from_staging(
+    mut staged: Handle,
+    target: &Path,
+    write: impl FnOnce(&mut dyn Write, &[u8]) -> io::Result<()>,
+) -> io::Result<Handle> {
+    let permissions = staged.as_file().metadata()?.permissions();
+    staged.as_file_mut().rewind()?;
+    let mut contents = Vec::new();
+    staged.as_file_mut().read_to_end(&mut contents)?;
+    drop(staged);
+
+    let mut options = fs_err::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(permissions.mode() & 0o7777);
+    let file = options.open(verbatim_path(target))?;
+    // Capture the new identity before writing any bytes. It can differ from the staged inode.
+    let mut identity = Handle::from_file(file.into_file())?;
+    let result = write(identity.as_file_mut(), &contents);
+    #[cfg(not(unix))]
+    let result = result.and_then(|()| {
+        if permissions.readonly() {
+            identity.as_file().set_permissions(permissions)?;
+        }
+        Ok(())
+    });
+    if let Err(source) = result {
+        let cleanup = identity.as_file_mut().stream_position().and_then(|length| {
+            let length = usize::try_from(length).map_err(io::Error::other)?;
+            let written = contents.get(..length).ok_or_else(|| {
+                io::Error::other("new file no longer matches its staged contents")
+            })?;
+            remove_incomplete(&mut identity, target, written)
+        });
+        return match cleanup {
+            Ok(()) => Err(source),
+            Err(cleanup) => Err(io::Error::new(
+                source.kind(),
+                IncompleteFileError {
+                    path: target.to_owned(),
+                    source,
+                    cleanup,
+                },
+            )),
+        };
+    }
+    Ok(identity)
+}
+
+/// Remove only the same entry with the bytes written by this failed creation.
+fn remove_incomplete(identity: &mut Handle, path: &Path, written: &[u8]) -> io::Result<()> {
+    let metadata = match fs_err::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_file() || metadata.is_symlink() || metadata.len() != written.len() as u64 {
+        return Err(io::Error::other("new file was changed outside publication"));
+    }
+    #[cfg(unix)]
+    let same = {
+        let opened = identity.as_file().metadata()?;
+        opened.dev() == metadata.dev() && opened.ino() == metadata.ino()
+    };
+    #[cfg(not(unix))]
+    let same = Handle::from_path(path)? == *identity;
+    if !same {
+        return Err(io::Error::other(
+            "new file was replaced outside publication",
+        ));
+    }
+    // Creation can authorize this descriptor even when the resulting mode denies fresh reads.
+    let current = identity.as_file_mut();
+    current.rewind()?;
+    let mut buffer = [0; 8192];
+    for expected in written.chunks(buffer.len()) {
+        let actual = &mut buffer[..expected.len()];
+        current.read_exact(actual)?;
+        if actual != expected {
+            return Err(io::Error::other("new file was changed outside publication"));
+        }
+    }
+    if current.read(&mut [0])? != 0 {
+        return Err(io::Error::other("new file was changed outside publication"));
+    }
+    fs_err::remove_file(path)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -195,6 +333,15 @@ struct PublicationError {
     path: PathBuf,
     #[source]
     source: io::Error,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("could not remove incomplete file `{}`: {cleanup}", path.display())]
+struct IncompleteFileError {
+    path: PathBuf,
+    #[source]
+    source: io::Error,
+    cleanup: io::Error,
 }
 
 fn create_staging_file(parent: &Path, replacing: bool) -> io::Result<tempfile::NamedTempFile> {
@@ -224,7 +371,9 @@ pub fn write_file(path: &Path, contents: &[u8]) -> io::Result<()> {
         publication.writer().set_len(0)?;
     }
     publication.writer().write_all(contents)?;
-    publication.publish()?;
+    if publication.is_staged() {
+        publication.publish()?;
+    }
     Ok(())
 }
 
@@ -447,7 +596,6 @@ mod tests {
     use std::os::unix::fs::MetadataExt;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    #[cfg(unix)]
     use std::path::Path;
     #[cfg(unix)]
     use std::process::Command;
@@ -614,6 +762,163 @@ mod tests {
         assert_eq!(source.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs_err::read(&path)?, b"external");
         assert_eq!(fs_err::read_dir(directory.path())?.count(), 1);
+        Ok(())
+    }
+
+    fn unsupported_noclobber(
+        path: tempfile::TempPath,
+        _target: &Path,
+    ) -> Result<(), tempfile::PathPersistError> {
+        #[cfg(unix)]
+        let error = rustix::io::Errno::NOTSUP.into();
+        #[cfg(not(unix))]
+        let error = io::ErrorKind::Unsupported.into();
+        Err(tempfile::PathPersistError { error, path })
+    }
+
+    #[test]
+    fn unsupported_noclobber_returns_created_file_identity() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let mut publication = FilePublication::new(&path)?;
+        publication.writer().write_all(b"complete")?;
+        let staged = same_file::Handle::from_file(publication.writer().file().try_clone()?)?;
+        let identity = publication.publish_with(unsupported_noclobber, |writer, contents| {
+            writer.write_all(contents)
+        })?;
+        assert_eq!(identity, same_file::Handle::from_path(&path)?);
+        assert_ne!(identity, staged);
+        drop(staged);
+        assert_eq!(fs_err::read(&path)?, b"complete");
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unsupported_noclobber_writes_through_a_dangling_link() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let target = directory.path().join("created.lock");
+        fs_err::os::unix::fs::symlink("created.lock", &path)?;
+        let mut publication = FilePublication::new(&path)?;
+        publication.writer().write_all(b"complete")?;
+        let identity = publication.publish_with(unsupported_noclobber, |writer, contents| {
+            writer.write_all(contents)
+        })?;
+        assert_eq!(identity, same_file::Handle::from_path(&target)?);
+        assert_eq!(fs_err::read(&target)?, b"complete");
+        assert_eq!(fs_err::read_link(&path)?, Path::new("created.lock"));
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_noclobber_keeps_a_competing_creator() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let mut publication = FilePublication::new(&path)?;
+        publication.writer().write_all(b"complete")?;
+        let error = publication
+            .publish_with(
+                |temporary, target| {
+                    fs_err::write(target, b"foreign").expect("publish competing file");
+                    #[cfg(unix)]
+                    let error = rustix::io::Errno::INVAL.into();
+                    #[cfg(not(unix))]
+                    let error = io::ErrorKind::Unsupported.into();
+                    Err(tempfile::PathPersistError {
+                        error,
+                        path: temporary,
+                    })
+                },
+                |writer, contents| writer.write_all(contents),
+            )
+            .expect_err("exclusive creation rejects the competing entry");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs_err::read(&path)?, b"foreign");
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_noclobber_cleans_a_failed_partial_creation() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let mut publication = FilePublication::new(&path)?;
+        publication.writer().write_all(b"complete")?;
+        let error = publication
+            .publish_with(unsupported_noclobber, |writer, contents| {
+                writer.write_all(&contents[..3])?;
+                Err(io::ErrorKind::WriteZero.into())
+            })
+            .expect_err("injected partial write failure");
+        assert_eq!(error.kind(), io::ErrorKind::WriteZero);
+        assert!(!path.try_exists()?);
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unsupported_noclobber_cleans_a_write_only_partial_creation() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let mut publication = FilePublication::new(&path)?;
+        publication.writer().write_all(b"complete")?;
+        publication
+            .writer()
+            .set_permissions(std::fs::Permissions::from_mode(0o200))?;
+        let error = publication
+            .publish_with(unsupported_noclobber, |writer, contents| {
+                writer.write_all(&contents[..3])?;
+                Err(io::ErrorKind::WriteZero.into())
+            })
+            .expect_err("injected partial write failure on a write-only file");
+        assert_eq!(error.kind(), io::ErrorKind::WriteZero);
+        assert!(!path.try_exists()?);
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_creation_keeps_foreign_in_place_edits() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let mut publication = FilePublication::new(&path)?;
+        publication.writer().write_all(b"complete")?;
+        let error = publication
+            .publish_with(unsupported_noclobber, |writer, contents| {
+                writer.write_all(&contents[..3])?;
+                fs_err::write(&path, b"new")?;
+                Err(io::ErrorKind::WriteZero.into())
+            })
+            .expect_err("injected failure after a foreign edit");
+        assert_eq!(error.kind(), io::ErrorKind::WriteZero);
+        assert_eq!(fs_err::read(&path)?, b"new");
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_creation_keeps_a_foreign_replacement() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let moved = directory.path().join("moved.lock");
+        let mut publication = FilePublication::new(&path)?;
+        publication.writer().write_all(b"complete")?;
+        let error = publication
+            .publish_with(unsupported_noclobber, |writer, contents| {
+                writer.write_all(&contents[..3])?;
+                fs_err::rename(&path, &moved)?;
+                fs_err::write(&path, b"com")?;
+                Err(io::ErrorKind::WriteZero.into())
+            })
+            .expect_err("injected failure after a foreign replacement");
+        assert_eq!(error.kind(), io::ErrorKind::WriteZero);
+        assert_eq!(fs_err::read(&path)?, b"com");
+        assert_eq!(fs_err::read(&moved)?, b"com");
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 2);
         Ok(())
     }
 
