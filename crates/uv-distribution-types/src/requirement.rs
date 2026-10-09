@@ -139,15 +139,6 @@ impl Requirement {
         };
         Hashes::parse_url_fragment(fragment)
     }
-
-    /// Set the source file containing the requirement.
-    #[must_use]
-    pub fn with_origin(self, origin: RequirementOrigin) -> Self {
-        Self {
-            origin: Some(origin),
-            ..self
-        }
-    }
 }
 
 impl std::hash::Hash for Requirement {

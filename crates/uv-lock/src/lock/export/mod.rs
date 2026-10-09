@@ -77,6 +77,17 @@ impl<'lock> ExportableRequirements<'lock> {
                     .group_root(groups)
                     .map(|root| (root, InstallableRootKind::DependencyGroups)),
             )
+            .chain(
+                target
+                    .lock()
+                    .workspace_group_roots(|group| target.includes_group(None, group, groups))
+                    .into_iter()
+                    .filter(|name| {
+                        !target.roots().any(|root| root == *name)
+                            && target.group_root(groups) != Some(*name)
+                    })
+                    .map(|root| (root, InstallableRootKind::DependencyGroups)),
+            )
         {
             if prune.contains(root_name) {
                 continue;

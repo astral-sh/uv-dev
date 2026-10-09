@@ -207,6 +207,14 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
         group: &GroupName,
         groups: &DependencyGroupsWithDefaults,
     ) -> bool {
+        if package.is_some_and(|package| {
+            self.lock()
+                .includes_workspace_group(package, group, |group| {
+                    self.includes_group(None, group, groups)
+                })
+        }) {
+            return true;
+        }
         if !groups.contains(group) {
             return false;
         }
@@ -755,10 +763,9 @@ impl<'lock> InstallTarget<'lock> {
                 // Groups defined directly on a non-project workspace root are not members.
                 let workspace_groups = workspace
                     .is_non_project()
-                    .then(|| workspace.workspace_dependency_groups().ok())
-                    .flatten()
+                    .then_some(lock.dependency_groups())
                     .into_iter()
-                    .flat_map(|dependency_groups| dependency_groups.into_keys().map(Cow::Owned));
+                    .flat_map(|dependency_groups| dependency_groups.keys().map(Cow::Borrowed));
 
                 let known_groups = member_groups
                     .chain(workspace_groups)
