@@ -1,6 +1,4 @@
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-use std::process::Command;
 
 use anyhow::Result;
 use assert_fs::fixture::ChildPath;
@@ -89,19 +87,6 @@ async fn catalog(context: &TestContext) -> Result<ChildPath> {
     Ok(downloads)
 }
 
-fn install(context: &TestContext, catalog: &ChildPath, path: &Path) -> Command {
-    let mut command = context.python_install();
-    command
-        .arg("--no-config")
-        .arg("--no-bin")
-        .arg("--no-registry")
-        .arg("--python-downloads-json-url")
-        .arg(catalog.path())
-        .env(EnvVars::PATH, path)
-        .env(EnvVars::UV_PYTHON_DOWNLOADS, "manual");
-    command
-}
-
 fn assert_not_executed(context: &TestContext) -> Result<()> {
     for entry in WalkDir::new(context.root.path()) {
         let entry = entry?;
@@ -119,7 +104,11 @@ async fn python_install_pyodide_missing_node() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
     let catalog = catalog(&context).await?;
 
-    uv_snapshot!(context.filters(), install(&context, &catalog, context.bin_dir.path())
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["--no-config", "--no-bin", "--no-registry", "--python-downloads-json-url"])
+        .arg(catalog.path())
+        .env(EnvVars::PATH, context.bin_dir.path())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "manual")
         .arg("cpython-3.13.2-emscripten-wasm32-musl"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -129,7 +118,11 @@ async fn python_install_pyodide_missing_node() -> Result<()> {
     ");
 
     // This currently reports another changed installation, rather than a true no-op.
-    uv_snapshot!(context.filters(), install(&context, &catalog, context.bin_dir.path())
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["--no-config", "--no-bin", "--no-registry", "--python-downloads-json-url"])
+        .arg(catalog.path())
+        .env(EnvVars::PATH, context.bin_dir.path())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "manual")
         .arg("pyodide@3.13"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -149,7 +142,11 @@ async fn python_install_pyodide_present_node() -> Result<()> {
     node.write_binary(INERT_EXECUTABLE)?;
     fs_err::set_permissions(node.path(), std::fs::Permissions::from_mode(0o755))?;
 
-    uv_snapshot!(context.filters(), install(&context, &catalog, context.bin_dir.path())
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["--no-config", "--no-bin", "--no-registry", "--python-downloads-json-url"])
+        .arg(catalog.path())
+        .env(EnvVars::PATH, context.bin_dir.path())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "manual")
         .arg("pyodide@3.13"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -165,7 +162,11 @@ async fn python_install_pyodide_warning_is_specific() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
     let catalog = catalog(&context).await?;
 
-    uv_snapshot!(context.filters(), install(&context, &catalog, context.bin_dir.path())
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["--no-config", "--no-bin", "--no-registry", "--python-downloads-json-url"])
+        .arg(catalog.path())
+        .env(EnvVars::PATH, context.bin_dir.path())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "manual")
         .arg("pypy-3.11.14-linux-x86_64-gnu"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -173,7 +174,11 @@ async fn python_install_pyodide_warning_is_specific() -> Result<()> {
      + pypy-3.11.14-linux-x86_64-gnu
     ");
 
-    uv_snapshot!(context.filters(), install(&context, &catalog, context.bin_dir.path())
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["--no-config", "--no-bin", "--no-registry", "--python-downloads-json-url"])
+        .arg(catalog.path())
+        .env(EnvVars::PATH, context.bin_dir.path())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "manual")
         .arg("pypy-3.11.14-linux-x86_64-gnu"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -188,7 +193,11 @@ async fn python_install_pyodide_warns_once() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
     let catalog = catalog(&context).await?;
 
-    uv_snapshot!(context.filters(), install(&context, &catalog, context.bin_dir.path())
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["--no-config", "--no-bin", "--no-registry", "--python-downloads-json-url"])
+        .arg(catalog.path())
+        .env(EnvVars::PATH, context.bin_dir.path())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "manual")
         .arg("pyodide@3.12")
         .arg("pyodide@3.13"), @"
     exit_code: 0 (success)
