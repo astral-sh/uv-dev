@@ -2557,3 +2557,157 @@ fn explicit_roots_frozen_conflicts_preserve_environment() -> Result<()> {
     assert_eq!(context.read(".venv/pyvenv.cfg"), configuration);
     Ok(())
 }
+
+/// Pylock conflict checks use the same Python domain as the selected member's output.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_pylock_conflicts_use_selected_python_domain() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared; python_version >= '3.13'"]
+        [dependency-groups]
+        dev = ["legacy; python_version < '3.13'"]
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "shared" }, { package = "legacy" }]]
+        [tool.uv.sources]
+        shared = { workspace = true }
+        legacy = { workspace = true }
+        [tool.uv.workspace]
+        members = ["shared", "legacy"]
+        roots = ["app"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/src/shared/__init__.py")
+        .touch()?;
+    context
+        .temp_dir
+        .child("legacy/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "legacy"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("legacy/src/legacy/__init__.py")
+        .touch()?;
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--no-index",
+            "--python",
+            "3.12",
+            "--preview-features",
+            "package-conflicts",
+        ])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--group", "dev", "--format", "pylock.toml",
+        "--no-header", "--preview-features", "package-conflicts",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.13"
+
+    [[packages]]
+    name = "shared"
+    directory = { path = "shared", editable = true }
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--group", "dev", "--format", "requirements.txt",
+        "--no-header", "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `legacy` and package `shared` are incompatible with the declared conflicts: {legacy, shared}
+    ");
+
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--no-index",
+            "--upgrade",
+            "--python",
+            "3.12",
+            "--preview-features",
+            "package-conflicts",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--group", "dev", "--format", "pylock.toml",
+        "--no-header", "--preview-features", "package-conflicts",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.13"
+
+    [[packages]]
+    name = "shared"
+    directory = { path = "shared", editable = true }
+    "#);
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&context.read("pyproject.toml").replace(
+            "legacy; python_version < '3.13'",
+            "legacy; python_version >= '3.13'",
+        ))?;
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--no-index",
+            "--python",
+            "3.12",
+            "--preview-features",
+            "package-conflicts",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--group", "dev", "--format", "pylock.toml",
+        "--no-header", "--preview-features", "package-conflicts",
+    ]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `legacy` and package `shared` are incompatible with the declared conflicts: {legacy, shared}
+    ");
+    Ok(())
+}
