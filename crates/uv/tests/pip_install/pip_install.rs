@@ -11591,6 +11591,71 @@ fn install_build_isolation_package() -> Result<()> {
     Ok(())
 }
 
+/// The indexed build-isolation partition installs nonmatching packages before matching packages.
+#[test]
+fn install_build_isolation_package_indexed_partition() {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("build-isolation/indexed-partition.toml");
+
+    // Nine shared-name entries and 33 uncached distributions exercise the indexed branch.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .args([
+            "--no-build-isolation-package", "shared-package",
+            "--no-build-isolation-package", "unused-1",
+            "--no-build-isolation-package", "unused-2",
+            "--no-build-isolation-package", "unused-3",
+            "--no-build-isolation-package", "unused-4",
+            "--no-build-isolation-package", "unused-5",
+            "--no-build-isolation-package", "unused-6",
+            "--no-build-isolation-package", "unused-7",
+            "--no-build-isolation-package", "unused-8",
+        ])
+        .arg("shared-package"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 33 packages in [TIME]
+    Prepared 32 packages in [TIME]
+    Installed 32 packages in [TIME]
+    Prepared 1 package without build isolation in [TIME]
+    Installed 1 package in [TIME]
+     + isolated-00==1.0.0
+     + isolated-01==1.0.0
+     + isolated-02==1.0.0
+     + isolated-03==1.0.0
+     + isolated-04==1.0.0
+     + isolated-05==1.0.0
+     + isolated-06==1.0.0
+     + isolated-07==1.0.0
+     + isolated-08==1.0.0
+     + isolated-09==1.0.0
+     + isolated-10==1.0.0
+     + isolated-11==1.0.0
+     + isolated-12==1.0.0
+     + isolated-13==1.0.0
+     + isolated-14==1.0.0
+     + isolated-15==1.0.0
+     + isolated-16==1.0.0
+     + isolated-17==1.0.0
+     + isolated-18==1.0.0
+     + isolated-19==1.0.0
+     + isolated-20==1.0.0
+     + isolated-21==1.0.0
+     + isolated-22==1.0.0
+     + isolated-23==1.0.0
+     + isolated-24==1.0.0
+     + isolated-25==1.0.0
+     + isolated-26==1.0.0
+     + isolated-27==1.0.0
+     + isolated-28==1.0.0
+     + isolated-29==1.0.0
+     + isolated-30==1.0.0
+     + isolated-31==1.0.0
+     + shared-package==1.0.0
+    ");
+}
+
 /// Install a package with an unsupported extension.
 #[test]
 fn invalid_extension() {
