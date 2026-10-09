@@ -612,6 +612,10 @@ fn add_git_branch() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_snapshot!(lock["package"][1]["source"].to_string(), @r#"
+    { git = "https://github.com/astral-test/uv-public-pypackage?branch=test-branch#0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
+    "#);
 
     Ok(())
 }
@@ -3746,24 +3750,40 @@ fn add_update_git_reference_project() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_snapshot!(lock["package"][1]["source"].to_string(), @r#"
+    { git = "https://github.com/astral-test/uv-public-pypackage.git#b270df1a2fb5d012294e9aaf05e7e0bab1e6a389" }
+    "#);
 
     uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage").arg("--tag=0.0.1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_snapshot!(lock["package"][1]["source"].to_string(), @r#"
+    { git = "https://github.com/astral-test/uv-public-pypackage.git?tag=0.0.1#0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
+    "#);
 
     uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage").arg("--branch=main"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_snapshot!(lock["package"][1]["source"].to_string(), @r#"
+    { git = "https://github.com/astral-test/uv-public-pypackage.git?branch=main#b270df1a2fb5d012294e9aaf05e7e0bab1e6a389" }
+    "#);
 
     uv_snapshot!(context.filters(), context.add().arg("--no-sync").arg("uv-public-pypackage").arg("--rev=2005223fcad0e2c06daf2e14b93b790604868e1e"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_snapshot!(lock["package"][1]["source"].to_string(), @r#"
+    { git = "https://github.com/astral-test/uv-public-pypackage.git?rev=2005223fcad0e2c06daf2e14b93b790604868e1e#2005223fcad0e2c06daf2e14b93b790604868e1e" }
+    "#);
 
     Ok(())
 }
