@@ -7637,7 +7637,7 @@ impl Package {
     }
 
     /// Returns the dependencies of the package.
-    pub(crate) fn dependencies(&self) -> &[Dependency] {
+    fn dependencies(&self) -> &[Dependency] {
         &self.dependencies
     }
 
