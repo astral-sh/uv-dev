@@ -19,13 +19,14 @@ use tracing::debug;
 use url::{ParseError, Url};
 
 use uv_preview::{Preview, PreviewFeature};
+use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
-use crate::Credentials;
-use crate::credentials::Token;
+use crate::credentials::{Authentication, Token};
 use crate::index::is_path_prefix;
 use crate::realm::{Realm, RealmRef};
+use crate::{Credentials, CredentialsCache};
 
 /// The username expected by Google Artifact Registry when using an `OAuth2` access token.
 const GOOGLE_ARTIFACT_REGISTRY_USERNAME: &str = "oauth2accesstoken";
@@ -51,6 +52,17 @@ const GOOGLE_ARTIFACT_REGISTRY_ADC_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Avoid waiting indefinitely for credentials from the `gcloud` CLI.
 const GOOGLE_ARTIFACT_REGISTRY_GCLOUD_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Errors retrieving explicitly configured Google Artifact Registry credentials.
+#[derive(Debug, thiserror::Error)]
+pub enum ArtifactRegistryError {
+    #[error("Failed to build a Google Artifact Registry credential request")]
+    Request(#[source] http::Error),
+    #[error("Failed to retrieve Google Application Default Credentials")]
+    ApplicationDefaultCredentials(#[source] reqsign::Error),
+    #[error("Timed out retrieving Google Application Default Credentials")]
+    Timeout(#[source] tokio::time::error::Elapsed),
+}
 
 /// A provider for authentication credentials for Google Artifact Registry.
 #[derive(Clone, Debug)]
@@ -196,9 +208,12 @@ impl ArtifactRegistryProvider {
     ///
     /// This follows the lookup order of Google's `keyrings.google-artifactregistry-auth` package:
     /// Application Default Credentials are preferred, then active `gcloud` credentials on Unix.
-    pub(crate) async fn credentials_for(&self, url: &Url) -> Option<Credentials> {
+    pub(crate) async fn credentials_for(
+        &self,
+        url: &Url,
+    ) -> Result<Option<Credentials>, ArtifactRegistryError> {
         if !Self::is_artifact_registry(url) {
-            return None;
+            return Ok(None);
         }
 
         let mut cached_credentials = self.credentials.lock().await;
@@ -206,14 +221,20 @@ impl ArtifactRegistryProvider {
             .as_ref()
             .filter(|credentials| credentials.expires_at > Instant::now())
         {
-            return credentials.credentials.clone();
+            return Ok(credentials.credentials.clone());
         }
 
         let explicit_adc =
             std::env::var_os(GOOGLE_APPLICATION_CREDENTIALS).is_some_and(|path| !path.is_empty());
-        let (credentials, cache_duration) = if let Some(credentials) =
-            self.credentials_from_adc(url).await
-        {
+        let adc_credentials = match self.credentials_from_adc(url).await {
+            Ok(credentials) => credentials,
+            Err(err) if explicit_adc => return Err(err),
+            Err(err) => {
+                debug!("Optional Google Application Default Credentials are unavailable: {err}");
+                None
+            }
+        };
+        let (credentials, cache_duration) = if let Some(credentials) = adc_credentials {
             debug!(
                 "Found Google Artifact Registry credentials from Application Default Credentials"
             );
@@ -236,23 +257,34 @@ impl ArtifactRegistryProvider {
             expires_at: Instant::now() + cache_duration,
         });
 
-        credentials
+        Ok(credentials)
     }
 
-    /// Returns `true` if credentials are available for Google Artifact Registry.
-    pub async fn has_credentials_for(&self, url: &Url) -> bool {
-        self.credentials_for(url).await.is_some()
+    /// Prepare refreshable authentication, retaining the fetched credentials for the first request.
+    pub async fn cache_credentials_for(
+        &self,
+        url: &DisplaySafeUrl,
+        cache: &CredentialsCache,
+    ) -> Result<bool, ArtifactRegistryError> {
+        let Some(credentials) = self.credentials_for(url).await? else {
+            return Ok(false);
+        };
+        cache.insert(
+            url,
+            Arc::new(Authentication::artifact_registry(self.clone(), credentials)),
+        );
+        Ok(true)
     }
 
-    async fn credentials_from_adc(&self, url: &Url) -> Option<Credentials> {
+    async fn credentials_from_adc(
+        &self,
+        url: &Url,
+    ) -> Result<Option<Credentials>, ArtifactRegistryError> {
         let request = http::Request::get(url.as_str())
             .body(())
-            .inspect_err(|err| {
-                debug!("Failed to build Google Artifact Registry credential request: {err}");
-            })
-            .ok()?;
+            .map_err(ArtifactRegistryError::Request)?;
         let (mut parts, ()) = request.into_parts();
-        let Ok(result) = tokio::time::timeout(
+        tokio::time::timeout(
             GOOGLE_ARTIFACT_REGISTRY_ADC_TIMEOUT,
             self.signer
                 .as_ref()
@@ -260,25 +292,16 @@ impl ArtifactRegistryProvider {
                 .sign(&mut parts, None),
         )
         .await
-        else {
-            debug!("Timed out retrieving Google Artifact Registry Application Default Credentials");
-            return None;
-        };
-        result
-            .inspect_err(|err| {
-                debug!(
-                    "Failed to retrieve Google Artifact Registry Application Default Credentials: {err}"
-                );
-            })
-            .ok()?;
+        .map_err(ArtifactRegistryError::Timeout)?
+        .map_err(ArtifactRegistryError::ApplicationDefaultCredentials)?;
 
-        let token = parts
+        let credentials = parts
             .headers
-            .get(AUTHORIZATION)?
-            .to_str()
-            .ok()?
-            .strip_prefix("Bearer ")?;
-        Self::credentials_from_token(token.to_string())
+            .get(AUTHORIZATION)
+            .and_then(|header| header.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .and_then(|token| Self::credentials_from_token(token.to_owned()));
+        Ok(credentials)
     }
 
     async fn credentials_from_gcloud() -> Option<(Credentials, Duration)> {
@@ -641,7 +664,8 @@ mod tests {
                 .credentials_for(
                     &Url::parse("https://us-central1-python.pkg.dev/project/index/simple").unwrap()
                 )
-                .await,
+                .await
+                .expect("credential lookup should succeed"),
             Some(Credentials::basic(
                 Some("oauth2accesstoken".to_string()),
                 Some("test-token".to_string())
@@ -661,7 +685,8 @@ mod tests {
         assert_eq!(
             provider
                 .credentials_for(&Url::parse("https://python.pkg.dev.example.com/simple").unwrap())
-                .await,
+                .await
+                .expect("credential lookup should succeed"),
             None
         );
         assert_eq!(
@@ -669,7 +694,8 @@ mod tests {
                 .credentials_for(
                     &Url::parse("https://us-central1-docker.pkg.dev/project/image").unwrap()
                 )
-                .await,
+                .await
+                .expect("credential lookup should succeed"),
             None
         );
         assert_eq!(
@@ -677,7 +703,8 @@ mod tests {
                 .credentials_for(
                     &Url::parse("https://us-central1-python.pkg.dev.evil.example/simple").unwrap()
                 )
-                .await,
+                .await
+                .expect("credential lookup should succeed"),
             None
         );
         assert_eq!(
@@ -685,7 +712,8 @@ mod tests {
                 .credentials_for(
                     &Url::parse("http://us-central1-python.pkg.dev/project/index/simple").unwrap()
                 )
-                .await,
+                .await
+                .expect("credential lookup should succeed"),
             None
         );
     }
@@ -705,7 +733,8 @@ mod tests {
                 .credentials_for(
                     &Url::parse("https://us-central1-python.pkg.dev/project/index/simple").unwrap()
                 )
-                .await,
+                .await
+                .expect("credential lookup should succeed"),
             None
         );
     }
