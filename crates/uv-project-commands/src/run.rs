@@ -69,6 +69,8 @@ use uv_settings::{
     ResolverInstallerSettings, ResolverSettings,
 };
 use uv_shell::WindowsRunnable;
+#[cfg(unix)]
+use uv_shell::escape_posix_for_single_quotes;
 use uv_static::EnvVars;
 use uv_types::SourceTreeEditablePolicy;
 use uv_virtualenv::UpgradePolicy;
@@ -2080,6 +2082,19 @@ fn copy_entrypoint(
         Err(err) => return Err(err.into()),
     }
 
+    // Absolute interpreter paths can use a direct shebang or a shell wrapper for long paths
+    // and paths containing spaces. Match the quoting emitted by the wheel installer.
+    let strip_absolute_shebang = |executable: &str| {
+        contents
+            .strip_prefix(&format!("#!{executable}\n"))
+            .or_else(|| {
+                contents.strip_prefix(&format!(
+                    "#!/bin/sh\n'''exec' '{}' \"$0\" \"$@\"\n' '''\n",
+                    escape_posix_for_single_quotes(executable)
+                ))
+            })
+    };
+
     let Some(contents) = contents
         // Check for a relative path or relocatable shebang
         .strip_prefix(
@@ -2089,13 +2104,13 @@ fn copy_entrypoint(
 "#,
         )
         // Or, an absolute path shebang
-        .or_else(|| contents.strip_prefix(&format!("#!{}\n", previous_executable.display())))
+        .or_else(|| strip_absolute_shebang(&previous_executable.display().to_string()))
         // If the previous executable ends with `python3`, check for a shebang with `python` too
         .or_else(|| {
             previous_executable
                 .to_str()
                 .and_then(|path| path.strip_suffix("3"))
-                .and_then(|path| contents.strip_prefix(&format!("#!{path}\n")))
+                .and_then(strip_absolute_shebang)
         })
     else {
         // If it's not a Python shebang, we'll skip it
