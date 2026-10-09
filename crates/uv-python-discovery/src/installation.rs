@@ -345,13 +345,7 @@ impl PythonInstallation {
 
         let installed = ManagedPythonInstallation::new(path, download)?;
         if !finalized {
-            installed.ensure_externally_managed().await?;
-            installed.ensure_sysconfig_patched().await?;
-            installed.ensure_canonical_executables().await?;
-            installed.ensure_build_file().await?;
-            if let Err(error) = installed.ensure_dylib_patched() {
-                error.warn_user(&installed);
-            }
+            installed.finalize(installed.path()).await?;
         }
 
         let minor_version = installed.minor_version_key();
