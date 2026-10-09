@@ -16,8 +16,7 @@ pub mod format;
 pub mod init;
 pub mod lock;
 pub mod remove;
-#[cfg(test)]
-mod requires_python_warnings;
+
 pub mod run;
 pub mod sync;
 mod toolchain;

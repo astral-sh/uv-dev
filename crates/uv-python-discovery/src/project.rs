@@ -1,6 +1,9 @@
 //! Project Python requests and compatibility validation.
 
+use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::atomic::Ordering;
+use std::sync::{LazyLock, Mutex};
 
 use crate::ConfigDiscovery;
 use crate::PythonInstallation;
@@ -19,7 +22,7 @@ use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
 use uv_settings::PythonInstallMirrors;
-use uv_warnings::warn_user_once;
+use uv_warnings::{ENABLED, warn_user_once};
 use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources, Workspace};
 
 use crate::PythonDownloadReporter;
@@ -255,9 +258,7 @@ fn find_workspace_python_requirement(
     if requires_python.is_empty() {
         return Ok(None);
     }
-    if let Some(warning) = format_tilde_requires_python_warning(&requires_python) {
-        warn_user_once!("{warning}");
-    }
+    warn_tilde_requires_python(&requires_python);
     match RequiresPython::intersection(requires_python.iter().map(|(.., specifiers)| specifiers)) {
         Some(intersection) => Ok(Some(ProjectPythonRequirement {
             requires_python: intersection,
@@ -272,10 +273,37 @@ fn find_workspace_python_requirement(
     }
 }
 
+/// A declaration can be revisited with different selected groups during one command.
+fn warn_tilde_requires_python(requires_python: &RequiresPythonSources) {
+    static WARNED: LazyLock<Mutex<BTreeSet<(RequiresPythonDeclaration, String)>>> =
+        LazyLock::new(Mutex::default);
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    let Ok(mut warned) = WARNED.lock() else {
+        return;
+    };
+    let unreported = requires_python
+        .iter()
+        .filter_map(|(source, specifiers)| {
+            let [specifier] = &specifiers[..] else {
+                return None;
+            };
+            let specifier = TildeVersionSpecifier::from_specifier_ref(specifier)?;
+            if specifier.has_patch() || !warned.insert((source.clone(), specifier.to_string())) {
+                return None;
+            }
+            Some((source.clone(), specifiers.clone()))
+        })
+        .collect();
+    drop(warned);
+    if let Some(warning) = format_tilde_requires_python_warning(&unreported) {
+        warn_user_once!("{warning}");
+    }
+}
+
 /// Consolidate ambiguous tilde specifiers without changing the single-source warning.
-pub fn format_tilde_requires_python_warning(
-    requires_python: &RequiresPythonSources,
-) -> Option<String> {
+fn format_tilde_requires_python_warning(requires_python: &RequiresPythonSources) -> Option<String> {
     let mut sources = Vec::new();
     for (source, specifiers) in requires_python {
         if let [spec] = &specifiers[..] {
