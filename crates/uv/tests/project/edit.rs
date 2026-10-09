@@ -15608,3 +15608,49 @@ async fn add_malware_detected() {
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
 }
+
+/// A lowered script requirement retains the named index selected for an add operation.
+#[test]
+fn add_pep723_requirements_named_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements")
+        .write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["foo"]
+        # [tool.uv.sources]
+        # foo = { index = "private" }
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().args(["-r", "requirements", "--index", "private=https://example.com/simple", "--frozen"]), @r#"
+    exit_code: 0 (success)
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "foo",
+    ]
+
+    [tool.uv.sources]
+    foo = { index = "private" }
+
+    [[tool.uv.index]]
+    name = "private"
+    url = "https://example.com/simple"
+    "#);
+    Ok(())
+}

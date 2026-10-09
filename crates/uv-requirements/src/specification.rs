@@ -725,9 +725,16 @@ impl RequirementsSpecification {
 
         // Collect excludes.
         for source in excludes {
-            let source =
-                Self::from_source_with_cache(source, client_builder, lowering_context, &mut cache)
-                    .await?;
+            let source = Self::from_source_with_cache(
+                source,
+                client_builder,
+                LoweringContext {
+                    sources: &NoSources::All,
+                    ..lowering_context
+                },
+                &mut cache,
+            )
+            .await?;
             for req_spec in source.requirements {
                 match req_spec.requirement {
                     UnresolvedRequirement::Named(requirement) => {

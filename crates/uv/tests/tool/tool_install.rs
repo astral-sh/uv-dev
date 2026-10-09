@@ -6551,3 +6551,80 @@ fn tool_install_with_build_hashes() -> Result<()> {
     }
     Ok(())
 }
+
+/// Tool upgrades reload the format of indexes pinned by inline requirements metadata.
+#[test]
+fn tool_install_pep723_flat_index_receipt_upgrade() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let bin = context.temp_dir.child("bin");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel) = generate_wheel(
+        &"dependency".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    context.temp_dir.child("deps.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["dependency"]
+        # [[tool.uv.index]]
+        # name = "flat"
+        # url = "./wheels"
+        # format = "flat"
+        # explicit = true
+        # [tool.uv.sources]
+        # dependency = { index = "flat" }
+        # ///
+    "#})?;
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/simple-launcher/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [
+            { name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" },
+            { name = "dependency", index = "file://[TEMP_DIR]/wheels", index-format = "flat" },
+        ]
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
+    let (filename, wheel) = generate_wheel(
+        &"dependency".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Modified simple-launcher environment
+     - dependency==1.0.0
+     + dependency==2.0.0
+    "#);
+    Ok(())
+}
