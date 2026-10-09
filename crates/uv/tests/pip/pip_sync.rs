@@ -3409,6 +3409,26 @@ requires-python = ">=3.13"
     Ok(())
 }
 
+/// Hash-policy errors retain the environment variable that enabled the policy.
+#[test]
+fn require_hashes_environment_provenance() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig")?;
+
+    uv_snapshot!(context.pip_sync().arg("requirements.txt")
+        .env(EnvVars::UV_REQUIRE_HASHES, "1"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: iniconfig
+
+    hint: `--require-hashes` was enabled by environment variable `UV_REQUIRE_HASHES`
+    ");
+    Ok(())
+}
+
 /// Use an unknown hash algorithm with `--require-hashes`.
 #[test]
 fn require_hashes_unknown_algorithm() -> Result<()> {

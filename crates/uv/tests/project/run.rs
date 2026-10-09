@@ -775,6 +775,31 @@ fn run_pep723_script_metadata() -> Result<()> {
     Ok(())
 }
 
+/// Inline script configuration retains its input and TOML key.
+#[test]
+fn run_pep723_script_no_index_provenance() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig"]
+        # [tool.uv]
+        # no-index = true
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.run().arg("script.py"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving script dependencies
+      cause: Because iniconfig was not found in the provided package locations and you require iniconfig, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+
+    hint: `--no-index` was enabled by `tool.uv.no-index` in `script.py`
+    ");
+    Ok(())
+}
+
 /// Run a PEP 723-compatible script with a `[[tool.uv.index]]`.
 #[test]
 fn run_pep723_script_index() -> Result<()> {
