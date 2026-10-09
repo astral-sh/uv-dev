@@ -188,6 +188,14 @@ pub struct OptionalDependencies<
 >(Map, #[serde(skip)] std::marker::PhantomData<Requirement>);
 
 impl<Requirement, Map> OptionalDependencies<Requirement, Map> {
+    /// Iterate over optional dependency groups.
+    pub fn iter<'a>(&'a self) -> <&'a Map as IntoIterator>::IntoIter
+    where
+        &'a Map: IntoIterator<Item = (&'a ExtraName, &'a Vec<Requirement>)>,
+    {
+        (&self.0).into_iter()
+    }
+
     /// Consume the wrapper and return the underlying map.
     pub fn into_inner(self) -> Map {
         self.0
@@ -219,7 +227,7 @@ where
     type IntoIter = <&'a Map as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        (&self.0).into_iter()
+        self.iter()
     }
 }
 
@@ -383,6 +391,19 @@ pub struct DependencyGroups<
 );
 
 impl<Requirement, Object, Map> DependencyGroups<Requirement, Object, Map> {
+    /// Iterate over dependency groups.
+    pub fn iter<'a>(&'a self) -> <&'a Map as IntoIterator>::IntoIter
+    where
+        &'a Map: IntoIterator<
+            Item = (
+                &'a GroupName,
+                &'a Vec<DependencyGroupSpecifier<Requirement, Object>>,
+            ),
+        >,
+    {
+        (&self.0).into_iter()
+    }
+
     /// Consume the wrapper and return the underlying map.
     pub fn into_inner(self) -> Map {
         self.0
@@ -472,7 +493,7 @@ where
     type IntoIter = <&'a Map as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        (&self.0).into_iter()
+        self.iter()
     }
 }
 
@@ -725,13 +746,13 @@ mod tests {
         )
         .unwrap_err();
 
-        insta::assert_snapshot!(error.to_string(), @r#"
+        insta::assert_snapshot!(error.to_string(), @r"
         TOML parse error at line 5, column 13
           |
         5 |             [project.optional-dependencies]
           |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         duplicate normalized extra name `dev-test`
-        "#);
+        ");
     }
 
     #[test]
@@ -831,12 +852,12 @@ mod tests {
         )
         .unwrap_err();
 
-        insta::assert_snapshot!(error.to_string(), @r#"
+        insta::assert_snapshot!(error.to_string(), @r"
         TOML parse error at line 2, column 13
           |
         2 |             [dependency-groups]
           |             ^^^^^^^^^^^^^^^^^^^
         duplicate dependency group: `dev-test`
-        "#);
+        ");
     }
 }
