@@ -202,10 +202,14 @@ impl SitePackages {
     /// requested extra. Root extras are supplied by the caller; extras on transitive dependency
     /// edges are read from installed metadata. Dependencies selected only by the historical
     /// command that installed a root package are therefore intentionally not inferred.
+    ///
+    /// `traverse_dependencies` can exclude installed dependency sections superseded by a planned
+    /// replacement. The package itself remains reachable.
     pub fn reachable_packages<'root>(
         &self,
         roots: impl IntoIterator<Item = (&'root PackageName, &'root [ExtraName])>,
         markers: &ResolverMarkerEnvironment,
+        traverse_dependencies: impl Fn(&PackageName, Option<&ExtraName>) -> bool,
     ) -> InstalledReachability {
         let mut packages = BTreeSet::new();
         let mut incomplete = BTreeSet::new();
@@ -224,6 +228,9 @@ impl SitePackages {
                 continue;
             }
             packages.insert(package.clone());
+            if !traverse_dependencies(&package, extra.as_ref()) {
+                continue;
+            }
 
             for distribution in distributions {
                 // Legacy egg metadata can store dependencies in `requires.txt`, which

@@ -4571,6 +4571,13 @@ fn remove_subset_ignores_replaced_package_dependencies() -> Result<()> {
         .assert()
         .success();
     context
+        .pip_install()
+        .args(["remaining-external", "--no-deps", "--index"])
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    context
         .add()
         .args(["remaining==2.0.0", "--no-sync", "--index"])
         .arg(server.index_url())
@@ -4594,7 +4601,70 @@ fn remove_subset_ignores_replaced_package_dependencies() -> Result<()> {
     ");
 
     context.assert_installed("remaining", "2.0.0");
+    context.assert_installed("remaining_external", "1.0.0");
     context.assert_not_installed("candidate");
+    context.assert_not_installed("removed");
+    context.pip_check().assert().success();
+
+    Ok(())
+}
+
+/// An unmanaged package can still request extras from a package being replaced.
+#[test]
+fn remove_subset_preserves_external_extras_on_replaced_packages() -> Result<()> {
+    let server = uv_test::packse::PackseServer::new("extras/remove-prune-extra.toml");
+    let context = uv_test::test_context!("3.12");
+    let filters = context.filters();
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["removed==1.0.0", "remaining==1.0.0"]
+    "#})?;
+    context
+        .sync()
+        .arg("--index")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    context
+        .pip_install()
+        .args(["remaining-extra-external", "--no-deps", "--index"])
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    context
+        .add()
+        .args(["remaining==2.0.0", "--no-sync", "--index"])
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+
+    uv_snapshot!(filters, context.remove().arg("removed").env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 4 packages in [TIME]
+    Installed 1 package in [TIME]
+     - orphan==1.0.0
+     - orphan-leaf==1.0.0
+     - remaining==1.0.0
+     + remaining==2.0.0
+     - removed==1.0.0
+    ");
+
+    context.assert_installed("remaining", "2.0.0");
+    context.assert_installed("remaining_extra_external", "1.0.0");
+    context.assert_installed("candidate", "1.0.0");
     context.assert_not_installed("removed");
     context.pip_check().assert().success();
 
@@ -5012,7 +5082,12 @@ fn remove_subset_respects_workspace_target_reachability() -> Result<()> {
      - candidate==1.0.0
     ");
 
-    context.assert_not_installed("candidate");
+    context
+        .python_command()
+        .args(["-c", "import candidate"])
+        .current_dir(&child1)
+        .assert()
+        .failure();
 
     Ok(())
 }

@@ -11,7 +11,6 @@ use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DryRun, ExtrasSpecification, InstallOptions,
-    Modifications,
 };
 use uv_dispatch::UniversalState;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
@@ -22,7 +21,7 @@ use uv_environment_operations::{
 };
 use uv_fs::Simplified;
 use uv_install_operations::loggers::DefaultInstallLogger;
-use uv_install_operations::{PrunePolicy, RemovalRoot};
+use uv_install_operations::{InstallationModifications, PrunePolicy, RemovalRoot};
 use uv_lock::{
     DependencySection, reachable_declared_package_names, reachable_direct_dependency_names,
 };
@@ -411,8 +410,7 @@ pub async fn remove(
         &groups,
         None,
         InstallOptions::default(),
-        Modifications::Exact,
-        Some(prune),
+        InstallationModifications::Prune(prune),
         None,
         (&settings).into(),
         &client_builder,
