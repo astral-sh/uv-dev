@@ -2,7 +2,6 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use owo_colors::OwoColorize;
 
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
@@ -19,6 +18,7 @@ use uv_environment_operations::{
 use uv_lock::{Lock, Metadata, Package};
 use uv_lock_operations::{
     DiscoveredProject, FrozenWorkspace, LockError, LockMode, LockOperation, LockTarget,
+    handle_missing_script_lockfile,
 };
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -28,8 +28,7 @@ use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, Pyt
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::{Pep723Item, Pep723ItemRef, Pep723Script};
 use uv_settings::{
-    FrozenSource, LockCheck, LockedSource, MalwareCheckSettings, PythonInstallMirrors,
-    ResolverSettings,
+    FrozenSource, LockCheck, MalwareCheckSettings, PythonInstallMirrors, ResolverSettings,
 };
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, WorkspaceCache};
@@ -90,7 +89,7 @@ pub async fn metadata(
         Some(Pep723Item::Script(script)) => MetadataSource::Manifest(LockTarget::Script(script)),
         Some(Pep723Item::Stdin(metadata)) => {
             stdin_script = Pep723Script {
-                path: project_dir.join("-"),
+                path: Pep723ItemRef::Stdin(metadata).directory()?.join("-"),
                 metadata: metadata.clone(),
                 prelude: String::new(),
                 postlude: String::new(),
@@ -350,48 +349,6 @@ pub async fn metadata(
     }
 
     print_metadata(&export, printer)
-}
-
-/// Report lockfile requirements for a Python script without an existing lockfile.
-fn handle_missing_script_lockfile(
-    lock_check: LockCheck,
-    frozen: Option<FrozenSource>,
-) -> Result<()> {
-    if let LockCheck::Enabled(lock_check) = lock_check {
-        match lock_check {
-            LockedSource::Cli(_) => {
-                bail!(
-                    "Unable to find lockfile for Python script, but `{lock_check}` was provided. To create a lockfile, run `{}`.",
-                    "uv lock --script".green(),
-                );
-            }
-            LockedSource::Env => {
-                warn_user!(
-                    "No lockfile found for Python script (ignoring `{lock_check}`); run `{}` to generate a lockfile",
-                    "uv lock --script".green(),
-                );
-            }
-        }
-    }
-
-    if let Some(frozen_source) = frozen {
-        match frozen_source {
-            FrozenSource::Cli(_) => {
-                bail!(
-                    "Unable to find lockfile for Python script, but `{frozen_source}` was provided. To create a lockfile, run `{}`.",
-                    "uv lock --script".green(),
-                );
-            }
-            FrozenSource::Env => {
-                warn_user!(
-                    "No lockfile found for Python script (ignoring `--frozen`); run `{}` to generate a lockfile",
-                    "uv lock --script".green(),
-                );
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn metadata_for_target(target: InstallTarget<'_>) -> Metadata {
