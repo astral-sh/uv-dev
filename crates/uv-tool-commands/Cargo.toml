@@ -34,6 +34,7 @@ uv-errors = { workspace = true }
 uv-fs = { workspace = true }
 uv-git = { workspace = true }
 uv-install-operations = { workspace = true }
+uv-install-wheel = { workspace = true }
 uv-installer = { workspace = true }
 uv-lock = { workspace = true }
 uv-lock-operations = { workspace = true }

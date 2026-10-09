@@ -1603,6 +1603,44 @@ pub async fn sync_environment(
     printer: Printer,
     preview: Preview,
 ) -> Result<PythonEnvironment, EnvironmentError> {
+    sync_environment_with_platform(
+        venv,
+        None,
+        resolution,
+        hasher,
+        modifications,
+        build_constraints,
+        settings,
+        client_builder,
+        state,
+        logger,
+        installer_metadata,
+        concurrency,
+        cache,
+        printer,
+        preview,
+    )
+    .await
+}
+
+/// Sync using the wheel compatibility tags selected for a requested Python platform.
+pub async fn sync_environment_with_platform(
+    venv: PythonEnvironment,
+    python_platform: Option<&TargetTriple>,
+    resolution: &Resolution,
+    hasher: HashStrategy,
+    modifications: Modifications,
+    build_constraints: Constraints,
+    settings: InstallerSettingsRef<'_>,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &PlatformState,
+    logger: Box<dyn InstallLogger>,
+    installer_metadata: bool,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    printer: Printer,
+    preview: Preview,
+) -> Result<PythonEnvironment, EnvironmentError> {
     let InstallerSettingsRef {
         index_locations,
         index_strategy,
@@ -1627,7 +1665,7 @@ pub async fn sync_environment(
 
     // Determine the markers tags to use for resolution.
     let interpreter = venv.interpreter();
-    let tags = venv.interpreter().tags()?;
+    let tags = uv_resolve_operations::resolution_tags(None, python_platform, interpreter)?;
 
     // Initialize the registry client.
     let client = RegistryClientBuilder::new(client_builder, cache.clone())
@@ -1702,7 +1740,7 @@ pub async fn sync_environment(
         link_mode,
         compile_bytecode.then_some(uv_install_operations::BytecodeCompilation::All),
         &hasher,
-        tags,
+        &tags,
         &client,
         state.in_flight(),
         concurrency,

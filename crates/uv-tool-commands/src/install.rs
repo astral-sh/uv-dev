@@ -19,8 +19,8 @@ use uv_configuration::{
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
-    RequirementSource, ResolvedDist, UnresolvedRequirementSpecification,
+    ExtraBuildRequires, IndexCapabilities, InstalledDistKind, NameRequirementSpecification,
+    Requirement, RequirementSource, ResolvedDist, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -50,7 +50,7 @@ use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
     EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
-    sync_environment, update_environment_with_preflight,
+    sync_environment, sync_environment_with_platform, update_environment_with_preflight,
 };
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_resolve_operations as operations;
@@ -929,8 +929,9 @@ pub async fn install(
                                 &cache,
                                 Some(environment),
                             )?;
-                            let preflight = sync_environment(
+                            let preflight = sync_environment_with_platform(
                                 preflight,
+                                python_platform.as_ref(),
                                 resolution,
                                 hash_strategy.clone(),
                                 Modifications::Exact,
@@ -1223,6 +1224,23 @@ fn create_preflight_environment(
             Path::new(""),
             &mut HashSet::new(),
         )?;
+        let previous_layout = existing.interpreter().layout();
+        let layout = environment.interpreter().layout();
+        for distribution in SitePackages::from_environment(&environment)?.iter() {
+            match distribution.kind {
+                InstalledDistKind::Registry(_) | InstalledDistKind::Url(_) => {
+                    uv_install_wheel::relocate_installed_scripts(
+                        &previous_layout,
+                        &layout,
+                        environment.relocatable(),
+                        distribution.install_path(),
+                    )?;
+                }
+                InstalledDistKind::EggInfoFile(_)
+                | InstalledDistKind::EggInfoDirectory(_)
+                | InstalledDistKind::LegacyEditable(_) => {}
+            }
+        }
     }
     Ok((temp_dir, environment))
 }

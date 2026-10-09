@@ -326,6 +326,151 @@ impl<'script> ValidatedScript<'script> {
     }
 }
 
+/// Relocate an installed distribution's Python scripts to the current interpreter.
+pub fn relocate_installed_scripts(
+    previous_layout: &Layout,
+    layout: &Layout,
+    relocatable: bool,
+    dist_info: &Path,
+) -> Result<(), Error> {
+    let EntryPoints {
+        console_scripts,
+        gui_scripts,
+    } = EntryPoints::read(dist_info.join("entry_points.txt"), layout.python_version.1)?;
+    let site_packages = dist_info.parent().ok_or_else(|| {
+        Error::InvalidWheel(format!(
+            "Invalid installed metadata path: {}",
+            dist_info.display()
+        ))
+    })?;
+    let prefix = dist_info
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".dist-info"))
+        .ok_or_else(|| {
+            Error::InvalidWheel(format!(
+                "Invalid installed metadata path: {}",
+                dist_info.display()
+            ))
+        })?;
+    let record = match File::open(dist_info.join("RECORD")) {
+        Ok(record) => Some(read_record(record)?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let mut generated = Vec::new();
+    write_script_entrypoints(
+        layout,
+        relocatable,
+        site_packages,
+        &console_scripts,
+        &mut generated,
+        false,
+    )?;
+    write_script_entrypoints(
+        layout,
+        relocatable,
+        site_packages,
+        &gui_scripts,
+        &mut generated,
+        true,
+    )?;
+    if let Some(mut record) = record {
+        relocate_recorded_scripts(
+            previous_layout,
+            layout,
+            relocatable,
+            site_packages,
+            &record,
+            &mut generated,
+        )?;
+        if generated.is_empty() {
+            return Ok(());
+        }
+        record.retain(|entry| {
+            !generated
+                .iter()
+                .any(|generated| generated.path == entry.path)
+        });
+        record.extend(generated);
+        write_record(site_packages, prefix, record)?;
+    }
+    Ok(())
+}
+
+/// Rewrite interpreter prefixes in recorded data scripts while retaining their bodies and modes.
+fn relocate_recorded_scripts(
+    previous_layout: &Layout,
+    layout: &Layout,
+    relocatable: bool,
+    site_packages: &Path,
+    record: &[RecordEntry],
+    generated: &mut Vec<RecordEntry>,
+) -> Result<(), Error> {
+    let prefixes = [false, true]
+        .into_iter()
+        .map(|is_gui| {
+            let previous = get_script_executable(&previous_layout.sys_executable, is_gui);
+            let current = get_relocatable_executable(
+                get_script_executable(&layout.sys_executable, is_gui),
+                layout,
+                relocatable,
+            )?;
+            Ok((
+                format_shebang(previous, &previous_layout.os_name, false),
+                format_shebang(current, &layout.os_name, relocatable),
+            ))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let prefix_limit = prefixes
+        .iter()
+        .map(|(prefix, _)| prefix.len() + 1)
+        .max()
+        .unwrap_or_default();
+    for entry in record {
+        let Some(path) =
+            normalize_path_under(site_packages.join(&entry.path), &layout.scheme.scripts)
+        else {
+            continue;
+        };
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let mut reader = BufReader::new(file);
+        let mut prefix = Vec::new();
+        reader
+            .by_ref()
+            .take(prefix_limit as u64)
+            .read_to_end(&mut prefix)?;
+        let Some((previous, current)) = prefixes.iter().find(|(previous, _)| {
+            prefix
+                .strip_prefix(previous.as_bytes())
+                .is_some_and(|suffix| {
+                    suffix
+                        .first()
+                        .is_none_or(|byte| matches!(byte, b'\n' | b'\r' | b' '))
+                })
+        }) else {
+            continue;
+        };
+        let permissions = reader.get_ref().metadata()?.permissions();
+        let mut contents = current.as_bytes().to_vec();
+        contents.extend_from_slice(&prefix[previous.len()..]);
+        reader.read_to_end(&mut contents)?;
+        let relative = pathdiff::diff_paths(&path, site_packages).ok_or_else(|| {
+            Error::Io(io::Error::other(format!(
+                "Could not find relative path for {}",
+                path.display()
+            )))
+        })?;
+        write_file_recorded(site_packages, &relative, contents, generated)?;
+        fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
 /// Create the wrapper scripts in the bin folder of the venv for launching console scripts.
 pub(crate) fn write_script_entrypoints(
     layout: &Layout,

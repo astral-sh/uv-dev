@@ -8080,6 +8080,7 @@ dependencies = [
  "uv-fs",
  "uv-git",
  "uv-install-operations",
+ "uv-install-wheel",
  "uv-installer",
  "uv-lock",
  "uv-lock-operations",
