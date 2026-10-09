@@ -7640,6 +7640,8 @@ version = "0.12.13"
 name = "uv-virtualenv"
 version = "0.0.80"
 dependencies = [
+ "anyhow",
+ "assert_fs",
  "console",
  "fs-err",
  "itertools 0.14.0",

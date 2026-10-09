@@ -22,10 +22,21 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct PythonEnvironment(Arc<PythonEnvironmentShared>);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct PythonEnvironmentShared {
     root: PathBuf,
     interpreter: Interpreter,
+    _lifetime_guard: Option<Arc<dyn Send + Sync>>,
+}
+
+impl fmt::Debug for PythonEnvironmentShared {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PythonEnvironmentShared")
+            .field("root", &self.root)
+            .field("interpreter", &self.interpreter)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The result of failed environment discovery.
@@ -220,6 +231,7 @@ impl PythonEnvironment {
         Ok(Self(Arc::new(PythonEnvironmentShared {
             root: interpreter.sys_prefix().to_path_buf(),
             interpreter,
+            _lifetime_guard: None,
         })))
     }
 
@@ -233,7 +245,21 @@ impl PythonEnvironment {
         Self(Arc::new(PythonEnvironmentShared {
             root: interpreter.sys_prefix().to_path_buf(),
             interpreter,
+            _lifetime_guard: None,
         }))
+    }
+
+    /// Retain the environment's storage and admission while any clone is still in use.
+    ///
+    /// Detached installers must own a clone through their last filesystem mutation.
+    #[must_use]
+    pub fn with_lifetime_guard(mut self, guard: Arc<dyn Send + Sync>) -> Self {
+        let inner = Arc::make_mut(&mut self.0);
+        inner._lifetime_guard = Some(match inner._lifetime_guard.take() {
+            Some(previous) => Arc::new((previous, guard)),
+            None => guard,
+        });
+        self
     }
 
     /// Create a [`PythonEnvironment`] from an existing [`Interpreter`] and `--target` directory.

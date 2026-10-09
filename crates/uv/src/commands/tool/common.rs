@@ -520,6 +520,10 @@ impl ToolLock {
     }
 
     /// Write or remove the lock for a tool.
+    pub(super) fn serialize(&self) -> anyhow::Result<String> {
+        Ok(self.lock.to_toml()?)
+    }
+
     pub(crate) fn write(directory: &Path, lock: Option<&Self>) -> anyhow::Result<()> {
         let contents = lock.map(|lock| lock.lock.to_toml()).transpose()?;
         Self::write_contents(directory, contents.as_deref())

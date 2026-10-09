@@ -321,16 +321,15 @@ impl ToolEntrypointSnapshot {
         Ok(())
     }
 
-    /// Discover and preflight the complete final export set, then apply it.
-    pub(super) fn install(
+    /// Discover and preflight the complete final export set without changing commands.
+    pub(super) fn prepare(
         &self,
         environment: &PythonEnvironment,
         name: &PackageName,
         providers: &[PackageName],
         force: bool,
-        report_unchanged: bool,
         printer: Printer,
-    ) -> anyhow::Result<Vec<ToolEntrypoint>> {
+    ) -> anyhow::Result<ToolEntrypointPlan> {
         let site_packages = SitePackages::from_environment(environment)?;
         let environment_root = fs_err::canonicalize(environment.root())?;
         let previous_providers = self
@@ -467,40 +466,119 @@ impl ToolEntrypointSnapshot {
                 }
             }
             if !retained && old.fingerprint.matches(&old.entrypoint.install_path)? {
-                removals.push(&old.entrypoint.install_path);
+                removals.push(old.entrypoint.install_path.clone());
             }
         }
-        if !planned.is_empty() {
+        let exports = planned
+            .into_iter()
+            .map(
+                |(target, (entry_name, source, provider, replace))| PlannedToolEntrypoint {
+                    entrypoint: ToolEntrypoint::new(&entry_name, target, provider.to_string()),
+                    source,
+                    provider,
+                    replace,
+                },
+            )
+            .collect();
+        Ok(ToolEntrypointPlan {
+            executable_directory: self.executable_directory.clone(),
+            exports,
+            removals,
+        })
+    }
+
+    /// Discover and preflight the complete final export set, then apply it.
+    pub(super) fn install(
+        &self,
+        environment: &PythonEnvironment,
+        name: &PackageName,
+        providers: &[PackageName],
+        force: bool,
+        report_unchanged: bool,
+        printer: Printer,
+    ) -> anyhow::Result<Vec<ToolEntrypoint>> {
+        self.prepare(environment, name, providers, force, printer)?
+            .apply(name, report_unchanged, printer)
+    }
+}
+
+/// A prepared existing-tool export set, retaining the admission policy of its receipt snapshot.
+pub(super) struct ToolEntrypointPlan {
+    executable_directory: PathBuf,
+    pub(super) exports: Vec<PlannedToolEntrypoint>,
+    pub(super) removals: Vec<PathBuf>,
+}
+
+pub(super) struct PlannedToolEntrypoint {
+    pub(super) entrypoint: ToolEntrypoint,
+    pub(super) source: PathBuf,
+    provider: PackageName,
+    replace: bool,
+}
+
+impl ToolEntrypointPlan {
+    pub(super) fn entrypoints(&self) -> Vec<ToolEntrypoint> {
+        self.exports
+            .iter()
+            .map(|export| export.entrypoint.clone())
+            .collect()
+    }
+
+    pub(super) fn revalidate(
+        &self,
+        snapshot: &ToolEntrypointSnapshot,
+        name: &PackageName,
+    ) -> anyhow::Result<()> {
+        snapshot.admit_mutation(name, false)?;
+        for export in &self.exports {
+            snapshot.admit_target(name, &export.entrypoint.install_path, false)?;
+        }
+        for removal in &self.removals {
+            for old in &snapshot.owned {
+                if same_existing_entrypoint_location(&old.entrypoint.install_path, removal)?
+                    && !old.fingerprint.matches(removal)?
+                {
+                    bail!(
+                        "Executable `{}` changed during preparation",
+                        removal.user_display()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn apply(
+        &self,
+        name: &PackageName,
+        report_unchanged: bool,
+        printer: Printer,
+    ) -> anyhow::Result<Vec<ToolEntrypoint>> {
+        if !self.exports.is_empty() {
             fs_err::create_dir_all(&self.executable_directory)
                 .context("Failed to create executable directory")?;
         }
         #[cfg(windows)]
         let itself = std::env::current_exe().ok();
-        let mut result = Vec::new();
-        let mut names = BTreeMap::<PackageName, BTreeSet<String>>::new();
-        for (target, (entry_name, source, package, replace)) in planned {
-            if replace {
+        for export in &self.exports {
+            if export.replace {
+                let target = &export.entrypoint.install_path;
                 #[cfg(unix)]
-                uv_fs::replace_symlink(source, &target).context("Failed to install executable")?;
+                uv_fs::replace_symlink(&export.source, target)
+                    .context("Failed to install executable")?;
                 #[cfg(windows)]
                 if itself.as_ref().is_some_and(|itself| {
-                    std::path::absolute(&target).is_ok_and(|target| *itself == target)
+                    std::path::absolute(target).is_ok_and(|target| *itself == target)
                 }) {
-                    self_replace::self_replace(source).context("Failed to install executable")?;
+                    self_replace::self_replace(&export.source)
+                        .context("Failed to install executable")?;
                 } else {
-                    copy_executable(&source, &target).context("Failed to install executable")?;
+                    copy_executable(&export.source, target)
+                        .context("Failed to install executable")?;
                 }
             }
-            let entrypoint = ToolEntrypoint::new(&entry_name, target, package.to_string());
-            if replace || report_unchanged {
-                names
-                    .entry(package.clone())
-                    .or_default()
-                    .insert(entrypoint.name.clone());
-            }
-            result.push(entrypoint);
         }
-        for old in removals {
+        for old in &self.removals {
             #[cfg(windows)]
             if itself.as_ref().is_some_and(|itself| {
                 std::path::absolute(old).is_ok_and(|target| *itself == target)
@@ -514,12 +592,31 @@ impl ToolEntrypointSnapshot {
                 Err(err) => return Err(err.into()),
             }
         }
+        self.report(name, report_unchanged, printer)?;
+        Ok(self.entrypoints())
+    }
+
+    pub(super) fn report(
+        &self,
+        name: &PackageName,
+        report_unchanged: bool,
+        printer: Printer,
+    ) -> anyhow::Result<()> {
+        let mut names = BTreeMap::<PackageName, BTreeSet<String>>::new();
+        for export in &self.exports {
+            if export.replace || report_unchanged {
+                names
+                    .entry(export.provider.clone())
+                    .or_default()
+                    .insert(export.entrypoint.name.clone());
+            }
+        }
         let root_names = names.remove(name);
         for (package, names) in names
             .into_iter()
             .chain(root_names.map(|names| (name.clone(), names)))
         {
-            let s = if names.len() == 1 { "" } else { "s" };
+            let suffix = if names.len() == 1 { "" } else { "s" };
             let from = if package == *name {
                 String::new()
             } else {
@@ -527,12 +624,12 @@ impl ToolEntrypointSnapshot {
             };
             writeln!(
                 printer.stderr(),
-                "Installed {} executable{s}{from}: {}",
+                "Installed {} executable{suffix}{from}: {}",
                 names.len(),
                 names.iter().map(|name| name.bold()).join(", ")
             )?;
         }
-        Ok(result)
+        Ok(())
     }
 }
 

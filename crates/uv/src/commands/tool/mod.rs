@@ -9,6 +9,7 @@ use uv_python::PythonRequest;
 pub(crate) mod audit;
 pub(crate) mod common;
 pub(crate) mod dir;
+mod environment_transaction;
 mod export_transaction;
 pub(crate) mod install;
 pub(crate) mod list;

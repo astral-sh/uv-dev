@@ -83,7 +83,10 @@ pub(crate) fn read_scripts_from_section(
 /// <https://github.com/richo/hashing-copy/blob/d8dd2fdb63c6faf198de0c9e5713d6249cbb5323/src/lib.rs#L10-L52>
 /// which in turn got it from std
 /// <https://doc.rust-lang.org/1.58.0/src/std/io/copy.rs.html#128-156>
-fn copy_and_hash(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<(u64, String)> {
+pub(super) fn copy_and_hash(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+) -> io::Result<(u64, String)> {
     // TODO: Do we need to support anything besides sha256?
     let mut hasher = Sha256::new();
     // Same buf size as std. Note that this number is important for performance
@@ -113,7 +116,11 @@ fn copy_and_hash(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<
 /// executable.
 ///
 /// See: <https://github.com/pypa/pip/blob/0ad4c94be74cc24874c6feb5bb3c2152c398a18e/src/pip/_vendor/distlib/scripts.py#L136-L165>
-fn format_shebang(executable: impl AsRef<Path>, os_name: &str, relocatable: bool) -> String {
+pub(super) fn format_shebang(
+    executable: impl AsRef<Path>,
+    os_name: &str,
+    relocatable: bool,
+) -> String {
     // Convert the executable to a simplified path.
     let executable = executable.as_ref().simplified_display().to_string();
 
@@ -147,7 +154,7 @@ fn format_shebang(executable: impl AsRef<Path>, os_name: &str, relocatable: bool
 /// Returns a [`PathBuf`] to `python[w].exe` for script execution.
 ///
 /// <https://github.com/pypa/pip/blob/76e82a43f8fb04695e834810df64f2d9a2ff6020/src/pip/_vendor/distlib/scripts.py#L121-L126>
-fn get_script_executable(python_executable: &Path, is_gui: bool) -> PathBuf {
+pub(super) fn get_script_executable(python_executable: &Path, is_gui: bool) -> PathBuf {
     // Only check for `pythonw.exe` on Windows.
     if cfg!(windows) && is_gui {
         python_executable
@@ -381,13 +388,13 @@ fn validate_data_script_destination(target: &Path, scripts: &Path) -> Result<(),
 
 /// A form of [`Script`] guaranteed by [`ValidatedScript::try_from_script`] to be constrained to
 /// the scripts directory.
-struct ValidatedScript<'script> {
+pub(super) struct ValidatedScript<'script> {
     path: PathBuf,
     script: &'script Script,
 }
 
 impl<'script> ValidatedScript<'script> {
-    fn try_from_script(script: &'script Script, layout: &Layout) -> Result<Self, Error> {
+    pub(super) fn try_from_script(script: &'script Script, layout: &Layout) -> Result<Self, Error> {
         let Some(path) = normalize_path_under(
             layout.scheme.scripts.join(&script.name),
             &layout.scheme.scripts,
@@ -433,7 +440,7 @@ impl<'script> ValidatedScript<'script> {
         Ok(Self { path, script })
     }
 
-    fn as_path(&self) -> &Path {
+    pub(super) fn as_path(&self) -> &Path {
         &self.path
     }
 
@@ -455,6 +462,21 @@ impl<'script> ValidatedScript<'script> {
     }
 }
 
+pub(super) fn render_script_launcher(
+    script: &Script,
+    executable: &Path,
+    os_name: &str,
+    relocatable: bool,
+    is_gui: bool,
+) -> Result<Vec<u8>, Error> {
+    let source = get_script_launcher(script, &format_shebang(executable, os_name, relocatable));
+    if cfg!(windows) {
+        Ok(windows_script_launcher(&source, is_gui, executable)?)
+    } else {
+        Ok(source.into_bytes())
+    }
+}
+
 /// Create the wrapper scripts in the bin folder of the venv for launching console scripts.
 pub(crate) fn write_script_entrypoints(
     layout: &Layout,
@@ -472,38 +494,25 @@ pub(crate) fn write_script_entrypoints(
         let launcher_executable = get_script_executable(&layout.sys_executable, is_gui);
         let launcher_executable =
             get_relocatable_executable(launcher_executable, layout, relocatable)?;
-        let launcher_python_script = get_script_launcher(
+        let launcher = render_script_launcher(
             script.inner(),
-            &format_shebang(&launcher_executable, &layout.os_name, relocatable),
-        );
+            &launcher_executable,
+            &layout.os_name,
+            relocatable,
+            is_gui,
+        )?;
+        write_file_recorded(site_packages, &entrypoint_relative, &launcher, record)?;
 
-        // If necessary, wrap the launcher script in a Windows launcher binary.
-        if cfg!(windows) {
-            write_file_recorded(
-                site_packages,
-                &entrypoint_relative,
-                &windows_script_launcher(&launcher_python_script, is_gui, &launcher_executable)?,
-                record,
-            )?;
-        } else {
-            write_file_recorded(
-                site_packages,
-                &entrypoint_relative,
-                &launcher_python_script,
-                record,
-            )?;
+        // Make the launcher executable.
+        #[cfg(unix)]
+        {
+            use std::fs::Permissions;
+            use std::os::unix::fs::PermissionsExt;
 
-            // Make the launcher executable.
-            #[cfg(unix)]
-            {
-                use std::fs::Permissions;
-                use std::os::unix::fs::PermissionsExt;
-
-                let path = script.as_path();
-                let permissions = fs::metadata(path)?.permissions();
-                if permissions.mode() & 0o111 != 0o111 {
-                    fs::set_permissions(path, Permissions::from_mode(permissions.mode() | 0o111))?;
-                }
+            let path = script.as_path();
+            let permissions = fs::metadata(path)?.permissions();
+            if permissions.mode() & 0o111 != 0o111 {
+                fs::set_permissions(path, Permissions::from_mode(permissions.mode() | 0o111))?;
             }
         }
     }

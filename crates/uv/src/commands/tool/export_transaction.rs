@@ -11,6 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, bail};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -30,7 +31,10 @@ use crate::commands::tool::recovery::{
 use crate::printer::Printer;
 
 /// Restrict Unix staging access from the initial directory creation.
-fn private_staging_directory(parent: &Path, prefix: &str) -> io::Result<tempfile::TempDir> {
+pub(super) fn private_staging_directory(
+    parent: &Path,
+    prefix: &str,
+) -> io::Result<tempfile::TempDir> {
     let mut builder = tempfile::Builder::new();
     builder.prefix(prefix);
     #[cfg(unix)]
@@ -38,18 +42,18 @@ fn private_staging_directory(parent: &Path, prefix: &str) -> io::Result<tempfile
     builder.tempdir_in(parent)
 }
 
-const JOURNAL_PREFIX: &str = ".uv-tool-exports-";
+pub(super) const JOURNAL_PREFIX: &str = ".uv-tool-exports-";
 const JOURNAL_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "platform", rename_all = "kebab-case")]
-enum ExportIdentity {
+pub(super) enum ExportIdentity {
     Unix { device: u64, inode: u64 },
     Windows { identifier: [u8; 24] },
 }
 
 impl ExportIdentity {
-    fn directory(path: &Path) -> io::Result<Self> {
+    pub(super) fn directory(path: &Path) -> io::Result<Self> {
         #[cfg(unix)]
         let file = fs_err::File::open(path)?;
         #[cfg(windows)]
@@ -105,13 +109,13 @@ enum ExportContents {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-struct ExportVersion {
+pub(super) struct ExportVersion {
     identity: ExportIdentity,
     contents: ExportContents,
 }
 
 impl ExportVersion {
-    fn capture(path: &Path) -> anyhow::Result<Option<Self>> {
+    pub(super) fn capture(path: &Path) -> anyhow::Result<Option<Self>> {
         let metadata = match fs_err::symlink_metadata(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -154,7 +158,7 @@ impl ExportVersion {
         }))
     }
 
-    fn matches(&self, path: &Path) -> anyhow::Result<bool> {
+    pub(super) fn matches(&self, path: &Path) -> anyhow::Result<bool> {
         Ok(Self::capture(path)?.as_ref() == Some(self))
     }
 }
@@ -173,10 +177,10 @@ fn digest_file(mut file: &fs_err::File) -> io::Result<[u8; 32]> {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct JournalExport {
-    filename: PathBuf,
-    original: Option<ExportVersion>,
-    replacement: ExportVersion,
+pub(super) struct JournalExport {
+    pub(super) filename: PathBuf,
+    pub(super) original: Option<ExportVersion>,
+    pub(super) replacement: ExportVersion,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -184,13 +188,19 @@ struct ExportJournal {
     version: u8,
     phase: JournalPhase,
     tool: PackageName,
-    directory: PathBuf,
-    staging: PathBuf,
-    staging_identity: ExportIdentity,
+    #[serde(flatten)]
+    files: ExportDirectory,
     receipt_before: Option<[u8; 32]>,
     receipt: [u8; 32],
     lock: Option<[u8; 32]>,
-    exports: Vec<JournalExport>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(super) struct ExportDirectory {
+    pub(super) directory: PathBuf,
+    pub(super) staging: PathBuf,
+    pub(super) staging_identity: ExportIdentity,
+    pub(super) exports: Vec<JournalExport>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -200,20 +210,28 @@ enum JournalPhase {
     Committed,
 }
 
-struct JournalRecord {
-    path: PathBuf,
+pub(super) struct OwnedJournal<T> {
+    pub(super) path: PathBuf,
     identity: ExportIdentity,
     // Pin the journal's identity until its contents have been checked and removed.
     _file: fs_err::File,
     bytes: Vec<u8>,
-    journal: ExportJournal,
+    pub(super) journal: T,
 }
+
+type JournalRecord = OwnedJournal<ExportJournal>;
 
 impl ExportJournal {
     fn validate(&self, name: &PackageName) -> anyhow::Result<()> {
         if self.version != JOURNAL_VERSION || &self.tool != name || self.receipt_before.is_some() {
             bail!("Unsupported executable recovery journal for `{name}`");
         }
+        self.files.validate(name)
+    }
+}
+
+impl ExportDirectory {
+    pub(super) fn validate(&self, name: &PackageName) -> anyhow::Result<()> {
         if !self.directory.is_absolute()
             || !is_filename(&self.staging)
             || !self.staging.to_string_lossy().starts_with(JOURNAL_PREFIX)
@@ -233,7 +251,7 @@ impl ExportJournal {
         Ok(())
     }
 
-    fn staging_directory(&self) -> anyhow::Result<PathBuf> {
+    pub(super) fn staging_directory(&self) -> anyhow::Result<PathBuf> {
         let path = self.directory.join(&self.staging);
         let metadata = fs_err::symlink_metadata(&path)?;
         if !metadata.is_dir()
@@ -250,9 +268,32 @@ impl ExportJournal {
     }
 }
 
-impl JournalRecord {
+impl OwnedJournal<ExportJournal> {
     fn read(installed_tools: &InstalledTools, name: &PackageName) -> anyhow::Result<Option<Self>> {
-        let path = journal_path(installed_tools, name);
+        let record = Self::read_from(journal_path(installed_tools, name))?;
+        if let Some(record) = &record {
+            record.journal.validate(name)?;
+        }
+        Ok(record)
+    }
+
+    fn create(installed_tools: &InstalledTools, journal: ExportJournal) -> anyhow::Result<Self> {
+        journal.validate(&journal.tool)?;
+        Self::create_at(journal_path(installed_tools, &journal.tool), journal)
+    }
+
+    fn mark_committed(&mut self) -> anyhow::Result<()> {
+        if self.journal.phase == JournalPhase::Committed {
+            return Ok(());
+        }
+        let mut journal = self.journal.clone();
+        journal.phase = JournalPhase::Committed;
+        self.replace(journal)
+    }
+}
+
+impl<T: DeserializeOwned> OwnedJournal<T> {
+    pub(super) fn read_from(path: PathBuf) -> anyhow::Result<Option<Self>> {
         let mut file = match fs_err::File::open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -267,13 +308,12 @@ impl JournalRecord {
         }
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
-        let journal: ExportJournal = serde_json::from_slice(&bytes).with_context(|| {
+        let journal: T = serde_json::from_slice(&bytes).with_context(|| {
             format!(
                 "Invalid executable recovery journal `{}`",
                 path.user_display()
             )
         })?;
-        journal.validate(name)?;
         Ok(Some(Self {
             path,
             identity,
@@ -282,14 +322,14 @@ impl JournalRecord {
             journal,
         }))
     }
+}
 
-    fn create(installed_tools: &InstalledTools, journal: ExportJournal) -> anyhow::Result<Self> {
-        journal.validate(&journal.tool)?;
-        let path = journal_path(installed_tools, &journal.tool);
+impl<T: Serialize> OwnedJournal<T> {
+    pub(super) fn create_at(path: PathBuf, journal: T) -> anyhow::Result<Self> {
         let bytes = serde_json::to_vec(&journal)?;
         let mut temporary = tempfile::Builder::new()
             .prefix(JOURNAL_PREFIX)
-            .tempfile_in(installed_tools.root())?;
+            .tempfile_in(path.parent().context("Recovery journal has no parent")?)?;
         temporary.write_all(&bytes)?;
         temporary.as_file().sync_all()?;
         let (file, temporary) = temporary.into_parts();
@@ -307,31 +347,8 @@ impl JournalRecord {
         })
     }
 
-    fn remove(&self) -> anyhow::Result<()> {
+    pub(super) fn replace(&mut self, journal: T) -> anyhow::Result<()> {
         self.check_current()?;
-        fs_err::remove_file(&self.path)?;
-        Ok(())
-    }
-
-    fn check_current(&self) -> anyhow::Result<()> {
-        if ExportIdentity::at(&self.path)?.as_ref() != Some(&self.identity)
-            || fs_err::read(&self.path)? != self.bytes
-        {
-            bail!(
-                "Executable recovery journal `{}` changed outside this installation",
-                self.path.user_display()
-            );
-        }
-        Ok(())
-    }
-
-    fn mark_committed(&mut self) -> anyhow::Result<()> {
-        if self.journal.phase == JournalPhase::Committed {
-            return Ok(());
-        }
-        self.check_current()?;
-        let mut journal = self.journal.clone();
-        journal.phase = JournalPhase::Committed;
         let bytes = serde_json::to_vec(&journal)?;
         let parent = self
             .path
@@ -369,6 +386,26 @@ impl JournalRecord {
     }
 }
 
+impl<T> OwnedJournal<T> {
+    pub(super) fn remove(&self) -> anyhow::Result<()> {
+        self.check_current()?;
+        fs_err::remove_file(&self.path)?;
+        Ok(())
+    }
+
+    pub(super) fn check_current(&self) -> anyhow::Result<()> {
+        if ExportIdentity::at(&self.path)?.as_ref() != Some(&self.identity)
+            || fs_err::read(&self.path)? != self.bytes
+        {
+            bail!(
+                "Executable recovery journal `{}` changed outside this installation",
+                self.path.user_display()
+            );
+        }
+        Ok(())
+    }
+}
+
 fn is_filename(path: &Path) -> bool {
     let mut components = path.components();
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
@@ -398,7 +435,7 @@ impl PendingToolExportRecovery {
     fn directories(&self) -> impl Iterator<Item = &Path> {
         self.records
             .iter()
-            .map(|record| record.journal.directory.as_path())
+            .map(|record| record.journal.files.directory.as_path())
     }
 
     fn recover(self, installed_tools: &InstalledTools) -> anyhow::Result<()> {
@@ -699,17 +736,19 @@ impl FreshToolExportPlan {
             version: JOURNAL_VERSION,
             phase: JournalPhase::Publishing,
             tool: name.clone(),
-            directory: self.canonical_directory.clone(),
-            staging: staging
-                .path()
-                .file_name()
-                .ok_or_else(|| io::Error::other("Recovery directory has no filename"))?
-                .into(),
-            staging_identity: ExportIdentity::directory(staging.path())?,
+            files: ExportDirectory {
+                directory: self.canonical_directory.clone(),
+                staging: staging
+                    .path()
+                    .file_name()
+                    .ok_or_else(|| io::Error::other("Recovery directory has no filename"))?
+                    .into(),
+                staging_identity: ExportIdentity::directory(staging.path())?,
+                exports,
+            },
             receipt_before: None,
             receipt: Sha256::digest(receipt).into(),
             lock: lock.map(|contents| Sha256::digest(contents).into()),
-            exports,
         };
         Ok(PreparedToolExports {
             plan: self,
@@ -731,7 +770,7 @@ impl PreparedToolExports {
         installed_tools: &InstalledTools,
     ) -> anyhow::Result<ToolExportTransaction> {
         self.plan.check_conflicts(self.force)?;
-        if fs_err::canonicalize(&self.plan.directory)? != self.journal.directory {
+        if fs_err::canonicalize(&self.plan.directory)? != self.journal.files.directory {
             bail!("Executable directory changed during installation");
         }
         let receipt = installed_tools
@@ -742,8 +781,8 @@ impl PreparedToolExports {
             Ok(_) => bail!("Tool receipt appeared during fresh installation"),
             Err(error) => return Err(error.into()),
         }
-        for export in &self.journal.exports {
-            let target = self.journal.directory.join(&export.filename);
+        for export in &self.journal.files.exports {
+            let target = self.journal.files.directory.join(&export.filename);
             if ExportVersion::capture(&target)? != export.original {
                 bail!(
                     "Executable `{}` changed after installation was prepared",
@@ -767,8 +806,8 @@ impl PreparedToolExports {
 
 impl ToolExportTransaction {
     pub(super) fn publish(&mut self, printer: Printer) -> anyhow::Result<()> {
-        for index in 0..self.record.journal.exports.len() {
-            publish_export(&self.record.journal, index)?;
+        for index in 0..self.record.journal.files.exports.len() {
+            publish_export(&self.record.journal.files, index)?;
         }
         let mut names = BTreeMap::<PackageName, BTreeSet<String>>::new();
         for export in &self.plan.exports {
@@ -799,7 +838,7 @@ impl ToolExportTransaction {
                 commands.iter().map(|command| command.bold()).join(", ")
             )?;
         }
-        if fs_err::canonicalize(&self.plan.directory)? != self.record.journal.directory {
+        if fs_err::canonicalize(&self.plan.directory)? != self.record.journal.files.directory {
             bail!("Executable directory changed before recording the installation");
         }
         Ok(())
@@ -817,7 +856,7 @@ impl ToolExportTransaction {
             .mark_committed()
             .context("Tool is installed, but its recovery commit could not be saved")?;
         if let Err(error) =
-            cleanup_anchors(&self.record.journal).and_then(|()| self.record.remove())
+            cleanup_anchors(&self.record.journal.files).and_then(|()| self.record.remove())
         {
             warn_user!(
                 "Installed `{}`, but executable recovery cleanup is pending: {error:#}. Recovery information remains at `{}`",
@@ -845,7 +884,7 @@ impl Drop for ToolExportTransaction {
     }
 }
 
-fn publish_export(journal: &ExportJournal, index: usize) -> anyhow::Result<()> {
+pub(super) fn publish_export(journal: &ExportDirectory, index: usize) -> anyhow::Result<()> {
     let staging = publish_export_data(journal, index)?;
     fs_err::hard_link(
         new_anchor(&staging, index),
@@ -856,7 +895,7 @@ fn publish_export(journal: &ExportJournal, index: usize) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn publish_export_data(journal: &ExportJournal, index: usize) -> anyhow::Result<PathBuf> {
+fn publish_export_data(journal: &ExportDirectory, index: usize) -> anyhow::Result<PathBuf> {
     let staging = journal.staging_directory()?;
     let export = &journal.exports[index];
     let target = journal.directory.join(&export.filename);
@@ -897,7 +936,7 @@ fn metadata_matches(
     Ok(file_digest(&directory.join("uv.lock"))? == journal.lock)
 }
 
-fn file_digest(path: &Path) -> io::Result<Option<[u8; 32]>> {
+pub(super) fn file_digest(path: &Path) -> io::Result<Option<[u8; 32]>> {
     let file = match fs_err::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -952,8 +991,8 @@ fn recover_record(
         record.mark_committed()?;
     } else {
         let mut errors = Vec::new();
-        for index in (0..record.journal.exports.len()).rev() {
-            if let Err(error) = rollback_export(&record.journal, index) {
+        for index in (0..record.journal.files.exports.len()).rev() {
+            if let Err(error) = rollback_export(&record.journal.files, index) {
                 errors.push(format!("{error:#}"));
             }
         }
@@ -961,13 +1000,13 @@ fn recover_record(
             bail!("{}", errors.join("; "));
         }
     }
-    cleanup_anchors(&record.journal)?;
+    cleanup_anchors(&record.journal.files)?;
     record.remove()?;
     sync_directory(installed_tools.root())?;
     Ok(())
 }
 
-fn rollback_export(journal: &ExportJournal, index: usize) -> anyhow::Result<()> {
+pub(super) fn rollback_export(journal: &ExportDirectory, index: usize) -> anyhow::Result<()> {
     let export = &journal.exports[index];
     let target = journal.directory.join(&export.filename);
     let current = ExportVersion::capture(&target)?;
@@ -1023,7 +1062,7 @@ fn rollback_export(journal: &ExportJournal, index: usize) -> anyhow::Result<()> 
     Ok(())
 }
 
-fn cleanup_anchors(journal: &ExportJournal) -> anyhow::Result<()> {
+pub(super) fn cleanup_anchors(journal: &ExportDirectory) -> anyhow::Result<()> {
     let path = journal.directory.join(&journal.staging);
     match fs_err::symlink_metadata(&path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -1063,11 +1102,11 @@ fn cleanup_anchors(journal: &ExportJournal) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn old_anchor(directory: &Path, index: usize) -> PathBuf {
+pub(super) fn old_anchor(directory: &Path, index: usize) -> PathBuf {
     directory.join(format!("old-{index}"))
 }
 
-fn new_anchor(directory: &Path, index: usize) -> PathBuf {
+pub(super) fn new_anchor(directory: &Path, index: usize) -> PathBuf {
     directory.join(format!("new-{index}"))
 }
 
@@ -1078,7 +1117,7 @@ fn new_anchor(directory: &Path, index: usize) -> PathBuf {
         reason = "directory synchronization is fallible on Unix"
     )
 )]
-fn sync_directory(path: &Path) -> io::Result<()> {
+pub(super) fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     fs_err::File::open(path)?.sync_all()?;
     #[cfg(windows)]
@@ -1105,6 +1144,34 @@ mod tests {
         journal_path, publish_export_data, recover_tool_exports,
     };
     use crate::printer::Printer;
+
+    #[test]
+    fn reads_existing_flat_export_journals() -> anyhow::Result<()> {
+        let directory = std::env::current_dir()?;
+        let legacy = serde_json::json!({
+            "version": 1,
+            "phase": "publishing",
+            "tool": "example",
+            "directory": directory,
+            "staging": ".uv-tool-exports-example",
+            "staging_identity": { "platform": "unix", "device": 1, "inode": 2 },
+            "receipt_before": null,
+            "receipt": vec![0u8; 32],
+            "lock": null,
+            "exports": [{
+                "filename": "example",
+                "original": null,
+                "replacement": {
+                    "identity": { "platform": "unix", "device": 1, "inode": 3 },
+                    "contents": { "kind": "symbolic-link", "target": directory.join("tool/bin/example") }
+                }
+            }]
+        });
+        let journal: super::ExportJournal = serde_json::from_value(legacy.clone())?;
+        journal.validate(&"example".parse()?)?;
+        assert_eq!(serde_json::to_value(journal)?, legacy);
+        Ok(())
+    }
 
     fn isolated_root(test: &str) -> anyhow::Result<Option<PathBuf>> {
         const ROOT: &str = "UV_TEST_TOOL_EXPORT_ROOT";
@@ -1361,7 +1428,10 @@ mod tests {
         let (mut transaction, _) = installation.begin(false)?;
         transaction.publish(Printer::Silent)?;
         let foreign = installation.replace_alpha()?;
-        assert_ne!(foreign, transaction.record.journal.exports[0].replacement);
+        assert_ne!(
+            foreign,
+            transaction.record.journal.files.exports[0].replacement
+        );
         drop(transaction);
         assert!(foreign.matches(&installation.target("alpha"))?);
         assert!(!installation.target("beta").exists());
@@ -1404,6 +1474,7 @@ mod tests {
         let obstruction = transaction
             .record
             .journal
+            .files
             .staging_directory()?
             .join("leave-alone");
         fs_err::write(&obstruction, "external recovery-directory entry")?;
@@ -1482,13 +1553,13 @@ mod tests {
         fs_err::write(installation.target("alpha"), "original command")?;
         let original = ExportVersion::capture(&installation.target("alpha"))?;
         let (transaction, _) = installation.begin(true)?;
-        publish_export(&transaction.record.journal, 0)?;
+        publish_export(&transaction.record.journal.files, 0)?;
         let permissions = fs_err::metadata(&installation.directory)?.permissions();
         fs_err::set_permissions(
             &installation.directory,
             std::fs::Permissions::from_mode(0o500),
         )?;
-        let result = publish_export(&transaction.record.journal, 1);
+        let result = publish_export(&transaction.record.journal.files, 1);
         let privileged =
             fs_err::write(installation.directory.join("authorization-probe"), "").is_ok();
         fs_err::set_permissions(&installation.directory, permissions)?;
@@ -1518,7 +1589,7 @@ mod tests {
         assert_eq!(fs_err::read(installation.target("alpha"))?, b"foreign edit");
         let record = JournalRecord::read(&installation.tools, &installation.name)?
             .context("recovery journal is missing")?;
-        let backup = super::old_anchor(&record.journal.staging_directory()?, 0);
+        let backup = super::old_anchor(&record.journal.files.staging_directory()?, 0);
         assert_eq!(fs_err::read(backup)?, b"original command");
         Ok(())
     }
@@ -1534,7 +1605,7 @@ mod tests {
         fs_err::write(installation.target("alpha"), "original command")?;
         let original = ExportVersion::capture(&installation.target("alpha"))?;
         let (transaction, _) = installation.begin(true)?;
-        let staging = transaction.record.journal.staging_directory()?;
+        let staging = transaction.record.journal.files.staging_directory()?;
         // ReplaceFileW documents this intermediate state when moving the replacement fails.
         fs_err::rename(installation.target("alpha"), staging.join("displaced-0"))?;
         drop(transaction);
@@ -1656,7 +1727,7 @@ mod tests {
             let root = PathBuf::from(root);
             let installation = Installation::at(&root)?;
             let (transaction, _) = installation.begin(true)?;
-            publish_export_data(&transaction.record.journal, 0)?;
+            publish_export_data(&transaction.record.journal.files, 0)?;
             fs_err::write(root.join("published"), "ready")?;
             loop {
                 thread::park();
@@ -1711,6 +1782,7 @@ mod tests {
         assert!(
             !record
                 .journal
+                .files
                 .staging_directory()?
                 .join("published-0")
                 .exists()

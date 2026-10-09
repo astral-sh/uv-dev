@@ -107,6 +107,7 @@ impl<'a> Installer<'a> {
 
         let layout = venv.interpreter().layout();
         let relocatable = venv.relocatable();
+        let environment = venv.clone();
         // Initialize the threadpool with the user settings.
         initialize_rayon_once();
         rayon::spawn(move || {
@@ -121,6 +122,9 @@ impl<'a> Installer<'a> {
                 preview,
             );
 
+            // Keep storage and admission through the actual worker's last write, then release
+            // them before notifying a caller that may publish the completed environment.
+            drop(environment);
             // This may fail if the main task was cancelled.
             let _ = tx.send(result);
         });
