@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::env::current_dir;
 use std::fs;
+#[cfg(not(windows))]
+use std::path::Path;
 use std::process::Command;
 use std::str::FromStr;
 
@@ -15457,6 +15459,154 @@ fn symlink() -> Result<()> {
     // The destination of the symlink should be the same as the output file.
     assert_eq!(symlink.path().read_link()?, requirements_txt.path());
 
+    Ok(())
+}
+
+/// Relative output links are anchored to the directory containing the link.
+#[test]
+#[cfg(not(windows))]
+fn relative_output_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("example==1.0.0")?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("# cwd sentinel\n")?;
+    let output = context.temp_dir.child("out/result.txt");
+    context
+        .temp_dir
+        .child("out/requirements.txt")
+        .write_str("# target sentinel\n")?;
+    output.symlink_to_file("requirements.txt")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--offline", "--no-index", "--find-links", "wheels", "--no-header", "--no-annotate", "--output-file", "out/result.txt"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    assert_eq!(context.read("out/requirements.txt"), "example==1.0.0\n");
+    assert_eq!(context.read("requirements.txt"), "# cwd sentinel\n");
+    assert_eq!(output.path().read_link()?, Path::new("requirements.txt"));
+    Ok(())
+}
+
+/// A dangling output link creates its final target without replacing the link.
+#[test]
+#[cfg(not(windows))]
+fn dangling_relative_output_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("example==1.0.0")?;
+    context
+        .temp_dir
+        .child("generated.txt")
+        .write_str("# cwd sentinel\n")?;
+    context.temp_dir.child("out").create_dir_all()?;
+    let output = context.temp_dir.child("out/result.txt");
+    output.symlink_to_file("generated.txt")?;
+    assert!(!context.temp_dir.child("out/generated.txt").path().exists());
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--offline", "--no-index", "--find-links", "wheels", "--no-header", "--no-annotate", "--output-file", "out/result.txt"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    assert_eq!(context.read("out/generated.txt"), "example==1.0.0\n");
+    assert_eq!(context.read("generated.txt"), "# cwd sentinel\n");
+    assert_eq!(output.path().read_link()?, Path::new("generated.txt"));
+    Ok(())
+}
+
+/// A cyclic output path must fail without replacing either link or a same-named cwd file.
+#[test]
+#[cfg(not(windows))]
+fn cyclic_output_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("example==1.0.0")?;
+    context
+        .temp_dir
+        .child("next.txt")
+        .write_str("# cwd sentinel\n")?;
+    context.temp_dir.child("out").create_dir_all()?;
+    let output = context.temp_dir.child("out/result.txt");
+    let next = context.temp_dir.child("out/next.txt");
+    output.symlink_to_file("next.txt")?;
+    next.symlink_to_file("result.txt")?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--offline", "--no-index", "--find-links", "wheels", "--no-header", "--no-annotate", "--output-file", "out/result.txt"]), @"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    example==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Too many symbolic links in output path `out/result.txt`
+    ");
+
+    assert_eq!(context.read("next.txt"), "# cwd sentinel\n");
+    assert_eq!(output.path().read_link()?, Path::new("next.txt"));
+    assert_eq!(next.path().read_link()?, Path::new("result.txt"));
     Ok(())
 }
 

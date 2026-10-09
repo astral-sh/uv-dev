@@ -1,7 +1,7 @@
 //! Output and process primitives shared by uv command implementations.
 
 use std::borrow::Cow;
-use std::io::stdout;
+use std::io::{self, stdout};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -126,12 +126,32 @@ impl<'a> OutputWriter<'a> {
                 fs_err::create_dir_all(parent_dir)?;
             }
 
-            // If the output file is an existing symlink, write to the destination instead.
-            let output_file = fs_err::read_link(output_file)
-                .map(Cow::Owned)
-                .unwrap_or(Cow::Borrowed(output_file));
+            // Resolve each link relative to its containing directory, retaining the links when
+            // atomically replacing the final target. A missing final target can be created.
+            let mut target = Cow::Borrowed(output_file);
+            for depth in 0..=256 {
+                let metadata = match fs_err::symlink_metadata(&*target) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => break,
+                    Err(error) => return Err(error),
+                };
+                if !metadata.is_symlink() {
+                    break;
+                }
+                if depth == 256 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "Too many symbolic links in output path `{}`",
+                            output_file.display()
+                        ),
+                    ));
+                }
+                let link = fs_err::read_link(&*target)?;
+                target = Cow::Owned(target.parent().unwrap_or(Path::new("")).join(link));
+            }
             let stream = anstream::adapter::strip_bytes(&self.buffer).into_vec();
-            uv_fs::write_atomic(output_file, &stream).await?;
+            uv_fs::write_atomic(target, &stream).await?;
         }
         Ok(())
     }

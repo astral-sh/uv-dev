@@ -6,7 +6,7 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use std::collections::BTreeMap;
-#[cfg(all(feature = "test-universal", feature = "test-git"))]
+#[cfg(any(not(windows), all(feature = "test-universal", feature = "test-git")))]
 use std::path::Path;
 use std::process::{Command, Stdio};
 #[cfg(feature = "test-universal")]
@@ -2601,6 +2601,52 @@ fn requirements_txt_no_hashes() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
+    Ok(())
+}
+
+/// Export follows each output link while quiet mode still writes the final target.
+#[test]
+#[cfg(not(windows))]
+fn requirements_txt_mixed_output_symlink_chain() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("out").create_dir_all()?;
+    context.temp_dir.child("links").create_dir_all()?;
+    context
+        .temp_dir
+        .child("data/requirements.txt")
+        .write_str("# target sentinel\n")?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("# cwd sentinel\n")?;
+    let output = context.temp_dir.child("out/result.txt");
+    let next = context.temp_dir.child("links/next.txt");
+    output.symlink_to_file(next.path())?;
+    next.symlink_to_file("../data/requirements.txt")?;
+
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--offline", "--no-header", "--no-annotate", "--no-hashes", "--quiet", "--output-file", "out/result.txt"]), @"exit_code: 0 (success)");
+
+    assert_eq!(context.read("data/requirements.txt"), "-e .\n");
+    assert_eq!(context.read("requirements.txt"), "# cwd sentinel\n");
+    assert_eq!(output.path().read_link()?, next.path());
+    assert_eq!(
+        next.path().read_link()?,
+        Path::new("../data/requirements.txt")
+    );
     Ok(())
 }
 
