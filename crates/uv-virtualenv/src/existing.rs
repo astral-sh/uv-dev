@@ -205,10 +205,10 @@ impl OnExisting {
             return Ok(ExistingAction::Allow);
         }
         if fs_err::read_dir(location)
-            .map_err(&inspect_error)?
+            .map_err(inspect_error)?
             .next()
             .transpose()
-            .map_err(&inspect_error)?
+            .map_err(inspect_error)?
             .is_none()
         {
             return Ok(ExistingAction::Create);
