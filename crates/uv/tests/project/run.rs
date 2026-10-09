@@ -1957,6 +1957,12 @@ fn run_with_overlay_long_project_path() -> Result<()> {
         .with_exclude_newer("2025-04-01T00:00:00Z")
         .with_env("TERM", "dumb")
         .with_filter((r"a{200}", "[LONG_DIR]"));
+    let cache = context
+        .temp_dir
+        .child("cache")
+        .child("b".repeat(100))
+        .child("c".repeat(100));
+    let context = context.with_cache_dir(cache.path());
     let project = context.temp_dir.child("a".repeat(200));
     project.child("pyproject.toml").write_str(indoc! { r#"
         [project]
@@ -1968,7 +1974,10 @@ fn run_with_overlay_long_project_path() -> Result<()> {
     })?;
     project.child("test_import.py").write_str(indoc! { r"
         def test_import():
+            import os
+            import sys
             import six
+            assert len(os.fsencode(sys.executable)) > 256
         "
     })?;
 

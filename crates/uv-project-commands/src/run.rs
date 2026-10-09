@@ -2121,7 +2121,10 @@ fn copy_entrypoint(
         return Ok(());
     };
 
-    let contents = format!("#!{}\n{}", python_executable.display(), contents);
+    let contents = format!(
+        "{}\n{contents}",
+        uv_install_wheel::format_shebang(python_executable, "posix", false),
+    );
     let mode = fs_err::metadata(source)?.permissions().mode();
     let mut file = fs_err::OpenOptions::new()
         .create_new(true)
