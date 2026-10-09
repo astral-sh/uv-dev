@@ -37,6 +37,23 @@ impl PrepareReporter {
         reporter.emit_progress(&event);
         Self { reporter }
     }
+
+    pub(super) fn on_failed(&self) {
+        self.finish(ProgressStatus::Failed);
+    }
+
+    fn finish(&self, status: ProgressStatus) {
+        // Need an extra call to `set_message` here to fully clear avoid leaving ghost output
+        // in Jupyter notebooks.
+        self.reporter.root.set_message("");
+        if self.reporter.printer.emits_jsonl_progress() {
+            let mut event = JsonlProgressEvent::new(ProgressPhase::Prepare, status);
+            event.completed = Some(self.reporter.root.position());
+            event.total = self.reporter.root.length();
+            self.reporter.emit_progress(&event);
+        }
+        self.reporter.root.finish_and_clear();
+    }
 }
 
 impl uv_installer::PrepareReporter for PrepareReporter {
@@ -53,17 +70,7 @@ impl uv_installer::PrepareReporter for PrepareReporter {
     }
 
     fn on_complete(&self) {
-        // Need an extra call to `set_message` here to fully clear avoid leaving ghost output
-        // in Jupyter notebooks.
-        self.reporter.root.set_message("");
-        if self.reporter.printer.emits_jsonl_progress() {
-            let mut event =
-                JsonlProgressEvent::new(ProgressPhase::Prepare, ProgressStatus::Completed);
-            event.completed = Some(self.reporter.root.position());
-            event.total = self.reporter.root.length();
-            self.reporter.emit_progress(&event);
-        }
-        self.reporter.root.finish_and_clear();
+        self.finish(ProgressStatus::Completed);
     }
 
     fn on_build_start(&self, source: &BuildableSource) -> usize {
@@ -129,6 +136,22 @@ impl InstallReporter {
             progress_lock: Mutex::new(()),
         }
     }
+
+    pub(super) fn on_failed(&self) {
+        self.finish(ProgressStatus::Failed);
+    }
+
+    fn finish(&self, status: ProgressStatus) {
+        let _guard = self.progress_lock.lock().unwrap();
+        self.progress.set_message("");
+        if self.printer.emits_jsonl_progress() {
+            let mut event = JsonlProgressEvent::new(ProgressPhase::Install, status);
+            event.completed = Some(self.progress.position());
+            event.total = self.progress.length();
+            emit_jsonl_progress(self.printer, &event);
+        }
+        self.progress.finish_and_clear();
+    }
 }
 
 impl uv_installer::InstallReporter for InstallReporter {
@@ -147,15 +170,6 @@ impl uv_installer::InstallReporter for InstallReporter {
     }
 
     fn on_install_complete(&self) {
-        let _guard = self.progress_lock.lock().unwrap();
-        self.progress.set_message("");
-        if self.printer.emits_jsonl_progress() {
-            let mut event =
-                JsonlProgressEvent::new(ProgressPhase::Install, ProgressStatus::Completed);
-            event.completed = Some(self.progress.position());
-            event.total = self.progress.length();
-            emit_jsonl_progress(self.printer, &event);
-        }
-        self.progress.finish_and_clear();
+        self.finish(ProgressStatus::Completed);
     }
 }
