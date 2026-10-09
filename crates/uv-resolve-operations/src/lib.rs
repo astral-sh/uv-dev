@@ -27,7 +27,7 @@ use uv_platform_tags::Tags;
 use uv_pypi_types::Conflicts;
 use uv_requirements::{
     GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
-    RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
+    RequirementsSpecification, SourceTree, SourceTreeResolver,
 };
 use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
@@ -203,11 +203,13 @@ pub async fn resolve(
             }
 
             // Extend the requirements with the resolved source trees.
-            requirements.extend(
-                resolutions
-                    .into_iter()
-                    .flat_map(SourceTreeResolution::into_requirements),
-            );
+            for resolution in resolutions {
+                let (source_requirements, workspace_member_paths) = resolution.into_parts();
+                options
+                    .workspace_wheel_exemptions
+                    .extend(workspace_member_paths);
+                requirements.extend(source_requirements);
+            }
         }
 
         for (pyproject_path, groups) in groups {

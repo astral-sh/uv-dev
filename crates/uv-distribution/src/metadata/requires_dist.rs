@@ -1,5 +1,5 @@
-use std::collections::{BTreeMap, VecDeque};
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::slice;
 
 use rustc_hash::FxHashSet;
@@ -24,6 +24,8 @@ pub struct RequiresDist {
     pub provides_extra: Box<[ExtraName]>,
     pub dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
     pub dynamic: bool,
+    /// Local workspace members discovered while lowering the requirements.
+    pub workspace_member_paths: BTreeSet<PathBuf>,
 }
 
 impl RequiresDist {
@@ -98,6 +100,7 @@ impl RequiresDist {
             provides_extra: metadata.provides_extra,
             dependency_groups: BTreeMap::default(),
             dynamic: metadata.dynamic,
+            workspace_member_paths: BTreeSet::new(),
         })
     }
 
@@ -235,6 +238,13 @@ impl RequiresDist {
             dependency_groups: lowered_dependency_groups,
             provides_extra: metadata.provides_extra,
             dynamic: metadata.dynamic,
+            workspace_member_paths: project_workspace
+                .workspace()
+                .packages()
+                .iter()
+                .filter(|(name, _)| !no_sources.for_package(name))
+                .map(|(_, member)| member.root().clone())
+                .collect(),
         })
     }
 
@@ -306,6 +316,7 @@ impl From<Metadata> for RequiresDist {
             provides_extra: metadata.provides_extra,
             dependency_groups: metadata.dependency_groups,
             dynamic: metadata.dynamic,
+            workspace_member_paths: metadata.workspace_member_paths,
         }
     }
 }
