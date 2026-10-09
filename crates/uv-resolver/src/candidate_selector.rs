@@ -147,8 +147,7 @@ impl CandidateSelector {
                 version_maps,
                 replacement_prerelease,
                 env,
-                required_environments,
-                true,
+                Some(required_environments),
             ) {
                 debug!(
                     "Ignoring preference {} {} in favor of {} with wheels for the required environments",
@@ -185,8 +184,7 @@ impl CandidateSelector {
             version_maps,
             prerelease_selection,
             env,
-            required_environments,
-            false,
+            None,
         );
 
         // Cross-reference against the already-installed distribution.
@@ -478,8 +476,7 @@ impl CandidateSelector {
             version_maps,
             self.prerelease_strategy.selection(package_name, env),
             env,
-            &[],
-            false,
+            None,
         )
     }
 
@@ -492,8 +489,7 @@ impl CandidateSelector {
         version_maps: &'a [VersionMap],
         prerelease_selection: PrereleaseSelection,
         env: &ResolverEnvironment,
-        required_environments: &[MarkerTree],
-        require_wheels: bool,
+        required_environments: Option<&[MarkerTree]>,
     ) -> Option<Candidate<'a>> {
         match prerelease_selection {
             PrereleaseSelection::Allow => self.select_no_preference_from(
@@ -503,7 +499,6 @@ impl CandidateSelector {
                 PrereleaseCandidates::All,
                 env,
                 required_environments,
-                require_wheels,
             ),
             PrereleaseSelection::Disallow => self.select_no_preference_from(
                 package_name,
@@ -512,7 +507,6 @@ impl CandidateSelector {
                 PrereleaseCandidates::Stable,
                 env,
                 required_environments,
-                require_wheels,
             ),
             PrereleaseSelection::PreferStable
                 if self.index_strategy == IndexStrategy::UnsafeFirstMatch =>
@@ -526,7 +520,6 @@ impl CandidateSelector {
                         PrereleaseCandidates::Stable,
                         env,
                         required_environments,
-                        require_wheels,
                     )
                     .or_else(|| {
                         self.select_no_preference_from(
@@ -536,7 +529,6 @@ impl CandidateSelector {
                             PrereleaseCandidates::Prerelease,
                             env,
                             required_environments,
-                            require_wheels,
                         )
                     })
                 })
@@ -549,7 +541,6 @@ impl CandidateSelector {
                     PrereleaseCandidates::Stable,
                     env,
                     required_environments,
-                    require_wheels,
                 )
                 .or_else(|| {
                     self.select_no_preference_from(
@@ -559,7 +550,6 @@ impl CandidateSelector {
                         PrereleaseCandidates::Prerelease,
                         env,
                         required_environments,
-                        require_wheels,
                     )
                 }),
         }
@@ -572,13 +562,14 @@ impl CandidateSelector {
         version_maps: &'a [VersionMap],
         prerelease_candidates: PrereleaseCandidates,
         env: &ResolverEnvironment,
-        required_environments: &[MarkerTree],
-        require_wheels: bool,
+        required_environments: Option<&[MarkerTree]>,
     ) -> Option<Candidate<'a>> {
         trace!(
             "Selecting candidate for {package_name} with range {range} with {} remote versions",
             version_maps.iter().map(VersionMap::len).sum::<usize>(),
         );
+        let required_environments =
+            required_environments.map(|markers| (markers, env, self.minimum_libc_version));
         let highest = self.use_highest_version(package_name, env);
 
         if self.index_strategy == IndexStrategy::UnsafeBestMatch {
@@ -607,11 +598,7 @@ impl CandidateSelector {
                     range,
                     prerelease_candidates,
                     highest,
-                    require_wheels.then_some((
-                        required_environments,
-                        env,
-                        self.minimum_libc_version,
-                    )),
+                    required_environments,
                 )
             } else {
                 Self::select_candidate(
@@ -637,11 +624,7 @@ impl CandidateSelector {
                     range,
                     prerelease_candidates,
                     highest,
-                    require_wheels.then_some((
-                        required_environments,
-                        env,
-                        self.minimum_libc_version,
-                    )),
+                    required_environments,
                 )
             }
         } else {
@@ -653,11 +636,7 @@ impl CandidateSelector {
                         range,
                         prerelease_candidates,
                         highest,
-                        require_wheels.then_some((
-                            required_environments,
-                            env,
-                            self.minimum_libc_version,
-                        )),
+                        required_environments,
                     )
                 })
             } else {
@@ -668,11 +647,7 @@ impl CandidateSelector {
                         range,
                         prerelease_candidates,
                         highest,
-                        require_wheels.then_some((
-                            required_environments,
-                            env,
-                            self.minimum_libc_version,
-                        )),
+                        required_environments,
                     )
                 })
             }
