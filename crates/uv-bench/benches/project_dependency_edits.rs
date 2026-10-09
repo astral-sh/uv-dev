@@ -1,5 +1,7 @@
 //! Benchmarks for applying large batches of direct project-dependency edits.
 
+extern crate uv_performance_memory_allocator;
+
 use std::fmt::Write;
 use std::hint::black_box;
 use std::str::FromStr;
