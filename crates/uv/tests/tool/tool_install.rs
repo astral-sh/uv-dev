@@ -3292,102 +3292,6 @@ fn tool_install_preflight_retains_shared_build_environment() -> Result<()> {
     Ok(())
 }
 
-/// Non-isolated preflight builds use dependencies retained in the original tool environment.
-#[test]
-fn tool_install_preflight_retains_shared_package_build_environment() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
-        name = "tool-shared-build-environment"
-        [root]
-        requires = ["tool", "backend-helper"]
-        [expected]
-        satisfiable = true
-        [packages.tool.versions."1.0.0"]
-        sdist = false
-        entry_points = ["tool"]
-        [packages.backend-helper.versions."1.0.0"]
-        sdist = false
-    "#})?;
-    let server = PackseServer::from_scenario(&scenario);
-    let bin = context.temp_dir.child("bin");
-    context
-        .tool_install()
-        .arg("tool")
-        .arg("--with")
-        .arg("backend-helper")
-        .arg("--default-index")
-        .arg(server.index_url())
-        .env(EnvVars::PATH, bin.as_os_str())
-        .assert()
-        .success();
-    let project = context.temp_dir.child("tool");
-    project.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "tool"
-        version = "2.0.0"
-        requires-python = ">=3.12"
-        dependencies = []
-        [build-system]
-        requires = ["backend-helper"]
-        build-backend = "backend"
-        backend-path = ["."]
-    "#})?;
-    let (filename, wheel) = generate_wheel(
-        &"tool".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &["tool".to_owned()],
-    );
-    project.child(&filename).write_binary(&wheel)?;
-    project.child("backend.py").write_str(&formatdoc! {r#"
-        from pathlib import Path
-        import shutil
-        import zipfile
-
-        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
-            with zipfile.ZipFile(Path(__file__).parent / "{filename}") as wheel:
-                for name in wheel.namelist():
-                    if name.startswith("tool-2.0.0.dist-info/"):
-                        wheel.extract(name, metadata_directory)
-            return "tool-2.0.0.dist-info"
-
-        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-            import backend_helper
-            source = Path(__file__).parent / "{filename}"
-            shutil.copyfile(source, Path(wheel_directory) / source.name)
-            return source.name
-    "#})?;
-    uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
-        .arg("--with").arg("backend-helper").arg("--no-build-isolation-package").arg("tool")
-        .arg("--default-index").arg(server.index_url())
-        .env(EnvVars::PATH, bin.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - tool==1.0.0
-     + tool==2.0.0 (from file://[TEMP_DIR]/tool)
-    Installed 1 executable: tool
-    ");
-    let python = context
-        .temp_dir
-        .child("tools/tool")
-        .child(if cfg!(windows) {
-            "Scripts/python.exe"
-        } else {
-            "bin/python"
-        });
-    Command::new(python.path()).args(["-c", "import backend_helper; import importlib.metadata; assert importlib.metadata.version('tool') == '2.0.0'"]).assert().success();
-    Ok(())
-}
-
 /// Shared preflight builds see isolated dependency upgrades in the same private environment.
 #[test]
 fn tool_install_preflight_upgrades_shared_build_dependency() -> Result<()> {
@@ -3629,6 +3533,7 @@ fn tool_install_preflight_relocates_retained_build_commands() -> Result<()> {
     "#})?;
     let server = PackseServer::from_scenario(&scenario);
     let bin = context.temp_dir.child("bin");
+    let tool_dir = context.temp_dir.child("tool store");
     let (filename, wheel) = generate_wheel_with_files(
         &"backend-cli".parse()?,
         &"1.0.0".parse()?,
@@ -3659,8 +3564,44 @@ fn tool_install_preflight_relocates_retained_build_commands() -> Result<()> {
         .arg("--default-index")
         .arg(server.index_url())
         .env(EnvVars::PATH, bin.as_os_str())
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .assert()
         .success();
+    {
+        let python = tool_dir.child("tool").child(if cfg!(windows) {
+            "Scripts/python.exe"
+        } else {
+            "bin/python"
+        });
+        context
+            .pip_install()
+            .arg("pip==24.0")
+            .arg("--python")
+            .arg(python.path())
+            .assert()
+            .success();
+        Command::new(python.path())
+            .arg("-c")
+            .arg(indoc! {r#"
+                from pathlib import Path
+                import sys
+                from pip._vendor.distlib.scripts import ScriptMaker
+
+                maker = ScriptMaker(None, str(Path(sys.executable).parent))
+                maker.variants = {""}
+                maker.clobber = True
+                maker.make("backend-cli = backend_cli.cli:main")
+            "#})
+            .assert()
+            .success();
+        context
+            .pip_uninstall()
+            .arg("pip")
+            .arg("--python")
+            .arg(python.path())
+            .assert()
+            .success();
+    }
     let project = context.temp_dir.child("tool");
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -3707,7 +3648,7 @@ fn tool_install_preflight_relocates_retained_build_commands() -> Result<()> {
     uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
         .arg("--with").arg("backend-helper==2.0.0").arg("--with").arg(backend_cli.path()).arg("--no-build-isolation-package").arg("tool")
         .arg("--default-index").arg(server.index_url())
-        .env(EnvVars::PATH, bin.as_os_str()), @"
+        .env(EnvVars::PATH, bin.as_os_str()).env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -3722,14 +3663,11 @@ fn tool_install_preflight_relocates_retained_build_commands() -> Result<()> {
      + tool==2.0.0 (from file://[TEMP_DIR]/tool)
     Installed 1 executable: tool
     ");
-    let python = context
-        .temp_dir
-        .child("tools/tool")
-        .child(if cfg!(windows) {
-            "Scripts/python.exe"
-        } else {
-            "bin/python"
-        });
+    let python = tool_dir.child("tool").child(if cfg!(windows) {
+        "Scripts/python.exe"
+    } else {
+        "bin/python"
+    });
     Command::new(python.path()).args(["-c", "import backend_helper; assert backend_helper.__version__ == '2.0.0'; import importlib.metadata; assert importlib.metadata.version('tool') == '2.0.0'"]).assert().success();
     Ok(())
 }

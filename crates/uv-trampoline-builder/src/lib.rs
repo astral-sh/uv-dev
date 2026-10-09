@@ -6,10 +6,14 @@ use std::str::Utf8Error;
 use editpe::{
     Image, ResourceData, ResourceDirectory, ResourceEntry, ResourceEntryName, ResourceTable,
 };
+#[cfg(any(windows, test))]
+use goblin::pe::PE;
 use thiserror::Error;
 
 use uv_fs::Simplified;
 
+#[cfg(test)]
+mod distlib_tests;
 #[cfg(all(test, windows))]
 mod resource_tests;
 
@@ -174,6 +178,68 @@ impl Launcher {
             script_data: self.script_data,
         }
     }
+}
+
+/// Repoint a distlib script launcher without changing its PE stub or ZIP payload.
+///
+/// distlib appends an interpreter shebang and a ZIP containing `__main__.py` directly after the
+/// PE image. Other executable layouts and interpreter paths are left untouched.
+#[cfg(windows)]
+pub fn relocate_distlib_script(
+    contents: &[u8],
+    previous_executable: &Path,
+    python_executable: &Path,
+) -> Option<Vec<u8>> {
+    relocate_distlib_script_inner(contents, previous_executable, python_executable)
+}
+
+#[cfg(any(windows, test))]
+fn relocate_distlib_script_inner(
+    contents: &[u8],
+    previous_executable: &Path,
+    python_executable: &Path,
+) -> Option<Vec<u8>> {
+    let image = PE::parse(contents).ok()?;
+    let image_end = image.sections.iter().try_fold(0usize, |end, section| {
+        let start = usize::try_from(section.pointer_to_raw_data).ok()?;
+        let size = usize::try_from(section.size_of_raw_data).ok()?;
+        Some(end.max(start.checked_add(size)?))
+    })?;
+    let appended = contents.get(image_end..)?;
+    let line_end = appended.iter().position(|byte| *byte == b'\n')?;
+    let shebang = appended.get(..line_end)?.strip_prefix(b"#!")?;
+    let previous = previous_executable.simplified_display().to_string();
+    let quoted_previous = format!("\"{previous}\"");
+    let arguments = shebang
+        .strip_prefix(quoted_previous.as_bytes())
+        .or_else(|| shebang.strip_prefix(previous.as_bytes()))?;
+    if arguments
+        .first()
+        .is_some_and(|byte| !matches!(byte, b' ' | b'\t' | b'\r'))
+    {
+        return None;
+    }
+    let payload = appended.get(line_end + 1..)?;
+    if !payload.starts_with(b"PK\x03\x04") {
+        return None;
+    }
+    let filename_length = usize::from(u16::from_le_bytes(payload.get(26..28)?.try_into().ok()?));
+    if payload.get(30..30usize.checked_add(filename_length)?)? != b"__main__.py" {
+        return None;
+    }
+    let executable = python_executable.simplified_display().to_string();
+    let executable = if executable.contains(' ') {
+        format!("\"{executable}\"")
+    } else {
+        executable
+    };
+    let mut relocated = contents.get(..image_end)?.to_vec();
+    relocated.extend_from_slice(b"#!");
+    relocated.extend_from_slice(executable.as_bytes());
+    relocated.extend_from_slice(arguments);
+    relocated.push(b'\n');
+    relocated.extend_from_slice(payload);
+    Some(relocated)
 }
 
 /// The window mode of a Windows trampoline launcher.

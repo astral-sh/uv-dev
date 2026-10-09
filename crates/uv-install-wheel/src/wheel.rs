@@ -20,7 +20,7 @@ use uv_pypi_types::DirectUrl;
 use uv_shell::escape_posix_for_single_quotes;
 use uv_trampoline_builder::windows_script_launcher;
 #[cfg(windows)]
-use uv_trampoline_builder::{Launcher, LauncherKind};
+use uv_trampoline_builder::{Launcher, LauncherKind, relocate_distlib_script};
 use uv_warnings::warn_user_once;
 
 use crate::record::RecordEntry;
@@ -406,21 +406,34 @@ fn relocate_scripts(
     paths: BTreeSet<PathBuf>,
     generated: &mut Vec<RecordEntry>,
 ) -> Result<(), Error> {
-    let prefixes = [false, true]
-        .into_iter()
-        .map(|is_gui| {
-            let previous = get_script_executable(&previous_layout.sys_executable, is_gui);
-            let current = get_relocatable_executable(
-                get_script_executable(&layout.sys_executable, is_gui),
-                layout,
-                relocatable,
-            )?;
-            Ok((
-                format_shebang(previous, &previous_layout.os_name, false),
-                format_shebang(current, &layout.os_name, relocatable),
-            ))
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
+    let mut prefixes = Vec::new();
+    for is_gui in [false, true] {
+        let previous = get_script_executable(&previous_layout.sys_executable, is_gui);
+        let current = get_relocatable_executable(
+            get_script_executable(&layout.sys_executable, is_gui),
+            layout,
+            relocatable,
+        )?;
+        let current = format_shebang(current, &layout.os_name, relocatable);
+        prefixes.push((
+            format_shebang(&previous, &previous_layout.os_name, false),
+            current.clone(),
+        ));
+        let executable = previous.simplified_display().to_string();
+        prefixes.push((format!("#!{executable}"), current.clone()));
+        if previous_layout.os_name == "posix" {
+            // pip uses a different shell quoting convention and platform-specific shebang limits.
+            let executable = if executable.contains(' ') {
+                format!("\"{executable}\"")
+            } else {
+                executable
+            };
+            prefixes.push((
+                format!("#!/bin/sh\n'''exec' {executable} \"$0\" \"$@\"\n' '''"),
+                current,
+            ));
+        }
+    }
     let prefix_limit = prefixes
         .iter()
         .map(|(prefix, _)| prefix.len() + 1)
@@ -489,6 +502,18 @@ fn relocate_windows_launcher(
     relocatable: bool,
 ) -> Result<Option<Vec<u8>>, Error> {
     let Some(launcher) = Launcher::try_from_path(path)? else {
+        let contents = fs::read(path)?;
+        for is_gui in [false, true] {
+            let previous = get_script_executable(&previous_layout.sys_executable, is_gui);
+            let current = get_relocatable_executable(
+                get_script_executable(&layout.sys_executable, is_gui),
+                layout,
+                relocatable,
+            )?;
+            if let Some(contents) = relocate_distlib_script(&contents, &previous, &current) {
+                return Ok(Some(contents));
+            }
+        }
         return Ok(None);
     };
     match launcher.kind {
