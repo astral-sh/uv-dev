@@ -4552,7 +4552,9 @@ fn combine_resolver_settings(
     args.no_build_package = args
         .no_build_package
         .or(environment.no_build_package.clone());
-    args.no_sources = args.no_sources.or(environment.no_sources.value);
+    args.no_sources = args
+        .no_sources
+        .or(environment.no_sources.value.filter(|enabled| *enabled));
     args.no_sources_package = args
         .no_sources_package
         .or(environment.no_sources_package.clone());
@@ -4625,7 +4627,9 @@ fn resolver_installer_options_with_environment(
     options.no_build_package = options
         .no_build_package
         .or(environment.no_build_package.clone());
-    options.no_sources = options.no_sources.or(environment.no_sources.value);
+    options.no_sources = options
+        .no_sources
+        .or(environment.no_sources.value.filter(|enabled| *enabled));
     options.no_sources_package = options
         .no_sources_package
         .or(environment.no_sources_package.clone());
@@ -5018,7 +5022,7 @@ impl PipSettings {
                 .unwrap_or_default(),
             sources: NoSources::from_args(
                 args.no_sources
-                    .or(environment.no_sources.value)
+                    .or(environment.no_sources.value.filter(|enabled| *enabled))
                     .combine(no_sources),
                 args_no_sources_package
                     .combine(no_sources_package)

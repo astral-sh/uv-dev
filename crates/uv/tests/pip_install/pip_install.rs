@@ -13443,6 +13443,34 @@ fn no_sources_workspace_discovery() -> Result<()> {
 
 /// Test `--no-sources-package` with pip install to selectively disable sources.
 #[test]
+fn pip_install_no_sources_false_preserves_package_exclusion() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = ["iniconfig==2.0.0"]
+        [tool.uv.sources]
+        iniconfig = { path = "missing-source" }
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("pyproject.toml")
+        .arg("--no-sources-package").arg("iniconfig")
+        .env(EnvVars::UV_NO_SOURCES, "0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    Ok(())
+}
+
+#[test]
 #[cfg(feature = "test-git")]
 fn pip_install_no_sources_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
