@@ -38,18 +38,25 @@ fn root_python_requirement(
     root: Option<&PackageName>,
     inherited_group_root: Option<&PackageName>,
 ) -> Result<RequiresPython, LockError> {
-    let specifiers = requirements
-        .iter()
-        .filter_map(|(source, specifiers)| match source {
-            RequiresPythonDeclaration::Member(package, group) => (Some(package) == root
-                || (group.is_some() && Some(package) == inherited_group_root))
-                .then_some(specifiers),
-            RequiresPythonDeclaration::Workspace(_) => Some(specifiers),
-        });
+    let sources = requirements.iter().filter(|(source, _)| match source {
+        RequiresPythonDeclaration::Member(package, group) => {
+            Some(package) == root || (group.is_some() && Some(package) == inherited_group_root)
+        }
+        RequiresPythonDeclaration::Workspace(_) => true,
+    });
     RequiresPython::intersection(
-        std::iter::once(lock.requires_python().specifiers()).chain(specifiers),
+        std::iter::once(lock.requires_python().specifiers())
+            .chain(sources.clone().map(|(_, specifiers)| specifiers)),
     )
-    .ok_or_else(|| LockErrorKind::DisjointWorkspaceRequiresPython.into())
+    .ok_or_else(|| {
+        LockErrorKind::DisjointWorkspaceRequiresPython {
+            locked: lock.requires_python().clone(),
+            requirements: sources
+                .map(|(source, specifiers)| (source.clone(), specifiers.clone()))
+                .collect(),
+        }
+        .into()
+    })
 }
 
 fn newly_activated_extras<'lock>(
@@ -258,7 +265,7 @@ pub trait Installable<'lock> {
                         LockErrorKind::UnrepresentableLockedRequiresPython(name.clone()).into(),
                     );
                 }
-                return Err(LockErrorKind::DisjointWorkspaceRequiresPython.into());
+                return Err(LockErrorKind::EmptyWorkspaceEnvironment(name.clone()).into());
             };
             group_requirements
                 .entry(RequiresPythonDeclaration::Member(name.clone(), None))
@@ -1681,6 +1688,7 @@ mod tests {
     use petgraph::visit::EdgeRef;
     use uv_configuration::{DependencyGroups, ExtrasSpecification};
     use uv_distribution_types::Name;
+    use uv_fs::CWD;
     use uv_normalize::{DefaultExtras, DefaultGroups};
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
     use uv_platform_tags::{Arch, Os, Platform, TagsOptions};
@@ -2072,7 +2080,7 @@ source = { registry = "https://example.com/simple" }
 
     impl<'lock> Installable<'lock> for OverridingInstallable<'lock> {
         fn install_path(&self) -> &'lock Path {
-            Path::new(".")
+            &CWD
         }
 
         fn lock(&self) -> &'lock Lock {
@@ -2202,7 +2210,6 @@ provides-extras = ["feature"]
         let error = crate::PylockToml::from_lock(
             &target,
             Path::new("."),
-            lock.requires_python().clone(),
             &[],
             &extras,
             &groups,
@@ -2212,6 +2219,62 @@ provides-extras = ["feature"]
         )
         .expect_err("the requested non-root extra was not resolved");
         insta::assert_snapshot!(error, @"Extra `feature` for workspace member `shared` was not resolved for this selection");
+    }
+
+    #[test]
+    fn pylock_conversion_derives_selected_python_requirement() {
+        let lock = Lock::from_toml(
+            r#"
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[manifest]
+members = ["app"]
+workspace-members = ["app", "shared"]
+
+[[package]]
+name = "app"
+version = "1.0.0"
+source = { virtual = "." }
+dependencies = [{ name = "shared", marker = "python_full_version >= '3.13'" }]
+
+[[package]]
+name = "shared"
+version = "1.0.0"
+source = { editable = "shared" }
+resolution-markers = ["python_full_version >= '3.13'"]
+
+[package.metadata]
+requires-python = ">=3.13"
+"#,
+        )
+        .expect("valid explicit-root lock");
+        let target = OverridingInstallable {
+            lock: &lock,
+            root_name: package(&lock, "shared", "1.0.0").name(),
+            package_to_node_calls: Cell::new(0),
+        };
+        let export = crate::PylockToml::from_lock(
+            &target,
+            &CWD,
+            &[],
+            &ExtrasSpecification::default().with_defaults(DefaultExtras::default()),
+            &DependencyGroupsWithDefaults::none(),
+            false,
+            None,
+            &InstallOptions::default(),
+        )
+        .expect("selected member is resolved");
+        insta::assert_snapshot!(export.to_toml().expect("valid pylock"), @r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        requires-python = ">=3.13"
+
+        [[packages]]
+        name = "shared"
+        directory = { path = "shared", editable = true }
+        "#);
     }
 
     fn graph_snapshot(resolution: &Resolution) -> (Vec<String>, Vec<String>) {

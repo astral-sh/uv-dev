@@ -2,9 +2,11 @@
 
 use uv_distribution_types::RequiresPython;
 use uv_pep440::Version;
-use uv_workspace::{RequiresPythonSources, dependency_groups::DependencyGroupError};
+use uv_workspace::{
+    RequiresPythonSources, dependency_groups::DependencyGroupError, format_requires_python_sources,
+};
 
-use crate::{PythonRequirementConflicts, format_requires_python_sources};
+use crate::PythonRequirementConflicts;
 
 /// A failure while discovering or validating a project or script interpreter.
 #[derive(Debug, thiserror::Error)]

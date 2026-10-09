@@ -688,7 +688,6 @@ async fn render_export<'output>(
             let mut export = PylockToml::from_lock(
                 &target,
                 output_dir,
-                requires_python.into_owned(),
                 prune,
                 extras,
                 groups,

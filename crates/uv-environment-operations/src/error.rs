@@ -6,10 +6,9 @@ use uv_command_support::UvError;
 use uv_distribution_types::{IndexCredentialsError, IndexUrlError, RequiresPython};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
-use uv_python_discovery::format_requires_python_sources;
 use uv_requirements::ScriptRequirementsError;
-use uv_workspace::RequiresPythonSources;
 use uv_workspace::dependency_groups::DependencyGroupError;
+use uv_workspace::{RequiresPythonSources, format_requires_python_sources};
 
 use crate::ConflictError;
 

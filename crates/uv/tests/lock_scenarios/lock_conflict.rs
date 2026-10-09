@@ -4,7 +4,6 @@ use anyhow::{Result, anyhow};
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::{assert_json_snapshot, assert_snapshot};
-use url::Url;
 
 use uv_redacted::SafeUrl;
 use uv_test::packse::PackseServer;
