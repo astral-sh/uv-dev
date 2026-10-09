@@ -210,9 +210,7 @@ pub(crate) fn insert_record(
 ) -> Result<(), Error> {
     match records.entry(record.artifact().clone()) {
         Entry::Occupied(existing) if existing.get() != &record => {
-            return Err(Error::ConflictingRecord(
-                record.artifact().filename().to_owned(),
-            ));
+            return Err(Error::ConflictingRecord(record.artifact().clone()));
         }
         Entry::Occupied(_) => {}
         Entry::Vacant(entry) => {

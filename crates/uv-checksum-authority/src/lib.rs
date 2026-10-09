@@ -86,7 +86,7 @@ impl ChecksumAuthority {
             .map_err(|_| Error::InvalidEndpoint)?;
         let mut response = self.client.get(endpoint).query(artifact).send().await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(Error::UnknownArtifact(artifact.filename().to_owned()));
+            return Err(Error::UnknownArtifact(artifact.clone()));
         }
         if response.status() != reqwest::StatusCode::OK {
             return Err(Error::AuthorityStatus(response.status()));
@@ -127,14 +127,14 @@ impl ChecksumAuthority {
             let current = self.lookup(record.artifact()).await?;
             if current.record().sha256() != record.sha256() {
                 return Err(Error::Mismatch {
-                    filename: record.artifact().filename().to_owned(),
+                    artifact: record.artifact().clone(),
                     expected: current.record().sha256(),
                     actual: record.sha256(),
                 });
             }
             if current.record().size() != record.size() {
                 return Err(Error::SizeMismatch {
-                    filename: record.artifact().filename().to_owned(),
+                    artifact: record.artifact().clone(),
                     expected: current.record().size(),
                 });
             }
@@ -181,7 +181,7 @@ impl VerifiedRecord {
         while let Some(chunk) = body.chunk().await? {
             let Some(next_remaining) = remaining.checked_sub(chunk.len() as u64) else {
                 return Err(Error::SizeMismatch {
-                    filename: artifact.filename().to_owned(),
+                    artifact: artifact.clone(),
                     expected: record.size(),
                 });
             };
@@ -191,14 +191,14 @@ impl VerifiedRecord {
         }
         if remaining != 0 {
             return Err(Error::SizeMismatch {
-                filename: artifact.filename().to_owned(),
+                artifact: artifact.clone(),
                 expected: record.size(),
             });
         }
         let actual = Sha256Digest::from_bytes(hasher.finalize().into());
         if actual != record.sha256() {
             return Err(Error::Mismatch {
-                filename: artifact.filename().to_owned(),
+                artifact: artifact.clone(),
                 expected: record.sha256(),
                 actual,
             });
@@ -231,10 +231,10 @@ pub enum Error {
     InvalidSignature,
     #[error("Checksum authority returned a record for a different artifact")]
     WrongArtifact,
-    #[error("Conflicting checksum authority records for `{0}`")]
-    ConflictingRecord(String),
-    #[error("Checksum authority has no trusted record for `{0}`")]
-    UnknownArtifact(String),
+    #[error("Conflicting checksum authority records for `{}` from `{}`", .0.filename(), .0.source())]
+    ConflictingRecord(ArtifactId),
+    #[error("Checksum authority has no trusted record for `{}` from `{}`", .0.filename(), .0.source())]
+    UnknownArtifact(ArtifactId),
     #[error("Checksum authority returned HTTP {0}")]
     AuthorityStatus(reqwest::StatusCode),
     #[error("Expected a complete archive response, received HTTP {0}")]
@@ -242,15 +242,15 @@ pub enum Error {
     #[error("Checksum authority response exceeds the size limit")]
     ResponseTooLarge,
     #[error(
-        "Checksum authority mismatch for `{filename}`: expected sha256:{expected}, received sha256:{actual}"
+        "Checksum authority mismatch for `{}` from `{}`: expected sha256:{expected}, received sha256:{actual}", .artifact.filename(), .artifact.source()
     )]
     Mismatch {
-        filename: String,
+        artifact: ArtifactId,
         expected: Sha256Digest,
         actual: Sha256Digest,
     },
-    #[error("Checksum authority size mismatch for `{filename}`: expected {expected} bytes")]
-    SizeMismatch { filename: String, expected: u64 },
+    #[error("Checksum authority size mismatch for `{}` from `{}`: expected {expected} bytes", .artifact.filename(), .artifact.source())]
+    SizeMismatch { artifact: ArtifactId, expected: u64 },
     #[error("Checksum authority request failed")]
     Http(#[from] reqwest::Error),
     #[error("Invalid checksum authority response")]
