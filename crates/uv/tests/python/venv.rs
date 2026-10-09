@@ -1,7 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use predicates::prelude::*;
@@ -73,50 +77,86 @@ fn create_venv() {
     context.venv.assert(predicates::path::is_dir());
 }
 
-/// Creating a venv caches the same interpreter metadata that Python would report.
+/// Creating a venv from a regular executable caches the metadata that Python reports.
 #[test]
 fn create_venv_caches_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let python = context
+        .python_versions
+        .first()
+        .context("No Python installation")?
+        .1
+        .canonicalize()?;
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+
+    let root = tempfile::tempdir_in(context.temp_dir.path())?;
+    // Canonicalization adds a Windows verbatim prefix, which Python omits from its metadata.
+    let root_path = root.path().canonicalize()?;
+    context
+        .venv()
+        .arg(&root_path)
+        .arg("--python")
+        .arg(&python)
+        .assert()
+        .success();
+
+    let site_packages = site_packages_path(&root_path, "python3.12");
+    fs_err::write(
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
+    )?;
+    let startup_marker = ChildPath::new(root_path.join("interpreter-started"));
+
+    let cached = PythonEnvironment::from_root(&root_path, &cache)?;
+    startup_marker.assert(predicate::path::missing());
+
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(&root_path, &fresh_cache)?;
+    startup_marker.assert(predicate::path::is_file());
+    assert_eq!(cached, queried);
+
+    Ok(())
+}
+
+/// Creating a venv from another venv caches the metadata that Python reports.
+#[test]
+fn create_venv_caches_interpreter_from_venv() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
         .init_no_wait()?
         .context("Interpreter cache is locked")?;
 
-    // It should cache for both a system interpreter and when starting from another venv.
-    for python in [Path::new("3.12"), context.venv.path()] {
-        let root = tempfile::tempdir_in(context.temp_dir.path())?;
-        // Check that cached metadata matches Python's output even when the venv path has
-        // a Windows verbatim prefix.
-        let root_path = root.path().canonicalize()?;
-        context
-            .venv()
-            .arg(&root_path)
-            .arg("--clear")
-            .arg("--python")
-            .arg(python)
-            .assert()
-            .success();
+    let root = tempfile::tempdir_in(context.temp_dir.path())?;
+    // Canonicalization adds a Windows verbatim prefix, which Python omits from its metadata.
+    let root_path = root.path().canonicalize()?;
+    context
+        .venv()
+        .arg(&root_path)
+        .arg("--python")
+        .arg(context.venv.path())
+        .assert()
+        .success();
 
-        let site_packages = site_packages_path(&root_path, "python3.12");
-        fs_err::write(
-            site_packages.join("sitecustomize.py"),
-            indoc! {r#"
-                from pathlib import Path
+    let site_packages = site_packages_path(&root_path, "python3.12");
+    fs_err::write(
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
+    )?;
+    let startup_marker = ChildPath::new(root_path.join("interpreter-started"));
 
-                Path(__file__).with_name("interpreter-started").touch()
-            "#},
-        )?;
-        let startup_marker = site_packages.join("interpreter-started");
+    let cached = PythonEnvironment::from_root(&root_path, &cache)?;
+    startup_marker.assert(predicate::path::missing());
 
-        let cached = PythonEnvironment::from_root(&root_path, &cache)?;
-        assert!(!startup_marker.exists());
-
-        let fresh_cache = Cache::temp()?
-            .init_no_wait()?
-            .context("Fresh interpreter cache is locked")?;
-        let queried = PythonEnvironment::from_root(&root_path, &fresh_cache)?;
-        assert!(startup_marker.is_file());
-        assert_eq!(cached, queried);
-    }
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(&root_path, &fresh_cache)?;
+    startup_marker.assert(predicate::path::is_file());
+    assert_eq!(cached, queried);
 
     Ok(())
 }
@@ -151,14 +191,26 @@ fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     ");
 
+    let site_packages = site_packages_path(context.venv.path(), "python3.12");
+    fs_err::write(
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
+    )?;
+    let startup_marker = context.venv.child("interpreter-started");
+
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
         .init_no_wait()?
         .context("Interpreter cache is locked")?;
     let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    startup_marker.assert(predicate::path::missing());
+    let cached_again = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    startup_marker.assert(predicate::path::missing());
+    assert_eq!(cached, cached_again);
     let fresh_cache = Cache::temp()?
         .init_no_wait()?
         .context("Fresh interpreter cache is locked")?;
     let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
+    startup_marker.assert(predicate::path::is_file());
 
     // The base executable should not depend on whether the cache is warm: astral-sh/uv#22383.
     let cached_base = cached.interpreter().to_base_python()?;
@@ -197,6 +249,191 @@ fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
         insta::assert_snapshot!(cached_target.display(), @"[PYTHON_BIN]/python3");
         insta::assert_snapshot!(queried_target.display(), @"[PYTHON_BIN]/python3.12");
     });
+
+    Ok(())
+}
+
+/// Recreating a venv through an executable symlink leaves its canonical target unchanged.
+#[test]
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+fn create_venv_caches_recreated_symlinked_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.12.9").assert().success();
+    let output = context.python_find().arg("3.12.9").assert().success();
+    let python = Path::new(std::str::from_utf8(&output.get_output().stdout)?.trim());
+
+    // Move the installation out of the managed directory to avoid transparent patch upgrades.
+    let installation = python
+        .parent()
+        .and_then(Path::parent)
+        .context("Python executable has no installation directory")?;
+    let relocated = context.temp_dir.child("python");
+    fs_err::rename(installation, relocated.path())?;
+    let python_directory = relocated.child("bin");
+    let context = context.with_filtered_path(python_directory.path(), "PYTHON_BIN");
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--python")
+        .arg(python_directory.child("python3.12").path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: python/bin/python3.12
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    let executable_target = fs_err::canonicalize(context.venv.child("bin/python"))?;
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--clear")
+        .arg("--python")
+        .arg(python_directory.child("python3").path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: python/bin/python3
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+    assert_eq!(
+        fs_err::canonicalize(context.venv.child("bin/python"))?,
+        executable_target
+    );
+
+    let site_packages = site_packages_path(context.venv.path(), "python3.12");
+    fs_err::write(
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
+    )?;
+    let startup_marker = context.venv.child("interpreter-started");
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    startup_marker.assert(predicate::path::missing());
+
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
+    startup_marker.assert(predicate::path::is_file());
+    let cached_base = cached.interpreter().to_base_python()?;
+    let queried_base = queried.interpreter().to_base_python()?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_BIN]/python3");
+        insta::assert_snapshot!(queried_base.display(), @"[PYTHON_BIN]/python3.12");
+    });
+
+    Ok(())
+}
+
+/// An absolute executable symlink can contain a directory symlink followed by `..`.
+/// Normalizing that target lexically can turn a working Python path into a missing file.
+#[test]
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+fn create_venv_caches_absolute_symlink_target() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.12.9").assert().success();
+    let output = context.python_find().arg("3.12.9").assert().success();
+    let python = Path::new(std::str::from_utf8(&output.get_output().stdout)?.trim());
+
+    // Move the installation out of the managed directory to avoid transparent patch upgrades.
+    let installation = python
+        .parent()
+        .and_then(Path::parent)
+        .context("Python executable has no installation directory")?;
+    let relocated = context.temp_dir.child("python");
+    fs_err::rename(installation, relocated.path())?;
+    let python_directory = relocated.child("bin");
+    let context = context.with_filtered_path(python_directory.path(), "PYTHON_BIN");
+
+    let directory_link = python_directory.child("alias");
+    symlink(python_directory.path(), directory_link.path())?;
+    let executable_target = directory_link.join("../bin/python3.12");
+    let symlinked_python = python_directory.child("python-link");
+    symlink(&executable_target, symlinked_python.path())?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--python")
+        .arg(symlinked_python.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: python/bin/python-link
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("child")
+        .arg("--python")
+        .arg(context.venv.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: .venv/bin/python
+    Creating virtual environment at: child
+    Activate with: source child/[BIN]/activate
+    ");
+
+    uv_snapshot!(context.filters(), context.external_command(context.temp_dir.child("child/bin/python").path())
+        .arg("-I")
+        .arg("-c")
+        .arg("print('ok')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+    ");
+
+    let target = fs_err::read_link(context.temp_dir.child("child/bin/python"))?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(target.display(), @"[PYTHON_BIN]/python-link");
+    });
+
+    Ok(())
+}
+
+/// Linux can execute a venv with 40 executable symlinks, including its own `bin/python`.
+/// CPython falls back to the executable in `pyvenv.cfg`'s home at its resolution limit.
+#[test]
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+fn create_venv_caches_interpreter_at_symlink_limit() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.12.9").assert().success();
+    let output = context.python_find().arg("3.12.9").assert().success();
+    let python = Path::new(std::str::from_utf8(&output.get_output().stdout)?.trim());
+
+    // Move the installation out of the managed directory to avoid transparent patch upgrades.
+    let installation = python
+        .parent()
+        .and_then(Path::parent)
+        .context("Python executable has no installation directory")?;
+    let relocated = context.temp_dir.child("python");
+    fs_err::rename(installation, relocated.path())?;
+    let python_directory = relocated.child("bin");
+    let context = context.with_filtered_path(python_directory.path(), "PYTHON_BIN");
+
+    let mut target = python_directory.child("python3.12").to_path_buf();
+    for index in (0..39).rev() {
+        let link = python_directory.child(format!("chain-{index}"));
+        symlink(&target, link.path())?;
+        target = link.to_path_buf();
+    }
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--python")
+        .arg(&target), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.9 interpreter at: python/bin/chain-0
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    ");
+
+    uv_snapshot!(context.filters(), context.external_command(context.venv.child("bin/python").path())
+        .arg("-I")
+        .arg("-c")
+        .arg("print('ok')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+    ");
 
     Ok(())
 }
