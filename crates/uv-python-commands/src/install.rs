@@ -98,6 +98,7 @@ impl InstallRequest {
 
     fn matches_installation(&self, installation: &ManagedPythonInstallation) -> bool {
         self.download_request.satisfied_by_key(installation.key())
+            && matches_build(self.download_request.build.as_deref(), installation.build())
     }
 
     fn python_request(&self) -> &PythonRequest {
@@ -587,6 +588,12 @@ async fn perform_install(
             .iter()
             .map(|request| {
                 let download = request.download(downloads)?;
+                if existing_installations.iter().any(|installation| {
+                    installation.key() == download.key()
+                        && !matches_build(download.build(), installation.build())
+                }) {
+                    changelog.existing.insert(download.key().clone());
+                }
                 debug!("Found download `{}` for request `{}`", download, request);
                 Ok(download)
             })
