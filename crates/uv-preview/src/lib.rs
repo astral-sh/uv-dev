@@ -135,7 +135,8 @@ pub fn is_enabled(flag: PreviewFeature) -> bool {
 }
 
 /// Check whether a feature was selected individually instead of by enabling all previews.
-pub fn is_enabled_explicitly(flag: PreviewFeature) -> bool {
+#[cfg(test)]
+fn is_enabled_explicitly(flag: PreviewFeature) -> bool {
     get().is_enabled_explicitly(flag)
 }
 
