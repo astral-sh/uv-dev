@@ -1615,3 +1615,39 @@ async fn python_list_remote_catalog_preserves_build_priority() -> Result<()> {
     ");
     Ok(())
 }
+
+/// HEAD failures must redact signed metadata URLs even when the subsequent stream succeeds.
+#[tokio::test]
+async fn python_list_ndjson_head_failure_redacts_signed_url() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_collapsed_whitespace();
+    let server = MockServer::start().await;
+    Mock::given(method("HEAD"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(405))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"version":"3.14.1+20260420","artifacts":[{"url":"https://example.com/python.tar.gz","platform":"aarch64-apple-darwin","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}"#,
+            "application/x-ndjson",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.python_list()
+        .args(["cpython-3.14-macos-aarch64-none", "--all-versions", "--all-platforms", "--all-arches", "--show-urls"])
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .env(EnvVars::RUST_LOG, "uv_python_managed::downloads=debug")
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/versions.ndjson?X-Amz-Signature=secret-signature&safe=value", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.14.1-macos-aarch64-none https://example.com/python.tar.gz
+
+    ----- stderr -----
+    DEBUG Failed to validate Python downloads metadata with HEAD request: HTTP status client error (405 Method Not Allowed) for url (http://[LOCALHOST]/versions.ndjson?X-Amz-Signature=****&safe=value)
+    ");
+    Ok(())
+}
