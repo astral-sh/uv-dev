@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::mem;
 
 use petgraph::algo::kosaraju_scc;
@@ -16,7 +17,6 @@ use uv_pypi_types::{ConflictItem, ConflictSet, Conflicts};
 
 use uv_resolver_types::universal_marker::encode_conflict_item;
 
-use crate::lock::{LockErrorKind, Source};
 pub use crate::lock::export::metadata::{Metadata, PythonReport};
 pub(crate) use crate::lock::export::metadata::{
     MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript, MetadataWorkspace,
@@ -25,6 +25,7 @@ pub(crate) use crate::lock::export::metadata::{
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
 use crate::lock::walk::LockWalker;
+use crate::lock::{LockErrorKind, Source};
 use crate::{Installable, InstallableRootKind, LockError, Package};
 
 pub mod cyclonedx_json;
@@ -190,8 +191,7 @@ impl<'lock> ExportableRequirements<'lock> {
         while let Some(visit) = walker.pop() {
             let package_index = visit.index;
             let extra = visit.extra;
-            let index =
-                node_by_package[package_index.0].expect("queued package has a graph node");
+            let index = node_by_package[package_index.0].expect("queued package has a graph node");
 
             for dep in visit.dependencies {
                 if prune.contains(&dep.package_id.name) {
