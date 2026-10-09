@@ -3383,7 +3383,7 @@ fn build_name_mismatch() -> Result<()> {
 }
 
 #[test]
-fn build_wheel_project_identity_mismatch() -> Result<()> {
+fn build_wheel_project_name_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(indoc! {r#"
@@ -3442,7 +3442,64 @@ fn build_wheel_project_identity_mismatch() -> Result<()> {
     ");
     dist.child("different_name-1.0.0-py3-none-any.whl")
         .assert(predicate::path::missing());
-    assert_eq!(fs_err::read(existing.path())?, b"existing artifact");
+    assert_eq!(
+        context.read("project/dist/existing.txt"),
+        "existing artifact"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn build_wheel_project_version_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "configured-name"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        import os
+        import pathlib
+        import zipfile
+
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            wheel_name = os.environ["UV_TEST_WHEEL_NAME"]
+            name, version, *_ = wheel_name.split("-")
+            dist_info = f"{name}-{version}.dist-info"
+            records = [
+                (f"{name}/__init__.py", b""),
+                (
+                    f"{dist_info}/METADATA",
+                    f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n".encode(),
+                ),
+                (
+                    f"{dist_info}/WHEEL",
+                    b"Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+                ),
+            ]
+
+            with zipfile.ZipFile(pathlib.Path(wheel_directory, wheel_name), "w") as wheel:
+                for path, contents in records:
+                    wheel.writestr(path, contents)
+                record = "\n".join(f"{path},," for path, _ in records)
+                wheel.writestr(f"{dist_info}/RECORD", f"{record}\n{dist_info}/RECORD,,\n")
+
+            return wheel_name
+    "#})?;
+
+    let dist = project.child("dist");
+    dist.create_dir_all()?;
+    let existing = dist.child("existing.txt");
+    existing.write_binary(b"existing artifact")?;
 
     uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel").env("UV_TEST_WHEEL_NAME", "configured_name-9.0.0-py3-none-any.whl"), @"
     exit_code: 2 (failure)
@@ -3453,7 +3510,59 @@ fn build_wheel_project_identity_mismatch() -> Result<()> {
     ");
     dist.child("configured_name-9.0.0-py3-none-any.whl")
         .assert(predicate::path::missing());
-    assert_eq!(fs_err::read(existing.path())?, b"existing artifact");
+    assert_eq!(
+        context.read("project/dist/existing.txt"),
+        "existing artifact"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn build_wheel_project_skip_filename_check() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "configured-name"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        import os
+        import pathlib
+        import zipfile
+
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            wheel_name = os.environ["UV_TEST_WHEEL_NAME"]
+            name, version, *_ = wheel_name.split("-")
+            dist_info = f"{name}-{version}.dist-info"
+            records = [
+                (f"{name}/__init__.py", b""),
+                (
+                    f"{dist_info}/METADATA",
+                    f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n".encode(),
+                ),
+                (
+                    f"{dist_info}/WHEEL",
+                    b"Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+                ),
+            ]
+
+            with zipfile.ZipFile(pathlib.Path(wheel_directory, wheel_name), "w") as wheel:
+                for path, contents in records:
+                    wheel.writestr(path, contents)
+                record = "\n".join(f"{path},," for path, _ in records)
+                wheel.writestr(f"{dist_info}/RECORD", f"{record}\n{dist_info}/RECORD,,\n")
+
+            return wheel_name
+    "#})?;
 
     uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel").env("UV_TEST_WHEEL_NAME", "different_name-9.0.0-py3-none-any.whl").env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1"), @"
     exit_code: 0 (success)
@@ -3464,6 +3573,55 @@ fn build_wheel_project_identity_mismatch() -> Result<()> {
     project
         .child("dist/different_name-9.0.0-py3-none-any.whl")
         .assert(predicate::path::is_file());
+
+    Ok(())
+}
+
+#[test]
+fn build_wheel_project_local_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "configured-name"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        import os
+        import pathlib
+        import zipfile
+
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            wheel_name = os.environ["UV_TEST_WHEEL_NAME"]
+            name, version, *_ = wheel_name.split("-")
+            dist_info = f"{name}-{version}.dist-info"
+            records = [
+                (f"{name}/__init__.py", b""),
+                (
+                    f"{dist_info}/METADATA",
+                    f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n".encode(),
+                ),
+                (
+                    f"{dist_info}/WHEEL",
+                    b"Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+                ),
+            ]
+
+            with zipfile.ZipFile(pathlib.Path(wheel_directory, wheel_name), "w") as wheel:
+                for path, contents in records:
+                    wheel.writestr(path, contents)
+                record = "\n".join(f"{path},," for path, _ in records)
+                wheel.writestr(f"{dist_info}/RECORD", f"{record}\n{dist_info}/RECORD,,\n")
+
+            return wheel_name
+    "#})?;
 
     uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel").env("UV_TEST_WHEEL_NAME", "configured_name-1.0.0+local-py3-none-any.whl"), @"
     exit_code: 0 (success)

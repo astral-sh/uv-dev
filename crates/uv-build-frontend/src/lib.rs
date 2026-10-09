@@ -32,9 +32,11 @@ use uv_cache::Cache;
 use uv_cache_key::cache_digest;
 use uv_configuration::{BuildKind, BuildOutput, NoSources};
 use uv_distribution::BuildRequires;
+use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, Requirement,
 };
+use uv_flags::EnvironmentFlags;
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_fs::{PythonExt, Simplified};
 use uv_normalize::PackageName;
@@ -979,19 +981,32 @@ impl SourceBuild {
         // The build scripts run with the extracted root as cwd, so they need the absolute path.
         let wheel_dir = std::path::absolute(wheel_dir)?;
         let filename = self.pep517_build(&wheel_dir).await?;
+        if !uv_flags::contains(EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK) {
+            match self.build_kind {
+                BuildKind::Sdist => {}
+                BuildKind::Wheel | BuildKind::Editable => {
+                    let filename = WheelFilename::from_str(&filename)?;
+                    if let Some(project) = &self.project {
+                        if project.name != filename.name {
+                            return Err(Error::ProjectNameMismatch(
+                                project.name.clone(),
+                                filename.name,
+                            ));
+                        }
+                        if let Some(expected) = &project.version
+                            && expected != &filename.version
+                            && expected != &filename.version.clone().without_local()
+                        {
+                            return Err(Error::ProjectVersionMismatch(
+                                expected.clone(),
+                                filename.version,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         Ok(filename)
-    }
-
-    /// Return the statically declared project name, if available.
-    pub fn project_name(&self) -> Option<&PackageName> {
-        self.project.as_ref().map(|project| &project.name)
-    }
-
-    /// Return the statically declared project version, if available.
-    pub fn project_version(&self) -> Option<&Version> {
-        self.project
-            .as_ref()
-            .and_then(|project| project.version.as_ref())
     }
 
     /// Perform a PEP 517 build for a wheel or source distribution (sdist).
