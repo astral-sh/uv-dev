@@ -1,13 +1,12 @@
 use std::borrow::Cow;
 use std::error::Error;
-use std::fmt;
 
 use crate::source::SourceSnippet;
 
 /// User-facing presentation data for one error in a source chain.
 ///
 /// This does not replace the error or its sources. Unrecognized error types continue to use
-/// their [`fmt::Display`] implementation.
+/// their [`std::fmt::Display`] implementation.
 #[derive(Default)]
 pub struct Diagnostic<'a> {
     pub(crate) message: Option<Cow<'a, str>>,
