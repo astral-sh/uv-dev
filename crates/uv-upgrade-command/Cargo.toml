@@ -23,7 +23,6 @@ uv-dispatch = { workspace = true }
 uv-distribution = { workspace = true }
 uv-distribution-types = { workspace = true }
 uv-lock = { workspace = true }
-uv-lock-command = { workspace = true }
 uv-normalize = { workspace = true }
 uv-operations = { workspace = true }
 uv-pep440 = { workspace = true }

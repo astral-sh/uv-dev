@@ -33,11 +33,11 @@ use uv_cli_error::UvError;
 use uv_cli_output::printer::Printer;
 use uv_cli_settings::{FrozenSource, LockCheck, ResolverInstallerSettings};
 use uv_cli_types::exit::ExitStatus;
-use uv_lock_command::lock::LockMode;
 use uv_operations::installation::Modifications;
 use uv_operations::loggers::{DefaultInstallLogger, DefaultResolveLogger};
 use uv_project::edit::{ProjectEdit, PythonTarget};
 use uv_project::install_target::{InstallTarget, PackageSelection};
+use uv_project::lock_operation::LockMode;
 use uv_project::lock_target::LockTarget;
 use uv_project::malware::MalwareCheckContext;
 use uv_project::python::ProjectPythonRequest;
@@ -639,7 +639,7 @@ async fn lock_and_sync(
 
     // Lock and sync the environment, if necessary.
     let lock = match Box::pin(
-        uv_lock_command::lock::LockOperation::new(
+        uv_project::lock_operation::LockOperation::new(
             mode,
             &settings.resolver,
             &client_builder,

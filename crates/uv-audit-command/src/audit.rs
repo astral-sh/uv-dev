@@ -5,9 +5,9 @@ use uv_cli_output::printer::Printer;
 use uv_cli_settings::{FrozenSource, LockCheck, ResolverSettings};
 use uv_cli_types::exit::ExitStatus;
 use uv_dispatch::UniversalState;
-use uv_lock_command::lock::{LockMode, LockOperation};
 use uv_operations::loggers::DefaultResolveLogger;
 use uv_operations::resolution::resolution_markers;
+use uv_project::lock_operation::{LockMode, LockOperation};
 use uv_project::lock_target::LockTarget;
 use uv_project::python::ProjectPythonRequest;
 use uv_project::{

@@ -4,6 +4,7 @@ pub mod edit;
 pub mod environment;
 pub mod install_target;
 pub mod lock;
+pub mod lock_operation;
 pub mod lock_target;
 pub mod lockfile;
 pub mod malware;
