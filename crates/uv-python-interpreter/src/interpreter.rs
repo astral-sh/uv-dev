@@ -1180,8 +1180,51 @@ pub(crate) struct InterpreterInfo {
 }
 
 impl InterpreterInfo {
+    /// Infer a Unix venv's base executable using CPython 3.11+'s symlink resolution.
+    ///
+    /// Directory symlinks are not resolved, and absolute link targets are not normalized.
+    /// Relative targets are normalized.
+    /// Return `None` when Python must determine the fallback, including at the 40-link limit.
+    ///
+    /// See <https://github.com/python/cpython/blob/v3.12.15/Modules/getpath.c#L397-L451>.
+    fn infer_cpython_base_executable(executable: &Path) -> Option<PathBuf> {
+        let mut base_executable = executable.to_path_buf();
+        for _ in 0..40 {
+            let Ok(target) = fs::read_link(&base_executable) else {
+                return (base_executable != executable).then_some(base_executable);
+            };
+            base_executable = if target.is_absolute() {
+                target
+            } else {
+                uv_fs::normalize_absolute_path(&base_executable.parent()?.join(target)).ok()?
+            };
+        }
+        None
+    }
+
     /// Build metadata for virtual environment discovery without querying Python or using the cache.
-    pub(crate) fn from_virtualenv(interpreter: &Interpreter) -> Result<Self, Error> {
+    /// Return `None` when the venv's base executable requires querying Python.
+    pub(crate) fn from_virtualenv(interpreter: &Interpreter) -> Result<Option<Self>, Error> {
+        let sys_base_executable = if cfg!(unix) && interpreter.implementation_name() == "cpython" {
+            // Older CPython versions use a different base-executable initialization algorithm.
+            if interpreter.python_tuple() < (3, 11) {
+                return Ok(None);
+            }
+            let Some(executable) =
+                Self::infer_cpython_base_executable(interpreter.sys_executable())
+            else {
+                return Ok(None);
+            };
+            // Crossing executable directories can also change Python's base prefix and stdlib.
+            // Query that metadata together instead of only correcting the base executable.
+            if executable.parent() != interpreter.sys_base_executable().and_then(Path::parent) {
+                return Ok(None);
+            }
+            Some(executable)
+        } else {
+            interpreter.sys_base_executable.clone()
+        };
+
         // Python reports ordinary Windows paths even when the venv was created with a verbatim path.
         let scheme = Scheme {
             purelib: interpreter.scheme.purelib.simplified().to_path_buf(),
@@ -1191,7 +1234,7 @@ impl InterpreterInfo {
             data: interpreter.scheme.data.simplified().components().collect(),
             include: interpreter.scheme.include.simplified().to_path_buf(),
         };
-        Ok(Self {
+        Ok(Some(Self {
             platform: interpreter.platform.clone(),
             markers: (*interpreter.markers).clone(),
             scheme,
@@ -1202,7 +1245,7 @@ impl InterpreterInfo {
             sys_base_exec_prefix: PathBuf::new(),
             sys_path: Vec::new(),
             sys_base_prefix: interpreter.sys_base_prefix.clone(),
-            sys_base_executable: interpreter.sys_base_executable.clone(),
+            sys_base_executable,
             sys_executable: std::path::absolute(interpreter.sys_executable())?
                 .simplified()
                 .to_path_buf(),
@@ -1217,7 +1260,7 @@ impl InterpreterInfo {
             pointer_size: interpreter.pointer_size,
             gil_disabled: interpreter.gil_disabled,
             debug_enabled: interpreter.debug_enabled,
-        })
+        }))
     }
 
     /// Cache already prepared metadata for this executable.
@@ -1625,6 +1668,7 @@ mod tests {
 
     use anyhow::{Context, Result};
     use fs_err as fs;
+    use fs_err::os::unix::fs::symlink;
     use indoc::{formatdoc, indoc};
     use serde_json::Value;
     use tempfile::tempdir;
@@ -1695,6 +1739,64 @@ mod tests {
             "debug_enabled": false
         }
     "##}
+    }
+
+    #[test]
+    fn test_infer_cpython_base_executable_relative_target() -> Result<()> {
+        let root = tempdir()?;
+        let bin = root.path().join("bin");
+        fs::create_dir(&bin)?;
+        let executable = bin.join("python3.12");
+        fs::write(&executable, "")?;
+        let link = bin.join("python3");
+        symlink("../bin/./python3.12", &link)?;
+
+        assert_eq!(
+            InterpreterInfo::infer_cpython_base_executable(&link),
+            Some(executable)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_infer_cpython_base_executable_absolute_target() -> Result<()> {
+        let root = tempdir()?;
+        let bin = root.path().join("bin");
+        fs::create_dir(&bin)?;
+        fs::write(bin.join("python3.12"), "")?;
+        let directory_link = root.path().join("alias");
+        symlink(&bin, &directory_link)?;
+        let target = directory_link.join("../bin/python3.12");
+        let executable = bin.join("python3");
+        symlink(&target, &executable)?;
+
+        assert_eq!(
+            InterpreterInfo::infer_cpython_base_executable(&executable),
+            Some(target)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_infer_cpython_base_executable_link_limit() -> Result<()> {
+        let root = tempdir()?;
+        let executable = root.path().join("python3.12");
+        fs::write(&executable, "")?;
+        let mut target = executable.clone();
+        for index in 0..39 {
+            let link = root.path().join(format!("link-{index}"));
+            symlink(&target, &link)?;
+            target = link;
+        }
+        assert_eq!(
+            InterpreterInfo::infer_cpython_base_executable(&target),
+            Some(executable)
+        );
+
+        let venv_executable = root.path().join("venv-python");
+        symlink(&target, &venv_executable)?;
+        assert!(InterpreterInfo::infer_cpython_base_executable(&venv_executable).is_none());
+        Ok(())
     }
 
     #[tokio::test]
@@ -1792,7 +1894,7 @@ mod tests {
         Ok(())
     }
 
-    /// The v4 cache can contain an inferred base path that differs from Python's response.
+    /// Query Python instead of trusting an inferred base path from the v4 cache.
     #[tokio::test]
     async fn test_legacy_virtualenv_cache() -> Result<()> {
         let mock_dir = tempdir()?;
@@ -1830,7 +1932,7 @@ mod tests {
                 .strip_prefix(cache.bucket(CacheBucket::Interpreter))?,
         );
         let mut info = serde_json::from_value::<InterpreterInfo>(response)?;
-        info.sys_base_executable = Some(symlinked_python.clone());
+        info.sys_base_executable = Some(symlinked_python);
         fs::create_dir_all(legacy_entry.parent().context("Cache entry has no parent")?)?;
         fs::write(
             &legacy_entry,
@@ -1843,10 +1945,10 @@ mod tests {
         let interpreter = Interpreter::query(&executable, &cache)?;
         assert_eq!(
             interpreter.sys_base_executable(),
-            Some(symlinked_python.as_path())
+            Some(base_python.as_path())
         );
         assert_eq!(Interpreter::query(&executable, &cache)?, interpreter);
-        assert_eq!(fs::read_to_string(&query_log)?, "");
+        assert_eq!(fs::read_to_string(&query_log)?, ".");
         Ok(())
     }
 

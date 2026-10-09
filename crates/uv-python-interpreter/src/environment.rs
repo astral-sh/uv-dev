@@ -400,7 +400,10 @@ impl PythonEnvironment {
             return Ok(());
         }
 
-        let info = InterpreterInfo::from_virtualenv(self.interpreter())?;
+        let Some(info) = InterpreterInfo::from_virtualenv(self.interpreter())? else {
+            Interpreter::clear_cache(self.interpreter().sys_executable(), cache)?;
+            return Ok(());
+        };
         info.cache(self.interpreter().sys_executable(), cache)?;
         Ok(())
     }
