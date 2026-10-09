@@ -3438,7 +3438,8 @@ impl ForkedDependencies {
             assert!(!deps.is_empty(), "every name has at least one dependency");
             // Avoid forking for a package with one dependency specification.
             // This conservative strategy produces simpler lockfiles and faster resolution.
-            // However, it does not detect conflicts between transitive non-sibling dependencies.
+            // However, it can miss forks needed for transitive non-sibling dependencies,
+            // causing resolution to fail even when their disjoint markers permit a solution.
             if let [dep] = deps.as_slice() {
                 // Fork if the requirement raises the minimum supported Python version.
                 // The subsequent resolution must respect the higher minimum.
