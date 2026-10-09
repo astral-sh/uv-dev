@@ -1367,6 +1367,85 @@ fn git_lfs_cache_recovery(partial_fetches: bool) -> Result<()> {
     Ok(())
 }
 
+/// Offline Git sources cannot download LFS objects from a configured HTTP endpoint.
+#[cfg(feature = "test-git-lfs")]
+#[tokio::test]
+async fn add_git_lfs_offline_http_endpoint() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_git_lfs_config();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(400))
+        .mount(&server)
+        .await;
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    let git = |arguments: &[&str]| -> Result<String> {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(repository.path())
+            .output()?
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        Ok(String::from_utf8(output)?.trim().to_owned())
+    };
+    git(&["init", "--template="])?;
+    git(&["config", "user.name", "Alice"])?;
+    git(&["config", "user.email", "alice@example.com"])?;
+    git(&["config", "commit.gpgsign", "false"])?;
+    git(&["lfs", "install", "--local", "--skip-repo"])?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+    "#})?;
+    repository
+        .child(".gitattributes")
+        .write_str("module.py filter=lfs diff=lfs merge=lfs -text\n")?;
+    repository.child("module.py").write_str("VALUE = True\n")?;
+    repository
+        .child(".lfsconfig")
+        .write_str(&format!("[lfs]\nurl = {}\n", server.uri()))?;
+    git(&["add", "."])?;
+    git(&["commit", "-m", "Initial version"])?;
+    let revision = git(&["rev-parse", "HEAD"])?;
+    let url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository path"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["dependency"]
+
+        [tool.uv.sources]
+        dependency = {{ git = "{url}", rev = "{revision}", lfs = true }}
+    "#})?;
+    let mut filters = context.filters();
+    filters.push((revision.as_str(), "[COMMIT]"));
+    uv_snapshot!(filters, context.lock().arg("--offline").arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `dependency @ git+file://[TEMP_DIR]/repository/@[COMMIT]#lfs=true`
+      cause: Git operation failed
+      cause: failed to fetch LFS objects at [COMMIT]
+      cause: Remote Git fetches are not allowed because network connectivity is disabled (i.e., with `--offline`)
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .is_some_and(|requests| requests.is_empty())
+    );
+    Ok(())
+}
+
 /// Revision-local LFS endpoints apply to downloads, while cached-object copies stay local.
 #[test]
 #[cfg(all(feature = "test-git-lfs", feature = "test-pypi"))]
@@ -1461,6 +1540,38 @@ fn add_git_lfs_custom_endpoint() -> Result<()> {
     // The Git source has no LFS objects; only the selected revision identifies their endpoint.
     lock().assert().success();
     assert!(db_root.child(".git/lfs/objects").exists());
+    assert_eq!(
+        fs_err::read_to_string(checkout_root.child("module.py"))?,
+        "VALUE = True\n"
+    );
+
+    // Another revision excludes the object, leaving different configuration in the shared database.
+    repository.child(".lfsconfig").write_str(&formatdoc! {r#"
+        [lfs]
+        url = "{endpoint_url}"
+        fetchexclude = "module.py"
+    "#})?;
+    git(&["add", ".lfsconfig"])?;
+    git(&["commit", "-m", "Exclude the LFS module"])?;
+    let excluded_revision = git(&["rev-parse", "HEAD"])?;
+    let project = context.read("pyproject.toml");
+    clear_source_metadata()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&project.replace(&revision, &excluded_revision))?;
+    lock().assert().success();
+    assert!(fs_err::read_to_string(db_root.child(".lfsconfig"))?.contains("fetchexclude"));
+
+    // Validating the earlier revision must discard that exclusion and recover the missing object.
+    clear_source_metadata()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&project)?;
+    fs_err::remove_dir_all(db_root.child(".git/lfs/objects"))?;
+    fs_err::remove_dir_all(checkout_root.path())?;
+    lock().assert().success();
     assert_eq!(
         fs_err::read_to_string(checkout_root.child("module.py"))?,
         "VALUE = True\n"

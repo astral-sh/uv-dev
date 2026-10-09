@@ -702,6 +702,10 @@ impl GitDatabase {
 
     /// Checks whether the shared database contains the revision's LFS objects.
     pub(crate) fn contains_lfs_artifacts(&self, oid: GitOid) -> bool {
+        if let Err(error) = self.repo.prepare_lfs_config(&oid) {
+            debug!("Failed to prepare Git LFS configuration for {oid}: {error}");
+            return false;
+        }
         self.repo.lfs_fsck_objects(&format!("{oid}^0")) == LfsValidation::Passed
     }
 
@@ -1419,14 +1423,36 @@ fn fetch_lfs(
         url.as_str(),
     );
 
-    cmd.arg("fetch")
-        .arg(CHECKOUT_REMOTE)
-        .arg(revision.as_str())
-        // We should not support requesting LFS artifacts with skip smudge being set.
-        // While this may not be necessary, it's added to avoid any potential future issues.
-        .env_remove(EnvVars::GIT_LFS_SKIP_SMUDGE)
-        .cwd(&repo.path);
+    // Explicit object fetches do not inherit smudge suppression.
+    cmd.env_remove(EnvVars::GIT_LFS_SKIP_SMUDGE).cwd(&repo.path);
+    if offline {
+        // Git LFS has its own HTTP client and does not honor GIT_ALLOW_PROTOCOL. Ask its
+        // configuration loader which download endpoint the named remote actually selects.
+        let output = cmd.clone().arg("env").exec_with_output()?;
+        let environment = str::from_utf8(&output.stdout)?;
+        let named = format!("Endpoint ({CHECKOUT_REMOTE})=");
+        let endpoint = environment
+            .lines()
+            .find_map(|line| line.strip_prefix(&named))
+            .or_else(|| {
+                environment
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Endpoint="))
+            });
+        let local_endpoint = endpoint
+            .and_then(|endpoint| {
+                let endpoint = endpoint
+                    .rsplit_once(" (auth=")
+                    .map_or(endpoint, |(endpoint, _)| endpoint);
+                Url::parse(endpoint).ok()
+            })
+            .is_some_and(|endpoint| endpoint.scheme() == "file");
+        if !local_endpoint {
+            return Err(GitError::TransportNotAllowed.into());
+        }
+    }
 
+    cmd.arg("fetch").arg(CHECKOUT_REMOTE).arg(revision.as_str());
     cmd.exec_with_output()
         .map_err(|err| git_command_error(err, url, offline))?;
 
