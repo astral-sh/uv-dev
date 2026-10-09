@@ -183,6 +183,20 @@ impl PyProjectToml {
         }
     }
 
+    /// Returns whether any dependency group includes groups from its workspace.
+    pub fn has_workspace_group_includes(&self) -> bool {
+        self.tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.dependency_groups.as_ref())
+            .is_some_and(|groups| {
+                groups
+                    .inner()
+                    .values()
+                    .any(|settings| !settings.include_workspace_groups.is_empty())
+            })
+    }
+
     /// Returns the workspace dependency groups included by a local group.
     ///
     /// A missing package indicates a group defined by the workspace root.

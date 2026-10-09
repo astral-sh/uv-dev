@@ -65,6 +65,31 @@ impl RequiresDist {
             return Self::from_metadata23_with_source_context(metadata, git_member);
         };
 
+        let project_workspace = if !sources.is_none()
+            && project_workspace
+                .current_project()
+                .pyproject_toml()
+                .has_workspace_group_includes()
+        {
+            let discovery = DiscoveryOptions {
+                members: MemberDiscovery::Existing,
+                ..discovery
+            };
+            let Some(workspace) = ProjectWorkspace::from_maybe_project_root(
+                install_path,
+                &discovery,
+                cache,
+                workspace_cache,
+            )
+            .await?
+            else {
+                return Self::from_metadata23_with_source_context(metadata, git_member);
+            };
+            workspace
+        } else {
+            project_workspace
+        };
+
         Self::from_project_workspace(
             metadata,
             &project_workspace,

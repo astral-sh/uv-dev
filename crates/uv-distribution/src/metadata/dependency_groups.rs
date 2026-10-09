@@ -93,6 +93,17 @@ impl SourcedDependencyGroups {
         let project =
             VirtualProject::discover(project_dir, &discovery, cache, workspace_cache).await?;
 
+        let project =
+            if !no_sources.is_none() && project.pyproject_toml().has_workspace_group_includes() {
+                let discovery = DiscoveryOptions {
+                    members: MemberDiscovery::Existing,
+                    ..discovery
+                };
+                VirtualProject::discover(project_dir, &discovery, cache, workspace_cache).await?
+            } else {
+                project
+            };
+
         // Collect the dependency groups.
         let dependency_groups = FlatDependencyGroups::from_workspace(
             project.root(),
