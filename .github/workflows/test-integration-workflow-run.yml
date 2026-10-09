@@ -68,6 +68,14 @@ jobs:
           echo "sha=$SOURCE_HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "started-at=$(jq -r .run_started_at <<< "$source_run")" >> "$GITHUB_OUTPUT"
 
+      - name: Check out integration workflow scripts
+        if: ${{ steps.source.outputs.current == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
       - name: Ignore duplicate workflow notifications
         shell: bash
         id: claim
@@ -76,27 +84,12 @@ jobs:
           INTEGRATION_RUN_NAME: Integration tests for CI ${{ inputs.run }}, attempt ${{ inputs.attempt }}
           SOURCE_STARTED_AT: ${{ steps.source.outputs.started-at }}
         run: |
-          select_consumer() {
-            local consumers jobs
-            consumers=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/test-integration-workflow-run.yml/runs" \
-              -f event=workflow_dispatch -f "created=>=$started_at" -f per_page=100 --paginate --slurp | \
-              jq -c '[.[].workflow_runs[] | select(.display_title == env.INTEGRATION_RUN_NAME and (.status == "in_progress" or .status == "completed"))]')
-            # A completed duplicate has no integration jobs. Actual test jobs retain the
-            # claimant even when a lower-ID notification starts later or tests are canceled.
-            while read -r candidate attempt; do
-              jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/attempts/$attempt/jobs?per_page=100" --paginate --slurp)
-              if jq -e '[.[].jobs[] | select(.name | startswith("test-integration /"))] | any(.conclusion != "skipped")' <<< "$jobs" > /dev/null; then
-                echo "$candidate"
-                return
-              fi
-            done < <(jq -r 'sort_by(.id)[] | "\(.id) \(.run_attempt)"' <<< "$consumers")
-            # Workflow concurrency admits one active consumer, but does not schedule it
-            # in ID order. Queued and canceled unclaimed notifications cannot own work.
-            jq -r '([.[] | select(.status == "in_progress")] | min_by(.id).id) //
-              ([.[] | select(.conclusion == "failure" or .conclusion == "timed_out")] | min_by(.id).id) // empty' <<< "$consumers"
-          }
-          started_at="$SOURCE_STARTED_AT"
-          first_run=$(select_consumer)
+          export INTEGRATION_STARTED_AT="$SOURCE_STARTED_AT"
+          first_run=$(bash "$GITHUB_WORKSPACE/.github/scripts/select-integration-consumer.sh")
+          if [[ -z "$first_run" ]]; then
+            echo '::error::No active integration consumer was found for this CI attempt.'
+            exit 1
+          fi
           if [[ "$first_run" == "$GITHUB_RUN_ID" ]]; then
             echo 'selected=true' >> "$GITHUB_OUTPUT"
           else

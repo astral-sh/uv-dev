@@ -169,7 +169,15 @@ jobs:
     timeout-minutes: 35
     permissions:
       actions: read
+      contents: read
     steps:
+      - name: Check out integration workflow scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
       - name: Wait for integration tests
         shell: bash
         env:
@@ -178,30 +186,12 @@ jobs:
         run: |
           # The consumer waits for this job to start before downloading binaries.
           # Correlate the two workflows by run ID and attempt, not a moving branch.
-          select_consumer() {
-            local consumers jobs
-            consumers=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/test-integration-workflow-run.yml/runs" \
-              -f event=workflow_dispatch -f "created=>=$started_at" -f per_page=100 --paginate --slurp | \
-              jq -c '[.[].workflow_runs[] | select(.display_title == env.INTEGRATION_RUN_NAME and (.status == "in_progress" or .status == "completed"))]')
-            # A completed duplicate has no integration jobs. Actual test jobs retain the
-            # claimant even when a lower-ID notification starts later or tests are canceled.
-            while read -r candidate attempt; do
-              jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$candidate/attempts/$attempt/jobs?per_page=100" --paginate --slurp)
-              if jq -e '[.[].jobs[] | select(.name | startswith("test-integration /"))] | any(.conclusion != "skipped")' <<< "$jobs" > /dev/null; then
-                echo "$candidate"
-                return
-              fi
-            done < <(jq -r 'sort_by(.id)[] | "\(.id) \(.run_attempt)"' <<< "$consumers")
-            # Workflow concurrency admits one active consumer, but does not schedule it
-            # in ID order. Queued and canceled unclaimed notifications cannot own work.
-            jq -r '([.[] | select(.status == "in_progress")] | min_by(.id).id) //
-              ([.[] | select(.conclusion == "failure" or .conclusion == "timed_out")] | min_by(.id).id) // empty' <<< "$consumers"
-          }
-          started_at=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" --jq .run_started_at)
+          INTEGRATION_STARTED_AT=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" --jq .run_started_at)
+          export INTEGRATION_STARTED_AT
           deadline=$((SECONDS + 1800))
           run_id=
           while (( SECONDS < deadline )); do
-            selected_run=$(select_consumer)
+            selected_run=$(bash "$GITHUB_WORKSPACE/.github/scripts/select-integration-consumer.sh")
             if [[ -z "$selected_run" ]]; then
               sleep 30
               continue
