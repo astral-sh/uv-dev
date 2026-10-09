@@ -2,7 +2,6 @@ use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
-use insta::allow_duplicates;
 use sha2::{Digest, Sha256};
 use wiremock::matchers::{basic_auth, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1158,38 +1157,59 @@ async fn download_local_revision() -> Result<()> {
         .cache_dir
         .join("packed-v1")
         .join(WheelCache::Path(&url).wheel_dir("basic-package"));
-    for revision in ["original", "replacement"] {
-        let bytes = wheel(revision)?;
-        let hash = digest(&bytes);
-        write_project(
-            &context,
-            &formatdoc! {r#"
-            [[package]]
-            name = "basic-package"
-            version = "0.1.0"
-            source = {{ path = "{filename}" }}
-            wheels = [{{ filename = "{filename}", hash = "sha256:{hash}" }}]
-        "#},
-        )?;
-        fs_err::write(&path, &bytes)?;
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Downloaded 1 distributions (1 total)
-            ");
-        }
-        assert_eq!(fs_err::read(shard.join(digest(&bytes)))?, bytes);
-        assert!(shard.join("0.1.0-py3-none-any.whl.rev").is_file());
-        assert!(!shard.join("0.1.0-py3-none-any.whl.http").exists());
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Downloaded 0 distributions (1 total)
-            ");
-        }
-    }
+    let bytes = wheel("original")?;
+    let hash = digest(&bytes);
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ path = "{filename}" }}
+        wheels = [{{ filename = "{filename}", hash = "sha256:{hash}" }}]
+    "#},
+    )?;
+    fs_err::write(&path, &bytes)?;
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    assert_eq!(fs_err::read(shard.join(digest(&bytes)))?, bytes);
+    assert!(shard.join("0.1.0-py3-none-any.whl.rev").is_file());
+    assert!(!shard.join("0.1.0-py3-none-any.whl.http").exists());
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 0 distributions (1 total)
+    ");
+
+    let bytes = wheel("replacement")?;
+    let hash = digest(&bytes);
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ path = "{filename}" }}
+        wheels = [{{ filename = "{filename}", hash = "sha256:{hash}" }}]
+    "#},
+    )?;
+    fs_err::write(&path, &bytes)?;
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
+    assert_eq!(fs_err::read(shard.join(digest(&bytes)))?, bytes);
+    assert!(shard.join("0.1.0-py3-none-any.whl.rev").is_file());
+    assert!(!shard.join("0.1.0-py3-none-any.whl.http").exists());
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 0 distributions (1 total)
+    ");
     context
         .command()
         .args(["cache", "clean", "basic-package"])
@@ -1714,5 +1734,38 @@ async fn download_refresh_retains_file_cache_override() -> Result<()> {
     Downloaded 0 distributions (1 total)
     ");
     server.verify().await;
+    Ok(())
+}
+
+/// Prefetching a lockfile does not normalize or warn about resolver-only prerelease settings.
+#[test]
+fn download_ignores_resolver_only_settings() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let filename = "basic_package-0.1.0-py3-none-any.whl";
+    let bytes = wheel("original")?;
+    let hash = digest(&bytes);
+    context.temp_dir.child(filename).write_binary(&bytes)?;
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ path = "{filename}" }}
+        wheels = [{{ filename = "{filename}", hash = "sha256:{hash}" }}]
+    "#},
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&format!(
+            "{}\n[tool.uv]\nprerelease = \"if-necessary-or-explicit\"\n",
+            context.read("pyproject.toml"),
+        ))?;
+    uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Downloaded 1 distributions (1 total)
+    ");
     Ok(())
 }

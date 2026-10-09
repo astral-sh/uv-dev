@@ -6,20 +6,22 @@ use futures::{StreamExt, TryStreamExt, stream};
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, PackedArchiveEntry, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, Printer};
-use uv_configuration::Concurrency;
+use uv_configuration::{Concurrency, IndexStrategy, KeyringProviderType};
+use uv_distribution_types::IndexLocations;
 use uv_environment_operations::install_target::InstallTarget;
 use uv_environment_operations::store_credentials_from_target;
 use uv_lock::LockedArtifactKind;
 use uv_lock_operations::LockTarget;
 use uv_preview::{Preview, PreviewFeature};
-use uv_settings::ResolverSettings;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, WorkspaceCache};
 
 /// Populate the packed cache from the existing universal lockfile.
 pub async fn download(
     project_dir: &Path,
-    settings: ResolverSettings,
+    index_locations: IndexLocations,
+    index_strategy: IndexStrategy,
+    keyring_provider: KeyringProviderType,
     client_builder: BaseClientBuilder<'_>,
     concurrency: Concurrency,
     cache: &Cache,
@@ -58,9 +60,9 @@ pub async fn download(
         &client_builder,
     )?;
     let client = RegistryClientBuilder::new(client_builder, cache.clone())
-        .index_locations(settings.index_locations)
-        .index_strategy(settings.index_strategy)
-        .keyring(settings.keyring_provider)
+        .index_locations(index_locations)
+        .index_strategy(index_strategy)
+        .keyring(keyring_provider)
         .build()?;
     let mut artifacts = Vec::new();
     for package in lock.packages() {

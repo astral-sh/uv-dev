@@ -2458,7 +2458,7 @@ async fn run_project(
             .await
         }
         ProjectCommand::Download(args) => {
-            let args = settings::DownloadSettings::resolve(args, filesystem, &environment)?;
+            let args = settings::DownloadSettings::resolve(args, filesystem)?;
             show_settings!(args);
             globals
                 .network_settings
@@ -2466,7 +2466,9 @@ async fn run_project(
             let cache = cache.init().await?.with_refresh(args.refresh);
             Box::pin(commands::download(
                 project_dir,
-                args.settings,
+                args.index_locations,
+                args.index_strategy,
+                args.keyring_provider,
                 client_builder.subcommand(vec!["download".to_owned()]),
                 globals.concurrency,
                 &cache,
