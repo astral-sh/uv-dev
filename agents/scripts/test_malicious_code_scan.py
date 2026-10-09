@@ -107,6 +107,15 @@ class MaliciousCodeScanTests(unittest.TestCase):
             check=False,
         )
 
+    def test_prepare_preserves_git_diagnostics(self) -> None:
+        missing = "f" * 40
+        with self.assertRaises(subprocess.CalledProcessError) as error:
+            self.prepare(self.base, missing)
+        self.assertIn(
+            f"fatal: Not a valid object name {missing}^{{commit}}",
+            error.exception.stderr,
+        )
+
     def test_push_preserves_changes_removed_by_later_commits(self) -> None:
         added = self.commit("temporary.txt", "Transient fixture content\n")
         self.git("rm", "temporary.txt")

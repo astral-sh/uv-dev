@@ -35,7 +35,7 @@ def git(git_dir: Path, *arguments: str, stdin: bytes | None = None) -> bytes:
         ],
         input=stdin,
         check=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         timeout=120,
     ).stdout
 
