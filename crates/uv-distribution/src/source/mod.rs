@@ -72,13 +72,15 @@ pub struct StaticMetadataDatabase<'a, 'client> {
 }
 
 /// A direct source tree materialized on disk for static metadata inspection.
-#[derive(Debug)]
-struct MaterializedSourceTree(Box<Path>);
+struct MaterializedSourceTree {
+    path: Box<Path>,
+    git: Option<Fetch>,
+}
 
 impl MaterializedSourceTree {
     /// Return the on-disk path for this source tree.
     fn path(&self) -> &Path {
-        &self.0
+        &self.path
     }
 }
 
@@ -105,9 +107,10 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
         source: &RequirementSource,
     ) -> Result<Option<MaterializedSourceTree>, Error> {
         match source {
-            RequirementSource::Directory { install_path, .. } => Ok(Some(MaterializedSourceTree(
-                install_path.to_path_buf().into_boxed_path(),
-            ))),
+            RequirementSource::Directory { install_path, .. } => Ok(Some(MaterializedSourceTree {
+                path: install_path.to_path_buf().into_boxed_path(),
+                git: None,
+            })),
             RequirementSource::GitDirectory {
                 git,
                 subdirectory,
@@ -125,14 +128,14 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
                 )
                 .await?;
 
-                if let Some(subdirectory) = subdirectory {
-                    let source_tree = fetch.path().join(subdirectory);
-                    Ok(Some(MaterializedSourceTree(source_tree.into_boxed_path())))
-                } else {
-                    Ok(Some(MaterializedSourceTree(
-                        fetch.path().to_path_buf().into_boxed_path(),
-                    )))
-                }
+                let path = subdirectory.as_ref().map_or_else(
+                    || fetch.path().to_path_buf(),
+                    |subdirectory| fetch.path().join(subdirectory),
+                );
+                Ok(Some(MaterializedSourceTree {
+                    path: path.into_boxed_path(),
+                    git: Some(fetch),
+                }))
             }
             _ => Ok(None),
         }
@@ -174,12 +177,13 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
     /// Discover a [`VirtualProject`] from a direct source-tree requirement.
     ///
     /// Git source trees are materialized into the Git cache before project discovery. Returns
-    /// `None` when the requirement does not identify a source tree.
+    /// `None` when the requirement does not identify a source tree. Git fetch metadata accompanies
+    /// the project so repository-local requirements can retain their original source.
     pub async fn source_tree_project(
         &self,
         source: &RequirementSource,
         workspace_cache: &WorkspaceCache,
-    ) -> Result<Option<VirtualProject>, Error> {
+    ) -> Result<Option<(VirtualProject, Option<Fetch>)>, Error> {
         let Some(source_tree) = self.materialize_source_tree(source).await? else {
             return Ok(None);
         };
@@ -191,7 +195,7 @@ impl<'a, 'client> StaticMetadataDatabase<'a, 'client> {
         )
         .await
         .map_err(MetadataError::from)?;
-        Ok(project.map(VirtualProject::Project))
+        Ok(project.map(|project| (VirtualProject::Project(project), source_tree.git)))
     }
 }
 

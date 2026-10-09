@@ -8260,7 +8260,17 @@ fn tool_install_preserves_build_only_extra_requirements() -> Result<()> {
      ~ foo==0.1.0 (from file://[TEMP_DIR]/foo)
     Installed 1 executable: foo
     ");
-    assert_snapshot!(fs_err::read_to_string(backend.child("builds"))?, @"
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("foo")
+        .args(["--offline", "--no-cache", "--reinstall", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Modified foo environment
+     ~ foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    "#);
+    assert_snapshot!(context.read("backend/builds"), @"
+    built
     built
     built
     ");
@@ -8296,5 +8306,206 @@ fn tool_install_locked_rejects_matching_ancestor_project() -> Result<()> {
     warning: The `--locked` option for tool commands is experimental and may change without warning. Pass `--preview-features tool-install-locks` to disable this warning.
     error: `--locked` requires a source tree with a `[project]` table for `foo`
     "#);
+    Ok(())
+}
+
+/// Repository-local build sources remain usable after the checkout cache is discarded.
+#[cfg(feature = "test-git")]
+#[test]
+fn tool_install_locked_git_build_sources_survive_cache_removal() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let repository = context.temp_dir.child("repository");
+    let project = repository.child("foo");
+    let helper = repository.child("directory-helper");
+    let bin = context.temp_dir.child("bin");
+    let path = tool_install_git_path(&bin);
+    let marker = context.temp_dir.child("builds");
+    let (wheel_helper_name, wheel_helper) = generate_wheel_with_files(
+        &"wheel-helper".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("wheel_helper/payload.py", "VALUE = 'wheel'\n")],
+    );
+    repository
+        .child(&wheel_helper_name)
+        .write_binary(&wheel_helper)?;
+    let (directory_helper_name, directory_helper) = generate_wheel_with_files(
+        &"directory-helper".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("directory_helper/payload.py", "VALUE = 'directory'\n")],
+    );
+    helper.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "directory-helper"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    helper.child("backend.py").write_str(&formatdoc! {r"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            Path(wheel_directory, {directory_helper_name:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {directory_helper_name:?}
+    ", bytes = hex::encode(directory_helper)})?;
+    repository
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [tool.uv.workspace]
+        members = ["foo", "directory-helper"]
+        [tool.uv.extra-build-dependencies]
+        foo = ["wheel-helper==1.0.0", "directory-helper==1.0.0"]
+        [tool.uv.sources]
+        wheel-helper = {{ path = "{wheel_helper_name}" }}
+        directory-helper = {{ workspace = true }}
+    "#})?;
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.scripts]
+        foo = "foo.cli:main"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["foo".to_owned()],
+    );
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            from wheel_helper import payload as wheel_helper
+            from directory_helper import payload as directory_helper
+            assert wheel_helper.VALUE == "wheel"
+            assert directory_helper.VALUE == "directory"
+            with Path({marker:?}).open("a") as file:
+                file.write("built\n")
+            Path(wheel_directory, {filename:?}).write_bytes(bytes.fromhex({bytes:?}))
+            return {filename:?}
+    "#, marker = marker.path().to_string_lossy(), bytes = hex::encode(wheel)})?;
+    context
+        .lock()
+        .current_dir(repository.path())
+        .arg("--offline")
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+        .assert()
+        .success();
+    let commit = Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let commit = String::from_utf8(commit)?;
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository directory URL"))?;
+    let mut filters = context.filters();
+    filters.push((
+        r"file://[^\s]+/git-v1/checkouts/",
+        "file://[CACHE_DIR]/git-v1/checkouts/",
+    ));
+    filters.push((r"[0-9a-f]{40}", "[COMMIT]"));
+    filters.push((
+        r"git-v1/checkouts/[0-9a-f]+/[0-9a-f]+",
+        "git-v1/checkouts/[CHECKOUT]/[REV]",
+    ));
+    uv_snapshot!(filters, context.tool_install()
+        .arg(format!("git+{repository_url}@{}#subdirectory=foo", commit.trim()))
+        .args(["--locked", "--no-cache", "--preview-features", "tool-install-locks"])
+        .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh")
+        .env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + foo==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/foo)
+    Installed 1 executable: foo
+    "#);
+    insta::with_settings!({ filters => filters.clone() }, {
+        assert_snapshot!(context.read("tools/foo/uv-receipt.toml"), @r#"
+    [tool]
+    requirements = [{ name = "foo", git = "file://[TEMP_DIR]/repository/?subdirectory=foo&rev=[COMMIT]" }]
+    extra-build-requires = { foo = [{ requirement = { name = "wheel-helper", git = "file://[TEMP_DIR]/repository/?path=wheel_helper-1.0.0-py3-none-any.whl&rev=[COMMIT]#[COMMIT]" }, match_runtime = false }, { requirement = { name = "directory-helper", git = "file://[TEMP_DIR]/repository/?subdirectory=directory-helper&rev=[COMMIT]#[COMMIT]" }, match_runtime = false }] }
+    entrypoints = [
+        { name = "foo", install-path = "[TEMP_DIR]/bin/foo", from = "foo" },
+    ]
+
+    [tool.options]
+    extra-build-dependencies = { foo = [{ requirement = "wheel-helper==1.0.0", match-runtime = false }, { requirement = "directory-helper==1.0.0", match-runtime = false }] }
+    exclude-newer = "2024-03-25T00:00:00Z"
+    "#);
+    });
+    uv_snapshot!(filters, context.tool_upgrade().arg("foo")
+        .args(["--reinstall", "--no-cache", "--preview-features", "tool-install-locks"])
+        .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh")
+        .env(EnvVars::PATH, &path), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Reinstalled foo v0.1.0
+     - foo==0.1.0 (from file://[CACHE_DIR]/git-v1/checkouts/[CHECKOUT]/[REV]/foo)
+     + foo==0.1.0 (from git+file://[TEMP_DIR]/repository/@[COMMIT]#subdirectory=foo)
+    Installed 1 executable: foo
+    "#);
+    assert_snapshot!(context.read("builds"), @"
+    built
+    built
+    ");
+    uv_snapshot!(context.filters(), Command::new("foo").env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from foo!
+    ");
     Ok(())
 }

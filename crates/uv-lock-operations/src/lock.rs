@@ -716,6 +716,7 @@ async fn do_lock(
             LoweredExtraBuildDependencies::from_workspace(
                 extra_build_dependencies.clone(),
                 workspace,
+                None,
                 index_locations,
                 sources,
                 cache,

@@ -85,6 +85,7 @@ pub async fn sync_from_lock(
             LoweredExtraBuildDependencies::from_workspace(
                 extra_build_dependencies.clone(),
                 workspace,
+                None,
                 index_locations,
                 &sources,
                 cache,
@@ -119,6 +120,7 @@ pub async fn sync_from_lock(
                 LoweredExtraBuildDependencies::from_workspace(
                     extra_build_dependencies.clone(),
                     &workspace,
+                    None,
                     index_locations,
                     &sources,
                     cache,
