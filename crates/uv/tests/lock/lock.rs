@@ -48858,3 +48858,66 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
 
     Ok(())
 }
+
+/// Member-scoped flat indexes remain exempt when the root configures a cutoff.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_exclude_newer_member_flat_index() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "member-flat-index"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let flat_index = MockServer::start().await;
+    Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{}">a-1.0.0-py3-none-any.whl</a>"#,
+                server.file_url("a-1.0.0-py3-none-any.whl")
+            ),
+            "text/html",
+        ))
+        .mount(&flat_index)
+        .await;
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-26T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["member"]
+    "#})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [tool.uv.sources]
+        a = {{ index = "member-flat" }}
+        [[tool.uv.index]]
+        name = "member-flat"
+        url = "{}/links"
+        format = "flat"
+        explicit = true
+    "#, flat_index.uri()})?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}

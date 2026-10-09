@@ -392,9 +392,16 @@ impl<'a> IndexLocations {
     }
 
     /// Return whether the given URL is configured only as a flat index.
-    pub fn is_flat_index(&self, url: &IndexUrl) -> bool {
+    ///
+    /// Include source-scoped indexes, which can be defined by individual workspace members.
+    pub fn is_flat_index(&self, url: &IndexUrl, source_indexes: &[Index]) -> bool {
         let mut flat = false;
-        for index in self.flat_index.iter().chain(self.simple_indexes()) {
+        for index in self
+            .flat_index
+            .iter()
+            .chain(self.simple_indexes())
+            .chain(source_indexes)
+        {
             if is_same_index(index.url(), url) {
                 match index.format {
                     IndexFormat::Flat => flat = true,
@@ -686,7 +693,7 @@ mod tests {
         let mut shadowed = simple.clone();
         shadowed.format = IndexFormat::Flat;
         let locations = IndexLocations::new(vec![simple, shadowed], vec![], false);
-        assert!(!locations.is_flat_index(&url));
+        assert!(!locations.is_flat_index(&url, &[]));
         Ok(())
     }
 
@@ -697,9 +704,9 @@ mod tests {
         let mut flat = simple.clone();
         flat.format = IndexFormat::Flat;
         let locations = IndexLocations::new(vec![simple], vec![flat.clone()], false);
-        assert!(!locations.is_flat_index(&url));
+        assert!(!locations.is_flat_index(&url, &[]));
         let locations = IndexLocations::new(vec![], vec![flat], true);
-        assert!(locations.is_flat_index(&url));
+        assert!(locations.is_flat_index(&url, &[]));
         Ok(())
     }
 

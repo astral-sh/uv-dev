@@ -38,7 +38,7 @@ use uv_distribution_types::{
     ArchiveHashPolicy, BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist,
     DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
     FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
+    HashValidation, Identifier, Index, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
     MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
     PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
     Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
@@ -3102,6 +3102,7 @@ impl Lock {
         root: &Path,
         exclude_newer: &ExcludeNewer,
         index_locations: &IndexLocations,
+        source_indexes: &[Index],
     ) -> Result<Option<(&PackageName, Timestamp)>, LockError> {
         for package in &self.packages {
             let Some(index) = package.index(root)? else {
@@ -3116,7 +3117,7 @@ impl Lock {
 
             // Flat indexes bypass cutoffs during resolution, including when their HTML lists
             // upload times. A URL also configured as a Simple index has ambiguous provenance.
-            if index_locations.is_flat_index(&index) {
+            if index_locations.is_flat_index(&index, source_indexes) {
                 continue;
             }
             let mismatched = |upload_time: Option<Timestamp>| {

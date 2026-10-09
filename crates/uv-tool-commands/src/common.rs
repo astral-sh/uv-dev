@@ -541,6 +541,7 @@ impl ToolLock {
             interpreter,
             &requires_python,
             index_locations,
+            &[],
             upgrade,
             Some(refresh),
             &options,

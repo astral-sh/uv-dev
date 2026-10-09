@@ -9,7 +9,9 @@ use uv_command_support::Printer;
 use uv_configuration::{Constraints, ExcludeDependency, Override, Upgrade};
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
-use uv_distribution_types::{DependencyMetadata, IndexLocations, Requirement, RequiresPython};
+use uv_distribution_types::{
+    DependencyMetadata, Index, IndexLocations, Requirement, RequiresPython,
+};
 use uv_lock::{GroupMetadata, Lock, SatisfiesResult};
 use uv_normalize::{DefaultGroups, GroupName, PackageName};
 use uv_preview::{Preview, PreviewFeature};
@@ -60,6 +62,7 @@ impl ValidatedLock {
         interpreter: &Interpreter,
         requires_python: &RequiresPython,
         index_locations: &IndexLocations,
+        source_indexes: &[Index],
         upgrade: &Upgrade,
         refresh: Option<&Refresh>,
         options: &Options,
@@ -204,9 +207,12 @@ impl ValidatedLock {
             };
         }
 
-        if let Some((package, cutoff)) =
-            lock.find_exclude_newer_mismatch(install_path, &options.exclude_newer, index_locations)?
-        {
+        if let Some((package, cutoff)) = lock.find_exclude_newer_mismatch(
+            install_path,
+            &options.exclude_newer,
+            index_locations,
+            source_indexes,
+        )? {
             let _ = writeln!(
                 printer.stderr(),
                 "Resolving despite existing lockfile because package `{package}` contains artifacts that do not satisfy the `exclude-newer` cutoff of `{cutoff}`",
