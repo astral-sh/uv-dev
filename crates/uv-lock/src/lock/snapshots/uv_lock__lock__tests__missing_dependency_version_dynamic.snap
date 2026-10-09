@@ -69,6 +69,7 @@ Ok(
                 default_groups: None,
                 group_requires_python: {},
                 metadata: PackageMetadata {
+                    requires_python: None,
                     requires_dist: {},
                     provides_extra: [],
                     dependency_groups: {},
@@ -116,6 +117,7 @@ Ok(
                 default_groups: None,
                 group_requires_python: {},
                 metadata: PackageMetadata {
+                    requires_python: None,
                     requires_dist: {},
                     provides_extra: [],
                     dependency_groups: {},
@@ -183,6 +185,7 @@ Ok(
                 default_groups: None,
                 group_requires_python: {},
                 metadata: PackageMetadata {
+                    requires_python: None,
                     requires_dist: {},
                     provides_extra: [],
                     dependency_groups: {},
@@ -239,6 +242,7 @@ Ok(
         workspace_members: {},
         manifest: ResolverManifest {
             members: {},
+            workspace_members: None,
             default_groups: None,
             group_requires_python: {},
             requirements: {},
