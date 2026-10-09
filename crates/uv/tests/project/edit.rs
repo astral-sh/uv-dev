@@ -3356,6 +3356,9 @@ fn update() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
+        config-settings-digest = "526f4e6011dd6aaa"
+        config-settings-packages = ["requests"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -12092,6 +12095,9 @@ fn add_direct_url_subdirectory() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
+        config-settings-digest = "8f5896a7a4372370"
+        config-settings-packages = ["root"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -12216,6 +12222,9 @@ fn add_direct_url_subdirectory_raw() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
+        config-settings-digest = "8f5896a7a4372370"
+        config-settings-packages = ["root"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]

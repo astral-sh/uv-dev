@@ -22,7 +22,9 @@ use tracing::{Instrument, debug, info_span, instrument, warn};
 use url::Url;
 
 use uv_auth::CredentialsCache;
-use uv_cache::{Cache, CacheBucket, CacheEntry, CacheShard, Removal, WheelCache};
+use uv_cache::{
+    Cache, CacheBucket, CacheEntry, CacheShard, METADATA_WITH_SETTINGS, Removal, WheelCache,
+};
 use uv_cache_info::CacheInfo;
 use uv_client::{
     BaseClientBuilder, CacheControl, CachedClientError, Connectivity, DataWithCachePolicy,
@@ -614,19 +616,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
     /// Determine the [`ConfigSettings`] for the given package name.
     fn config_settings_for(&self, name: Option<&PackageName>) -> Cow<'_, ConfigSettings> {
-        if let Some(name) = name {
-            if let Some(package_settings) = self.build_context.config_settings_package().get(name) {
-                Cow::Owned(
-                    package_settings
-                        .clone()
-                        .merge(self.build_context.config_settings().clone()),
-                )
-            } else {
-                Cow::Borrowed(self.build_context.config_settings())
-            }
-        } else {
-            Cow::Borrowed(self.build_context.config_settings())
-        }
+        self.build_context
+            .config_settings_package()
+            .effective(name, self.build_context.config_settings())
     }
 
     /// Determine the extra build dependencies for the given package name.
@@ -762,9 +754,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // Store the metadata.
         let metadata_entry = cache_shard.entry(METADATA);
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        CachedMetadata::write(
+            &metadata_entry,
+            &metadata,
+            &self.config_settings_for(source.name()),
+        )
+        .await?;
 
         Ok(BuiltWheelMetadata {
             path: cache_shard.join(&disk_filename).into_boxed_path(),
@@ -827,12 +822,15 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // If the cache contains compatible metadata, return it.
         let metadata_entry = cache_shard.entry(METADATA);
-        match CachedMetadata::read(&metadata_entry).await {
+        match CachedMetadata::read(&metadata_entry, &self.config_settings_for(source.name())).await
+        {
             Ok(Some(metadata)) => {
                 if metadata.matches(source.name(), source.version()) {
                     debug!("Using cached metadata for: {source}");
                     return Ok(ArchiveMetadata {
-                        metadata: Metadata::from_metadata23(metadata.into()),
+                        metadata: Metadata::from_metadata23(metadata.into()).with_config_settings(
+                            self.config_settings_for(source.name()).into_owned(),
+                        ),
                         hashes: revision.into_hashes(),
                     });
                 }
@@ -897,12 +895,16 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             fs::create_dir_all(metadata_entry.dir())
                 .await
                 .map_err(Error::CacheWrite)?;
-            write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-                .await
-                .map_err(Error::CacheWrite)?;
+            CachedMetadata::write(
+                &metadata_entry,
+                &metadata,
+                &self.config_settings_for(source.name()),
+            )
+            .await?;
 
             return Ok(ArchiveMetadata {
-                metadata: Metadata::from_metadata23(metadata),
+                metadata: Metadata::from_metadata23(metadata)
+                    .with_config_settings(self.config_settings_for(source.name()).into_owned()),
                 hashes: revision.into_hashes(),
             });
         }
@@ -954,12 +956,16 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         };
 
         // Store the metadata.
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        CachedMetadata::write(
+            &metadata_entry,
+            &metadata,
+            &self.config_settings_for(source.name()),
+        )
+        .await?;
 
         Ok(ArchiveMetadata {
-            metadata: Metadata::from_metadata23(metadata),
+            metadata: Metadata::from_metadata23(metadata)
+                .with_config_settings(self.config_settings_for(source.name()).into_owned()),
             hashes: revision.into_hashes(),
         })
     }
@@ -1166,9 +1172,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // Store the metadata.
         let metadata_entry = cache_shard.entry(METADATA);
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        CachedMetadata::write(
+            &metadata_entry,
+            &metadata,
+            &self.config_settings_for(source.name()),
+        )
+        .await?;
 
         Ok(BuiltWheelMetadata {
             path: cache_shard.join(&disk_filename).into_boxed_path(),
@@ -1226,12 +1235,15 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // If the cache contains compatible metadata, return it.
         let metadata_entry = cache_shard.entry(METADATA);
-        match CachedMetadata::read(&metadata_entry).await {
+        match CachedMetadata::read(&metadata_entry, &self.config_settings_for(source.name())).await
+        {
             Ok(Some(metadata)) => {
                 if metadata.matches(source.name(), source.version()) {
                     debug!("Using cached metadata for: {source}");
                     return Ok(ArchiveMetadata {
-                        metadata: Metadata::from_metadata23(metadata.into()),
+                        metadata: Metadata::from_metadata23(metadata.into()).with_config_settings(
+                            self.config_settings_for(source.name()).into_owned(),
+                        ),
                         hashes: revision.into_hashes(),
                     });
                 }
@@ -1271,12 +1283,16 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             fs::create_dir_all(metadata_entry.dir())
                 .await
                 .map_err(Error::CacheWrite)?;
-            write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-                .await
-                .map_err(Error::CacheWrite)?;
+            CachedMetadata::write(
+                &metadata_entry,
+                &metadata,
+                &self.config_settings_for(source.name()),
+            )
+            .await?;
 
             return Ok(ArchiveMetadata {
-                metadata: Metadata::from_metadata23(metadata),
+                metadata: Metadata::from_metadata23(metadata)
+                    .with_config_settings(self.config_settings_for(source.name()).into_owned()),
                 hashes: revision.into_hashes(),
             });
         }
@@ -1328,12 +1344,16 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         };
 
         // Store the metadata.
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        CachedMetadata::write(
+            &metadata_entry,
+            &metadata,
+            &self.config_settings_for(source.name()),
+        )
+        .await?;
 
         Ok(ArchiveMetadata {
-            metadata: Metadata::from_metadata23(metadata),
+            metadata: Metadata::from_metadata23(metadata)
+                .with_config_settings(self.config_settings_for(source.name()).into_owned()),
             hashes: revision.into_hashes(),
         })
     }
@@ -1487,9 +1507,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // Store the metadata.
         let metadata_entry = cache_shard.entry(METADATA);
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        CachedMetadata::write(
+            &metadata_entry,
+            &metadata,
+            &self.config_settings_for(source.name()),
+        )
+        .await?;
 
         Ok(BuiltWheelMetadata {
             path: cache_shard.join(&disk_filename).into_boxed_path(),
@@ -1571,7 +1594,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // If the cache contains compatible metadata, return it.
         let metadata_entry = cache_shard.entry(METADATA);
-        match CachedMetadata::read(&metadata_entry).await {
+        match CachedMetadata::read(&metadata_entry, &self.config_settings_for(source.name())).await
+        {
             Ok(Some(metadata)) => {
                 if metadata.matches(source.name(), source.version()) {
                     debug!("Using cached metadata for: {source}");
@@ -1597,7 +1621,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                             self.build_context.workspace_cache(),
                             credentials_cache,
                         )
-                        .await?,
+                        .await?
+                        .with_config_settings(self.config_settings_for(source.name()).into_owned()),
                     ));
                 }
                 debug!("Cached metadata does not match expected name and version for: {source}");
@@ -1623,9 +1648,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             fs::create_dir_all(metadata_entry.dir())
                 .await
                 .map_err(Error::CacheWrite)?;
-            write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-                .await
-                .map_err(Error::CacheWrite)?;
+            CachedMetadata::write(
+                &metadata_entry,
+                &metadata,
+                &self.config_settings_for(source.name()),
+            )
+            .await?;
 
             // If necessary, mark the metadata as dynamic.
             let metadata = if dynamic {
@@ -1649,7 +1677,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     self.build_context.workspace_cache(),
                     credentials_cache,
                 )
-                .await?,
+                .await?
+                .with_config_settings(self.config_settings_for(source.name()).into_owned()),
             ));
         }
 
@@ -1690,9 +1719,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Store the metadata.
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        CachedMetadata::write(
+            &metadata_entry,
+            &metadata,
+            &self.config_settings_for(source.name()),
+        )
+        .await?;
 
         // If necessary, mark the metadata as dynamic.
         let metadata = if dynamic {
@@ -1716,7 +1748,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.build_context.workspace_cache(),
                 credentials_cache,
             )
-            .await?,
+            .await?
+            .with_config_settings(self.config_settings_for(source.name()).into_owned()),
         ))
     }
 
@@ -1973,9 +2006,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // Store the metadata.
         let metadata_entry = cache_shard.entry(METADATA);
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        CachedMetadata::write(
+            &metadata_entry,
+            &metadata,
+            &self.config_settings_for(source.name()),
+        )
+        .await?;
 
         Ok(BuiltWheelMetadata {
             path: cache_shard.join(&disk_filename).into_boxed_path(),
@@ -2045,12 +2081,15 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
 
         // If the cache contains compatible metadata, return it.
         let metadata_entry = cache_shard.entry(METADATA);
-        match CachedMetadata::read(&metadata_entry).await {
+        match CachedMetadata::read(&metadata_entry, &self.config_settings_for(source.name())).await
+        {
             Ok(Some(metadata)) => {
                 if metadata.matches(source.name(), source.version()) {
                     debug!("Using cached metadata for: {source}");
                     return Ok(ArchiveMetadata {
-                        metadata: Metadata::from_metadata23(metadata.into()),
+                        metadata: Metadata::from_metadata23(metadata.into()).with_config_settings(
+                            self.config_settings_for(source.name()).into_owned(),
+                        ),
                         hashes: revision.into_hashes(),
                     });
                 }
@@ -2082,12 +2121,16 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             fs::create_dir_all(metadata_entry.dir())
                 .await
                 .map_err(Error::CacheWrite)?;
-            write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-                .await
-                .map_err(Error::CacheWrite)?;
+            CachedMetadata::write(
+                &metadata_entry,
+                &metadata,
+                &self.config_settings_for(source.name()),
+            )
+            .await?;
 
             return Ok(ArchiveMetadata {
-                metadata: Metadata::from_metadata23(metadata),
+                metadata: Metadata::from_metadata23(metadata)
+                    .with_config_settings(self.config_settings_for(source.name()).into_owned()),
                 hashes: revision.into_hashes(),
             });
         }
@@ -2139,12 +2182,16 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         };
 
         // Store the metadata.
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        CachedMetadata::write(
+            &metadata_entry,
+            &metadata,
+            &self.config_settings_for(source.name()),
+        )
+        .await?;
 
         Ok(ArchiveMetadata {
-            metadata: Metadata::from_metadata23(metadata),
+            metadata: Metadata::from_metadata23(metadata)
+                .with_config_settings(self.config_settings_for(source.name()).into_owned()),
             hashes: revision.into_hashes(),
         })
     }
@@ -2241,9 +2288,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Store the metadata.
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        CachedMetadata::write(
+            &metadata_entry,
+            &metadata,
+            &self.config_settings_for(source.name()),
+        )
+        .await?;
 
         Ok(BuiltWheelMetadata {
             path: cache_shard.join(&disk_filename).into_boxed_path(),
@@ -2418,11 +2468,17 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         if self
             .build_context
             .cache()
-            .freshness(&metadata_entry, source.name(), source.source_tree())
+            .freshness(
+                &CachedMetadata::entry(&metadata_entry),
+                source.name(),
+                source.source_tree(),
+            )
             .map_err(Error::CacheRead)?
             .is_fresh()
         {
-            match CachedMetadata::read(&metadata_entry).await {
+            match CachedMetadata::read(&metadata_entry, &self.config_settings_for(source.name()))
+                .await
+            {
                 Ok(Some(metadata)) => {
                     if metadata.matches(source.name(), source.version()) {
                         debug!("Using cached metadata for: {source}");
@@ -2445,7 +2501,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                                 self.build_context.workspace_cache(),
                                 credentials_cache,
                             )
-                            .await?,
+                            .await?
+                            .with_config_settings(
+                                self.config_settings_for(source.name()).into_owned(),
+                            ),
                         ));
                     }
                     debug!(
@@ -2484,9 +2543,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             fs::create_dir_all(metadata_entry.dir())
                 .await
                 .map_err(Error::CacheWrite)?;
-            write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-                .await
-                .map_err(Error::CacheWrite)?;
+            CachedMetadata::write(
+                &metadata_entry,
+                &metadata,
+                &self.config_settings_for(source.name()),
+            )
+            .await?;
 
             return Ok(ArchiveMetadata::from(
                 Metadata::from_workspace(
@@ -2502,7 +2564,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     self.build_context.workspace_cache(),
                     credentials_cache,
                 )
-                .await?,
+                .await?
+                .with_config_settings(self.config_settings_for(source.name()).into_owned()),
             ));
         }
 
@@ -2553,9 +2616,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         };
 
         // Store the metadata.
-        write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
-            .await
-            .map_err(Error::CacheWrite)?;
+        CachedMetadata::write(
+            &metadata_entry,
+            &metadata,
+            &self.config_settings_for(source.name()),
+        )
+        .await?;
 
         Ok(ArchiveMetadata::from(
             Metadata::from_workspace(
@@ -2571,7 +2637,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.build_context.workspace_cache(),
                 credentials_cache,
             )
-            .await?,
+            .await?
+            .with_config_settings(self.config_settings_for(source.name()).into_owned()),
         ))
     }
 
@@ -3659,13 +3726,45 @@ async fn read_pyproject_toml(
 struct CachedMetadata(ResolutionMetadata);
 
 impl CachedMetadata {
+    /// Select the versioned record whose contents and freshness are checked together.
+    fn entry(cache_entry: &CacheEntry) -> CacheEntry {
+        cache_entry.with_file(METADATA_WITH_SETTINGS)
+    }
+
     /// Read an existing cached [`ResolutionMetadata`], if it exists.
-    async fn read(cache_entry: &CacheEntry) -> Result<Option<Self>, Error> {
-        match fs::read(&cache_entry.path()).await {
-            Ok(cached) => Ok(Some(Self(rmp_serde::from_slice(&cached)?))),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(Error::CacheRead(err)),
-        }
+    async fn read(
+        cache_entry: &CacheEntry,
+        config_settings: &ConfigSettings,
+    ) -> Result<Option<Self>, Error> {
+        let entry = Self::entry(cache_entry);
+        let (metadata, settings) = match fs::read(entry.path()).await {
+            Ok(record) => rmp_serde::from_slice::<(ResolutionMetadata, ConfigSettings)>(&record)?,
+            // Legacy metadata has no trustworthy settings provenance.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(Error::CacheRead(err)),
+        };
+        Ok((&settings == config_settings).then_some(Self(metadata)))
+    }
+
+    /// Atomically publish metadata together with the settings that produced it.
+    async fn write(
+        cache_entry: &CacheEntry,
+        metadata: &ResolutionMetadata,
+        config_settings: &ConfigSettings,
+    ) -> Result<(), Error> {
+        // Keep the legacy metadata file available to cache inspection and older uv versions.
+        // Readers use the versioned record, so concurrent legacy writes cannot change its inputs.
+        write_atomic(cache_entry.path(), rmp_serde::to_vec(metadata)?)
+            .await
+            .map_err(Error::CacheWrite)?;
+        let entry = Self::entry(cache_entry);
+        write_atomic(
+            entry.path(),
+            rmp_serde::to_vec(&(metadata, config_settings))?,
+        )
+        .await
+        .map_err(Error::CacheWrite)?;
+        Ok(())
     }
 
     /// Returns `true` if the metadata matches the given package name and version.
@@ -3691,4 +3790,74 @@ fn read_wheel_metadata(
     let dist_info = read_archive_metadata(filename, reader)
         .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))?;
     Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use uv_cache::CacheEntry;
+    use uv_distribution_types::ConfigSettings;
+    use uv_pypi_types::ResolutionMetadata;
+
+    use super::{CachedMetadata, METADATA};
+
+    #[tokio::test]
+    async fn cached_metadata_keeps_settings_bound_across_legacy_writes()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let entry = CacheEntry::new(directory.path(), METADATA);
+        let settings: ConfigSettings = serde_json::from_str(r#"{"dependency":"1.0.0"}"#)?;
+        let metadata = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.3\nName: demo\nVersion: 1.0.0\nRequires-Dist: dep==1.0.0\n",
+        )?;
+        CachedMetadata::write(&entry, &metadata, &settings).await?;
+
+        // An older uv can replace the unversioned file without knowing about the new record.
+        let other = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.3\nName: demo\nVersion: 1.0.0\nRequires-Dist: dep==2.0.0\n",
+        )?;
+        fs_err::write(entry.path(), rmp_serde::to_vec(&other)?)?;
+        let restored = CachedMetadata::read(&entry, &settings)
+            .await?
+            .expect("matching metadata");
+        assert_eq!(restored.0.requires_dist[0].to_string(), "dep==1.0.0");
+        let other_settings: ConfigSettings = serde_json::from_str(r#"{"dependency":"2.0.0"}"#)?;
+        assert!(
+            CachedMetadata::read(&entry, &other_settings)
+                .await?
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_metadata_writes_keep_settings_bound() -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let entry = CacheEntry::new(directory.path(), METADATA);
+        let first_settings: ConfigSettings = serde_json::from_str(r#"{"dependency":"1.0.0"}"#)?;
+        let first = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.3\nName: demo\nVersion: 1.0.0\nRequires-Dist: dep==1.0.0\n",
+        )?;
+        let second_settings: ConfigSettings = serde_json::from_str(r#"{"dependency":"2.0.0"}"#)?;
+        let second = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.3\nName: demo\nVersion: 1.0.0\nRequires-Dist: dep==2.0.0\n",
+        )?;
+        let (first_write, second_write) = tokio::join!(
+            CachedMetadata::write(&entry, &first, &first_settings),
+            CachedMetadata::write(&entry, &second, &second_settings),
+        );
+        first_write?;
+        second_write?;
+        let first = CachedMetadata::read(&entry, &first_settings).await?;
+        let second = CachedMetadata::read(&entry, &second_settings).await?;
+        assert_ne!(first.is_some(), second.is_some());
+        if let Some(metadata) = first {
+            assert_eq!(metadata.0.requires_dist[0].to_string(), "dep==1.0.0");
+        }
+        if let Some(metadata) = second {
+            assert_eq!(metadata.0.requires_dist[0].to_string(), "dep==2.0.0");
+        }
+        Ok(())
+    }
 }

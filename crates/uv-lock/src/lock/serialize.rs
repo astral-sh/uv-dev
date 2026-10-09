@@ -140,6 +140,8 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
         || !options.prerelease.package.is_empty()
         || options.fork_strategy != ForkStrategy::default()
         || options.minimum_libc_version.is_some()
+        || options.config_settings_provenance.is_some()
+        || options.config_settings_digest.is_some()
         || !options.exclude_newer.is_empty();
     if !has_options {
         return Ok(());
@@ -157,6 +159,18 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
     }
     if let Some(version) = options.minimum_libc_version {
         writer.key_value("minimum-libc-version", serialize_value(&version)?)?;
+    }
+    if let Some(version) = options.config_settings_provenance {
+        writer.key_value("config-settings-provenance", version)?;
+    }
+    if let Some(digest) = &options.config_settings_digest {
+        writer.key_value("config-settings-digest", digest)?;
+    }
+    if !options.config_settings_packages.is_empty() {
+        writer.key_value(
+            "config-settings-packages",
+            serialize_value(&options.config_settings_packages)?,
+        )?;
     }
 
     let exclude_newer = &options.exclude_newer;

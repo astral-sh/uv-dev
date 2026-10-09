@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, btree_map::Entry},
     str::FromStr,
 };
@@ -260,6 +261,18 @@ impl FromIterator<ConfigSettingPackageEntry> for PackageConfigSettings {
 }
 
 impl PackageConfigSettings {
+    /// Combine package settings with global settings using backend argument precedence.
+    pub fn effective<'a>(
+        &self,
+        package: Option<&PackageName>,
+        global: &'a ConfigSettings,
+    ) -> Cow<'a, ConfigSettings> {
+        package.and_then(|package| self.get(package)).map_or_else(
+            || Cow::Borrowed(global),
+            |settings| Cow::Owned(settings.clone().merge(global.clone())),
+        )
+    }
+
     /// Returns the config settings for a specific package, if any.
     pub fn get(&self, package: &PackageName) -> Option<&ConfigSettings> {
         self.0.get(package)
@@ -337,6 +350,7 @@ impl<'de> serde::Deserialize<'de> for PackageConfigSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
 
     #[test]
     fn collect_config_settings() {
@@ -374,6 +388,24 @@ mod tests {
                 "value4".to_string()
             ]))
         );
+    }
+
+    #[test]
+    fn effective_settings_preserve_package_before_global_order() -> Result<(), Box<dyn Error>> {
+        let global = ["key=global-one", "key=global-two"]
+            .into_iter()
+            .map(str::parse::<ConfigSettingEntry>)
+            .collect::<Result<ConfigSettings, _>>()?;
+        let packages = ["demo:key=package-one", "demo:key=package-two"]
+            .into_iter()
+            .map(str::parse::<ConfigSettingPackageEntry>)
+            .collect::<Result<PackageConfigSettings, _>>()?;
+        let name = "demo".parse()?;
+        assert_eq!(
+            packages.effective(Some(&name), &global).escape_for_python(),
+            r#"{"key":["package-one","package-two","global-one","global-two"]}"#
+        );
+        Ok(())
     }
 
     #[test]

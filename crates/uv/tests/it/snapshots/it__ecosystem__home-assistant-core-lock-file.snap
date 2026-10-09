@@ -11,6 +11,9 @@ resolution-markers = [
 ]
 
 [options]
+config-settings-provenance = 1
+config-settings-digest = "f4faf35eb8dea2df"
+config-settings-packages = ["fnvhash", "pyric"]
 exclude-newer = "2026-06-30T00:00:00Z"
 
 [[package]]

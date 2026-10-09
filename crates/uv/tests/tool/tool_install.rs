@@ -5959,6 +5959,83 @@ fn tool_install_lock_supports_local_wheel() {
     });
 }
 
+/// Build settings do not affect tool locks whose metadata comes from prebuilt wheels.
+#[test]
+fn tool_install_lock_ignores_unconsumed_config_settings() {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+
+    context
+        .tool_install()
+        .arg(&wheel)
+        .arg("-C")
+        .arg("global=enabled")
+        .arg("--config-settings-package")
+        .arg("simple-launcher:feature=enabled")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let first_lock = context.read("tools/simple-launcher/uv.lock");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(first_lock, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        config-settings-provenance = 1
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [manifest]
+        requirements = [{ name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" }]
+
+        [[package]]
+        name = "simple-launcher"
+        version = "0.1.0"
+        source = { path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" }
+        wheels = [
+            { filename = "simple_launcher-0.1.0-py3-none-any.whl", hash = "sha256:5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4" },
+        ]
+        "#);
+    });
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(&wheel)
+        .arg("-C")
+        .arg("global=enabled")
+        .arg("--config-settings-package")
+        .arg("simple-launcher:feature=enabled")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    `simple-launcher @ file://[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl` is already installed
+    ");
+
+    context
+        .tool_install()
+        .arg(&wheel)
+        .arg("-C")
+        .arg("global=disabled")
+        .arg("--config-settings-package")
+        .arg("simple-launcher:feature=disabled")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    assert_eq!(
+        first_lock,
+        context.read("tools/simple-launcher/uv.lock"),
+        "prebuilt wheel metadata does not consume config settings"
+    );
+}
+
 #[test]
 fn tool_install_lock_verifies_hashes() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_tool_dirs();
