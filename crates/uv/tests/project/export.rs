@@ -14357,6 +14357,101 @@ fn requirements_txt_undefined_registry_extra_conflict() -> Result<()> {
     Ok(())
 }
 
+/// Group-only exports retain conditional dependencies from legacy project-conflict markers.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_only_group_preserves_legacy_conflict_markers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["gateway"]
+
+        [dependency-groups]
+        dev = ["gateway"]
+
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "project" }, { group = "dev" }]]
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "project" },
+            { package = "project", group = "dev" },
+        ]]
+
+        [[package]]
+        name = "gateway"
+        version = "1.0.0"
+        source = { registry = "https://example.com/simple" }
+        dependencies = [
+            { name = "leaf", marker = "python_full_version < '3.13' or (extra == 'project-7-project' and extra == 'group-7-project-dev')" },
+        ]
+
+        [[package]]
+        name = "leaf"
+        version = "1.0.0"
+        source = { registry = "https://example.com/simple" }
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [{ name = "gateway" }]
+        [package.dev-dependencies]
+        dev = [{ name = "gateway" }]
+        [package.metadata]
+        requires-dist = [{ name = "gateway" }]
+        [package.metadata.requires-dev]
+        dev = [{ name = "gateway" }]
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--only-group", "dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    gateway==1.0.0
+    leaf==1.0.0 ; python_full_version < '3.13'
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--only-group", "dev", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "gateway"
+    version = "1.0.0"
+    index = "https://example.com/simple"
+
+    [[packages]]
+    name = "leaf"
+    version = "1.0.0"
+    marker = "python_full_version < '3.13'"
+    index = "https://example.com/simple"
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--no-dev", "--no-header", "--no-hashes", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    gateway==1.0.0
+    leaf==1.0.0 ; python_full_version < '3.13'
+    ");
+    Ok(())
+}
+
 /// A registry parent retains requests for a declared empty conflicting extra.
 #[cfg(feature = "test-universal")]
 #[test]
