@@ -8,7 +8,7 @@ use indoc::{formatdoc, indoc};
 use sha2::{Digest, Sha256};
 
 use uv_fs::PythonExt;
-use uv_test::archive::write_tar_gz;
+use uv_test::archive::{generate_source_archive, write_tar_gz};
 use uv_test::package_server::PackageServer;
 use uv_test::packse::generate_wheel;
 use uv_test::uv_snapshot;
@@ -82,27 +82,25 @@ async fn local_archive_subdirectory_is_not_built_as_root() -> Result<()> {
     let lock = context.temp_dir.child("pylock.toml");
 
     // Populate the local archive's root cache before selecting a different project within it.
-    for subdirectory in ["", ", subdirectory = '.'"] {
-        lock.write_str(&formatdoc! {r#"
-            lock-version = "1.0"
-            created-by = "uv"
-            requires-python = ">=3.12"
+    lock.write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        requires-python = ">=3.12"
 
-            [[packages]]
-            name = "root-demo"
-            version = "1.0"
-            archive = {{ path = "projects.tar.gz", hashes = {{ sha256 = "{hash}" }}{subdirectory} }}
-        "#})?;
-        context
-            .pip_install()
-            .arg("-r")
-            .arg(lock.path())
-            .arg("--preview-features")
-            .arg("pylock")
-            .arg("--no-index")
-            .assert()
-            .success();
-    }
+        [[packages]]
+        name = "root-demo"
+        version = "1.0"
+        archive = {{ path = "projects.tar.gz", hashes = {{ sha256 = "{hash}" }} }}
+    "#})?;
+    context
+        .pip_install()
+        .arg("-r")
+        .arg(lock.path())
+        .arg("--preview-features")
+        .arg("pylock")
+        .arg("--no-index")
+        .assert()
+        .success();
     assert!(root_marker.exists());
     fs_err::remove_file(root_marker.path())?;
 
@@ -116,24 +114,29 @@ async fn local_archive_subdirectory_is_not_built_as_root() -> Result<()> {
         version = "2.0"
         archive = {{ path = "projects.tar.gz", subdirectory = "nested", hashes = {{ sha256 = "{hash}" }} }}
     "#})?;
-    insta::allow_duplicates! {
-        for no_cache in [true, false] {
-            let mut command = context.pip_install();
-            command.arg("-r").arg(lock.path())
-                .arg("--preview-features").arg("pylock").arg("--no-index");
-            if no_cache {
-                command.arg("--no-cache");
-            }
-            let output = uv_snapshot!(context.filters(), command, @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: Package `nested-demo` selects subdirectory `nested` in local archive `projects.tar.gz`, which is not supported
-            ");
-            assert!(!output.status.success());
-            assert!(!root_marker.exists());
-            assert!(!nested_marker.exists());
-        }
-    }
+    // A cold request rejects the selected subtree without importing either backend.
+    let output = uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg(lock.path())
+        .arg("--preview-features").arg("pylock").arg("--no-index").arg("--no-cache"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `nested-demo` selects subdirectory `nested` in local archive `projects.tar.gz`, which is not supported
+    ");
+    assert!(!output.status.success());
+    assert!(!root_marker.exists());
+    assert!(!nested_marker.exists());
+
+    // The cached root build cannot satisfy a request for the nested project.
+    let output = uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg(lock.path())
+        .arg("--preview-features").arg("pylock").arg("--no-index"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `nested-demo` selects subdirectory `nested` in local archive `projects.tar.gz`, which is not supported
+    ");
+    assert!(!output.status.success());
+    assert!(!root_marker.exists());
+    assert!(!nested_marker.exists());
 
     // The same selected project is supported when the archive has a URL source.
     let server = PackageServer::new(&nested_name).await;
@@ -161,5 +164,46 @@ async fn local_archive_subdirectory_is_not_built_as_root() -> Result<()> {
     context.assert_installed("nested_demo", "2.0");
     assert!(!root_marker.exists());
     assert!(nested_marker.exists());
+    Ok(())
+}
+
+/// A current-directory selection uses the archive root without relying on a previous root build.
+#[test]
+fn local_archive_current_directory_selects_root() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let marker = context.temp_dir.child("root-backend-ran");
+    let archive = generate_source_archive(
+        &"root-demo".parse()?,
+        &"1.0".parse()?,
+        "",
+        Some(marker.path()),
+    )?;
+    context
+        .temp_dir
+        .child("projects.tar.gz")
+        .write_binary(&archive)?;
+    let hash = hex::encode(Sha256::digest(&archive));
+    let lock = context.temp_dir.child("pylock.toml");
+    lock.write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        requires-python = ">=3.12"
+
+        [[packages]]
+        name = "root-demo"
+        version = "1.0"
+        archive = {{ path = "projects.tar.gz", subdirectory = ".", hashes = {{ sha256 = "{hash}" }} }}
+    "#})?;
+    context
+        .pip_install()
+        .arg("-r")
+        .arg(lock.path())
+        .arg("--preview-features")
+        .arg("pylock")
+        .arg("--no-index")
+        .assert()
+        .success();
+    context.assert_installed("root_demo", "1.0");
+    assert!(marker.exists());
     Ok(())
 }
