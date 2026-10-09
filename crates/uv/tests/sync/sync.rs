@@ -55,7 +55,9 @@ fn sync() -> Result<()> {
 #[test]
 fn isolated_lock() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -69,31 +71,53 @@ fn isolated_lock() -> Result<()> {
     let sentinel = context.venv.child("sentinel");
     sentinel.write_str("present")?;
 
-    let assert = context
-        .sync()
+    uv_snapshot!(context.filters(), context.sync()
         .arg("--isolated-lock")
-        .arg("--index")
-        .arg(server.index_url())
-        .arg("--output-format=json")
-        .assert()
-        .success();
-    let report: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    insta::assert_json_snapshot!(json!({
-        "dry_run": report["dry_run"],
-        "lock_action": report["lock"]["action"],
-        "changes": report["sync"]["changes"],
-    }), @r#"
+        .arg("--index").arg(server.index_url())
+        .arg("--output-format=json"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
     {
-      "changes": [
-        {
-          "action": "installed",
-          "name": "a",
-          "version": "2.0.0"
+      "schema": {
+        "version": "preview"
+      },
+      "target": "project",
+      "project": {
+        "path": "[TEMP_DIR]/",
+        "workspace": {
+          "path": "[TEMP_DIR]/"
         }
-      ],
-      "dry_run": false,
-      "lock_action": "resolve"
+      },
+      "sync": {
+        "environment": {
+          "path": "[VENV]/",
+          "python": {
+            "path": "[VENV]/[BIN]/[PYTHON]",
+            "version": "3.12.[X]",
+            "implementation": "cpython"
+          }
+        },
+        "action": "check",
+        "changes": [
+          {
+            "name": "a",
+            "version": "2.0.0",
+            "action": "installed"
+          }
+        ]
+      },
+      "lock": {
+        "path": "[TEMP_DIR]/uv.lock",
+        "action": "resolve"
+      },
+      "dry_run": false
     }
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
     "#);
     assert!(!context.temp_dir.child("uv.lock").exists());
     assert!(sentinel.exists());
@@ -106,25 +130,61 @@ fn isolated_lock() -> Result<()> {
         .success();
     let lockfile = context.read("uv.lock");
 
-    let assert = context
-        .sync()
-        .arg("--isolated-lock")
-        .arg("--dry-run")
-        .arg("--resolution=lowest-direct")
-        .arg("--index")
-        .arg(server.index_url())
-        .arg("--output-format=json")
-        .assert()
-        .success();
-    let report: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    insta::assert_json_snapshot!(json!({
-        "dry_run": report["dry_run"],
-        "lock_action": report["lock"]["action"],
-    }), @r#"
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--isolated-lock", "--dry-run", "--resolution=lowest-direct"])
+        .arg("--index").arg(server.index_url())
+        .arg("--output-format=json"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
     {
-      "dry_run": true,
-      "lock_action": "resolve"
+      "schema": {
+        "version": "preview"
+      },
+      "target": "project",
+      "project": {
+        "path": "[TEMP_DIR]/",
+        "workspace": {
+          "path": "[TEMP_DIR]/"
+        }
+      },
+      "sync": {
+        "environment": {
+          "path": "[VENV]/",
+          "python": {
+            "path": "[VENV]/[BIN]/[PYTHON]",
+            "version": "3.12.[X]",
+            "implementation": "cpython"
+          }
+        },
+        "action": "check",
+        "changes": [
+          {
+            "name": "a",
+            "version": "2.0.0",
+            "action": "uninstalled"
+          },
+          {
+            "name": "a",
+            "version": "1.0.0",
+            "action": "installed"
+          }
+        ]
+      },
+      "lock": {
+        "path": "[TEMP_DIR]/uv.lock",
+        "action": "resolve"
+      },
+      "dry_run": true
     }
+
+    ----- stderr -----
+    Ignoring existing lockfile due to change in resolution mode: `highest` vs. `lowest-direct`
+    Resolved 2 packages in [TIME]
+    Would download 1 package
+    Would uninstall 1 package
+    Would install 1 package
+     - a==2.0.0
+     + a==1.0.0
     "#);
     assert_eq!(lockfile, context.read("uv.lock"));
     uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("python")

@@ -383,7 +383,7 @@ impl EnvVars {
 
     /// Equivalent to the `--isolated-lock` command-line argument. If set, uv resolves dependencies
     /// without creating or updating the lockfile, while allowing environment synchronization.
-    #[attr_added_in("0.12.17")]
+    #[attr_added_in("next release")]
     pub const UV_ISOLATED_LOCK: &'static str = "UV_ISOLATED_LOCK";
 
     /// Equivalent to the `--locked` command-line argument. If set, uv will assert that the
