@@ -83,7 +83,7 @@ impl Recovery {
 
     fn finish(&self, journal: &Journal) -> io::Result<()> {
         match fs_err::symlink_metadata(&self.previous) {
-            Ok(metadata) if metadata.is_symlink() => fs_err::remove_file(&self.previous)?,
+            Ok(metadata) if metadata.is_symlink() => uv_fs::remove_symlink(&self.previous)?,
             Ok(metadata) if metadata.is_dir() => fs_err::remove_dir_all(&self.previous)?,
             Ok(_) => {
                 return Err(io::Error::other(format!(
@@ -771,6 +771,52 @@ mod tests {
         assert!(!recovery.previous.exists());
         assert!(!recovery.journal.exists());
         assert!(!destination.join(MARKER).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn directory_link_replacement_keeps_target_and_allows_reinstall() -> io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let linked = root.path().join("linked-installation");
+        let destination = root.path().join("installed");
+        let staged = root.path().join("staged");
+        installation(&linked, "old")?;
+        uv_fs::create_symlink(&linked, &destination)?;
+        assert!(fs_err::symlink_metadata(&destination)?.is_symlink());
+        installation(&staged, "new")?;
+        publish_inner(
+            &staged,
+            &destination,
+            root.path(),
+            "first",
+            unavailable,
+            rename,
+        )?;
+        let recovery = Recovery::new(&destination, root.path())?;
+        assert_eq!(fs_err::read_to_string(linked.join("interpreter"))?, "old");
+        assert_eq!(
+            fs_err::read_to_string(destination.join("interpreter"))?,
+            "new"
+        );
+        assert!(!recovery.previous.try_exists()?);
+        assert!(!recovery.journal.try_exists()?);
+
+        installation(&staged, "second")?;
+        publish_inner(
+            &staged,
+            &destination,
+            root.path(),
+            "second",
+            unavailable,
+            rename,
+        )?;
+        assert_eq!(
+            fs_err::read_to_string(destination.join("interpreter"))?,
+            "second"
+        );
+        assert_eq!(fs_err::read_to_string(linked.join("interpreter"))?, "old");
+        assert!(!recovery.previous.try_exists()?);
+        assert!(!recovery.journal.try_exists()?);
         Ok(())
     }
 
