@@ -6263,6 +6263,7 @@ fn lock_conflicting_workspace_members_depends_direct_extra() -> Result<()> {
         name = "example"
         version = "0.1.0"
         source = { editable = "." }
+        declared-extras = ["foo"]
         dependencies = [
             { name = "sortedcontainers", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-example-foo' or extra == 'project-7-example'" },
         ]
@@ -7042,6 +7043,7 @@ fn lock_conflicting_mixed() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { editable = "." }
+        declared-extras = ["project2"]
 
         [package.optional-dependencies]
         project2 = [
@@ -7597,6 +7599,7 @@ fn lock_check_refresh_workspace_conflicts() -> Result<()> {
         name = "package-a"
         version = "0.1.0"
         source = { editable = "packages/package-a" }
+        declared-extras = ["prod", "non-prod"]
 
         [package.optional-dependencies]
         non-prod = [
@@ -7635,6 +7638,7 @@ fn lock_check_refresh_workspace_conflicts() -> Result<()> {
         name = "workspace-demo"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["prod", "non-prod"]
         dependencies = [
             { name = "package-a" },
         ]

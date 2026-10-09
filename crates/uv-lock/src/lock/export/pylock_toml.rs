@@ -45,7 +45,6 @@ use uv_warnings::warn_user_once;
 use uv_resolver_types::ResolverOutput;
 
 use crate::lock::export::ExportableRequirements;
-use crate::lock::reachability::validate_requested_conflicts;
 use crate::lock::{Source, WheelTagHint, is_wheel_unreachable};
 use crate::{Installable, LockError};
 
@@ -212,6 +211,8 @@ impl uv_errors::Hinted for PylockTomlError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if let Some(hint) = &self.hint {
             uv_errors::Hints::from(hint.to_string())
+        } else if let PylockTomlErrorKind::LockError(error) = &*self.kind {
+            error.hints()
         } else {
             uv_errors::Hints::none()
         }
@@ -780,8 +781,6 @@ impl<'lock> PylockToml {
         editable: Option<&EditableMode>,
         install_options: &'lock InstallOptions,
     ) -> Result<Self, PylockTomlErrorKind> {
-        validate_requested_conflicts(target, prune, extras, dev, None)?;
-
         // Extract the packages from the lock file.
         let ExportableRequirements(mut nodes) = ExportableRequirements::from_lock(
             target,

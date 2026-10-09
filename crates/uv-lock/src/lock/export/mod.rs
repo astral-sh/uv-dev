@@ -21,7 +21,9 @@ pub(crate) use crate::lock::export::metadata::{
 };
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
-use crate::lock::reachability::{Edge, Node, conflict_marker_reachability};
+use crate::lock::reachability::{
+    Edge, Node, conflict_marker_reachability, validate_requested_conflicts,
+};
 use crate::lock::{Dependency, LockErrorKind, PackageIndex};
 use crate::{Installable, InstallableRootKind, LockError, Package};
 
@@ -56,6 +58,14 @@ impl<'lock> ExportableRequirements<'lock> {
         annotate: bool,
         install_options: &'lock InstallOptions,
     ) -> Result<Self, LockError> {
+        match format {
+            ExportFormat::RequirementsTxt | ExportFormat::PylockToml => {
+                validate_requested_conflicts(target, prune, extras, groups, None)?;
+            }
+            // An SBOM can include mutually exclusive package and extra selections.
+            ExportFormat::CycloneDX1_5 => {}
+        }
+
         let dependency_marker = |dependency: &Dependency| {
             let marker = dependency.simplified_marker.as_simplified_marker_tree();
             match format {

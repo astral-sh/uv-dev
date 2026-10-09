@@ -315,6 +315,7 @@ fn extra_basic() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["extra1", "extra2"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -486,6 +487,7 @@ fn extra_basic_three_extras() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["extra1", "extra2", "project3"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -953,6 +955,7 @@ fn extra_multiple_independent() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["extra1", "extra2", "project3", "project4"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -1062,6 +1065,7 @@ fn extra_config_change_ignore_lockfile() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["extra1", "extra2"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -1882,6 +1886,7 @@ fn extra_depends_on_conflicting_extra_transitive() -> Result<()> {
         name = "example"
         version = "0.1.0"
         source = { editable = "." }
+        declared-extras = ["foo", "bar"]
 
         [package.optional-dependencies]
         bar = [
@@ -2529,6 +2534,7 @@ fn extra_conflict_environments_omit_redundant_markers() -> Result<()> {
         name = "bar"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["a", "b"]
         dependencies = [
             { name = "anyio" },
             { name = "tqdm", version = "1.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-3-bar-a'" },
@@ -2886,6 +2892,7 @@ fn mixed() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["extra1"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -3059,6 +3066,7 @@ fn group_activates_self_extra() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["dev", "summarize", "foo"]
 
         [package.optional-dependencies]
         dev = [
@@ -3318,6 +3326,7 @@ fn multiple_sources_index_disjoint_extras() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cu118", "cu124"]
 
         [package.optional-dependencies]
         cu118 = [
@@ -3624,6 +3633,7 @@ fn multiple_sources_index_disjoint_extras_with_extra() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cu118", "cu124"]
 
         [package.optional-dependencies]
         cu118 = [
@@ -3792,6 +3802,7 @@ fn multiple_sources_index_disjoint_extras_with_marker() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cu118", "cu124"]
 
         [package.optional-dependencies]
         cu118 = [
@@ -4068,6 +4079,7 @@ fn shared_optional_dependency_extra1() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo", "bar", "baz"]
 
         [package.optional-dependencies]
         bar = [
@@ -4343,6 +4355,7 @@ fn shared_optional_dependency_mixed1() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo"]
 
         [package.optional-dependencies]
         foo = [
@@ -4485,6 +4498,7 @@ fn shared_optional_dependency_extra2() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo", "bar"]
 
         [package.optional-dependencies]
         bar = [
@@ -4766,6 +4780,7 @@ fn shared_optional_dependency_mixed2() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo"]
 
         [package.optional-dependencies]
         foo = [
@@ -4907,6 +4922,7 @@ fn shared_dependency_extra() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo", "bar"]
         dependencies = [
             { name = "anyio" },
         ]
@@ -5234,6 +5250,7 @@ fn shared_dependency_mixed() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo"]
         dependencies = [
             { name = "anyio" },
         ]
@@ -5454,6 +5471,7 @@ conflicts = [
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["x1"]
         dependencies = [
             { name = "anyio" },
             { name = "proxy1" },
@@ -5476,6 +5494,7 @@ conflicts = [
         name = "proxy1"
         version = "0.1.0"
         source = { editable = "proxy1" }
+        declared-extras = ["x2", "x3"]
 
         [package.optional-dependencies]
         x2 = [
@@ -5650,6 +5669,7 @@ fn jinja_no_conflict_markers1() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cu118", "cu124"]
 
         [package.optional-dependencies]
         cu118 = [
@@ -5814,6 +5834,7 @@ fn jinja_no_conflict_markers2() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cu118", "cu124"]
 
         [package.optional-dependencies]
         cu118 = [
@@ -5937,6 +5958,7 @@ fn collision_extra() -> Result<()> {
         name = "pkg"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo", "bar", "extra-3-pkg-foo"]
         dependencies = [
             { name = "anyio" },
         ]
@@ -7461,6 +7483,7 @@ fn extra_inferences() -> Result<()> {
         name = "pkg"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["x1", "x2"]
         dependencies = [
             { name = "quickpath-airflow-operator" },
         ]
@@ -8199,6 +8222,7 @@ fn deduplicate_resolution_markers() -> Result<()> {
         name = "pkg"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["x1", "x2"]
 
         [package.optional-dependencies]
         x1 = [
@@ -8353,6 +8377,7 @@ fn incorrect_extra_simplification_leads_to_multiple_torch_packages() -> Result<(
         name = "test"
         version = "0.0.1"
         source = { virtual = "." }
+        declared-extras = ["chgnet", "m3gnet"]
         dependencies = [
             { name = "core" },
         ]
@@ -8651,6 +8676,7 @@ fn duplicate_torch_and_sympy_because_of_wrong_inferences() -> Result<()> {
         name = "test"
         version = "0.0.1"
         source = { virtual = "." }
+        declared-extras = ["chgnet", "sevennet", "all", "alignn", "m3gnet"]
         dependencies = [
             { name = "core" },
         ]
@@ -8824,6 +8850,7 @@ fn overlapping_resolution_markers() -> Result<()> {
         name = "ads-mega-model"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu118"]
         dependencies = [
             { name = "wandb" },
         ]
@@ -9707,6 +9734,7 @@ fn conditional_sources_keep_default_platform_specific_transitive_dependencies() 
         name = "test-torch"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu124"]
         dependencies = [
             { name = "torch", version = "2.6.0", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-10-test-torch-cpu') or (extra == 'extra-10-test-torch-cpu' and extra == 'extra-10-test-torch-cu124')" },
             { name = "torch", version = "2.6.0+cpu", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-10-test-torch-cpu') or (extra == 'extra-10-test-torch-cpu' and extra == 'extra-10-test-torch-cu124')" },
@@ -10178,6 +10206,7 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
         name = "resolution-markers-for-days"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu124"]
 
         [package.optional-dependencies]
         cpu = [
@@ -10590,6 +10619,7 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
         name = "resolution-markers-for-days"
         version = "0.1.1"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu124"]
 
         [package.optional-dependencies]
         cpu = [
@@ -10809,6 +10839,7 @@ fn do_not_simplify_if_not_all_conflict_extras_satisfy_the_marker_by_themselves()
         name = "debug"
         version = "0.0.1"
         source = { virtual = "." }
+        declared-extras = ["a", "b"]
 
         [package.optional-dependencies]
         a = [
@@ -11032,6 +11063,7 @@ fn many_pairwise_conflicts_shared_extra() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["pinned", "a", "b", "c", "d", "e"]
 
         [package.optional-dependencies]
         a = [
@@ -11482,6 +11514,7 @@ fn project_level_conflict_with_extra() -> Result<()> {
         name = "pkg-b"
         version = "0.1.0"
         source = { editable = "pkg-b" }
+        declared-extras = ["extra1"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -11690,6 +11723,7 @@ fn project_level_conflict_with_extras_and_cross_dependency() -> Result<()> {
         name = "pkg-b"
         version = "0.1.0"
         source = { editable = "pkg-b" }
+        declared-extras = ["safe", "extra1"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -11880,6 +11914,7 @@ fn project_level_conflict_with_group() -> Result<()> {
         name = "pkg-b"
         version = "0.1.0"
         source = { editable = "pkg-b" }
+        declared-extras = ["extra1"]
 
         [package.optional-dependencies]
         extra1 = [

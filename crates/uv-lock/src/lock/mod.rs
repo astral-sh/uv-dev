@@ -2521,11 +2521,10 @@ impl Lock {
 
             let mut package =
                 Package::from_annotated_dist(dist, fork_markers, root, index_locations)?;
-            if package.id.source.is_immutable()
-                && conflicts
-                    .iter()
-                    .flat_map(ConflictSet::iter)
-                    .any(|item| item.package() == package.name() && item.extra().is_some())
+            if conflicts
+                .iter()
+                .flat_map(ConflictSet::iter)
+                .any(|item| item.package() == package.name() && item.extra().is_some())
             {
                 package.declared_extras = dist
                     .metadata
@@ -2827,12 +2826,13 @@ impl Lock {
         Ok(lock)
     }
 
-    /// Whether immutable conflict participants retain enough extra metadata for validation.
+    /// Whether conflict participants retain enough declaration and request metadata for validation.
     pub fn has_conflict_extra_metadata(&self) -> bool {
         self.packages.iter().all(|package| {
             package
                 .validate_conflict_extra_metadata(&self.conflicts)
                 .is_ok()
+                && !package.has_unrecorded_conflict_extra_requests(&self.conflicts)
         })
     }
 
@@ -6660,7 +6660,8 @@ pub struct Package {
     dependencies: Vec<Dependency>,
     /// The resolved optional dependencies of the package.
     optional_dependencies: BTreeMap<ExtraName, Vec<Dependency>>,
-    /// Declared extras for immutable conflict participants; `None` means legacy evidence is absent.
+    /// Declared conflict extras recorded with lossless incoming request labels.
+    /// `None` means legacy request evidence may be absent.
     declared_extras: Option<Box<[ExtraName]>>,
     /// The resolved PEP 735 dependency groups of the package.
     dependency_groups: BTreeMap<GroupName, Vec<Dependency>>,
@@ -7400,35 +7401,45 @@ impl Package {
         }
     }
 
+    /// Whether a legacy lock may have erased an incoming request for an empty conflict extra.
+    fn has_unrecorded_conflict_extra_requests(&self, conflicts: &Conflicts) -> bool {
+        if self.declared_extras.is_some() {
+            return false;
+        }
+        let declared = self
+            .recorded_extras()
+            .unwrap_or(&self.metadata.provides_extra);
+        conflicts
+            .iter()
+            .flat_map(ConflictSet::iter)
+            .filter(|item| item.package() == self.name())
+            .filter_map(ConflictItem::extra)
+            .any(|extra| {
+                declared.contains(extra) && !self.optional_dependencies.contains_key(extra)
+            })
+    }
+
     /// Require declarations and evidence that legacy serialization retained extra requests.
     fn validate_conflict_extra_metadata(&self, conflicts: &Conflicts) -> Result<(), LockError> {
         if !self.id.source.is_immutable() {
             return Ok(());
         }
-        let declared = self.recorded_extras();
-        for extra in conflicts
-            .iter()
-            .flat_map(ConflictSet::iter)
-            .filter(|item| item.package() == self.name())
-            .filter_map(ConflictItem::extra)
+        if self.recorded_extras().is_none()
+            && conflicts
+                .iter()
+                .flat_map(ConflictSet::iter)
+                .any(|item| item.package() == self.name() && item.extra().is_some())
         {
-            let Some(declared) = declared else {
-                return Err(LockErrorKind::MissingExtraMetadata {
-                    package: self.name().clone(),
-                }
-                .into());
-            };
-            // Legacy Git locks can retain declarations while erasing empty optional sections and
-            // their incoming extra labels. A missing extra cannot have lost a valid request.
-            if self.declared_extras.is_none()
-                && declared.contains(extra)
-                && !self.optional_dependencies.contains_key(extra)
-            {
-                return Err(LockErrorKind::MissingExtraRequests {
-                    package: self.name().clone(),
-                }
-                .into());
+            return Err(LockErrorKind::MissingExtraMetadata {
+                package: self.name().clone(),
             }
+            .into());
+        }
+        if self.has_unrecorded_conflict_extra_requests(conflicts) {
+            return Err(LockErrorKind::MissingExtraRequests {
+                package: self.name().clone(),
+            }
+            .into());
         }
         Ok(())
     }
@@ -9384,6 +9395,14 @@ pub struct Dependency {
     complexified_marker: UniversalMarker,
 }
 
+/// A dependency request reconstructed from declarations or retained lock edges.
+struct DependencyActivation {
+    marker: MarkerTree,
+    extras: BTreeMap<ExtraName, MarkerTree>,
+    /// Whether declarations establish which extras this dependency requests.
+    requests_recorded: bool,
+}
+
 impl Dependency {
     fn new(
         requires_python: &RequiresPython,
@@ -9412,7 +9431,7 @@ impl Dependency {
         lock: &Lock,
         requirements: Option<&[Requirement]>,
         root: &Path,
-    ) -> Result<(MarkerTree, BTreeMap<ExtraName, MarkerTree>), LockError> {
+    ) -> Result<DependencyActivation, LockError> {
         let has_forks = lock
             .packages_for_name(self.package_name())
             .iter()
@@ -9432,9 +9451,10 @@ impl Dependency {
         let fallback = || {
             // Normalize forbidden assignments before assuming the requested item, including
             // legacy markers on dependencies with only one locked version or source.
-            Ok((
-                selection_marker(None),
-                self.extra
+            Ok(DependencyActivation {
+                marker: selection_marker(None),
+                extras: self
+                    .extra
                     .iter()
                     .cloned()
                     .map(|extra| {
@@ -9442,7 +9462,8 @@ impl Dependency {
                         (extra, marker)
                     })
                     .collect(),
-            ))
+                requests_recorded: false,
+            })
         };
         let Some(requirements) = requirements else {
             return fallback();
@@ -9481,7 +9502,11 @@ impl Dependency {
         if has_forks {
             marker = marker.and(selection_marker(None));
         }
-        Ok((marker, extras))
+        Ok(DependencyActivation {
+            marker,
+            extras,
+            requests_recorded: true,
+        })
     }
 
     /// Returns the extras specified on this dependency.
@@ -10384,7 +10409,7 @@ enum LockErrorKind {
     /// An older lock cannot distinguish missing immutable extras from declared empty extras.
     #[error("The lockfile does not record the extras declared by `{package}`", package = package.cyan())]
     MissingExtraMetadata { package: PackageName },
-    /// An older lock can erase requests for declared empty Git extras.
+    /// An older lock can erase requests for declared empty extras.
     #[error("The lockfile does not record whether the declared extras of `{package}` were requested", package = package.cyan())]
     MissingExtraRequests { package: PackageName },
     /// An error that occurs when a concrete root package does not belong to the lock.

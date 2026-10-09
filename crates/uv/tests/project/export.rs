@@ -15200,3 +15200,278 @@ fn requirements_txt_extra_conflict_respects_selected_registry_version() -> Resul
     ");
     Ok(())
 }
+
+/// A registry parent in a uv 0.12.13 lock can lose its request for an empty workspace extra.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_legacy_workspace_conflict_extra_requests_need_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = ["gateway"]
+
+        [dependency-groups]
+        shared = []
+
+        [tool.uv]
+        conflicts = [[{ package = "child", extra = "feature" }, { group = "shared" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = []
+    "#})?;
+
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "child", extra = "feature" },
+            { package = "project", group = "shared" },
+        ]]
+
+        [manifest]
+        members = [
+            "child",
+            "project",
+        ]
+
+        [[package]]
+        name = "child"
+        version = "0.1.0"
+        source = { editable = "child" }
+
+        [package.metadata]
+        provides-extras = ["feature"]
+
+        [[package]]
+        name = "gateway"
+        version = "1.0"
+        source = { registry = "https://example.org/simple" }
+        dependencies = [
+            { name = "child" },
+            { name = "child", marker = "extra == 'extra-5-child-feature'" },
+        ]
+        wheels = [
+            { url = "https://example.org/gateway-1.0-py3-none-any.whl", hash = "sha256:a8e367e8fbae206239bfdc94e92d542c589251afb7a133ed89eab960997503c1" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [package.optional-dependencies]
+        feature = [
+            { name = "gateway" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "gateway", marker = "extra == 'feature'" }]
+        provides-extras = ["feature"]
+
+        [package.metadata.requires-dev]
+        shared = []
+    "#})?;
+
+    // The ambiguous registry edge is irrelevant when its parent is not selected.
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--group", "shared", "--no-header",
+    ]), @"
+    exit_code: 0 (success)
+    ");
+
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--extra", "feature", "--group", "shared", "--no-header",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record whether the declared extras of `child` were requested
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--extra", "feature", "--group", "shared", "--no-header", "--format", "pylock.toml",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record whether the declared extras of `child` were requested
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+
+    // Pruning the registry parent also removes the unrecorded request from the export.
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--extra", "feature", "--group", "shared", "--prune", "gateway", "--no-header",
+    ]), @"
+    exit_code: 0 (success)
+    ");
+    // Refreshing the legacy lock restores requests without changing the index or cutoff.
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "legacy-workspace-conflict-extra"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.gateway.versions."1.0"]
+        requires = ["child[feature]"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let index_url = server.index_url();
+    let index_url = index_url.trim_end_matches('/');
+    let lock = context
+        .read("uv.lock")
+        .replace("https://example.org/simple", index_url)
+        .replace(
+            "https://example.org/gateway-1.0-py3-none-any.whl",
+            &server.file_url("gateway-1.0-py3-none-any.whl"),
+        );
+    context.temp_dir.child("uv.lock").write_str(&lock)?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--extra", "feature", "--group", "shared", "--no-header",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting selections `child[feature]` and `project:shared` enabled simultaneously
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--check", "--offline"])
+        .arg("--index-url").arg(index_url)
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A uv 0.12.13 lock with parent declarations can reconstruct an erased workspace extra request.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_legacy_workspace_conflict_extra_requests_are_recovered() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = ["child[feature]"]
+
+        [dependency-groups]
+        shared = []
+
+        [tool.uv]
+        conflicts = [[{ package = "child", extra = "feature" }, { group = "shared" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = []
+    "#})?;
+
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "child", extra = "feature" },
+            { package = "project", group = "shared" },
+        ]]
+
+        [manifest]
+        members = [
+            "child",
+            "project",
+        ]
+
+        [[package]]
+        name = "child"
+        version = "0.1.0"
+        source = { editable = "child" }
+
+        [package.metadata]
+        provides-extras = ["feature"]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [package.optional-dependencies]
+        feature = [
+            { name = "child", marker = "extra == 'extra-5-child-feature'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "child", extras = ["feature"], marker = "extra == 'feature'", editable = "child" }]
+        provides-extras = ["feature"]
+
+        [package.metadata.requires-dev]
+        shared = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--extra", "feature", "--group", "shared", "--no-header",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting selections `child[feature]` and `project:shared` enabled simultaneously
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--extra", "feature", "--group", "shared", "--no-header", "--format", "pylock.toml",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting selections `child[feature]` and `project:shared` enabled simultaneously
+    ");
+    Ok(())
+}

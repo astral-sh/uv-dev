@@ -33,6 +33,8 @@ struct ConflictRequests<'lock> {
     nodes: FxHashMap<(PackageIndex, Option<ExtraName>), NodeIndex>,
     root: NodeIndex,
     queue: VecDeque<(PackageIndex, Option<ExtraName>, NodeIndex)>,
+    /// Separate nodes retain the reachability of each ambiguous incoming request.
+    unrecorded_requests: Vec<(NodeIndex, PackageIndex)>,
 }
 
 impl<'lock> ConflictRequests<'lock> {
@@ -46,6 +48,7 @@ impl<'lock> ConflictRequests<'lock> {
             root,
             nodes: FxHashMap::default(),
             queue: VecDeque::new(),
+            unrecorded_requests: Vec::new(),
         }
     }
 
@@ -93,6 +96,7 @@ impl<'lock> ConflictRequests<'lock> {
         index: PackageIndex,
         extra: Option<ExtraName>,
         marker: MarkerTree,
+        requests_recorded: bool,
     ) {
         let package = self.lock.package(index);
         let marker = if package.fork_markers.is_empty() {
@@ -121,6 +125,20 @@ impl<'lock> ConflictRequests<'lock> {
             {
                 return;
             }
+        }
+        if !requests_recorded
+            && package.has_unrecorded_conflict_extra_requests(self.lock.conflicts())
+        {
+            let node = self.graph.add_node(Node::Package(package, None));
+            self.graph.add_edge(
+                parent,
+                node,
+                Edge::Prod {
+                    marker,
+                    dep_extras: Vec::new(),
+                },
+            );
+            self.unrecorded_requests.push((node, index));
         }
         let node = self.node(index, extra);
         self.graph.add_edge(
@@ -230,24 +248,45 @@ impl<'lock> ConflictRequests<'lock> {
         let reachability =
             conflict_marker_reachability(self.lock, &self.graph, &[], &known_conflicts);
         let lock = self.lock;
-        self.nodes
+        let unrecorded_requests = self
+            .unrecorded_requests
             .into_iter()
-            .filter_map(move |((index, extra), node)| {
+            .filter_map(|(node, index)| {
                 let marker = reachability
                     .get(&node)
                     .copied()
                     .unwrap_or(MarkerTree::FALSE);
-                if marker.is_false() {
-                    return None;
-                }
-                let package = lock.package(index);
-                // Legacy serialization can erase an empty extra and its incoming request, so
-                // reachable production nodes also need declaration evidence.
-                if let Err(err) = package.validate_conflict_extra_metadata(lock.conflicts()) {
-                    return Some(Err(err));
-                }
-                Some(Ok((index, extra, marker)))
+                (!marker.is_false()).then(|| {
+                    Err(LockErrorKind::MissingExtraRequests {
+                        package: lock.package(index).name().clone(),
+                    }
+                    .into())
+                })
             })
+            .collect::<Vec<_>>();
+        unrecorded_requests
+            .into_iter()
+            .chain(
+                self.nodes
+                    .into_iter()
+                    .filter_map(move |((index, extra), node)| {
+                        let marker = reachability
+                            .get(&node)
+                            .copied()
+                            .unwrap_or(MarkerTree::FALSE);
+                        if marker.is_false() {
+                            return None;
+                        }
+                        let package = lock.package(index);
+                        // Legacy serialization can erase an empty extra and its incoming request, so
+                        // reachable production nodes also need declaration evidence.
+                        if let Err(err) = package.validate_conflict_extra_metadata(lock.conflicts())
+                        {
+                            return Some(Err(err));
+                        }
+                        Some(Ok((index, extra, marker)))
+                    }),
+            )
     }
 }
 
@@ -289,7 +328,7 @@ pub(super) fn validate_requested_conflicts<'lock>(
         let index = lock.by_id[&package.id];
         if kind == InstallableRootKind::Production && groups.prod() {
             known_conflicts.insert(ConflictItem::from(name.clone()), root_marker);
-            requests.push(requests.root, index, None, root_marker);
+            requests.push(requests.root, index, None, root_marker, true);
             for extra in extras
                 .extra_names(
                     package
@@ -303,7 +342,7 @@ pub(super) fn validate_requested_conflicts<'lock>(
                     ConflictItem::from((name.clone(), extra.clone())),
                     root_marker,
                 );
-                requests.push(requests.root, index, Some(extra.clone()), root_marker);
+                requests.push(requests.root, index, Some(extra.clone()), root_marker, true);
             }
         }
         for (group, dependencies) in &package.dependency_groups {
@@ -324,20 +363,22 @@ pub(super) fn validate_requested_conflicts<'lock>(
                 if prune.contains(dependency.package_name()) {
                     continue;
                 }
-                let (marker, extras) =
+                let activation =
                     dependency.activation(lock, requirements.as_deref(), target.install_path())?;
                 requests.push(
                     requests.root,
                     dependency.index,
                     None,
-                    root_marker.and(marker),
+                    root_marker.and(activation.marker),
+                    activation.requests_recorded,
                 );
-                for (extra, marker) in extras {
+                for (extra, marker) in activation.extras {
                     requests.push(
                         requests.root,
                         dependency.index,
                         Some(extra),
                         root_marker.and(marker),
+                        true,
                     );
                 }
             }
@@ -377,13 +418,14 @@ pub(super) fn validate_requested_conflicts<'lock>(
                 continue;
             };
             let index = lock.by_id[&package.id];
-            requests.push(requests.root, index, None, root_marker.and(marker));
+            requests.push(requests.root, index, None, root_marker.and(marker), true);
             for extra in &requirement.extras {
                 requests.push(
                     requests.root,
                     index,
                     Some(extra.clone()),
                     root_marker.and(marker),
+                    true,
                 );
             }
         }
@@ -403,11 +445,17 @@ pub(super) fn validate_requested_conflicts<'lock>(
             if prune.contains(dependency.package_name()) {
                 continue;
             }
-            let (marker, extras) =
+            let activation =
                 dependency.activation(lock, requirements.as_deref(), target.install_path())?;
-            requests.push(parent, dependency.index, None, marker);
-            for (extra, marker) in extras {
-                requests.push(parent, dependency.index, Some(extra), marker);
+            requests.push(
+                parent,
+                dependency.index,
+                None,
+                activation.marker,
+                activation.requests_recorded,
+            );
+            for (extra, marker) in activation.extras {
+                requests.push(parent, dependency.index, Some(extra), marker, true);
             }
         }
     }
@@ -743,12 +791,14 @@ mod tests {
             index,
             Some("feature".parse()?),
             MarkerTree::FALSE,
+            true,
         );
         requests.push(
             requests.root,
             index,
             Some("feature".parse()?),
             "sys_platform == 'linux'".parse()?,
+            true,
         );
         assert!(requests.queue.is_empty());
         let requests = requests
