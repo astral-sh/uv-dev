@@ -106,3 +106,6 @@ requires = [
 [packages.isolated-30.versions."1.0.0"]
 
 [packages.isolated-31.versions."1.0.0"]
+
+[testgen]
+disable = true
