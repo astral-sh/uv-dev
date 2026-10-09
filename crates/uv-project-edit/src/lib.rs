@@ -298,7 +298,7 @@ impl PyProjectTomlMut {
     /// Add an [`Index`] to `tool.uv.index`.
     #[cfg(test)]
     fn add_index(&mut self, index: &Index, root_dir: &Path) -> Result<(), Error> {
-        self.add_indexes(&[index], root_dir, &BTreeSet::new())
+        self.add_indexes(&[index], root_dir, &BTreeSet::new(), &[])
     }
 
     /// Add indexes before updating source names against the final declarations.
@@ -308,10 +308,12 @@ impl PyProjectTomlMut {
         indexes: &[&Index],
         root_dir: &Path,
         shadowed_names: &BTreeSet<IndexName>,
+        member_indexes: &[&Index],
     ) -> Result<(), Error> {
         let mut renames = Vec::new();
         for index in indexes {
-            let previous_names = self.edit_index(index, root_dir, shadowed_names)?;
+            let previous_names =
+                self.edit_index(index, root_dir, shadowed_names, member_indexes)?;
             if let Some(name) = index.name.as_deref() {
                 renames.push((previous_names, name));
             }
@@ -341,6 +343,7 @@ impl PyProjectTomlMut {
         index: &Index,
         root_dir: &Path,
         shadowed_names: &BTreeSet<IndexName>,
+        member_indexes: &[&Index],
     ) -> Result<Vec<String>, Error> {
         let size = self.doc.len();
         let existing = self
@@ -491,6 +494,19 @@ impl PyProjectTomlMut {
             }
         }
 
+        let replacement_name = table.get("name").and_then(Item::as_str);
+        let replacement_format = match table.get("format").and_then(Item::as_str) {
+            Some("flat") => IndexFormat::Flat,
+            _ => IndexFormat::Simple,
+        };
+        // Compare the declaration that will be written, including its retained name and format.
+        let incoming_shadowed = replacement_name.is_some_and(|name| {
+            member_indexes.iter().any(|member| {
+                member.name.as_deref() == Some(name)
+                    && (member.url != index.url || member.format != replacement_format)
+            })
+        });
+
         // Remove any replaced tables and retain every name whose sources need updating.
         let mut previous_names = Vec::new();
         let mut aliases = Vec::new();
@@ -508,13 +524,9 @@ impl PyProjectTomlMut {
             let replaced = same_name || replaced_default || same_url;
             if replaced && let Some(name) = table.get("name").and_then(Item::as_str) {
                 previous_names.push(name.to_owned());
-                let incoming_shadowed = index
-                    .name
-                    .as_ref()
-                    .is_some_and(|name| shadowed_names.contains(name));
                 let previous_shadowed =
                     IndexName::from_str(name).is_ok_and(|name| shadowed_names.contains(&name));
-                if (incoming_shadowed || previous_shadowed) && index.name.as_deref() != Some(name) {
+                if (incoming_shadowed || previous_shadowed) && replacement_name != Some(name) {
                     let mut alias = table.clone();
                     // Retained aliases are available to pinned sources, not implicit searches.
                     alias.remove("default");
@@ -1929,6 +1941,7 @@ mod test {
     };
     use anyhow::Result;
     use insta::assert_snapshot;
+    use std::collections::BTreeSet;
     use std::path::Path;
     use std::str::FromStr;
     use toml_edit::DocumentMut;
@@ -2469,6 +2482,70 @@ format = "flat"
 [[tool.uv.index]]
 name = "index"
 url = "https://pypi.org/simple"
+"#);
+    }
+
+    #[test]
+    fn add_unnamed_index_retains_effective_name_with_shadow() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/simple"
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let incoming = Index::from_str("https://example.com/simple").unwrap();
+        doc.add_indexes(
+            &[&incoming],
+            Path::new("."),
+            &BTreeSet::from(["old".parse().unwrap()]),
+            &[],
+        )
+        .unwrap();
+        assert_snapshot!(doc.to_string(), @r#"
+
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/simple"
+"#);
+    }
+
+    #[test]
+    fn add_index_retains_alias_for_shadowed_effective_format() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/flat"
+format = "flat"
+
+[tool.uv.sources]
+foo = { index = "old" }
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let incoming = Index::from_str("new=https://example.com/flat").unwrap();
+        let member = Index::from_str("new=https://example.com/flat").unwrap();
+        doc.add_indexes(&[&incoming], Path::new("."), &BTreeSet::new(), &[&member])
+            .unwrap();
+        assert_snapshot!(doc.to_string(), @r#"
+
+[[tool.uv.index]]
+name = "new"
+url = "https://example.com/flat"
+format = "flat"
+
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/flat"
+format = "flat"
+explicit = true
+
+[tool.uv.sources]
+foo = { index = "old" }
 "#);
     }
 
