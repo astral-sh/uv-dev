@@ -164,6 +164,7 @@ pub async fn pip_install(
         find_links,
         no_binary,
         no_build,
+        no_build_unnamed_editable,
         extras: _,
     } = uv_resolve_operations::read_requirements(
         requirements,
@@ -461,7 +462,7 @@ pub async fn pip_install(
         .build()?;
 
     // Combine the `--no-binary` and `--no-build` flags from the requirements files.
-    let build_options = build_options.combine(no_binary, no_build);
+    let build_options = build_options.combine(no_binary, no_build, no_build_unnamed_editable);
 
     // Resolve the flat indexes from `--find-links`.
     let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;

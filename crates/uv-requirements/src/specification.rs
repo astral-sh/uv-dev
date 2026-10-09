@@ -93,6 +93,8 @@ pub struct RequirementsSpecification {
     pub no_binary: NoBinary,
     /// The `--no-build` flags to enforce when selecting distributions.
     pub no_build: NoBuild,
+    /// Whether explicit no-build settings also prohibit unnamed editable builds.
+    pub no_build_unnamed_editable: bool,
 }
 
 impl RequirementsSpecification {
@@ -192,6 +194,7 @@ impl RequirementsSpecification {
                         .clone()
                         .unwrap_or_default(),
                 ),
+                no_build_unnamed_editable: tool_uv.top_level.no_build.unwrap_or_default(),
                 no_build: NoBuild::from_args(
                     tool_uv.top_level.no_build,
                     tool_uv
@@ -600,6 +603,7 @@ impl RequirementsSpecification {
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
+            spec.no_build_unnamed_editable |= source.no_build_unnamed_editable;
             spec.require_hashes |= source.require_hashes;
         }
 
@@ -640,6 +644,7 @@ impl RequirementsSpecification {
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
+            spec.no_build_unnamed_editable |= source.no_build_unnamed_editable;
             spec.require_hashes |= source.require_hashes;
         }
 
@@ -668,6 +673,7 @@ impl RequirementsSpecification {
             spec.find_links.extend(source.find_links);
             spec.no_binary.extend(source.no_binary);
             spec.no_build.extend(source.no_build);
+            spec.no_build_unnamed_editable |= source.no_build_unnamed_editable;
             spec.require_hashes |= source.require_hashes;
         }
 

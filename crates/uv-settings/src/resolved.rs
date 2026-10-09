@@ -194,6 +194,16 @@ pub fn resolve_prerelease(global: PrereleaseMode, mut package: PrereleasePackage
     }
 }
 
+/// Warn when build policies are configured without enabling their preview feature.
+pub fn warn_build_policy_preview(options: &BuildOptions) {
+    if options.has_build_policy() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
+        warn_user_once!(
+            "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::BuildPolicy
+        );
+    }
+}
+
 fn resolve_build_options(
     no_binary: NoBinary,
     no_build: NoBuild,
@@ -201,12 +211,7 @@ fn resolve_build_options(
     package: BuildPolicyPackage,
 ) -> BuildOptions {
     let options = BuildOptions::new(no_binary, no_build).with_build_policy(global, package);
-    if options.has_build_policy() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
-        warn_user_once!(
-            "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
-            PreviewFeature::BuildPolicy
-        );
-    }
+    warn_build_policy_preview(&options);
     options
 }
 
