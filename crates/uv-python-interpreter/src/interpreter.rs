@@ -1182,6 +1182,30 @@ pub(crate) struct InterpreterInfo {
 impl InterpreterInfo {
     /// Build metadata for virtual environment discovery without querying Python or using the cache.
     pub(crate) fn from_virtualenv(interpreter: &Interpreter) -> Result<Self, Error> {
+        // On Unix, CPython 3.11+ resolves the venv executable's symlinks when setting
+        // `sys._base_executable`, but leaves symlinks in parent directories intact (including
+        // managed minor-version directories). Match its readlink loop rather than canonicalizing.
+        let sys_base_executable = if cfg!(unix)
+            && interpreter.implementation_name() == "cpython"
+            && interpreter.python_tuple() >= (3, 11)
+        {
+            let mut executable = interpreter.sys_executable().to_path_buf();
+            let mut links = 0;
+            while let Ok(target) = fs::read_link(&executable) {
+                links += 1;
+                if links >= 40 {
+                    return Err(
+                        io::Error::other("Too many symbolic links in Python executable").into(),
+                    );
+                }
+                executable.pop();
+                executable = uv_fs::normalize_absolute_path(&executable.join(target))?;
+            }
+            Some(executable)
+        } else {
+            interpreter.sys_base_executable.clone()
+        };
+
         // Python reports ordinary Windows paths even when the venv was created with a verbatim path.
         let scheme = Scheme {
             purelib: interpreter.scheme.purelib.simplified().to_path_buf(),
@@ -1202,7 +1226,7 @@ impl InterpreterInfo {
             sys_base_exec_prefix: PathBuf::new(),
             sys_path: Vec::new(),
             sys_base_prefix: interpreter.sys_base_prefix.clone(),
-            sys_base_executable: interpreter.sys_base_executable.clone(),
+            sys_base_executable,
             sys_executable: std::path::absolute(interpreter.sys_executable())?
                 .simplified()
                 .to_path_buf(),
