@@ -17,6 +17,7 @@ use indoc::indoc;
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
+use url::Url;
 #[cfg(windows)]
 use uv_fs::Simplified;
 use uv_fs::copy_dir_all;
@@ -25,7 +26,7 @@ use uv_static::EnvVars;
 use uv_test::packse::{
     PackseServer, generate_wheel, generate_wheel_with_files, scenario::Scenario,
 };
-use uv_test::uv_snapshot;
+use uv_test::{uv_snapshot, venv_bin_path};
 
 #[cfg(feature = "test-git")]
 fn tool_install_git_path(bin_dir: &ChildPath) -> OsString {
@@ -2602,6 +2603,561 @@ fn tool_install_already_installed() {
      ~ click==8.1.7
     Installed 2 executables: black, blackd
     ");
+}
+
+#[test]
+fn tool_install_restores_missing_executables() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let first_bin_dir = context.temp_dir.child("first-bin");
+    let second_bin_dir = context.temp_dir.child("second-bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let app_requirement = format!(
+        "basic-app @ {}",
+        Url::from_file_path(&app).expect("Failed to convert app path to file URL")
+    );
+
+    context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let launcher_executable =
+        first_bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    let app_executable = first_bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    fs_err::remove_file(&launcher_executable)?;
+    fs_err::remove_file(&app_executable)?;
+
+    uv_snapshot!(context.filters(), context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    Installed 1 executable from `basic-app`: basic-app
+    Installed 1 executable: simple_launcher
+    ");
+
+    launcher_executable.assert(predicate::path::exists());
+    app_executable.assert(predicate::path::exists());
+    fs_err::remove_file(&launcher_executable)?;
+    fs_err::remove_file(&app_executable)?;
+
+    uv_snapshot!(context.filters(), context
+        .tool_upgrade()
+        .arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 executable from `basic-app`: basic-app
+    Installed 1 executable: simple_launcher
+    Nothing to upgrade
+    ");
+
+    launcher_executable.assert(predicate::path::exists());
+    app_executable.assert(predicate::path::exists());
+
+    uv_snapshot!(context.filters(), context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
+        .env(EnvVars::PATH, second_bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    Installed 1 executable from `basic-app`: basic-app
+    Installed 1 executable: simple_launcher
+    ");
+
+    second_bin_dir
+        .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+    second_bin_dir
+        .child(format!("basic-app{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_restores_missing_executables_with_locks() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let first_bin_dir = context.temp_dir.child("first-bin");
+    let second_bin_dir = context.temp_dir.child("second-bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let app_requirement = format!(
+        "basic-app @ {}",
+        Url::from_file_path(&app).expect("Failed to convert app path to file URL")
+    );
+
+    context
+        .tool_install()
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let launcher_executable =
+        first_bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    let app_executable = first_bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    fs_err::remove_file(&launcher_executable)?;
+    fs_err::remove_file(&app_executable)?;
+
+    uv_snapshot!(context.filters(), context
+        .tool_install()
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 executable from `basic-app`: basic-app
+    Installed 1 executable: simple_launcher
+    ");
+
+    launcher_executable.assert(predicate::path::exists());
+    app_executable.assert(predicate::path::exists());
+    fs_err::remove_file(&launcher_executable)?;
+    fs_err::remove_file(&app_executable)?;
+
+    uv_snapshot!(context.filters(), context
+        .tool_upgrade()
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, first_bin_dir.as_os_str())
+        .env(EnvVars::PATH, first_bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 executable from `basic-app`: basic-app
+    Installed 1 executable: simple_launcher
+    Nothing to upgrade
+    ");
+
+    launcher_executable.assert(predicate::path::exists());
+    app_executable.assert(predicate::path::exists());
+
+    uv_snapshot!(context.filters(), context
+        .tool_install()
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, second_bin_dir.as_os_str())
+        .env(EnvVars::PATH, second_bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 executable from `basic-app`: basic-app
+    Installed 1 executable: simple_launcher
+    ");
+
+    second_bin_dir
+        .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+    second_bin_dir
+        .child(format!("basic-app{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+
+    Ok(())
+}
+
+#[test]
+fn tool_install_repair_preserves_entrypoints_with_invalid_bin_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix()
+        .with_filter((r"(?:File exists|Cannot create a file when that file already exists\.?) \(os error \d+\)", "[ALREADY EXISTS]"));
+    let bin = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    let invalid_bin = context.temp_dir.child("not-a-directory");
+    invalid_bin.write_str("occupied")?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&wheel).arg("--force")
+        .env(EnvVars::UV_TOOL_BIN_DIR, invalid_bin.path())
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to create executable directory
+      cause: failed to create directory `[TEMP_DIR]/not-a-directory`: [ALREADY EXISTS]
+    "#);
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert_eq!(context.read("not-a-directory"), "occupied");
+    Command::new(bin.join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn tool_install_executable_repair_retains_python_request() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.13", "3.12"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let bin = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .args(["--python", "3.12"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    fs_err::remove_file(bin.join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&wheel)
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    Installed 1 executable: simple_launcher
+    "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/simple-launcher/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [{ name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" }]
+        python = "3.12"
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
+    context
+        .tool_install()
+        .arg(&wheel)
+        .arg("--reinstall")
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let python = venv_bin_path(context.temp_dir.child("tools/simple-launcher"))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(python).args(["-c", "import sys; print(sys.version_info[:2])"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 12)
+    ");
+    Ok(())
+}
+
+#[test]
+fn tool_install_executable_repair_retains_python_request_with_locks() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.13", "3.12"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let bin = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .args(["--python", "3.12"])
+        .args(["--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    fs_err::remove_file(bin.join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&wheel).args(["--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 executable: simple_launcher
+    "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/simple-launcher/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [{ name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" }]
+        python = "3.12"
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
+    context
+        .tool_install()
+        .arg(&wheel)
+        .arg("--reinstall")
+        .args(["--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let python = venv_bin_path(context.temp_dir.child("tools/simple-launcher"))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(python).args(["-c", "import sys; print(sys.version_info[:2])"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 12)
+    ");
+    Ok(())
+}
+
+/// A bin-directory symlink identifies the same command destinations during reuse and repair.
+#[test]
+#[cfg(unix)]
+fn tool_install_reuses_symlinked_bin_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    bin.create_dir_all()?;
+    let alias = context.temp_dir.child("linked-bin");
+    fs_err::os::unix::fs::symlink(bin.path(), alias.path())?;
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let app_requirement = format!(
+        "basic-app @ {}",
+        Url::from_file_path(&app).expect("app file URL")
+    );
+    context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, bin.as_os_str())
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let receipt = fs_err::read(tools.child("simple-launcher/uv-receipt.toml"))?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&launcher)
+        .arg("--with-executables-from").arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, alias.as_os_str())
+        .env(EnvVars::PATH, alias.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    `simple-launcher @ file://[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl` is already installed
+    ");
+    assert_eq!(
+        fs_err::read(tools.child("simple-launcher/uv-receipt.toml"))?,
+        receipt
+    );
+
+    // Repairing one command must recognize ownership of the other through the directory alias.
+    fs_err::remove_file(bin.child("basic-app"))?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&launcher)
+        .arg("--with-executables-from").arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, alias.as_os_str())
+        .env(EnvVars::PATH, alias.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    Installed 1 executable from `basic-app`: basic-app
+    Installed 1 executable: simple_launcher
+    ");
+    assert!(bin.child("basic-app").exists());
+    assert!(bin.child("simple_launcher").exists());
+    Ok(())
+}
+
+/// Parent components do not move an installed tool to a different bin directory.
+#[test]
+fn tool_install_reuses_bin_directory_with_parent_components() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    context.temp_dir.child("nested").create_dir_all()?;
+    let alias = context.temp_dir.child("nested/../bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&launcher)
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, bin.as_os_str())
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let receipt = fs_err::read(tools.child("simple-launcher/uv-receipt.toml"))?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&launcher)
+        .env(EnvVars::UV_TOOL_DIR, tools.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, alias.as_os_str())
+        .env(EnvVars::PATH, alias.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    `simple-launcher @ file://[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl` is already installed
+    ");
+    assert_eq!(
+        fs_err::read(tools.child("simple-launcher/uv-receipt.toml"))?,
+        receipt
+    );
+    assert!(
+        bin.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX))
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn tool_install_preserves_existing_bin_on_migration_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let original_bin = context.temp_dir.child("original-bin");
+    let destination_bin = context.temp_dir.child("destination-bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let app_requirement = format!(
+        "basic-app @ {}",
+        Url::from_file_path(app).expect("app file URL")
+    );
+    context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, original_bin.as_os_str())
+        .env(EnvVars::PATH, original_bin.as_os_str())
+        .assert()
+        .success();
+    let receipt_path = tool_dir.child("simple-launcher/uv-receipt.toml");
+    let receipt = fs_err::read(&receipt_path)?;
+    let conflict = destination_bin.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    conflict.write_str("unrelated executable")?;
+
+    uv_snapshot!(context.filters(), context.tool_install().arg(&launcher)
+        .arg("--with-executables-from").arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination_bin.as_os_str())
+        .env(EnvVars::PATH, destination_bin.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 2 packages in [TIME]
+    error: Executable already exists: basic-app (use `--force` to overwrite)
+    ");
+
+    assert_eq!(fs_err::read(&receipt_path)?, receipt);
+    assert_eq!(fs_err::read_to_string(&conflict)?, "unrelated executable");
+    original_bin
+        .child(format!("basic-app{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+    let executable = original_bin.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    Command::new(executable.path()).assert().success();
+    Ok(())
+}
+
+#[test]
+fn tool_install_preserves_existing_bin_on_migration_conflict_with_locks() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_filtered_exe_suffix();
+    let tool_dir = context.temp_dir.child("tools");
+    let original_bin = context.temp_dir.child("original-bin");
+    let destination_bin = context.temp_dir.child("destination-bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let app = context
+        .workspace_root
+        .join("test/links/basic_app-0.1.0-py3-none-any.whl");
+    let app_requirement = format!(
+        "basic-app @ {}",
+        Url::from_file_path(app).expect("app file URL")
+    );
+    context
+        .tool_install()
+        .arg("--preview-features")
+        .arg("tool-install-locks")
+        .arg(&launcher)
+        .arg("--with-executables-from")
+        .arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, original_bin.as_os_str())
+        .env(EnvVars::PATH, original_bin.as_os_str())
+        .assert()
+        .success();
+    let receipt_path = tool_dir.child("simple-launcher/uv-receipt.toml");
+    let receipt = fs_err::read(&receipt_path)?;
+    let conflict = destination_bin.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
+    conflict.write_str("unrelated executable")?;
+
+    uv_snapshot!(context.filters(), context.tool_install().arg("--preview-features").arg("tool-install-locks").arg(&launcher)
+        .arg("--with-executables-from").arg(&app_requirement)
+        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination_bin.as_os_str())
+        .env(EnvVars::PATH, destination_bin.as_os_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Executable already exists: basic-app (use `--force` to overwrite)
+    ");
+
+    assert_eq!(fs_err::read(&receipt_path)?, receipt);
+    assert_eq!(fs_err::read_to_string(&conflict)?, "unrelated executable");
+    original_bin
+        .child(format!("basic-app{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::exists());
+    let executable = original_bin.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    Command::new(executable.path()).assert().success();
+    Ok(())
 }
 
 /// Test installing a tool when its entry point already exists
@@ -6553,5 +7109,41 @@ fn tool_install_with_build_hashes() -> Result<()> {
             .child("backend-executed")
             .assert(predicate::path::exists());
     }
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn tool_install_migration_to_unwritable_directory_preserves_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    let destination = context.temp_dir.child("read-only-bin");
+    destination.create_dir_all()?;
+    let _guard = uv_test::ReadOnlyDirectoryGuard::new(destination.path())?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&wheel)
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination.path()).env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    error: Failed to install executable
+      cause: failed to symlink file from [TEMP_DIR]/read-only-bin/simple_launcher to [TEMP_DIR]/tools/simple-launcher/bin/simple_launcher: Permission denied (os error 13)
+    "#);
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert_eq!(fs_err::read_dir(destination.path())?.count(), 0);
+    Command::new(bin.join("simple_launcher")).assert().success();
     Ok(())
 }

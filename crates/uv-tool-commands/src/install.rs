@@ -41,8 +41,9 @@ use uv_workspace::WorkspaceCache;
 use uv_lock_operations::LockValidationError;
 
 use crate::common::{
-    ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    tool_environment_spec,
+    EntrypointConflictPolicy, ToolLock, ToolPython, finalize_tool_install,
+    prepare_tool_executable_dir, refine_interpreter, remove_entrypoints,
+    tool_entrypoints_are_fresh, tool_environment_spec,
 };
 use crate::error::ToolLockError;
 use crate::requirements::resolve_names;
@@ -650,7 +651,7 @@ pub async fn install(
                     ),
                     Ok(SatisfiesResult::Fresh { .. })
                 );
-                if already_installed {
+                if already_installed && tool_entrypoints_are_fresh(tool_receipt) {
                     // Then we're done! Though we might need to update the receipt.
                     if *tool_receipt.options() != options {
                         installed_tools.add_tool_receipt(
@@ -703,6 +704,25 @@ pub async fn install(
     // This lets us confirm the environment is valid before removing an existing install. However,
     // entrypoints always contain an absolute path to the relevant Python interpreter, which would
     // be invalidated by moving the environment.
+    prepare_tool_executable_dir()?;
+    // Keep an explicit request attached to a reused environment unless it is replaced explicitly.
+    let receipt_python = if explicit_python_request {
+        python_request.clone()
+    } else if existing_environment.is_some() {
+        existing_tool_receipt
+            .as_ref()
+            .and_then(|receipt| receipt.python().clone())
+    } else {
+        None
+    };
+    let conflict_policy = if force || invalid_tool_receipt {
+        EntrypointConflictPolicy::Overwrite
+    } else if existing_environment.is_none() {
+        EntrypointConflictPolicy::RejectAndRemoveEnvironment
+    } else {
+        EntrypointConflictPolicy::RejectAndRetainEnvironment
+    };
+    let mut previous_entrypoints = Vec::new();
     let (environment, tool_lock) = if let Some(environment) = existing_environment {
         let environment = environment.into_environment();
         let (environment, tool_lock) = if tool_locks {
@@ -803,6 +823,9 @@ pub async fn install(
                 && !request.is_latest()
                 && settings.reinstall.is_none()
                 && settings.resolver.upgrade.is_none()
+                && existing_tool_receipt
+                    .as_ref()
+                    .is_some_and(tool_entrypoints_are_fresh)
             {
                 let Some(existing_tool_receipt) = existing_tool_receipt.as_ref() else {
                     bail!("Expected an existing tool receipt");
@@ -885,10 +908,8 @@ pub async fn install(
             (update.environment, None)
         };
 
-        // At this point, we updated the existing environment, so we should remove any of its
-        // existing executables.
         if let Some(existing_receipt) = existing_tool_receipt.as_ref() {
-            remove_entrypoints(existing_receipt);
+            previous_entrypoints.extend(existing_receipt.entrypoints().iter().cloned());
         }
 
         (environment, tool_lock)
@@ -1070,13 +1091,9 @@ pub async fn install(
         entrypoints,
         &installed_tools,
         &options,
-        force || invalid_tool_receipt,
-        // Only persist the Python request if it was explicitly provided
-        if explicit_python_request {
-            python_request
-        } else {
-            None
-        },
+        conflict_policy,
+        &previous_entrypoints,
+        receipt_python,
         requirements,
         receipt_constraints,
         receipt_overrides,

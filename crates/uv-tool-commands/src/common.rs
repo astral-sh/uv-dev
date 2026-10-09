@@ -28,7 +28,7 @@ use uv_distribution_types::{
 use uv_errors::{ErrorWithHints, Hinted, Hints};
 #[cfg(unix)]
 use uv_fs::replace_symlink;
-use uv_fs::{CWD, Simplified};
+use uv_fs::{CWD, Simplified, is_same_file_allow_missing};
 use uv_git::GitResolver;
 use uv_installer::SitePackages;
 use uv_lock::{Installable, Lock, ResolverManifest};
@@ -152,6 +152,63 @@ pub(super) fn remove_entrypoints(tool: &Tool) {
             .iter()
             .map(|entrypoint| entrypoint.install_path.as_path()),
     );
+}
+
+/// Return whether all executables recorded for a [`Tool`] exist in the configured bin directory.
+pub(crate) fn tool_entrypoints_are_fresh(tool: &Tool) -> bool {
+    let Ok(executable_directory) = uv_tool::tool_executable_dir() else {
+        return false;
+    };
+
+    tool.entrypoints().iter().all(|entrypoint| {
+        entrypoint.install_path.file_name().is_some_and(|filename| {
+            same_entrypoint_destination(
+                &entrypoint.install_path,
+                &executable_directory.join(filename),
+            )
+        }) && entrypoint.install_path.exists()
+    })
+}
+
+/// Compare destination entries using filesystem identity without following executable symlinks.
+fn same_entrypoint_destination(left: &Path, right: &Path) -> bool {
+    if left
+        .parent()
+        .zip(right.parent())
+        .is_none_or(|(left, right)| is_same_file_allow_missing(left, right) != Some(true))
+    {
+        return false;
+    }
+    if left.file_name() == right.file_name() {
+        return true;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(left), Ok(right)) = (
+            fs_err::symlink_metadata(left),
+            fs_err::symlink_metadata(right),
+        ) {
+            return left.dev() == right.dev() && left.ino() == right.ino();
+        }
+    }
+    #[cfg(windows)]
+    {
+        use fs_err::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        let handle = |path| {
+            fs_err::OpenOptions::new()
+                .access_mode(0)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+                .open(path)
+                .and_then(|file| same_file::Handle::from_file(file.into_file()))
+        };
+        if let (Ok(left), Ok(right)) = (handle(left), handle(right)) {
+            return left == right;
+        }
+    }
+    false
 }
 
 /// Remove the entrypoints at the given paths.
@@ -735,8 +792,62 @@ pub(super) async fn refine_interpreter(
     Ok(Some(interpreter))
 }
 
+/// Enumerate a package's executable sources and configured destinations.
+fn package_entrypoint_targets(
+    site_packages: &SitePackages,
+    package: &PackageName,
+    executable_directory: &Path,
+) -> anyhow::Result<Option<BTreeSet<(String, PathBuf, PathBuf)>>> {
+    let installed = site_packages.get_packages(package);
+    let Some(dist) = installed.first() else {
+        return Ok(None);
+    };
+    Ok(Some(
+        entrypoint_paths(site_packages, dist.name(), dist.version())?
+            .into_iter()
+            .map(|(name, source_path)| {
+                let target_path = executable_directory.join(
+                    source_path
+                        .file_name()
+                        .map(std::borrow::ToOwned::to_owned)
+                        .unwrap_or_else(|| OsString::from(name.clone())),
+                );
+                (name, source_path, target_path)
+            })
+            .collect(),
+    ))
+}
+
+/// Prepare the executable directory before changing existing environments or entrypoints.
+pub(super) fn prepare_tool_executable_dir() -> anyhow::Result<PathBuf> {
+    let executable_directory = uv_tool::tool_executable_dir()?;
+    fs_err::create_dir_all(&executable_directory)
+        .context("Failed to create executable directory")?;
+    Ok(executable_directory)
+}
+
 /// Finalizes a tool installation, after creation of an environment.
 ///
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum EntrypointConflictPolicy {
+    Overwrite,
+    RejectAndRetainEnvironment,
+    RejectAndRemoveEnvironment,
+}
+
+/// Remove newly created destinations while retaining entrypoints from the previous receipt.
+fn remove_new_entrypoint_paths<'a>(
+    paths: impl IntoIterator<Item = &'a Path>,
+    previous: &[ToolEntrypoint],
+) {
+    remove_entrypoint_paths(paths.into_iter().filter(|path| {
+        !previous
+            .iter()
+            .any(|entry| same_entrypoint_destination(path, &entry.install_path))
+            && fs_err::symlink_metadata(path).is_ok()
+    }));
+}
+
 /// Installs tool executables for a given package, handling any conflicts.
 ///
 /// Adds a receipt for the tool.
@@ -746,7 +857,8 @@ pub(super) fn finalize_tool_install(
     entrypoints: &[PackageName],
     installed_tools: &InstalledTools,
     options: &ToolOptions,
-    force: bool,
+    conflict_policy: EntrypointConflictPolicy,
+    previous_entrypoints: &[ToolEntrypoint],
     python: Option<PythonRequest>,
     requirements: Vec<Requirement>,
     constraints: Vec<Requirement>,
@@ -756,9 +868,7 @@ pub(super) fn finalize_tool_install(
     lock: Option<&ToolLock>,
     printer: Printer,
 ) -> anyhow::Result<()> {
-    let executable_directory = uv_tool::tool_executable_dir()?;
-    fs_err::create_dir_all(&executable_directory)
-        .context("Failed to create executable directory")?;
+    let executable_directory = prepare_tool_executable_dir()?;
     debug!(
         "Installing tool executables into: {}",
         executable_directory.user_display()
@@ -775,15 +885,57 @@ pub(super) fn finalize_tool_install(
         .into_iter()
         .chain(std::iter::once(name));
 
-    for package in ordered_packages {
+    let package_entrypoints = ordered_packages
+        .map(|package| {
+            Ok((
+                package,
+                package_entrypoint_targets(&site_packages, package, &executable_directory)?,
+            ))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    if conflict_policy != EntrypointConflictPolicy::Overwrite {
+        let conflicts = package_entrypoints
+            .iter()
+            .filter_map(|(_, entrypoints)| entrypoints.as_ref())
+            .flatten()
+            .filter(|(_, _, target)| {
+                target.exists()
+                    && !previous_entrypoints
+                        .iter()
+                        .any(|entry| same_entrypoint_destination(target, &entry.install_path))
+            })
+            .map(|(_, _, target)| {
+                target
+                    .file_name()
+                    .expect("entrypoint target has a filename")
+                    .to_string_lossy()
+            })
+            .collect::<BTreeSet<_>>();
+        if !conflicts.is_empty() {
+            if conflict_policy == EntrypointConflictPolicy::RejectAndRemoveEnvironment {
+                installed_tools.remove_environment(name)?;
+            }
+            let (suffix, verb) = if conflicts.len() == 1 {
+                ("", "exists")
+            } else {
+                ("s", "exist")
+            };
+            bail!(
+                "Executable{suffix} already {verb}: {} (use `--force` to overwrite)",
+                conflicts.iter().map(|name| name.bold()).join(", ")
+            );
+        }
+    }
+
+    for (package, target_entrypoints) in package_entrypoints {
         if package == name {
             debug!("Installing entrypoints for tool `{package}`");
         } else {
             debug!("Installing entrypoints for `{package}` as part of tool `{name}`");
         }
 
-        let installed = site_packages.get_packages(package);
-        let Some(dist) = installed.first() else {
+        let Some(target_entrypoints) = target_entrypoints else {
             if package != name {
                 bail!("Expected package `{package}` to be installed");
             }
@@ -793,10 +945,16 @@ pub(super) fn finalize_tool_install(
                 "No executables are provided by package `{}`; removing tool",
                 package.cyan()
             )?;
-            remove_entrypoint_paths(
+            remove_new_entrypoint_paths(
                 installed_entrypoints
                     .iter()
                     .map(|entrypoint| entrypoint.install_path.as_path()),
+                previous_entrypoints,
+            );
+            remove_entrypoint_paths(
+                previous_entrypoints
+                    .iter()
+                    .map(|entry| entry.install_path.as_path()),
             );
             installed_tools.remove_environment(name)?;
 
@@ -806,22 +964,6 @@ pub(super) fn finalize_tool_install(
             }
             .into());
         };
-        let dist_entrypoints = entrypoint_paths(&site_packages, dist.name(), dist.version())?;
-
-        // Determine the entry points targets. Use a sorted collection for deterministic output.
-        let target_entrypoints = dist_entrypoints
-            .into_iter()
-            .map(|(name, source_path)| {
-                let target_path = executable_directory.join(
-                    source_path
-                        .file_name()
-                        .map(std::borrow::ToOwned::to_owned)
-                        .unwrap_or_else(|| OsString::from(name.clone())),
-                );
-                (name, source_path, target_path)
-            })
-            .collect::<BTreeSet<_>>();
-
         if target_entrypoints.is_empty() {
             let err = if package != name {
                 NoExecutablesError::Dependency {
@@ -858,48 +1000,20 @@ pub(super) fn finalize_tool_install(
             )?;
 
             // Clean up the environment we just created.
-            remove_entrypoint_paths(
+            remove_new_entrypoint_paths(
                 installed_entrypoints
                     .iter()
                     .map(|entrypoint| entrypoint.install_path.as_path()),
+                previous_entrypoints,
+            );
+            remove_entrypoint_paths(
+                previous_entrypoints
+                    .iter()
+                    .map(|entry| entry.install_path.as_path()),
             );
             installed_tools.remove_environment(name)?;
 
             return Err(err.into());
-        }
-
-        // Error if we're overwriting an existing entrypoint, unless the user passed `--force`.
-        if !force {
-            let mut existing_entrypoints = target_entrypoints
-                .iter()
-                .filter(|(_, _, target_path)| target_path.exists())
-                .peekable();
-            if existing_entrypoints.peek().is_some() {
-                // Clean up the environment we just created
-                remove_entrypoint_paths(
-                    installed_entrypoints
-                        .iter()
-                        .map(|entrypoint| entrypoint.install_path.as_path()),
-                );
-                installed_tools.remove_environment(name)?;
-
-                let existing_entrypoints = existing_entrypoints
-                    // SAFETY: We know the target has a filename because we just constructed it above
-                    .map(|(_, _, target)| target.file_name().unwrap().to_string_lossy())
-                    .collect::<Vec<_>>();
-                let (s, exists) = if existing_entrypoints.len() == 1 {
-                    ("", "exists")
-                } else {
-                    ("s", "exist")
-                };
-                bail!(
-                    "Executable{s} already {exists}: {} (use `--force` to overwrite)",
-                    existing_entrypoints
-                        .iter()
-                        .map(|name| name.bold())
-                        .join(", ")
-                )
-            }
         }
 
         #[cfg(windows)]
@@ -909,16 +1023,41 @@ pub(super) fn finalize_tool_install(
         for (name, src, target) in target_entrypoints {
             debug!("Installing executable: {name}");
 
-            #[cfg(unix)]
-            replace_symlink(src, &target).context("Failed to install executable")?;
-
+            // A failed Windows copy may leave a partial file only if no destination existed.
             #[cfg(windows)]
-            if itself.as_ref().is_some_and(|itself| {
-                std::path::absolute(&target).is_ok_and(|target| *itself == target)
-            }) {
-                self_replace::self_replace(src).context("Failed to install entrypoint")?;
-            } else {
-                fs_err::copy(src, &target).context("Failed to install entrypoint")?;
+            let target_existed = !matches!(fs_err::symlink_metadata(&target), Err(err) if err.kind() == io::ErrorKind::NotFound);
+            let result = {
+                #[cfg(unix)]
+                {
+                    replace_symlink(src, &target).context("Failed to install executable")
+                }
+                #[cfg(windows)]
+                {
+                    if itself.as_ref().is_some_and(|itself| {
+                        std::path::absolute(&target).is_ok_and(|target| *itself == target)
+                    }) {
+                        self_replace::self_replace(src).context("Failed to install entrypoint")
+                    } else {
+                        fs_err::copy(src, &target)
+                            .map(|_| ())
+                            .context("Failed to install entrypoint")
+                    }
+                }
+            };
+            if let Err(err) = result {
+                // Unix symlink replacement is atomic, so its failed target is untouched.
+                #[cfg(unix)]
+                let partial_target = None;
+                #[cfg(windows)]
+                let partial_target = (!target_existed).then_some(target.as_path());
+                remove_new_entrypoint_paths(
+                    installed_entrypoints
+                        .iter()
+                        .map(|entrypoint| entrypoint.install_path.as_path())
+                        .chain(partial_target),
+                    previous_entrypoints,
+                );
+                return Err(err);
             }
 
             let tool_entry = ToolEntrypoint::new(&name, target, package.to_string());
@@ -941,6 +1080,15 @@ pub(super) fn finalize_tool_install(
     }
 
     debug!("Adding receipt for tool `{name}`");
+    let obsolete_entrypoints = previous_entrypoints
+        .iter()
+        .filter(|previous| {
+            !installed_entrypoints.iter().any(|installed| {
+                same_entrypoint_destination(&previous.install_path, &installed.install_path)
+            })
+        })
+        .map(|entry| entry.install_path.as_path())
+        .collect::<Vec<_>>();
     let tool = Tool::new(
         requirements,
         constraints,
@@ -953,6 +1101,8 @@ pub(super) fn finalize_tool_install(
     );
     ToolLock::write(&installed_tools.tool_dir(name), lock)?;
     installed_tools.add_tool_receipt(name, tool)?;
+    // A bin-directory migration keeps the old launchers until every replacement is available.
+    remove_entrypoint_paths(obsolete_entrypoints);
 
     warn_out_of_path(&executable_directory);
 

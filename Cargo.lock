@@ -8166,6 +8166,7 @@ dependencies = [
  "itertools 0.14.0",
  "owo-colors",
  "rustc-hash",
+ "same-file",
  "self-replace",
  "serde_json",
  "thiserror",
@@ -8214,6 +8215,7 @@ dependencies = [
  "uv-virtualenv",
  "uv-warnings",
  "uv-workspace",
+ "windows",
 ]
 
 [[package]]
