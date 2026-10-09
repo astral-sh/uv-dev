@@ -2650,6 +2650,26 @@ fn explicit_roots_pylock_conflicts_use_selected_python_domain() -> Result<()> {
         .success();
 
     uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "app", "--group", "dev", "--format", "pylock.toml",
+        "--no-header", "--preview-features", "package-conflicts",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "legacy"
+    marker = "python_full_version < '3.13'"
+    directory = { path = "legacy", editable = true }
+
+    [[packages]]
+    name = "shared"
+    marker = "python_full_version >= '3.13'"
+    directory = { path = "shared", editable = true }
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
         "--frozen", "--offline", "--package", "shared", "--group", "dev", "--format", "pylock.toml",
         "--no-header", "--preview-features", "package-conflicts",
     ]), @r#"
