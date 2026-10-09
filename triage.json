@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 7538,
+        "title": "\"uv run\" runs resolve too much",
+        "url": "https://github.com/astral-sh/uv/issues/7538",
+        "state": "closed",
+        "reason": "Closest historical symptom: a shebang-driven script repeatedly displayed the same resolver message. Maintainer logs demonstrated resolution from cached responses, and comments explained HTTP cache expiry. That report concerns slow execution in uv 0.4/0.5; this report asks whether the message proves network access."
+      },
+      {
+        "kind": "issue",
+        "number": 9688,
+        "title": "Feat: Create a cached lock file for `uv run` with scripts",
+        "url": "https://github.com/astral-sh/uv/issues/9688",
+        "state": "closed",
+        "reason": "Follow-up to astral-sh/uv#7538 requesting avoidance of repeated resolution and network dependence. Comments discuss --offline and script locking. It was closed by astral-sh/uv#10136; the new report does not establish that locked dependency reuse failed."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10136,
+        "title": "Respect PEP 723 script lockfiles in uv run",
+        "url": "https://github.com/astral-sh/uv/pull/10136",
+        "state": "merged",
+        "reason": "Merged on 2025-01-08, this makes uv run reuse existing script lockfiles and closes astral-sh/uv#9688. It supports recommending explicit script locking and predates uv 0.12.21. No lockfile or regression is reported here."
+      },
+      {
+        "kind": "issue",
+        "number": 13863,
+        "title": "Cached venv in script mode",
+        "url": "https://github.com/astral-sh/uv/issues/13863",
+        "state": "closed",
+        "reason": "Related support discussion about executable scripts appearing to recreate environments. A maintainer confirms environment caching and recommends verbose output to observe reuse. Environment reuse differs from HTTP metadata caching, so this does not establish whether the reporter's invocation makes network requests."
+      }
+    ],
+    "search_scope": "Separated the recurring progress message from the question about Internet access, with uv run --script, the shebang, and uv 0.12.21 as context. Used authenticated gh searches across open and closed issues for the exact message, script/internet/network/every, and uv run/offline; then searched conceptually for repeated resolution, cached environments, HTTP caching, and PEP 723 locking without platform or version restrictions. Searched historical fixes and open, closed, and merged PRs. PR keyword searches returned no matches and PR-filtered API searches returned issue-only results, limiting coverage; supplemented these with issue timelines, direct PR inspection, and screening 100 recently updated PRs across all states. Followed astral-sh/uv#7538 through astral-sh/uv#9688 and astral-sh/uv#6318, inspecting astral-sh/uv#10123, astral-sh/uv#10135, and astral-sh/uv#10136. Ruled out astral-sh/uv#12234 because it reports confirmed Git traffic despite --offline; neither condition appears here. astral-sh/uv#15454 and astral-sh/uv#10380 request cache-first/offline-fallback capabilities, while astral-sh/uv#21066 and astral-sh/uv#22360 concern interpreter selection or caching. Also checked source at the reported release commit and current documentation."
+  },
+  "type": "question",
+  "type_reason": "The reporter asks what a progress message means, without reporting observed network requests, failure, or a requested behavior change. Source at uv 0.12.21 confirms that the message identifies resolver activity and that satisfied script environments can be reused. Resolution can also use cached metadata. No incorrect behavior or regression is established. The historical discussions address performance and locking capabilities rather than the same demonstrated defect or request.",
+  "summary": "astral-sh/uv#7538 and astral-sh/uv#9688 discuss repeated resolution and caching; astral-sh/uv#10136 implements script lockfile reuse; astral-sh/uv#13863 confirms environment caching. The progress message alone does not establish network access. The requested handoff README could not be updated because /home/runner/work/_temp/issue-context/README.md is on a read-only filesystem. No checkout or GitHub changes were made.",
+  "draft_response": "Not necessarily. `Resolving dependencies` is a resolver progress message; it does not mean a network request occurred. uv can use cached metadata and reuse an existing script environment. When needed metadata is missing or its HTTP cache entry has expired, uv may contact the package index.\n\nTo disable uv's network access, use `uv run --offline --script example.py`, or add `--offline` to your shebang. Python and the required dependencies/data must already be available locally. This does not restrict network access by the script itself.\n\nFor reproducible dependencies, run `uv lock --script example.py`; subsequent runs reuse `example.py.lock`. You can inspect cache use and requests with `uv run -v --script example.py`. To investigate why your script resolves on every run, we'd need its dependency metadata, relevant uv settings, and whether it has a lockfile."
+}
