@@ -206,6 +206,9 @@ fn script_identifier(value: &str) -> Result<Identifier, String> {
         ));
     }
     let identifier = Identifier::from_str(value).map_err(|error| error.to_string())?;
+    if value == "__debug__" {
+        return Err("Python constant `__debug__` cannot be assigned".to_owned());
+    }
     if matches!(
         value,
         "False"
@@ -573,6 +576,7 @@ extra_c = ["c"]
             "example:main[extra]",
             "example:main:other",
             "example:class",
+            "example:__debug__",
             "example.async:main",
             "example:méthode",
         ] {

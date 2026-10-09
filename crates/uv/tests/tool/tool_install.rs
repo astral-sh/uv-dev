@@ -53,45 +53,78 @@ fn tool_install_git_path(bin_dir: &ChildPath) -> OsString {
     std::env::join_paths(paths).unwrap()
 }
 
-/// Install and execute console scripts from both generated wheels and built source distributions.
+/// Install and execute console scripts from a generated wheel.
 #[test]
-fn tool_install_packse_console_scripts() {
+fn tool_install_packse_console_scripts_wheel() {
     let server = PackseServer::new("tools/console-scripts.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
 
-    allow_duplicates! {
-        for binary_option in ["--no-build-package", "--no-binary-package"] {
-            let context = uv_test::test_context!("3.12")
-                .with_filtered_exe_suffix()
-                .with_tool_dirs();
-            let bin_dir = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("packse-tool")
+        .arg("--index-url").arg(server.index_url())
+        .arg("--no-build-package").arg("packse-tool")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + packse-tool==1.2.3
+    Installed 2 executables: packse-alias, packse-tool
+    ");
 
-            uv_snapshot!(context.filters(), context.tool_install()
-                .arg("packse-tool")
-                .arg("--index-url")
-                .arg(server.index_url())
-                .arg(binary_option)
-                .arg("packse-tool")
-                .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Installed 1 package in [TIME]
-             + packse-tool==1.2.3
-            Installed 2 executables: packse-alias, packse-tool
-            ");
+    let executable = bin_dir.child(format!("packse-tool{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(Command::new(executable.path()).arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    packse-tool 1.2.3
+    ");
+    let alias = bin_dir.child(format!("packse-alias{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(Command::new(alias.path()).arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    packse-tool 1.2.3
+    ");
+}
 
-            for script in ["packse-tool", "packse-alias"] {
-                let executable = bin_dir.child(format!("{script}{}", std::env::consts::EXE_SUFFIX));
-                uv_snapshot!(Command::new(executable.path())
-                    .arg("--version"), @"
-                exit_code: 0 (success)
-                ----- stdout -----
-                packse-tool 1.2.3
-                ");
-            }
-        }
-    }
+/// Install and execute console scripts from a built source distribution.
+#[test]
+fn tool_install_packse_console_scripts_source() {
+    let server = PackseServer::new("tools/console-scripts.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("packse-tool")
+        .arg("--index-url").arg(server.index_url())
+        .arg("--no-binary-package").arg("packse-tool")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + packse-tool==1.2.3
+    Installed 2 executables: packse-alias, packse-tool
+    ");
+
+    let executable = bin_dir.child(format!("packse-tool{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(Command::new(executable.path()).arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    packse-tool 1.2.3
+    ");
+    let alias = bin_dir.child(format!("packse-alias{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(Command::new(alias.path()).arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    packse-tool 1.2.3
+    ");
 }
 
 /// A callable named print must not shadow output from itself or another generated callable.
