@@ -9,7 +9,7 @@ use uv_configuration::BuildOptions;
 use uv_distribution::{DistributionDatabase, LocalWheel};
 use uv_distribution_types::{
     BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, Hashed, Identifier, Name,
-    RemoteSource, Resolution,
+    RemoteSource, Resolution, SourceDist,
 };
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
@@ -127,6 +127,11 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
                         debug!(
                             "Allowing build for first-party or editable source distribution: {dist}"
                         );
+                    } else if self.database.client().unmanaged.has_checksum_authority()
+                        && matches!(dist, SourceDist::Registry(_) | SourceDist::DirectUrl(_))
+                    {
+                        // Reauthorize cached remote builds before the builder's no-build guard.
+                        debug!("Checking an authorized cached source wheel for {dist}");
                     } else {
                         return Err(Error::NoBuild(dist.name().clone()));
                     }
