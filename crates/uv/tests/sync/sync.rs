@@ -18,6 +18,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
+use uv_test::packse::scenario::Scenario;
 use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 
 use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
@@ -10090,6 +10091,211 @@ fn sync_transitive_extra_conflict_distinct_sources() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Extra `b` and group `dev` are incompatible with the declared conflicts: {`child[b]`, `project:dev`}
+    ");
+    Ok(())
+}
+
+/// Registry dependency version guards select only one transitive extra activation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_transitive_extra_conflict_registry_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "export-extra-conflict-registry-forks"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.gateway.versions."1"]
+        requires = ["bridge"]
+        sdist = false
+
+        [packages.bridge.versions."1"]
+        requires = ["child[a]"]
+        sdist = false
+
+        [packages.bridge.versions."2"]
+        requires = ["child[b]"]
+        sdist = false
+
+        [packages.left.versions."1"]
+        sdist = false
+
+        [packages.right.versions."1"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["gateway", "child"]
+
+        [project.optional-dependencies]
+        first = ["bridge==1"]
+        second = ["bridge==2"]
+
+        [tool.uv]
+        conflicts = [
+            [{ extra = "first" }, { extra = "second" }],
+            [{ package = "child", extra = "a" }, { package = "child", extra = "b" }],
+        ]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = ["left"]
+        b = ["right"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--frozen", "--extra", "first", "--no-install-workspace", "--dry-run"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + bridge==1
+     + gateway==1
+     + left==1
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--frozen", "--extra", "second", "--no-install-workspace", "--dry-run"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 3 packages
+    Would install 3 packages
+     + bridge==2
+     + gateway==1
+     + right==1
+    ");
+    Ok(())
+}
+
+/// Registry edges still activate workspace projects before package-conflict validation.
+#[test]
+fn sync_registry_dependency_activates_workspace_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "registry-workspace-conflict"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.gateway.versions."1"]
+        requires = ["child"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["gateway"]
+
+        [tool.uv]
+        conflicts = [[{ package = "project" }, { package = "child" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "package-conflicts", "--no-install-workspace"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    Ok(())
+}
+
+/// Scoped overrides can add an empty conflicting extra to an otherwise dependency-free root.
+#[test]
+fn sync_scoped_override_adds_conflicting_empty_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "scoped-empty-conflicting-extra"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.child.versions."1"]
+        extras = { feature = [] }
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [dependency-groups]
+        dev = ["child"]
+
+        [tool.uv]
+        override-dependencies = [
+            { package = { name = "project", version = "0.1.0" }, dependencies = ["child[feature]"] },
+        ]
+        conflicts = [[{ group = "dev" }, { package = "child", extra = "feature" }]]
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args(["--group", "dev", "--no-install-workspace"]).arg("--index-url").arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
+    ");
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--group", "dev", "--no-install-workspace"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
     ");
     Ok(())
 }

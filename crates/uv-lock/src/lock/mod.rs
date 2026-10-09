@@ -90,6 +90,7 @@ pub(crate) mod export;
 mod inputs;
 mod installable;
 mod map;
+mod reachability;
 mod requirements;
 mod serialize;
 mod tree;
@@ -4612,7 +4613,7 @@ impl Lock {
                         continue;
                     }
                     if allow_missing_package_metadata {
-                        if !Self::package_satisfies_requirement(package, &requirement, root)? {
+                        if !package.id.satisfies_requirement(&requirement, root)? {
                             continue;
                         }
                         let is_bare_registry_requirement = matches!(
@@ -5063,27 +5064,6 @@ impl Lock {
         Ok(false)
     }
 
-    /// Match a requirement's version and any explicitly declared source.
-    fn package_satisfies_requirement(
-        package: &Package,
-        requirement: &Requirement,
-        root: &Path,
-    ) -> Result<bool, LockError> {
-        let source_matches = matches!(
-            requirement.source,
-            RequirementSource::Registry { index: None, .. }
-        ) || package
-            .id
-            .source
-            .satisfies_requirement_source(&requirement.source, root)?;
-        let version_matches = requirement
-            .source
-            .version_specifiers()
-            .zip(package.id.version.as_ref())
-            .is_none_or(|(specifiers, version)| specifiers.contains(version));
-        Ok(source_matches && version_matches)
-    }
-
     /// Apply dependency policies before flattening recursive self-requirements.
     ///
     /// Groups use only global overrides and are not flattened, but exclusions still use the
@@ -5347,8 +5327,7 @@ impl Lock {
                         let requirement_marker =
                             requirement_context.requirement_marker(requirement.marker);
                         for dependency in self.packages_for_name(&requirement.name) {
-                            if !Self::package_satisfies_requirement(dependency, &requirement, root)?
-                            {
+                            if !dependency.id.satisfies_requirement(&requirement, root)? {
                                 continue;
                             }
                             // A bare registry declaration cannot authorize a stale external tree
@@ -5574,7 +5553,7 @@ impl Lock {
         }
         for requirement in root_requirements {
             for package in self.packages_for_name(&requirement.name) {
-                if !Self::package_satisfies_requirement(package, requirement, root)? {
+                if !package.id.satisfies_requirement(requirement, root)? {
                     continue;
                 }
                 let Some(marker) = self.root_requirement_marker(requirement, package) else {
@@ -7411,10 +7390,10 @@ impl Package {
                 Some(&self.metadata.requires_dist)
             }
         };
-        let Some(requirements) = requirements.filter(|requirements| !requirements.is_empty())
-        else {
+        let Some(requirements) = requirements else {
             return Ok(None);
         };
+        let had_requirements = !requirements.is_empty();
         let requirements = Lock::preprocess_requirements(
             &self.id.name,
             self.id.version.as_ref(),
@@ -7422,6 +7401,9 @@ impl Package {
             context,
             modifiers,
         );
+        if !had_requirements && requirements.is_empty() {
+            return Ok(None);
+        }
         requirements
             .into_iter()
             .map(|mut requirement| {
@@ -7631,6 +7613,26 @@ pub(crate) struct PackageId {
 }
 
 impl PackageId {
+    /// Match a requirement's version and any explicitly declared source.
+    fn satisfies_requirement(
+        &self,
+        requirement: &Requirement,
+        root: &Path,
+    ) -> Result<bool, LockError> {
+        let source_matches = matches!(
+            requirement.source,
+            RequirementSource::Registry { index: None, .. }
+        ) || self
+            .source
+            .satisfies_requirement_source(&requirement.source, root)?;
+        let version_matches = requirement
+            .source
+            .version_specifiers()
+            .zip(self.version.as_ref())
+            .is_none_or(|(specifiers, version)| specifiers.contains(version));
+        Ok(source_matches && version_matches)
+    }
+
     fn from_annotated_dist(annotated_dist: &AnnotatedDist, root: &Path) -> Result<Self, LockError> {
         // Identify the source of the package.
         let source = Source::from_resolved_dist(&annotated_dist.dist, root)?;
@@ -9300,7 +9302,7 @@ impl Dependency {
         root: &Path,
     ) -> Result<(MarkerTree, BTreeMap<ExtraName, MarkerTree>), LockError> {
         let fallback = || {
-            let marker = self.complexified_marker.pep508();
+            let marker = self.complexified_marker.combined();
             Ok((
                 marker,
                 self.extra
@@ -9318,23 +9320,8 @@ impl Dependency {
         let mut extras = BTreeMap::<ExtraName, MarkerTree>::new();
         for requirement in requirements {
             if requirement.name != *self.package_name()
-                || requirement
-                    .source
-                    .version_specifiers()
-                    .zip(self.package_id.version.as_ref())
-                    .is_some_and(|(specifiers, version)| !specifiers.contains(version))
+                || !self.package_id.satisfies_requirement(requirement, root)?
             {
-                continue;
-            }
-            // An unqualified registry declaration can inherit a direct source from another root.
-            let source_matches = match &requirement.source {
-                RequirementSource::Registry { index: None, .. } => true,
-                source => self
-                    .package_id
-                    .source
-                    .satisfies_requirement_source(source, root)?,
-            };
-            if !source_matches {
                 continue;
             }
             matched = true;

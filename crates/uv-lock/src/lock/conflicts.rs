@@ -1,14 +1,13 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 use either::Either;
-use rustc_hash::FxHashMap;
 use uv_configuration::{DependencyGroupsWithDefaults, ExtrasSpecification};
-use uv_normalize::ExtraName;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, ResolverMarkerEnvironment};
 
-use crate::lock::{DependencyContext, LockErrorKind, PackageIndex};
-use crate::{Installable, InstallableRootKind, Lock, LockError, implicit_constraints_marker};
+use crate::lock::reachability::ConflictRequests;
+use crate::lock::{DependencyContext, LockErrorKind};
+use crate::{Installable, InstallableRootKind, LockError, implicit_constraints_marker};
 
 /// Return the conditions under which selected packages, extras, and groups are requested.
 ///
@@ -25,12 +24,7 @@ pub fn activated_conflicts<'lock>(
         lock.requires_python.to_marker_tree(),
         lock.supported_environments(),
     );
-    let mut requests = ConflictRequests {
-        lock,
-        marker_environment,
-        queue: VecDeque::new(),
-        markers: FxHashMap::default(),
-    };
+    let mut requests = ConflictRequests::new(lock);
     let mut activated = BTreeMap::<ConflictItem, MarkerTree>::new();
     for (name, kind) in target
         .roots()
@@ -48,7 +42,7 @@ pub fn activated_conflicts<'lock>(
         let index = lock.by_id[&package.id];
         if kind == InstallableRootKind::Production && groups.prod() {
             activated.insert(ConflictItem::from(name.clone()), root_marker);
-            requests.push(index, None, root_marker);
+            requests.push(requests.root, index, None, root_marker);
             let conflict_extras = lock
                 .conflicts()
                 .iter()
@@ -65,7 +59,11 @@ pub fn activated_conflicts<'lock>(
                     .chain(package.metadata.provides_extra.iter())
                     .chain(conflict_extras),
             ) {
-                requests.push(index, Some(extra.clone()), root_marker);
+                activated.insert(
+                    ConflictItem::from((name.clone(), extra.clone())),
+                    root_marker,
+                );
+                requests.push(requests.root, index, Some(extra.clone()), root_marker);
             }
         }
         for (group, dependencies) in &package.dependency_groups {
@@ -85,9 +83,19 @@ pub fn activated_conflicts<'lock>(
             for dependency in dependencies {
                 let (marker, extras) =
                     dependency.activation(requirements.as_deref(), target.install_path())?;
-                requests.push(dependency.index, None, root_marker.and(marker));
+                requests.push(
+                    requests.root,
+                    dependency.index,
+                    None,
+                    root_marker.and(marker),
+                );
                 for (extra, marker) in extras {
-                    requests.push(dependency.index, Some(extra), root_marker.and(marker));
+                    requests.push(
+                        requests.root,
+                        dependency.index,
+                        Some(extra),
+                        root_marker.and(marker),
+                    );
                 }
             }
         }
@@ -107,35 +115,24 @@ pub fn activated_conflicts<'lock>(
             .filter(|(group, _)| target.includes_group(None, group, groups))
             .flat_map(|(_, requirements)| requirements),
     ) {
-        for package in lock
-            .packages()
-            .iter()
-            .filter(|package| package.name() == &requirement.name)
-        {
+        for package in lock.packages_for_name(&requirement.name) {
             let Some(marker) = lock.root_requirement_marker(requirement, package) else {
                 continue;
             };
             let index = lock.by_id[&package.id];
-            requests.push(index, None, root_marker.and(marker));
+            requests.push(requests.root, index, None, root_marker.and(marker));
             for extra in &requirement.extras {
-                requests.push(index, Some(extra.clone()), root_marker.and(marker));
+                requests.push(
+                    requests.root,
+                    index,
+                    Some(extra.clone()),
+                    root_marker.and(marker),
+                );
             }
         }
     }
-    while let Some((index, extra, parent_marker)) = requests.queue.pop_front() {
+    while let Some((index, extra, parent)) = requests.queue.pop_front() {
         let package = lock.package(index);
-        if groups.prod() && lock.is_workspace_package(package) {
-            activated
-                .entry(ConflictItem::from(package.name().clone()))
-                .and_modify(|marker| *marker = marker.or(parent_marker))
-                .or_insert(parent_marker);
-        }
-        if let Some(extra) = &extra {
-            activated
-                .entry(ConflictItem::from((package.name().clone(), extra.clone())))
-                .and_modify(|marker| *marker = marker.or(parent_marker))
-                .or_insert(parent_marker);
-        }
         let requirements = package.dependency_requirements(
             extra
                 .as_ref()
@@ -158,52 +155,38 @@ pub fn activated_conflicts<'lock>(
         for dependency in dependencies {
             let (marker, extras) =
                 dependency.activation(requirements.as_deref(), target.install_path())?;
-            requests.push(dependency.index, None, parent_marker.and(marker));
+            requests.push(parent, dependency.index, None, marker);
             for (extra, marker) in extras {
-                requests.push(dependency.index, Some(extra), parent_marker.and(marker));
+                requests.push(parent, dependency.index, Some(extra), marker);
             }
         }
     }
-    Ok(activated)
-}
-
-struct ConflictRequests<'lock, 'env> {
-    lock: &'lock Lock,
-    queue: VecDeque<(PackageIndex, Option<ExtraName>, MarkerTree)>,
-    markers: FxHashMap<(PackageIndex, Option<ExtraName>), MarkerTree>,
-    marker_environment: Option<&'env ResolverMarkerEnvironment>,
-}
-
-impl ConflictRequests<'_, '_> {
-    fn push(&mut self, index: PackageIndex, extra: Option<ExtraName>, marker: MarkerTree) {
-        let package = self.lock.package(index);
-        let marker = if package.fork_markers.is_empty() {
-            marker
-        } else {
-            marker.and(
-                package
-                    .fork_markers
-                    .iter()
-                    .fold(MarkerTree::FALSE, |combined, fork| {
-                        combined.or(fork.pep508())
-                    }),
-            )
-        };
-        if marker.is_false()
-            || self
-                .marker_environment
-                .is_some_and(|environment| !marker.evaluate(environment.markers(), &[]))
+    let known_conflicts = activated
+        .iter()
+        .map(|(item, marker)| (item.clone(), *marker))
+        .collect();
+    for (index, extra, parent_marker) in requests.finish(&known_conflicts) {
+        if marker_environment
+            .is_some_and(|environment| !parent_marker.evaluate(environment.markers(), &[]))
         {
-            return;
+            continue;
         }
-        let combined = self
-            .markers
-            .entry((index, extra.clone()))
-            .or_insert(MarkerTree::FALSE);
-        let expanded = combined.or(marker);
-        if expanded != *combined {
-            *combined = expanded;
-            self.queue.push_back((index, extra, expanded));
+        let package = lock.package(index);
+        if groups.prod() && lock.is_workspace_package(package) {
+            activated
+                .entry(ConflictItem::from(package.name().clone()))
+                .and_modify(|marker| *marker = marker.or(parent_marker))
+                .or_insert(parent_marker);
+        }
+        if let Some(extra) = &extra {
+            activated
+                .entry(ConflictItem::from((package.name().clone(), extra.clone())))
+                .and_modify(|marker| *marker = marker.or(parent_marker))
+                .or_insert(parent_marker);
         }
     }
+    activated.retain(|_, marker| {
+        marker_environment.is_none_or(|environment| marker.evaluate(environment.markers(), &[]))
+    });
+    Ok(activated)
 }
