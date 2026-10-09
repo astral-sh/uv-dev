@@ -330,6 +330,7 @@ async fn do_lock(
     // Collect the requirements, etc.
     let members = target.members();
     let packages = target.packages();
+    let member_group_metadata = target.member_group_metadata()?;
     let required_members = target.required_members();
     let workspace_default_groups = match target {
         LockTarget::Workspace(workspace) => {
@@ -474,7 +475,7 @@ async fn do_lock(
             conflicts.expand_transitive_group_includes(package, groups);
         }
 
-        for _ in 0..workspace.packages().len() {
+        loop {
             let initial_conflict_count = conflicts.iter().count();
             for (package, member) in workspace.packages() {
                 if let Some(groups) = &member.pyproject_toml().dependency_groups {
@@ -826,6 +827,7 @@ async fn do_lock(
             &requirements,
             &dependency_groups,
             &workspace_group_metadata,
+            &member_group_metadata,
             workspace_default_groups.as_ref(),
             &constraints,
             &overrides,
@@ -1058,7 +1060,7 @@ async fn do_lock(
                     .collect(),
             )
             .with_workspace_default_groups(workspace_default_groups)
-            .with_member_group_metadata(packages)?
+            .with_member_group_metadata(member_group_metadata)
             .with_workspace_group_metadata(workspace_group_metadata);
 
             let lock = if let Some(recorder) = recorder {

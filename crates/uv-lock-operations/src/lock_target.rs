@@ -17,7 +17,7 @@ use uv_distribution_types::{
     Index, IndexLocations, MinimumLibcVersion, NameRequirementSpecification, Requirement,
     RequiresPython,
 };
-use uv_lock::Lock;
+use uv_lock::{GroupMetadata, Lock};
 use uv_normalize::{GroupName, PackageName};
 use uv_pep508::RequirementOrigin;
 use uv_pypi_types::{Conflicts, SupportedEnvironments, VerbatimParsedUrl};
@@ -226,6 +226,40 @@ impl<'lock> LockTarget<'lock> {
                 &EMPTY
             }
         }
+    }
+
+    /// Collect group metadata with the same workspace-aware expansion used during resolution.
+    pub(crate) fn member_group_metadata(
+        self,
+    ) -> Result<BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>, DependencyGroupError>
+    {
+        let Self::Workspace(workspace) = self else {
+            return Ok(BTreeMap::new());
+        };
+        let mut metadata = BTreeMap::new();
+        for (name, member) in workspace.packages() {
+            let groups = FlatDependencyGroups::from_workspace(
+                member.root(),
+                member.pyproject_toml(),
+                workspace,
+            )?
+            .into_iter()
+            .filter_map(|(group, flat)| {
+                flat.requires_python.map(|requires_python| {
+                    (
+                        group,
+                        GroupMetadata {
+                            requires_python: Some(requires_python),
+                        },
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+            if !groups.is_empty() {
+                metadata.insert(name.clone(), groups);
+            }
+        }
+        Ok(metadata)
     }
 
     /// Return the set of required workspace members, i.e., those that are required by other
