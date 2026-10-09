@@ -52,7 +52,7 @@ fn run_path_rejects_unjoinable_project_environment() -> Result<()> {
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: environment:base
-    error: Failed to construct `PATH` for command: cannot include directory `environment:base/[BIN]`
+    error: Failed to construct `PATH` for command: cannot include directory `[TEMP_DIR]/environment:base/[BIN]`
       cause: path segment contains separator `:`
     ");
 
@@ -110,7 +110,7 @@ fn run_path_rejects_unjoinable_ephemeral_environment() -> Result<()> {
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
     Installed 1 package in [TIME]
-    error: Failed to construct `PATH` for command: cannot include directory `cache:ephemeral/builds-v0/[TMP]/[BIN]`
+    error: Failed to construct `PATH` for command: cannot include directory `[CACHE_DIR]/builds-v0/[TMP]/[BIN]`
       cause: path segment contains separator `:`
     ");
 
