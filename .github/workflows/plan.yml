@@ -225,7 +225,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           jq --null-input --raw-output --argjson changes "$CHANGES" --argjson labels "$LABELS" --argjson on_main "$ON_MAIN" --arg repository "$REPOSITORY" --arg event_name "$EVENT_NAME" --arg head_repository "$HEAD_REPOSITORY" --arg base_ref "$BASE_REF" '
-            def has_label($label): ($labels // []) | index($label) != null;
+            def has_label($label): ($labels // []) | map(ascii_downcase) | index($label) != null;
 
             ((has_label("test:skip") | not) and (has_label("build:skip") | not) and (has_label("build:skip-release") | not) and ($changes."release-build-changed" or has_label("build:release"))) as $build_release_binaries
             | {
