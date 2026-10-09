@@ -15885,7 +15885,7 @@ fn reject_cached_foreign_python_host_platform() {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel).env_remove("_PYTHON_HOST_PLATFORM"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
