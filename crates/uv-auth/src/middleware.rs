@@ -388,9 +388,11 @@ impl Middleware for AuthMiddleware {
         let auth_policy = self.indexes.auth_policy_for(request.url());
         trace!("Handling request for `{url}` with authentication policy {auth_policy}");
 
-        let credentials: Option<Arc<Authentication>> = if matches!(auth_policy, AuthPolicy::Never) {
-            None
-        } else {
+        if matches!(auth_policy, AuthPolicy::Never) {
+            return next.run(request, extensions).await;
+        }
+
+        let credentials: Option<Arc<Authentication>> = {
             if let Some(request_credentials) = request_credentials {
                 return self
                     .complete_request_with_request_credentials(
@@ -2825,6 +2827,34 @@ mod tests {
             "Requests should succeed if unauthenticated requests can succeed"
         );
 
+        Ok(())
+    }
+
+    /// Upload clients skip credential discovery when their index explicitly disables authentication.
+    #[test(tokio::test)]
+    async fn test_auth_policy_never_for_authenticated_upload_client() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(|request: &wiremock::Request| !request.headers.contains_key("authorization"))
+            .respond_with(ResponseTemplate::new(201))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let url = Url::parse(&server.uri())?;
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_only_authenticated(true)
+                    .with_indexes(indexes_for(&url, AuthPolicy::Never)),
+            )
+            .build();
+        assert_eq!(
+            client.post(url).body("distribution").send().await?.status(),
+            201
+        );
         Ok(())
     }
 
