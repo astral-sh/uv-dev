@@ -2976,7 +2976,7 @@ fn multiple_sources_index_disjoint_extras() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
-        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }]
+        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -3121,7 +3121,7 @@ fn multiple_sources_index_disjoint_groups() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
-        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }]
+        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -3265,7 +3265,7 @@ fn multiple_sources_index_disjoint_extras_with_extra() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
-        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }]
+        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -3435,7 +3435,7 @@ fn multiple_sources_index_disjoint_extras_with_marker() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
-        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }]
+        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -5293,7 +5293,7 @@ fn jinja_no_conflict_markers1() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
-        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }]
+        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -5459,7 +5459,7 @@ fn jinja_no_conflict_markers2() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
-        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }]
+        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -9662,7 +9662,7 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
 
         [options]
         exclude-newer = "2025-02-06T00:00:00Z"
-        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu", explicit = true }]
+        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }]
 
         [[package]]
         name = "filelock"
@@ -10075,7 +10075,7 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
 
         [options]
         exclude-newer = "2025-02-06T00:00:00Z"
-        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu", explicit = true }]
+        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }]
 
         [[package]]
         name = "filelock"

@@ -1837,15 +1837,19 @@ mod test {
             ),
             (
                 "mailto:ferris@example.com?sig=one&X-Amz-Credential=two&X-Amz-Security-Token=three&X-Amz-Signature=four&token=kept#fragment",
-                "mailto:ferris@example.com?sig=****&X-Amz-Credential=****&X-Amz-Security-Token=****&X-Amz-Signature=****&token=kept#fragment",
+                "mailto:ferris@example.com?sig=****&X-Amz-Credential=****&X-Amz-Security-Token=****&X-Amz-Signature=****&token=****#fragment",
             ),
             (
                 "mailto:ferris@example.com?x-amz%2dsignature=sentinel&safe=value",
                 "mailto:ferris@example.com?x-amz-signature=****&safe=value",
             ),
             (
-                "mailto:ferris@example.com?token=kept#fragment",
-                "mailto:ferris@example.com?token=kept#fragment",
+                "mailto:ferris@example.com?token=sentinel#fragment",
+                "mailto:ferris@example.com?token=****#fragment",
+            ),
+            (
+                "mailto:ferris@example.com?channel=kept#fragment",
+                "mailto:ferris@example.com?channel=kept#fragment",
             ),
         ] {
             let url = url::Url::parse(input).unwrap();

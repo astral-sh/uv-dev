@@ -6274,6 +6274,20 @@ struct ResolverIndexWire {
 }
 
 impl ResolverIndex {
+    fn normalize(indexes: &mut [Self]) {
+        // Explicit indexes are selected by name, independently of implicit index priority.
+        // Stable sorting retains declaration order for repeated URLs with different policies.
+        indexes.sort_by(|left, right| {
+            left.explicit.cmp(&right.explicit).then_with(|| {
+                if left.explicit {
+                    left.url.cmp(&right.url)
+                } else {
+                    (!left.find_links, !left.default).cmp(&(!right.find_links, !right.default))
+                }
+            })
+        });
+    }
+
     fn from_index(index: &Index, find_links: bool, root: &Path) -> Result<Self, LockError> {
         let url = match index.url() {
             IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
@@ -6336,6 +6350,7 @@ impl ResolverIndex {
             }
         }
         indexes.reverse();
+        Self::normalize(&mut indexes);
         Ok(indexes)
     }
 }
@@ -6691,10 +6706,12 @@ impl TryFrom<LockWire> for Lock {
             .map(|simplified_marker| simplified_marker.into_marker(&wire.requires_python))
             .collect();
         let mut options_wire = wire.options;
-        // Older policies recorded defaults at their definition positions. Their priority is fixed.
-        options_wire
+        let mut indexes = options_wire
             .indexes
-            .sort_by_key(|index| (!index.find_links, !index.default));
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        ResolverIndex::normalize(&mut indexes);
         if options_wire.exclude_newer.exclude_newer_span.is_some() {
             options_wire.exclude_newer.exclude_newer = None;
         }
@@ -6704,7 +6721,7 @@ impl TryFrom<LockWire> for Lock {
             fork_strategy: options_wire.fork_strategy,
             minimum_libc_version: options_wire.minimum_libc_version,
             exclude_newer: options_wire.exclude_newer.into(),
-            indexes: options_wire.indexes.into_iter().map(Into::into).collect(),
+            indexes,
         };
         let lock = Self::new(
             wire.version,

@@ -210,6 +210,9 @@ impl DisplaySafeUrl {
 
     /// Remove sensitive query parameters while retaining routing parameters and their order.
     pub fn remove_sensitive_query_parameters(&mut self) {
+        let Some(query) = self.0.query() else {
+            return;
+        };
         if !self
             .0
             .query_pairs()
@@ -217,16 +220,17 @@ impl DisplaySafeUrl {
         {
             return;
         }
-        let query = self
-            .0
-            .query_pairs()
-            .filter(|(key, _)| !is_sensitive_query_parameter(key))
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect::<Vec<_>>();
-        self.0.set_query(None);
-        if !query.is_empty() {
-            self.0.query_pairs_mut().extend_pairs(query);
-        }
+        // Decode keys only for classification. Routing values retain their original encoding.
+        let query = query
+            .split('&')
+            .filter(|pair| {
+                !url::form_urlencoded::parse(pair.as_bytes())
+                    .any(|(key, _)| is_sensitive_query_parameter(&key))
+            })
+            .collect::<Vec<_>>()
+            .join("&");
+        self.0
+            .set_query((!query.is_empty()).then_some(query.as_str()));
     }
 
     /// Returns the URL with any credentials removed.
@@ -660,6 +664,17 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://example.com/simple?channel=first&channel=second"
+        );
+    }
+
+    #[test]
+    fn remove_sensitive_query_parameters_preserves_encoding() {
+        let mut url = DisplaySafeUrl::parse("https://example.com/simple?channel=linux/x86_64&%74oken=secret&channel=a%2fb+c&flag&X-Amz-%53ignature=signed")
+            .expect("valid URL");
+        url.remove_sensitive_query_parameters();
+        assert_eq!(
+            url.as_str(),
+            "https://example.com/simple?channel=linux/x86_64&channel=a%2fb+c&flag"
         );
     }
 

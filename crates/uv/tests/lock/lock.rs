@@ -28121,6 +28121,78 @@ fn lock_index_policy_default_position() -> Result<()> {
     Ok(())
 }
 
+/// Named explicit indexes retain their identity when reordered around implicit indexes.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_policy_explicit_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = PackseServer::new("simple/single-package.toml");
+    let second = PackseServer::new("extras/missing-extra.toml");
+    let header = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [tool.uv.sources]
+        a = { index = "first" }
+    "#};
+    let first_index = formatdoc! {r#"
+        [[tool.uv.index]]
+        name = "first"
+        url = "{index}"
+        explicit = true
+    "#, index = first.index_url()};
+    let second_index = formatdoc! {r#"
+        [[tool.uv.index]]
+        name = "second"
+        url = "{index}"
+        explicit = true
+    "#, index = second.index_url()};
+    let implicit_index = indoc! {r#"
+        [[tool.uv.index]]
+        name = "fallback"
+        url = "https://example.invalid/simple"
+    "#};
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&format!(
+        "{header}{first_index}{implicit_index}{second_index}"
+    ))?;
+    context.lock().assert().success();
+    let lock = context.read("uv.lock");
+    pyproject.write_str(&format!(
+        "{header}{second_index}{first_index}{implicit_index}"
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+
+    // Older lockfiles can retain the same explicit policies in declaration order.
+    let mut document = lock.parse::<toml_edit::DocumentMut>()?;
+    let indexes = document["options"]["indexes"]
+        .as_array_mut()
+        .expect("index policies");
+    let mut values = indexes.iter().cloned().collect::<Vec<_>>();
+    values.reverse();
+    indexes.clear();
+    for value in values {
+        indexes.push(value);
+    }
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&document.to_string())?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
 /// Ignored status codes are a set in both current settings and older lockfiles.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -28638,7 +28710,7 @@ fn lock_index_policy_credentials() -> Result<()> {
 
         [[tool.uv.index]]
         name = "signed"
-        url = "https://user:password@example.invalid/simple?token=secret&X-Amz-Credential=credential&X-Amz-Signature=signature&X-Amz-Security-Token=session#secret"
+        url = "https://user:password@example.invalid/simple?channel=linux/x86_64&token=secret&X-Amz-Credential=credential&X-Amz-Signature=signature&X-Amz-Security-Token=session#secret"
         explicit = true
         "#,
     )?;
@@ -28652,7 +28724,7 @@ fn lock_index_policy_credentials() -> Result<()> {
     let lock = context.read("uv.lock");
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(lock.lines().find(|line| line.starts_with("indexes = ")).unwrap_or_default(), @r#"
-        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }, { url = "https://example.invalid/simple", explicit = true }]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }, { url = "https://example.invalid/simple?channel=linux/x86_64", explicit = true }]
         "#);
     });
 
@@ -28667,12 +28739,22 @@ fn lock_index_policy_credentials() -> Result<()> {
 
         [[tool.uv.index]]
         name = "signed"
-        url = "https://other:rotated@example.invalid/simple?token=rotated&X-Amz-Credential=other&X-Amz-Signature=rotated&X-Amz-Security-Token=rotated#rotated"
+        url = "https://other:rotated@example.invalid/simple?channel=linux/x86_64&token=rotated&X-Amz-Credential=other&X-Amz-Signature=rotated&X-Amz-Security-Token=rotated#rotated"
         explicit = true
         "#,
     )?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    pyproject_toml.write_str(&context.read("pyproject.toml").replace(
+        "https://other:rotated@example.invalid/simple?channel=linux/x86_64&token=rotated&X-Amz-Credential=other&X-Amz-Signature=rotated&X-Amz-Security-Token=rotated#rotated",
+        "https://example.invalid/simple?channel=linux/x86_64",
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked").arg("--offline").arg("--no-cache"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -39464,7 +39546,7 @@ fn lock_pytorch_cpu() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
-        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu", explicit = true }]
+        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", explicit = true }]
 
         [manifest]
         constraints = [
@@ -40117,7 +40199,7 @@ fn lock_pytorch_index_preferences() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
-        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu", explicit = true }]
+        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118", explicit = true }]
 
         [[package]]
         name = "filelock"
