@@ -34,6 +34,7 @@ use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::ScriptPath;
+use crate::edit::ProjectEdit;
 
 /// Resolve the project requirements into a lockfile.
 pub async fn lock(
@@ -58,6 +59,7 @@ pub async fn lock(
     preview: Preview,
 ) -> anyhow::Result<ExitStatus> {
     // If necessary, initialize the PEP 723 script.
+    let initialize_script = matches!(&script, Some(ScriptPath::Path(_)));
     let script = match script {
         Some(ScriptPath::Path(path)) => {
             let reporter = PythonDownloadReporter::single(printer);
@@ -159,6 +161,16 @@ pub async fn lock(
     // Initialize any shared state.
     let state = UniversalState::default();
 
+    // Persist newly initialized metadata and its lockfile as one edit.
+    let edit = if initialize_script
+        && matches!(mode, LockMode::Write(_))
+        && let Some(script) = script.as_ref()
+    {
+        Some(ProjectEdit::new([script.path.clone(), target.lock_path()])?)
+    } else {
+        None
+    };
+
     // Perform the lock operation.
     match Box::pin(
         LockOperation::new(
@@ -183,6 +195,13 @@ pub async fn lock(
     .await
     {
         Ok(lock) => {
+            if let Some(edit) = edit {
+                if let Some(script) = script.as_ref() {
+                    script.write(&script.metadata.raw)?;
+                }
+                edit.commit();
+            }
+
             if let Some(frozen_source) = frozen {
                 warn_user!(
                     "The lockfile at `uv.lock` was only checked for validity, not whether it is up-to-date, because {} was provided; use `--check` instead",

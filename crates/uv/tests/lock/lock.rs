@@ -1,5 +1,9 @@
 #[cfg(feature = "test-universal")]
 use std::collections::BTreeMap;
+#[cfg(all(feature = "test-universal", unix))]
+use std::fs::Permissions;
+#[cfg(all(feature = "test-universal", unix))]
+use std::os::unix::fs::PermissionsExt;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use std::process::Command;
 
@@ -38483,6 +38487,14 @@ fn lock_script_initialize() -> Result<()> {
     Resolved in [TIME]
     ");
 
+    assert_snapshot!(context.read("script.py"), @r#"
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = []
+    # ///
+    print('Hello, world!')
+    "#);
+
     let lock = context.read("script.py.lock");
 
     insta::with_settings!({
@@ -38500,6 +38512,156 @@ fn lock_script_initialize() -> Result<()> {
         );
     });
 
+    Ok(())
+}
+
+/// Initializing metadata for a BOM-prefixed script must leave it executable.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_script_initialize_utf8_bom() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str("\u{feff}print('Hello, world!')\n")?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run().arg("--locked").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello, world!
+
+    ----- stderr -----
+    Resolved in [TIME]
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Lock initialization must retain the source encoding even when its bytes are also valid UTF-8.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_script_initialize_encoding_declaration() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str("# coding: latin-1\nprint('é')\n")?;
+    uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    uv_snapshot!(context.python_command().arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Ã©
+    ");
+    insta::assert_snapshot!(context.read("script.py"), @r#"
+    # coding: latin-1
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = []
+    # ///
+    print('é')
+    "#);
+    Ok(())
+}
+
+/// A shebang and second-line encoding cookie retain their physical-line positions.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_script_initialize_shebang_encoding_declaration() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str("#!/usr/bin/env python\r\n# coding: latin-1\r\nprint('é')\r\n")?;
+    uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+    uv_snapshot!(context.python_command().arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Ã©
+    ");
+    insta::assert_snapshot!(context.read("script.py"), @r#"
+    #!/usr/bin/env python
+    # coding: latin-1
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = []
+    # ///
+    print('é')
+    "#);
+    Ok(())
+}
+
+/// Existing metadata immediately after a BOM must be reused without adding a second block.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_script_existing_metadata_utf8_bom() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let contents = format!(
+        "\u{feff}{}",
+        indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+        import importlib.metadata
+        print(importlib.metadata.version("iniconfig"))
+    "#}
+    );
+    context.temp_dir.child("script.py").write_str(&contents)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(context.read("script.py"), contents);
+    uv_snapshot!(context.filters(), context.run().arg("--locked").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    assert_eq!(context.read("script.py"), contents);
+    Ok(())
+}
+
+/// Do not leave an unusable script lockfile behind if metadata cannot be persisted.
+#[cfg(all(feature = "test-universal", unix))]
+#[test]
+fn lock_script_initialize_write_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_str("print('Hello, world!')\n")?;
+    fs_err::set_permissions(script.path(), Permissions::from_mode(0o444))?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved in [TIME]
+    error: failed to create file `[TEMP_DIR]/script.py`: Permission denied (os error 13)
+    ");
+
+    assert_snapshot!(context.read("script.py"), @r#"
+    print('Hello, world!')
+    "#);
+    assert!(!context.temp_dir.child("script.py.lock").exists());
     Ok(())
 }
 
