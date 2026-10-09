@@ -93,7 +93,7 @@ Ok(
                 group_requires_python: {},
                 metadata: PackageMetadata {
                     requires_python: None,
-                    requires_dist: []
+                    requires_dist: [],
                     provides_extra: [],
                     dependency_groups: {},
                 },
@@ -167,7 +167,7 @@ Ok(
                 group_requires_python: {},
                 metadata: PackageMetadata {
                     requires_python: None,
-                    requires_dist: []
+                    requires_dist: [],
                     provides_extra: [],
                     dependency_groups: {},
                 },

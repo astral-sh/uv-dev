@@ -18,6 +18,7 @@ use uv_pypi_types::{ConflictItem, ConflictKindRef, ConflictSet, Conflicts};
 
 use uv_resolver_types::universal_marker::encode_conflict_item;
 
+use crate::Lock;
 pub use crate::lock::export::metadata::{Metadata, PythonReport};
 pub(crate) use crate::lock::export::metadata::{
     MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript, MetadataWorkspace,
@@ -26,7 +27,6 @@ pub(crate) use crate::lock::export::metadata::{
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
 use crate::lock::{LockErrorKind, PackageIndex, Source};
-use crate::Lock;
 use crate::{Installable, InstallableRootKind, LockError, Package};
 
 pub mod cyclonedx_json;
@@ -71,9 +71,7 @@ impl<'lock> ExportableRequirements<'lock> {
     ) -> Result<Self, LockError> {
         target.validate_workspace_resolution(extras, groups, None)?;
         let root_requirements = match virtual_packages {
-            VirtualPackages::Exclude => {
-                Some(target.selected_root_python_requirements(groups)?)
-            }
+            VirtualPackages::Exclude => Some(target.selected_root_python_requirements(groups)?),
             // An SBOM can describe groups with incompatible Python requirements.
             VirtualPackages::Include => None,
         };
