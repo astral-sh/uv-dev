@@ -302,6 +302,41 @@ pub trait Installable<'lock> {
         };
         let mut queue: VecDeque<(PackageIndex, Option<&ExtraName>)> = VecDeque::new();
         let mut reachability = FxHashMap::default();
+        let expand_dependencies = |package: &'lock Package,
+                                   context: DependencyContext<'_>,
+                                   parent_marker: UniversalMarker,
+                                   reachability: &mut FxHashMap<_, _>,
+                                   queue: &mut VecDeque<_>|
+         -> Result<(), LockError> {
+            let requirements = package.dependency_requirements(
+                context,
+                &modifiers,
+                self.install_path(),
+                lock.requires_python(),
+            )?;
+            let selected = selected_conflicts(package, context);
+            for dependency in context.dependencies(package) {
+                let mut marker = parent_marker;
+                marker.and(dependency_marker(
+                    dependency,
+                    requirements.as_deref(),
+                    package,
+                    &selected,
+                )?);
+                if marker.is_false() {
+                    continue;
+                }
+                if add_reachability(reachability, (dependency.index, None), marker) {
+                    queue.push_back((dependency.index, None));
+                }
+                for extra in dependency.extra() {
+                    if add_reachability(reachability, (dependency.index, Some(extra)), marker) {
+                        queue.push_back((dependency.index, Some(extra)));
+                    }
+                }
+            }
+            Ok(())
+        };
 
         for (name, root_kind) in roots
             .iter()
@@ -324,41 +359,15 @@ pub trait Installable<'lock> {
                 }
             }
 
-            for (group, dependencies) in package.resolved_dependency_groups() {
-                if !self.includes_group(Some(package.name()), group, groups) {
-                    continue;
-                }
-                let context = DependencyContext::Group(group);
-                let requirements = package.dependency_requirements(
-                    context,
-                    &modifiers,
-                    self.install_path(),
-                    lock.requires_python(),
-                )?;
-                let selected = selected_conflicts(package, context);
-                for dependency in dependencies {
-                    let mut marker = root_marker;
-                    marker.and(dependency_marker(
-                        dependency,
-                        requirements.as_deref(),
+            for group in package.resolved_dependency_groups().keys() {
+                if self.includes_group(Some(package.name()), group, groups) {
+                    expand_dependencies(
                         package,
-                        &selected,
-                    )?);
-                    if marker.is_false() {
-                        continue;
-                    }
-                    if add_reachability(&mut reachability, (dependency.index, None), marker) {
-                        queue.push_back((dependency.index, None));
-                    }
-                    for extra in dependency.extra() {
-                        if add_reachability(
-                            &mut reachability,
-                            (dependency.index, Some(extra)),
-                            marker,
-                        ) {
-                            queue.push_back((dependency.index, Some(extra)));
-                        }
-                    }
+                        DependencyContext::Group(group),
+                        root_marker,
+                        &mut reachability,
+                        &mut queue,
+                    )?;
                 }
             }
         }
@@ -410,34 +419,13 @@ pub trait Installable<'lock> {
             let parent_marker = reachability[&(index, extra)];
             let package = lock.package(index);
             let context = extra.map_or(DependencyContext::Production, DependencyContext::Extra);
-            let requirements = package.dependency_requirements(
+            expand_dependencies(
+                package,
                 context,
-                &modifiers,
-                self.install_path(),
-                lock.requires_python(),
+                parent_marker,
+                &mut reachability,
+                &mut queue,
             )?;
-            let selected = selected_conflicts(package, context);
-            for dependency in package_dependencies(package, extra) {
-                let mut marker = parent_marker;
-                marker.and(dependency_marker(
-                    dependency,
-                    requirements.as_deref(),
-                    package,
-                    &selected,
-                )?);
-                if marker.is_false() {
-                    continue;
-                }
-                if add_reachability(&mut reachability, (dependency.index, None), marker) {
-                    queue.push_back((dependency.index, None));
-                }
-                for extra in dependency.extra() {
-                    if add_reachability(&mut reachability, (dependency.index, Some(extra)), marker)
-                    {
-                        queue.push_back((dependency.index, Some(extra)));
-                    }
-                }
-            }
         }
 
         let activated =
