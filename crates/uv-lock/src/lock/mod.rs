@@ -895,7 +895,9 @@ impl<'a> LockedDependencyBuilder<'a> {
                     // removing conflict predicates from the generated dependency edge.
                     let mut source_context = UniversalMarker::from_combined(source_marker);
                     source_context.assume_conflict_item(selected);
-                    expected.exclude_conflicting_items(&mut source_context, selected);
+                    expected
+                        .lock
+                        .exclude_conflicting_items(&mut source_context, selected);
                     if source_context.is_false() {
                         continue;
                     }
@@ -2046,19 +2048,6 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
         })
     }
 
-    /// Exclude conflict selections that cannot coexist with the selected item.
-    fn exclude_conflicting_items(&self, marker: &mut UniversalMarker, selected: &ConflictItem) {
-        for conflict_set in self.lock.conflicts.iter() {
-            if conflict_set.iter().any(|conflict| conflict == selected) {
-                for conflict in conflict_set.iter() {
-                    if conflict != selected {
-                        marker.assume_not_conflict_item(conflict);
-                    }
-                }
-            }
-        }
-    }
-
     /// Return selections that cannot coexist with a required conflict item.
     fn conflicting_alternatives(&self, required: &ConflictItem) -> UniversalMarker {
         let mut alternatives = UniversalMarker::FALSE;
@@ -3182,6 +3171,19 @@ impl Lock {
             ConflictMarker::from_relevant_conflicts(self.conflicts(), [marker]),
         ));
         marker
+    }
+
+    /// Exclude conflict selections that cannot coexist with the selected item.
+    fn exclude_conflicting_items(&self, marker: &mut UniversalMarker, selected: &ConflictItem) {
+        for conflict_set in self.conflicts.iter() {
+            if conflict_set.iter().any(|conflict| conflict == selected) {
+                for conflict in conflict_set.iter() {
+                    if conflict != selected {
+                        marker.assume_not_conflict_item(conflict);
+                    }
+                }
+            }
+        }
     }
 
     /// Return the dependency overrides and exclusions recorded in the lockfile.
@@ -9380,15 +9382,7 @@ impl Dependency {
                 |extra| ConflictItem::from((self.package_name().clone(), extra.clone())),
             );
             marker.assume_conflict_item(&requested);
-            for alternative in lock
-                .conflicts()
-                .iter()
-                .filter(|conflicts| conflicts.iter().any(|item| item == &requested))
-                .flat_map(ConflictSet::iter)
-                .filter(|item| *item != &requested)
-            {
-                marker.assume_not_conflict_item(alternative);
-            }
+            lock.exclude_conflicting_items(&mut marker, &requested);
             marker.combined()
         };
         let fallback = || {
