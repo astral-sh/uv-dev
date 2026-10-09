@@ -8,7 +8,7 @@ use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_configuration::{
-    DependencyGroupsWithDefaults, ExtrasSpecificationWithDefaults, InstallOptions,
+    DependencyGroupsWithDefaults, ExportFormat, ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::MarkerTree;
@@ -23,7 +23,7 @@ pub(crate) use crate::lock::export::metadata::{
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
 use crate::lock::reachability::{ConflictRequests, Edge, Node, conflict_marker_reachability};
-use crate::lock::{DependencyContext, LockErrorKind, PackageIndex};
+use crate::lock::{Dependency, DependencyContext, LockErrorKind, PackageIndex};
 use crate::{Installable, InstallableRootKind, LockError, Package, implicit_constraints_marker};
 
 pub mod cyclonedx_json;
@@ -50,12 +50,24 @@ impl<'lock> ExportableRequirements<'lock> {
     /// Generate the set of exportable [`ExportableRequirement`] entries from the given lockfile.
     fn from_lock(
         target: &impl Installable<'lock>,
+        format: ExportFormat,
         prune: &[PackageName],
         extras: &ExtrasSpecificationWithDefaults,
         groups: &DependencyGroupsWithDefaults,
         annotate: bool,
         install_options: &'lock InstallOptions,
     ) -> Result<Self, LockError> {
+        let dependency_marker = |dependency: &Dependency| {
+            let marker = dependency.simplified_marker.as_simplified_marker_tree();
+            match format {
+                ExportFormat::RequirementsTxt | ExportFormat::PylockToml => target
+                    .lock()
+                    .constrain_conflicts(UniversalMarker::from_combined(marker))
+                    .combined(),
+                // An SBOM can include mutually exclusive package and extra selections.
+                ExportFormat::CycloneDX1_5 => marker,
+            }
+        };
         let size_guess = target.lock().packages.len();
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
@@ -161,12 +173,7 @@ impl<'lock> ExportableRequirements<'lock> {
                     dep_index,
                     Edge::Dev {
                         group,
-                        marker: target
-                            .lock()
-                            .constrain_conflicts(UniversalMarker::from_combined(
-                                dep.simplified_marker.as_simplified_marker_tree(),
-                            ))
-                            .combined(),
+                        marker: dependency_marker(dep),
                         dep_extras: target.lock().dependency_extras(dep).collect(),
                     },
                 );
@@ -299,12 +306,7 @@ impl<'lock> ExportableRequirements<'lock> {
                     .get_or_insert_with(|| graph.add_node(Node::Package(dep_dist, None)));
 
                 let dep_extras = target.lock().dependency_extras(dep).collect::<Vec<_>>();
-                let marker = target
-                    .lock()
-                    .constrain_conflicts(UniversalMarker::from_combined(
-                        dep.simplified_marker.as_simplified_marker_tree(),
-                    ))
-                    .combined();
+                let marker = dependency_marker(dep);
                 graph.add_edge(
                     index,
                     dep_index,

@@ -9734,6 +9734,9 @@ fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = ["sortedcontainers==2.3.0"]
 
+        [project.optional-dependencies]
+        foo = ["child"]
+
         [tool.uv.workspace]
         members = ["child"]
 
@@ -9741,9 +9744,13 @@ fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
         conflicts = [
           [
             { package = "project" },
+            { package = "project", extra = "foo" },
             { package = "child" },
           ],
         ]
+
+        [tool.uv.sources]
+        child = { workspace = true }
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -9768,8 +9775,8 @@ fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
 
     context.lock().assert().success();
 
-    // Export with --all-packages to CycloneDX format should succeed as conflict detection is skipped
-    uv_snapshot!(context.filters(), context.export().arg("--format").arg("cyclonedx1.5").arg("--all-packages").arg("--no-hashes"), @r#"
+    // An SBOM includes both sides of these package and extra conflicts.
+    uv_snapshot!(context.filters(), context.export().arg("--format").arg("cyclonedx1.5").arg("--all-packages").arg("--all-extras").arg("--frozen").arg("--no-hashes"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -9867,27 +9874,26 @@ fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
       ]
     }
     ----- stderr -----
-    warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
-    Resolved 4 packages in [TIME]
     warning: `uv export --format=cyclonedx1.5` is experimental and may change without warning. Pass `--preview-features sbom-export` to disable this warning.
     "#);
 
-    // Should fail when exporting to `requirements.txt` or `pylock.toml`as conflict detection is enabled for these formats
-    uv_snapshot!(context.filters(), context.export().arg("--format").arg("requirements-txt").arg("--all-packages"), @"
+    // Installable export formats reject the same conflicting selections.
+    uv_snapshot!(context.filters(), context.export().args([
+        "--format", "requirements-txt", "--all-packages", "--all-extras", "--frozen",
+    ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
-    Resolved 4 packages in [TIME]
-    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    error: Package `child`, extra `foo`, and package `project` are incompatible with the declared conflicts: {child, `project[foo]`, project}
     ");
 
-    uv_snapshot!(context.filters(), context.export().arg("--format").arg("pylock.toml").arg("--all-packages"), @"
+    uv_snapshot!(context.filters(), context.export().args([
+        "--format", "pylock.toml", "--all-packages", "--all-extras", "--frozen",
+    ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    warning: Declaring conflicts for packages (`package = ...`) is experimental and may change without warning. Pass `--preview-features package-conflicts` to disable this warning.
-    Resolved 4 packages in [TIME]
-    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    error: Package `child`, extra `foo`, and package `project` are incompatible with the declared conflicts: {child, `project[foo]`, project}
     ");
+
     Ok(())
 }
 

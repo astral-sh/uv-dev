@@ -17,8 +17,8 @@ use url::Url;
 
 use uv_client::{FileHashError, RegistryClient};
 use uv_configuration::{
-    BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults,
-    InstallOptions,
+    BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExportFormat,
+    ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_filename::{
     BuildTag, DistExtension, ExtensionError, SourceDistExtension, SourceDistFilename,
@@ -784,6 +784,7 @@ impl<'lock> PylockToml {
         // Extract the packages from the lock file.
         let ExportableRequirements(mut nodes) = ExportableRequirements::from_lock(
             target,
+            ExportFormat::PylockToml,
             prune,
             extras,
             dev,
