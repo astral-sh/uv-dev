@@ -797,7 +797,9 @@ impl<'lock> InstallTarget<'lock> {
         Ok(match self.package_selection() {
             Some(PackageSelection::Projects(_)) => {
                 let lock = self.lock();
-                let modifiers = lock.dependency_modifiers()?;
+                let modifiers = marker_env
+                    .map(|_| lock.dependency_modifiers())
+                    .transpose()?;
                 let roots = self.roots().collect::<FxHashSet<_>>();
 
                 // Collect the packages by name for efficient lookup.
@@ -850,14 +852,12 @@ impl<'lock> InstallTarget<'lock> {
                         if !self.includes_group(Some(root_package.name()), group_name, groups) {
                             continue;
                         }
-                        let requirements = root_package.dependency_requirements(
-                            None,
-                            Some(group_name),
-                            &modifiers,
-                        );
+                        let requirements = modifiers.as_ref().and_then(|modifiers| {
+                            root_package.dependency_requirements(None, Some(group_name), modifiers)
+                        });
                         for dependency in dependencies {
                             if marker_env.is_some_and(|marker_env| {
-                                let (marker, _) = dependency.activation(requirements.as_deref());
+                                let marker = dependency.activation_marker(requirements.as_deref());
                                 !marker.evaluate(marker_env.markers(), &[])
                             }) {
                                 continue;
@@ -896,10 +896,12 @@ impl<'lock> InstallTarget<'lock> {
                         continue;
                     };
 
-                    let requirements = package.dependency_requirements(extra, None, &modifiers);
+                    let requirements = modifiers.as_ref().and_then(|modifiers| {
+                        package.dependency_requirements(extra, None, modifiers)
+                    });
                     for dependency in dependencies {
                         if marker_env.is_some_and(|marker_env| {
-                            let (marker, _) = dependency.activation(requirements.as_deref());
+                            let marker = dependency.activation_marker(requirements.as_deref());
                             !marker.evaluate(marker_env.markers(), &[])
                         }) {
                             continue;

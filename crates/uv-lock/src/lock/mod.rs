@@ -9287,50 +9287,34 @@ impl Dependency {
     }
 
     /// Return the conditions under which the effective declarations request this dependency.
-    pub fn activation(
-        &self,
-        requirements: Option<&[Requirement]>,
-    ) -> (MarkerTree, BTreeMap<ExtraName, MarkerTree>) {
-        let fallback = || {
-            let marker = self.complexified_marker.pep508();
-            (
-                marker,
-                self.extra
-                    .iter()
-                    .cloned()
-                    .map(|extra| (extra, marker))
-                    .collect(),
-            )
-        };
+    pub fn activation_marker(&self, requirements: Option<&[Requirement]>) -> MarkerTree {
+        let fallback = self.complexified_marker.pep508();
         let Some(requirements) = requirements else {
-            return fallback();
+            return fallback;
         };
         let mut requirements = requirements
             .iter()
             .filter(|requirement| requirement.name == *self.package_name())
             .peekable();
         if requirements.peek().is_none() {
-            return fallback();
+            return fallback;
         }
-        let mut marker = MarkerTree::FALSE;
-        let mut extras = BTreeMap::<ExtraName, MarkerTree>::new();
-        for requirement in requirements {
-            marker = marker.or(requirement.marker);
-            for extra in &requirement.extras {
-                extras
-                    .entry(extra.clone())
-                    .and_modify(|marker| *marker = marker.or(requirement.marker))
-                    .or_insert(requirement.marker);
-            }
-        }
+        let mut marker = requirements
+            .clone()
+            .fold(MarkerTree::FALSE, |marker, requirement| {
+                marker.or(requirement.marker)
+            });
         // A merged edge may receive its extras from separate declarations.
         for extra in &self.extra {
-            marker = marker.and(extras.get(extra).copied().unwrap_or(MarkerTree::FALSE));
+            let extra_marker = requirements
+                .clone()
+                .filter(|requirement| requirement.extras.contains(extra))
+                .fold(MarkerTree::FALSE, |marker, requirement| {
+                    marker.or(requirement.marker)
+                });
+            marker = marker.and(extra_marker);
         }
-        for extra_marker in extras.values_mut() {
-            *extra_marker = extra_marker.and(marker);
-        }
-        (marker, extras)
+        marker
     }
 
     /// Returns the extras specified on this dependency.
