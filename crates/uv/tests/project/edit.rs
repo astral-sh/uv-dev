@@ -15909,11 +15909,9 @@ fn remove_batch_inline_array_retains_indentation() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = ["a", "b", "c", "d"]
     "#})?;
-    context
-        .remove()
-        .args(["a", "b", "--frozen"])
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.remove().args(["a", "b", "--frozen"]), @"
+    exit_code: 0 (success)
+    ");
     assert_snapshot!(context.read("pyproject.toml"), @r#"
     [project]
     name = "project"
