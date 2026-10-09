@@ -489,7 +489,27 @@ impl RequirementsTxt {
                     data.require_hashes = data.require_hashes.or(sub_constraints.require_hashes);
                 }
                 RequirementsTxtStatement::RequirementEntry(requirement_entry) => {
-                    data.requirements.push(requirement_entry);
+                    match (&*visited, requirement_entry) {
+                        (
+                            VisitedFiles::Constraints { .. },
+                            RequirementEntry {
+                                requirement: RequirementsTxtRequirement::Named(requirement),
+                                hashes,
+                            },
+                        ) => data.constraints.push(RequirementEntry {
+                            requirement,
+                            hashes,
+                        }),
+                        // Keep unnamed entries for the including constraint statement to reject.
+                        (VisitedFiles::Requirements { .. }, requirement_entry)
+                        | (
+                            VisitedFiles::Constraints { .. },
+                            requirement_entry @ RequirementEntry {
+                                requirement: RequirementsTxtRequirement::Unnamed(_),
+                                ..
+                            },
+                        ) => data.requirements.push(requirement_entry),
+                    }
                 }
                 RequirementsTxtStatement::EditableRequirementEntry(editable) => {
                     data.editables.push(editable);
