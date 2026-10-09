@@ -33462,7 +33462,7 @@ fn lock_group_includes_requires_python() -> Result<()> {
         [package.group-requires-python]
         bar = ">=3.13"
         baz = ">=3.13,>=3.13.1"
-        blargh = ">=3.12.[X],>=3.13"
+        blargh = ">=3.12.1,>=3.13"
         foo = ">=3.13"
 
         [package.metadata]
