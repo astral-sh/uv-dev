@@ -31,6 +31,8 @@ resolution-markers = [
 ]
 
 [options]
+config-settings-digest = "95ae22e60ddad19a"
+config-settings-packages = ["ipadic", "jax", "rouge-score", "timeout-decorator", "unidic", "unidic-lite"]
 exclude-newer = "2026-06-30T00:00:00Z"
 
 [[package]]

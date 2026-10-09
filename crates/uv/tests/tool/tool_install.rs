@@ -5959,10 +5959,9 @@ fn tool_install_lock_supports_local_wheel() {
     });
 }
 
-/// Ensure that tool locks preserve and revalidate the PEP 517 config settings used to resolve
-/// their requirements.
+/// Build settings do not affect tool locks whose metadata comes from prebuilt wheels.
 #[test]
-fn tool_install_lock_tracks_config_settings() {
+fn tool_install_lock_ignores_unconsumed_config_settings() {
     let context = uv_test::test_context!("3.12");
     let tool_dir = context.temp_dir.child("tools");
     let bin_dir = context.temp_dir.child("bin");
@@ -5992,7 +5991,6 @@ fn tool_install_lock_tracks_config_settings() {
         requires-python = ">=3.12"
 
         [options]
-        config-settings-digest = "58ae64b186e59040"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [manifest]
@@ -6037,10 +6035,10 @@ fn tool_install_lock_tracks_config_settings() {
         .assert()
         .success();
 
-    assert_ne!(
+    assert_eq!(
         first_lock,
         context.read("tools/simple-launcher/uv.lock"),
-        "changing config settings should invalidate the tool lock"
+        "prebuilt wheel metadata does not consume config settings"
     );
 }
 

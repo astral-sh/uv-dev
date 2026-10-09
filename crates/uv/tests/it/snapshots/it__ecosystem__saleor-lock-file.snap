@@ -12,6 +12,8 @@ resolution-markers = [
 ]
 
 [options]
+config-settings-digest = "f0de36b9ce528493"
+config-settings-packages = ["adyen", "draftjs-sanitizer", "html-to-draftjs", "html2text", "jaeger-client", "micawber", "opentracing", "petl", "promise", "pybars3", "pymeta3", "rx"]
 exclude-newer = "2026-06-30T00:00:00Z"
 
 [[package]]

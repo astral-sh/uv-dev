@@ -98,7 +98,7 @@ mod windows_emulation_tests;
 const VERSION: u32 = 1;
 
 /// Return a stable digest for non-empty PEP 517 build config settings.
-pub fn config_settings_digest(
+fn config_settings_digest(
     config_setting: &ConfigSettings,
     config_settings_package: &PackageConfigSettings,
 ) -> Option<String> {
