@@ -34,7 +34,10 @@ struct CachedWheelMetadataFixture {
 }
 
 impl CachedWheelMetadataFixture {
-    async fn new(context: &TestContext, algorithm: Option<&'static str>) -> Result<Self> {
+    async fn new(
+        context: &TestContext,
+        algorithm: Option<uv_pypi_types::HashAlgorithm>,
+    ) -> Result<Self> {
         const FILENAME: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
         const METADATA: &str = "Metadata-Version: 2.3\nName: build-tag\nVersion: 1.0.0\n";
         context
@@ -60,16 +63,12 @@ impl CachedWheelMetadataFixture {
                 let archive = &index_archives[index_generation.load(Ordering::SeqCst)];
                 let mut hashes = serde_json::Map::new();
                 if let Some(algorithm) = algorithm {
-                    let digest = if algorithm == "sha256" {
-                        hex::encode(Sha256::digest(archive))
-                    } else {
-                        let mut hasher =
-                            uv_extract::hash::Hasher::from(uv_pypi_types::HashAlgorithm::Md5);
-                        hasher.update(archive);
-                        uv_pypi_types::HashDigest::from(hasher).digest().to_owned()
-                    };
-                    hashes.insert(algorithm.to_owned(), json!(digest));
+                    let mut hasher = uv_extract::hash::Hasher::from(algorithm);
+                    hasher.update(archive);
+                    let digest = uv_pypi_types::HashDigest::from(hasher);
+                    hashes.insert(algorithm.to_string(), json!(digest.digest()));
                 }
+
                 ResponseTemplate::new(200)
                     .insert_header("Cache-Control", "public, max-age=0")
                     .set_body_raw(
@@ -128,7 +127,9 @@ impl CachedWheelMetadataFixture {
 #[tokio::test]
 async fn resolution_reuses_verified_cached_wheel_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let fixture = CachedWheelMetadataFixture::new(&context, Some("sha256")).await?;
+    let fixture =
+        CachedWheelMetadataFixture::new(&context, Some(uv_pypi_types::HashAlgorithm::Sha256))
+            .await?;
     uv_snapshot!(context.filters(), context.pip_install().args(["--no-deps", "build-tag==1.0.0", "--default-index"]).arg(&fixture.index), @r#"
     exit_code: 0 (success)
     ----- stderr -----
@@ -175,7 +176,8 @@ async fn resolution_reuses_verified_cached_wheel_metadata() -> Result<()> {
 #[tokio::test]
 async fn resolution_fetches_metadata_for_md5_cached_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let fixture = CachedWheelMetadataFixture::new(&context, Some("md5")).await?;
+    let fixture =
+        CachedWheelMetadataFixture::new(&context, Some(uv_pypi_types::HashAlgorithm::Md5)).await?;
     uv_snapshot!(context.filters(), context.pip_install().args(["--no-deps", "build-tag==1.0.0", "--default-index"]).arg(&fixture.index), @r#"
 exit_code: 0 (success)
 ----- stderr -----
@@ -227,7 +229,9 @@ Installed 1 package in [TIME]
 #[tokio::test]
 async fn resolution_fetches_metadata_for_configured_file_cache_policy() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let fixture = CachedWheelMetadataFixture::new(&context, Some("sha256")).await?;
+    let fixture =
+        CachedWheelMetadataFixture::new(&context, Some(uv_pypi_types::HashAlgorithm::Sha256))
+            .await?;
     let config = context.temp_dir.child("cache-control.toml");
     config.write_str(&formatdoc! {r#"
         [[index]]
