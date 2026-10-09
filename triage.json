@@ -1,0 +1,19 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 21304,
+        "title": "Warm the interpreter cache when syncing workspace metadata",
+        "url": "https://github.com/astral-sh/uv/pull/21304",
+        "state": "merged",
+        "reason": "Added the exact failing test and persisted inferred virtual-environment interpreter metadata. Merged October 7 and shipped in uv 0.12.24 on October 8. Review comments discuss base-executable inference and symlink handling. This is the introducing change, not an existing fix."
+      }
+    ],
+    "search_scope": "Searched open and closed issues for create_venv_caches_interpreter, sys_base_executable, sys._base_executable, Gentoo/venv, version terms, interpreter-cache regressions, metadata mismatches, symlinks, and internal:testing. Searched open, closed, and merged PRs for exact identifiers and conceptual terms. PR text searches omitted even the known introducing PR, so supplemented them with all open PRs, the 300 most recently updated closed PRs, changelog references, and direct PR/comment/diff inspection. Followed references from astral-sh/uv#21304. Ruled out astral-sh/uv#18510 and astral-sh/uv#18537 (system-site-packages invalidation), astral-sh/uv#21073 (stale Python versions), astral-sh/uv#22310 (timestamp-dependent test), and astral-sh/uv#15188 and astral-sh/uv#17509 (different Gentoo test failures). No existing report of this same mismatch was found."
+  },
+  "type": "bug",
+  "type_reason": "Cached sys_base_executable contains the test's Python symlink, while a fresh query reports /usr/bin/python3.12. Source confirms that cache warming serializes inferred metadata without querying the virtual environment. The test and persistence behavior arrived through astral-sh/uv#21304 in 0.12.24; that introducing PR does not make this a duplicate. No existing tracker or prior fix for this mismatch was found. The precise path-resolution cause remains unconfirmed.",
+  "summary": "astral-sh/uv#21304 introduced the failing test and cache warming in uv 0.12.24. No matching existing issue or fix was found. The requested README update failed because its destination is on a read-only filesystem; the file remains unchanged.",
+  "draft_response": "This test and the cache-warming behavior were added in uv 0.12.24 by astral-sh/uv#21304. Your output shows that cached metadata retains the test's `python/3.12/python3` symlink, while a fresh Python query reports `/usr/bin/python3.12` for `sys_base_executable`. Those values should agree. The next step is to reproduce with a symlink to system Python, compare the generated `pyvenv.cfg` and Python's `sys._base_executable`, and determine whether to correct the inferred metadata or skip cache warming for that layout."
+}
