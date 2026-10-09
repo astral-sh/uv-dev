@@ -141,11 +141,6 @@ fn google_cloud_sdk_adc_path(context: &Context) -> Option<String> {
         .filter(|path| !path.is_empty())
     {
         PathBuf::from(path).join("gcloud")
-    } else if let Some(path) = context
-        .env_var(EnvVars::XDG_CONFIG_HOME)
-        .filter(|path| !path.is_empty())
-    {
-        PathBuf::from(path).join("gcloud")
     } else {
         let path = context
             .env_var(EnvVars::HOME)
@@ -330,23 +325,27 @@ impl ArtifactRegistryProvider {
             })
             .ok()?;
         let credential = config.credential?;
-        let token_expiry = credential
-            .token_expiry?
-            .parse::<jiff::Timestamp>()
-            .inspect_err(|err| {
-                debug!("Failed to parse credentials from `gcloud config config-helper`: {err}");
-            })
-            .ok()?;
-        let now = jiff::Timestamp::now();
-        if token_expiry <= now {
-            debug!("Ignoring expired credentials from `gcloud config config-helper`");
-            return None;
-        }
-        let cache_duration = token_expiry
-            .duration_since(now)
-            .unsigned_abs()
-            .saturating_sub(GOOGLE_ARTIFACT_REGISTRY_TOKEN_REFRESH_BUFFER)
-            .min(GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION);
+        let cache_duration = if let Some(token_expiry) = credential.token_expiry {
+            let token_expiry = token_expiry
+                .parse::<jiff::Timestamp>()
+                .inspect_err(|err| {
+                    debug!("Failed to parse credentials from `gcloud config config-helper`: {err}");
+                })
+                .ok()?;
+            let now = jiff::Timestamp::now();
+            if token_expiry <= now {
+                debug!("Ignoring expired credentials from `gcloud config config-helper`");
+                return None;
+            }
+            token_expiry
+                .duration_since(now)
+                .unsigned_abs()
+                .saturating_sub(GOOGLE_ARTIFACT_REGISTRY_TOKEN_REFRESH_BUFFER)
+                .min(GOOGLE_ARTIFACT_REGISTRY_CACHE_DURATION)
+        } else {
+            // Return credentials with unknown expiry without caching them.
+            Duration::ZERO
+        };
         Some((
             Self::credentials_from_token(credential.access_token?)?,
             cache_duration,
@@ -806,9 +805,11 @@ mod tests {
         });
         assert_eq!(
             google_cloud_sdk_adc_path(&platform_config),
-            Some(application_default_credentials(PathBuf::from(
-                if cfg!(windows) { "/app-data" } else { "/xdg" }
-            )))
+            Some(application_default_credentials(if cfg!(windows) {
+                PathBuf::from("/app-data")
+            } else {
+                PathBuf::from("/home").join(".config")
+            }))
         );
 
         let home_directory = Context::new().with_env(StaticEnv {
@@ -874,7 +875,25 @@ mod tests {
             ArtifactRegistryProvider::credentials_from_gcloud_output(
                 br#"{"credential":{"access_token":"test-token"}}"#
             ),
-            None
+            Some((
+                Credentials::basic(
+                    Some("oauth2accesstoken".to_string()),
+                    Some("test-token".to_string())
+                ),
+                Duration::ZERO
+            ))
+        );
+        assert_eq!(
+            ArtifactRegistryProvider::credentials_from_gcloud_output(
+                br#"{"credential":{"access_token":"test-token","token_expiry":null}}"#
+            ),
+            Some((
+                Credentials::basic(
+                    Some("oauth2accesstoken".to_string()),
+                    Some("test-token".to_string())
+                ),
+                Duration::ZERO
+            ))
         );
         assert_eq!(
             ArtifactRegistryProvider::credentials_from_gcloud_output(
