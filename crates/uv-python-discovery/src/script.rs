@@ -114,6 +114,15 @@ fn validate_script_requires_python(
     }
 }
 
+/// Whether the per-script environment owns packages or overlays a shared installation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptEnvironmentMode {
+    /// Dependencies are installed directly into the per-script environment.
+    Isolated,
+    /// Dependencies are installed in a shared base with a separate writable overlay.
+    Shared,
+}
+
 /// An interpreter suitable for a PEP 723 script.
 #[derive(Debug, Clone)]
 #[expect(clippy::large_enum_variant)]
@@ -130,7 +139,12 @@ impl ScriptInterpreter {
     /// If `--active` is set, the active virtual environment will be preferred.
     ///
     /// See: [`uv_workspace::Workspace::environment_selection`].
-    pub fn root(script: Pep723ItemRef<'_>, active: ActiveEnvironment, cache: &Cache) -> PathBuf {
+    pub fn root(
+        mode: ScriptEnvironmentMode,
+        script: Pep723ItemRef<'_>,
+        active: ActiveEnvironment,
+        cache: &Cache,
+    ) -> PathBuf {
         /// Resolve the `VIRTUAL_ENV` variable, if any.
         fn from_virtual_env_variable() -> Option<PathBuf> {
             let value = std::env::var_os(EnvVars::VIRTUAL_ENV)?;
@@ -171,6 +185,10 @@ impl ScriptInterpreter {
                 Pep723ItemRef::Stdin(metadata) => cache_digest(&metadata.raw),
             };
 
+            let entry = match mode {
+                ScriptEnvironmentMode::Isolated => entry,
+                ScriptEnvironmentMode::Shared => format!("shared-{entry}"),
+            };
             cache
                 .shard(CacheBucket::Environments, entry)
                 .into_path_buf()
@@ -212,11 +230,12 @@ impl ScriptInterpreter {
 
     /// Discover an existing script environment without selecting or downloading an interpreter.
     pub fn discover_existing(
+        mode: ScriptEnvironmentMode,
         script: Pep723ItemRef<'_>,
         active: ActiveEnvironment,
         cache: &Cache,
     ) -> Option<PythonEnvironment> {
-        let root = Self::root(script, active, cache);
+        let root = Self::root(mode, script, active, cache);
         match PythonEnvironment::from_root(&root, cache) {
             Ok(environment) => Some(environment),
             Err(uv_python_interpreter::PythonEnvironmentError::MissingEnvironment(_)) => None,
@@ -229,6 +248,7 @@ impl ScriptInterpreter {
 
     /// Discover the interpreter to use for the current [`Pep723ItemRef`].
     pub async fn discover(
+        mode: ScriptEnvironmentMode,
         script: Pep723ItemRef<'_>,
         python_request: Option<PythonRequest>,
         client_builder: &BaseClientBuilder<'_>,
@@ -248,7 +268,7 @@ impl ScriptInterpreter {
             requires_python,
         } = ScriptPython::from_request(python_request, script, config_discovery).await?;
 
-        if let Some(environment) = Self::discover_existing(script, active, cache) {
+        if let Some(environment) = Self::discover_existing(mode, script, active, cache) {
             match check_environment_compatibility(
                 &environment,
                 EnvironmentKind::Script,

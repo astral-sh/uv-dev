@@ -22,6 +22,7 @@ use uv_lock_operations::{
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::ScriptEnvironmentMode;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
@@ -108,6 +109,7 @@ pub async fn metadata(
             } else {
                 interpreter = match target {
                     LockTarget::Script(script) => ScriptInterpreter::discover(
+                        ScriptEnvironmentMode::Isolated,
                         script.into(),
                         python.as_deref().map(PythonRequest::parse),
                         &client_builder,
@@ -233,6 +235,7 @@ pub async fn metadata(
                 .into_environment()?
             }
             MetadataSource::Manifest(LockTarget::Script(script)) => ScriptEnvironment::get_or_init(
+                ScriptEnvironmentMode::Isolated,
                 (*script).into(),
                 python.as_deref().map(PythonRequest::parse),
                 &client_builder,
@@ -279,7 +282,12 @@ pub async fn metadata(
                 ProjectInterpreter::discover_existing(workspace.install_path(), active, cache)?
             }
             MetadataSource::Manifest(LockTarget::Script(script)) => {
-                ScriptInterpreter::discover_existing((*script).into(), active, cache)
+                ScriptInterpreter::discover_existing(
+                    ScriptEnvironmentMode::Isolated,
+                    (*script).into(),
+                    active,
+                    cache,
+                )
             }
             MetadataSource::Lockfile(workspace) => {
                 ProjectInterpreter::discover_existing(workspace.root(), active, cache)?
