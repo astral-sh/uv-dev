@@ -793,10 +793,11 @@ impl<'lock> InstallTarget<'lock> {
         extras: &ExtrasSpecification,
         groups: &DependencyGroupsWithDefaults,
         marker_env: Option<&ResolverMarkerEnvironment>,
-    ) -> BTreeSet<&PackageName> {
-        match self.package_selection() {
+    ) -> Result<BTreeSet<&PackageName>, LockError> {
+        Ok(match self.package_selection() {
             Some(PackageSelection::Projects(_)) => {
                 let lock = self.lock();
+                let modifiers = lock.dependency_modifiers()?;
                 let roots = self.roots().collect::<FxHashSet<_>>();
 
                 // Collect the packages by name for efficient lookup.
@@ -856,6 +857,7 @@ impl<'lock> InstallTarget<'lock> {
                                     marker_env,
                                     None,
                                     Some(group_name),
+                                    &modifiers,
                                 )
                             }) {
                                 continue;
@@ -897,7 +899,7 @@ impl<'lock> InstallTarget<'lock> {
                     for dependency in dependencies {
                         if marker_env.is_some_and(|marker_env| {
                             !package.dependency_applies_to_environment(
-                                dependency, marker_env, extra, None,
+                                dependency, marker_env, extra, None, &modifiers,
                             )
                         }) {
                             continue;
@@ -924,6 +926,6 @@ impl<'lock> InstallTarget<'lock> {
                 // Scripts don't have workspace members
                 BTreeSet::new()
             }
-        }
+        })
     }
 }

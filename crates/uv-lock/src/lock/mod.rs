@@ -3145,6 +3145,15 @@ impl Lock {
         &self.conflicts
     }
 
+    /// Return the dependency overrides and exclusions recorded in the lockfile.
+    pub fn dependency_modifiers(&self) -> Result<DependencyModifiers, LockError> {
+        Ok(DependencyModifiers::new(
+            Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(self.manifest.excludes.iter().cloned()),
+        ))
+    }
+
     /// Returns the supported environments that were used to generate this lock.
     pub fn supported_environments(&self) -> &[MarkerTree] {
         &self.supported_environments
@@ -7386,14 +7395,15 @@ impl Package {
         &self.dependency_groups
     }
 
-    /// Returns whether a resolved dependency applies to an environment using the original
-    /// requirement marker, when available.
+    /// Returns whether a resolved dependency applies using its effective declaration marker,
+    /// when metadata is available.
     pub fn dependency_applies_to_environment(
         &self,
         dependency: &Dependency,
         marker_environment: &MarkerEnvironment,
         extra: Option<&ExtraName>,
         group: Option<&GroupName>,
+        modifiers: &DependencyModifiers,
     ) -> bool {
         let requirements = group.map_or(Some(&self.metadata.requires_dist), |group| {
             self.metadata.dependency_groups.get(group)
@@ -7406,9 +7416,25 @@ impl Package {
                 .evaluate(marker_environment, &[]);
         };
 
-        let mut requirements = requirements
-            .iter()
-            .filter(|requirement| requirement.name == *dependency.package_name());
+        let context = match (group, extra) {
+            (Some(group), _) => DependencyContext::Group(group),
+            (None, Some(extra)) => DependencyContext::Extra(extra),
+            (None, None) => DependencyContext::Production,
+        };
+        let requirements = Lock::preprocess_requirements(
+            &self.id.name,
+            self.id.version.as_ref(),
+            &requirements.iter().cloned().collect::<Vec<_>>(),
+            context,
+            modifiers,
+        );
+        let mut requirements = requirements.iter().filter(|requirement| {
+            requirement.name == *dependency.package_name()
+                && dependency
+                    .extra
+                    .iter()
+                    .all(|extra| requirement.extras.contains(extra))
+        });
         let Some(requirement) = requirements.next() else {
             return dependency
                 .complexified_marker

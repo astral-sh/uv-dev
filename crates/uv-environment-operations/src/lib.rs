@@ -2040,8 +2040,11 @@ pub fn detect_conflicts(
     // group `g` are declared as conflicting, then enabling both of
     // those should result in an error.
     let lock = target.lock();
-    let packages = target.packages(extras, groups, marker_env);
     let conflicts = lock.conflicts();
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+    let packages = target.packages(extras, groups, marker_env)?;
     for set in conflicts.iter() {
         let mut conflicts: Vec<ConflictItem> = vec![];
         for item in set.iter() {
