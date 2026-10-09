@@ -51,3 +51,9 @@ impl From<uv_operations::error::Error> for UvError {
         }
     }
 }
+
+impl From<Box<uv_operations::error::Error>> for UvError {
+    fn from(error: Box<uv_operations::error::Error>) -> Self {
+        Self::from(*error)
+    }
+}
