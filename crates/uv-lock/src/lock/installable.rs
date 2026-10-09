@@ -21,6 +21,7 @@ use uv_pypi_types::{ConflictKind, ConflictSet, ResolverMarkerEnvironment};
 use uv_resolver_types::UniversalMarker;
 use uv_resolver_types::universal_marker::ActivatedConflictItems;
 
+use crate::lock::reachability::validate_requested_conflicts;
 use crate::lock::{
     Dependency, DependencySelectionContext, HashedDist, LockErrorKind, Package, PackageIndex,
     SelectedDependency, TagPolicy,
@@ -133,6 +134,8 @@ pub trait Installable<'lock> {
         build_options: &BuildOptions,
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
+        validate_requested_conflicts(self, &[], extras, groups, Some(marker_env))?;
+
         let resolve_root = |root_name: &PackageName| {
             self.lock()
                 .find_by_name(root_name)

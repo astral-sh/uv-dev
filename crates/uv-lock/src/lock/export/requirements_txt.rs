@@ -16,9 +16,8 @@ use uv_normalize::PackageName;
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl};
 use uv_redacted::DisplaySafeUrl;
 
-use crate::lock::export::{
-    ExportableRequirement, ExportableRequirements, validate_requested_conflicts,
-};
+use crate::lock::export::{ExportableRequirement, ExportableRequirements};
+use crate::lock::reachability::validate_requested_conflicts;
 use crate::lock::{Package, PackageId, Source};
 use crate::{Installable, LockError};
 
@@ -41,7 +40,7 @@ impl<'lock> RequirementsTxtExport<'lock> {
         hashes: bool,
         install_options: &'lock InstallOptions,
     ) -> Result<Self, LockError> {
-        validate_requested_conflicts(target, prune, extras, dev)?;
+        validate_requested_conflicts(target, prune, extras, dev, None)?;
 
         // Extract the packages from the lock file.
         let ExportableRequirements(mut nodes) = ExportableRequirements::from_lock(

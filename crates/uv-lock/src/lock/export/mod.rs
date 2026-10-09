@@ -1,19 +1,17 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::VecDeque;
 
 use either::Either;
-use itertools::Itertools;
 use petgraph::prelude::EdgeRef;
 use petgraph::visit::IntoNodeReferences;
 use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_configuration::{
-    DependencyGroupsWithDefaults, DependencyModifierScope, ExportFormat,
-    ExtrasSpecificationWithDefaults, InstallOptions,
+    DependencyGroupsWithDefaults, ExportFormat, ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::MarkerTree;
-use uv_pypi_types::{ConflictItem, ConflictKind};
+use uv_pypi_types::ConflictItem;
 use uv_resolver_types::UniversalMarker;
 
 pub use crate::lock::export::metadata::{Metadata, PythonReport};
@@ -23,11 +21,9 @@ pub(crate) use crate::lock::export::metadata::{
 };
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
-use crate::lock::reachability::{ConflictRequests, Edge, Node, conflict_marker_reachability};
-use crate::lock::{
-    Dependency, DependencyContext, LockErrorKind, PackageIndex, normalize_requirement,
-};
-use crate::{Installable, InstallableRootKind, LockError, Package, implicit_constraints_marker};
+use crate::lock::reachability::{Edge, Node, conflict_marker_reachability};
+use crate::lock::{Dependency, LockErrorKind, PackageIndex};
+use crate::{Installable, InstallableRootKind, LockError, Package};
 
 pub mod cyclonedx_json;
 mod metadata;
@@ -376,208 +372,4 @@ impl<'lock> ExportableRequirements<'lock> {
 
         Ok(Self(nodes))
     }
-}
-
-/// Validate requested extras before conflict guards can remove their resolved edges.
-fn validate_requested_conflicts<'lock>(
-    target: &impl Installable<'lock>,
-    prune: &[PackageName],
-    extras: &ExtrasSpecificationWithDefaults,
-    groups: &DependencyGroupsWithDefaults,
-) -> Result<(), LockError> {
-    let lock = target.lock();
-    if lock.conflicts().is_empty() {
-        return Ok(());
-    }
-    let modifiers = lock.dependency_modifiers()?;
-    let root_marker = implicit_constraints_marker(
-        lock.requires_python.to_marker_tree(),
-        lock.supported_environments(),
-    );
-    let mut requests = ConflictRequests::new(lock);
-    let mut known_conflicts = FxHashMap::default();
-    for (name, kind) in target
-        .roots()
-        .map(|name| (name, InstallableRootKind::Production))
-        .chain(
-            target
-                .group_root(groups)
-                .map(|name| (name, InstallableRootKind::DependencyGroups)),
-        )
-    {
-        if prune.contains(name) {
-            continue;
-        }
-        let package = lock
-            .find_by_name(name)
-            .map_err(|_| LockErrorKind::MultipleRootPackages { name: name.clone() })?
-            .ok_or_else(|| LockErrorKind::MissingRootPackage { name: name.clone() })?;
-        let index = lock.by_id[&package.id];
-        if kind == InstallableRootKind::Production && groups.prod() {
-            known_conflicts.insert(ConflictItem::from(name.clone()), root_marker);
-            requests.push(requests.root, index, None, root_marker);
-            for extra in extras
-                .extra_names(
-                    package
-                        .optional_dependencies
-                        .keys()
-                        .chain(package.metadata.provides_extra.iter()),
-                )
-                .collect::<BTreeSet<_>>()
-            {
-                known_conflicts.insert(
-                    ConflictItem::from((name.clone(), extra.clone())),
-                    root_marker,
-                );
-                requests.push(requests.root, index, Some(extra.clone()), root_marker);
-            }
-        }
-        for (group, dependencies) in &package.dependency_groups {
-            if !target.includes_group(Some(name), group, groups) {
-                continue;
-            }
-            known_conflicts.insert(
-                ConflictItem::from((name.clone(), group.clone())),
-                root_marker,
-            );
-            let requirements = package.dependency_requirements(
-                DependencyContext::Group(group),
-                &modifiers,
-                target.install_path(),
-                lock.requires_python(),
-            )?;
-            for dependency in dependencies {
-                if prune.contains(dependency.package_name()) {
-                    continue;
-                }
-                let (marker, extras) =
-                    dependency.activation(lock, requirements.as_deref(), target.install_path())?;
-                requests.push(
-                    requests.root,
-                    dependency.index,
-                    None,
-                    root_marker.and(marker),
-                );
-                for (extra, marker) in extras {
-                    requests.push(
-                        requests.root,
-                        dependency.index,
-                        Some(extra),
-                        root_marker.and(marker),
-                    );
-                }
-            }
-        }
-        for group in package.metadata.dependency_groups.keys() {
-            if target.includes_group(Some(name), group, groups) {
-                known_conflicts.insert(
-                    ConflictItem::from((name.clone(), group.clone())),
-                    root_marker,
-                );
-            }
-        }
-    }
-    let requirements = lock.requirements().iter().filter(|_| groups.prod()).chain(
-        lock.dependency_groups()
-            .iter()
-            .filter(|(group, _)| target.includes_group(None, group, groups))
-            .flat_map(|(_, requirements)| requirements),
-    );
-    for requirement in modifiers.apply(DependencyModifierScope::Global, requirements) {
-        let requirement = normalize_requirement(
-            requirement.into_owned(),
-            target.install_path(),
-            lock.requires_python(),
-        )?;
-        if prune.contains(&requirement.name) {
-            continue;
-        }
-        for package in lock.packages_for_name(&requirement.name) {
-            if !package
-                .id
-                .satisfies_requirement(&requirement, target.install_path())?
-            {
-                continue;
-            }
-            let Some(marker) = lock.root_requirement_marker(&requirement, package) else {
-                continue;
-            };
-            let index = lock.by_id[&package.id];
-            requests.push(requests.root, index, None, root_marker.and(marker));
-            for extra in &requirement.extras {
-                requests.push(
-                    requests.root,
-                    index,
-                    Some(extra.clone()),
-                    root_marker.and(marker),
-                );
-            }
-        }
-    }
-    while let Some((index, extra, parent)) = requests.queue.pop_front() {
-        let package = lock.package(index);
-        let context = extra
-            .as_ref()
-            .map_or(DependencyContext::Production, DependencyContext::Extra);
-        let requirements = package.dependency_requirements(
-            context,
-            &modifiers,
-            target.install_path(),
-            lock.requires_python(),
-        )?;
-        for dependency in context.dependencies(package) {
-            if prune.contains(dependency.package_name()) {
-                continue;
-            }
-            let (marker, extras) =
-                dependency.activation(lock, requirements.as_deref(), target.install_path())?;
-            requests.push(parent, dependency.index, None, marker);
-            for (extra, marker) in extras {
-                requests.push(parent, dependency.index, Some(extra), marker);
-            }
-        }
-    }
-    let mut activated = known_conflicts
-        .iter()
-        .map(|(item, marker)| (item.clone(), *marker))
-        .collect::<BTreeMap<_, _>>();
-    for request in requests.finish(&known_conflicts) {
-        let (index, extra, marker) = request?;
-        let package = lock.package(index);
-        if extra.is_none() && lock.is_workspace_package(package) {
-            activated
-                .entry(ConflictItem::from(package.name().clone()))
-                .and_modify(|current| *current = current.or(marker))
-                .or_insert(marker);
-        }
-        if let Some(extra) = extra {
-            activated
-                .entry(ConflictItem::from((package.name().clone(), extra)))
-                .and_modify(|current| *current = current.or(marker))
-                .or_insert(marker);
-        }
-    }
-    for set in lock.conflicts().iter() {
-        let items = set
-            .iter()
-            .filter_map(|item| activated.get(item).map(|marker| (item, marker)));
-        for ((item1, marker1), (item2, marker2)) in items.tuple_combinations() {
-            if marker1.is_disjoint(*marker2) {
-                continue;
-            }
-            if let (ConflictKind::Extra(extra1), ConflictKind::Extra(extra2)) =
-                (item1.kind(), item2.kind())
-            {
-                return Err(LockErrorKind::ConflictingExtra {
-                    package1: item1.package().clone(),
-                    extra1: extra1.clone(),
-                    package2: item2.package().clone(),
-                    extra2: extra2.clone(),
-                }
-                .into());
-            }
-            return Err(LockErrorKind::ConflictingSelections(item1.clone(), item2.clone()).into());
-        }
-    }
-    Ok(())
 }
