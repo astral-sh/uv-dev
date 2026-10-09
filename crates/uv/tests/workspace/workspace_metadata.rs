@@ -887,11 +887,11 @@ async fn workspace_metadata_script_replaces_changed_environment() -> Result<()> 
         return Err(anyhow::anyhow!("expected Python 3.12 and 3.11"));
     };
     let script = context.temp_dir.child("script.py");
-    script.write_str(indoc! {r#"
+    script.write_str(indoc! {r"
         # /// script
         # dependencies = []
         # ///
-        "#})?;
+        "})?;
     let initial = context
         .workspace_metadata()
         .arg("--script")
