@@ -6265,9 +6265,13 @@ fn lock_conflicting_workspace_members_depends_direct_extra() -> Result<()> {
         name = "example"
         version = "0.1.0"
         source = { editable = "." }
+        declared-extras = ["foo"]
         dependencies = [
             { name = "sortedcontainers", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-example-foo' or extra == 'project-7-example'" },
         ]
+
+        [package.optional-dependencies]
+        foo = []
 
         [package.metadata]
         requires-dist = [
@@ -6680,6 +6684,87 @@ fn lock_conflicting_workspace_members_depends_transitive_extra() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
+    uv_snapshot!(context.filters(), context.export().args(["--frozen", "--no-header", "--no-hashes"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `example` and package `subexample` are incompatible with the declared conflicts: {example, subexample}
+    ");
+
+    Ok(())
+}
+
+/// Dependency groups activate the production contexts of their workspace dependencies.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_conflicting_workspace_members_from_dependency_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["left", "right"]
+
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "left" }, { package = "right" }]]
+
+        [tool.uv.workspace]
+        members = ["left", "right"]
+
+        [tool.uv.sources]
+        left = { workspace = true }
+        right = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("left/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "left"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("right/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "right"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--only-group", "dev", "--preview-features", "package-conflicts", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Found conflicting selections `left` and `right` enabled simultaneously
+    ");
+    let lock = lock_without_package_metadata(&context.read("uv.lock"))?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.to_string())?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--only-group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting selections `left` and `right` enabled simultaneously
+    ");
     Ok(())
 }
 
@@ -6960,6 +7045,7 @@ fn lock_conflicting_mixed() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { editable = "." }
+        declared-extras = ["project2"]
 
         [package.optional-dependencies]
         project2 = [
@@ -7515,6 +7601,7 @@ fn lock_check_refresh_workspace_conflicts() -> Result<()> {
         name = "package-a"
         version = "0.1.0"
         source = { editable = "packages/package-a" }
+        declared-extras = ["prod", "non-prod"]
 
         [package.optional-dependencies]
         non-prod = [
@@ -7553,6 +7640,7 @@ fn lock_check_refresh_workspace_conflicts() -> Result<()> {
         name = "workspace-demo"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["prod", "non-prod"]
         dependencies = [
             { name = "package-a" },
         ]
@@ -38913,6 +39001,7 @@ fn lock_pytorch_cpu() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu124"]
         dependencies = [
             { name = "jinja2" },
             { name = "numpy" },
@@ -39471,6 +39560,7 @@ fn lock_pytorch_index_preferences() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu118"]
 
         [package.optional-dependencies]
         cpu = [

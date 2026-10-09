@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::{debug, warn};
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
@@ -2035,18 +2036,25 @@ pub fn detect_conflicts(
     // those should result in an error.
     let lock = target.lock();
     let packages = target.packages(extras, groups);
+    let roots = target.roots().collect::<FxHashSet<_>>();
+    let group_roots = roots
+        .iter()
+        .copied()
+        .chain(target.group_root(groups))
+        .collect::<FxHashSet<_>>();
     let conflicts = lock.conflicts();
     for set in conflicts.iter() {
         let mut conflicts: Vec<ConflictItem> = vec![];
         for item in set.iter() {
-            if !packages.contains(item.package()) {
-                // Ignore items that are not in the install targets
-                continue;
-            }
             let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod(),
-                ConflictKind::Extra(extra) => extras.contains(extra),
-                ConflictKind::Group(group1) => groups.contains(group1),
+                ConflictKind::Project => packages.contains(item.package()) && groups.prod(),
+                ConflictKind::Extra(extra) => {
+                    roots.contains(item.package()) && extras.contains(extra)
+                }
+                ConflictKind::Group(group) => {
+                    group_roots.contains(item.package())
+                        && target.includes_group(Some(item.package()), group, groups)
+                }
             };
             if is_conflicting {
                 conflicts.push(item.clone());

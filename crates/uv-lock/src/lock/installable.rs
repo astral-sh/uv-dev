@@ -21,6 +21,9 @@ use uv_pypi_types::{ConflictKind, ConflictSet, ResolverMarkerEnvironment};
 use uv_resolver_types::UniversalMarker;
 use uv_resolver_types::universal_marker::ActivatedConflictItems;
 
+use crate::lock::reachability::{
+    validate_concrete_requested_conflicts, validate_requested_conflicts,
+};
 use crate::lock::{
     Dependency, DependencySelectionContext, HashedDist, LockErrorKind, Package, PackageIndex,
     SelectedDependency, TagPolicy,
@@ -28,11 +31,11 @@ use crate::lock::{
 use crate::{Lock, LockError};
 
 fn newly_activated_extras<'lock>(
+    lock: &'lock Lock,
     dep: &'lock Dependency,
     activated_extras: &[(&'lock PackageName, &'lock ExtraName)],
 ) -> Vec<(&'lock PackageName, &'lock ExtraName)> {
-    dep.extra
-        .iter()
+    lock.dependency_extras(dep)
         .filter_map(|extra| {
             let key = (&dep.package_id.name, extra);
             (!activated_extras.contains(&key)).then_some(key)
@@ -254,7 +257,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
     /// included in addition to `roots`.
     fn to_resolution_from_packages(
         &self,
-        roots: &[&Package],
+        roots: &[&'lock Package],
         group_root: Option<&Package>,
         include_manifest: bool,
         selection_context: DependencySelectionContext<'lock>,
@@ -265,6 +268,19 @@ trait InstallableExt<'lock>: Installable<'lock> {
         build_options: &BuildOptions,
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
+        if include_manifest {
+            validate_requested_conflicts(self, &[], extras, groups, Some(marker_env))?;
+        } else {
+            validate_concrete_requested_conflicts(
+                self,
+                roots,
+                selection_context,
+                extras,
+                groups,
+                marker_env,
+            )?;
+        }
+
         let size_guess = self.lock().packages.len();
         let mut petgraph = Graph::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
@@ -318,7 +334,10 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 // Track the activated extras.
                 if groups.prod() {
                     activated_projects.push(&dist.id.name);
-                    for extra in extras.extra_names(dist.optional_dependencies.keys()) {
+                    for extra in extras
+                        .extra_names(dist.optional_dependencies.keys())
+                        .filter(|extra| !dist.is_known_missing_extra(extra))
+                    {
                         activated_extras.push((&dist.id.name, extra));
                     }
                 }
@@ -371,7 +390,10 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     (package_index, None),
                     UniversalMarker::TRUE,
                 );
-                for extra in extras.extra_names(dist.optional_dependencies.keys()) {
+                for extra in extras
+                    .extra_names(dist.optional_dependencies.keys())
+                    .filter(|extra| !dist.is_known_missing_extra(extra))
+                {
                     queue.push_back((package_index, Some(extra)));
                     add_reachability(
                         &mut conflict_reachability,
@@ -397,8 +419,10 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if validate_conflicts && dep.complexified_marker.has_conflict_marker() {
                     dependencies_for_conflict_validation.push((dist, dep));
                 }
-                let additional_activated_extras = newly_activated_extras(dep, &activated_extras);
-                if !dep.complexified_marker.evaluate(
+                let additional_activated_extras =
+                    newly_activated_extras(self.lock(), dep, &activated_extras);
+                let marker = self.lock().constrain_conflicts(dep.complexified_marker);
+                if !marker.evaluate(
                     marker_env,
                     activated_projects.iter().copied(),
                     activated_extras
@@ -462,20 +486,12 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 }
 
                 // Push its dependencies on the queue.
-                add_reachability(
-                    &mut conflict_reachability,
-                    (dep.index, None),
-                    dep.complexified_marker,
-                );
+                add_reachability(&mut conflict_reachability, (dep.index, None), marker);
                 if seen.insert((dep.index, None)) {
                     queue.push_back((dep.index, None));
                 }
-                for extra in &dep.extra {
-                    add_reachability(
-                        &mut conflict_reachability,
-                        (dep.index, Some(extra)),
-                        dep.complexified_marker,
-                    );
+                for extra in self.lock().dependency_extras(dep) {
+                    add_reachability(&mut conflict_reachability, (dep.index, Some(extra)), marker);
                     if seen.insert((dep.index, Some(extra))) {
                         queue.push_back((dep.index, Some(extra)));
                     }
@@ -535,7 +551,11 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if seen.insert((package_index, None)) {
                     queue.push_back((package_index, None));
                 }
-                for extra in &dependency.extras {
+                for extra in dependency
+                    .extras
+                    .iter()
+                    .filter(|extra| !dist.is_known_missing_extra(extra))
+                {
                     add_reachability(
                         &mut conflict_reachability,
                         (package_index, Some(extra)),
@@ -616,7 +636,11 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 // handling in the package-level `dependency_groups` loop above; without this,
                 // conflict markers on transitive dependencies gated by the activated extra
                 // would not evaluate to `true` during the graph traversals below.
-                for extra in &dependency.extras {
+                for extra in dependency
+                    .extras
+                    .iter()
+                    .filter(|extra| !dist.is_known_missing_extra(extra))
+                {
                     let key = (&dist.id.name, extra);
                     if !activated_extras.contains(&key) {
                         activated_extras.push(key);
@@ -632,7 +656,11 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if seen.insert((package_index, None)) {
                     queue.push_back((package_index, None));
                 }
-                for extra in &dependency.extras {
+                for extra in dependency
+                    .extras
+                    .iter()
+                    .filter(|extra| !dist.is_known_missing_extra(extra))
+                {
                     add_reachability(
                         &mut conflict_reachability,
                         (package_index, Some(extra)),
@@ -687,8 +715,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 for dep in package_dependencies(package, extra) {
                     let mut dep_reachability = dep.complexified_marker;
                     dep_reachability.and(parent_reachability);
+                    dep_reachability = self.lock().constrain_conflicts(dep_reachability);
                     let additional_activated_extras =
-                        newly_activated_extras(dep, &activated_extras);
+                        newly_activated_extras(self.lock(), dep, &activated_extras);
                     if !dep_reachability.evaluate(
                         marker_env,
                         activated_projects.iter().copied(),
@@ -716,7 +745,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     if add_reachability(&mut reachability, (dep.index, None), dep_reachability) {
                         queue.push_back((dep.index, None));
                     }
-                    for extra in &dep.extra {
+                    for extra in self.lock().dependency_extras(dep) {
                         if add_reachability(
                             &mut reachability,
                             (dep.index, Some(extra)),
@@ -769,8 +798,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if validate_conflicts && dep.complexified_marker.has_conflict_marker() {
                     dependencies_for_conflict_validation.push((package, dep));
                 }
-                if !dep
-                    .complexified_marker
+                if !self
+                    .lock()
+                    .constrain_conflicts(dep.complexified_marker)
                     .evaluate_activated(marker_env, &activated)
                 {
                     continue;
@@ -821,7 +851,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if seen.insert((dep.index, None)) {
                     queue.push_back((dep.index, None));
                 }
-                for extra in &dep.extra {
+                for extra in self.lock().dependency_extras(dep) {
                     if seen.insert((dep.index, Some(extra))) {
                         queue.push_back((dep.index, Some(extra)));
                     }
@@ -1181,7 +1211,7 @@ sdist = { url = "https://example.com/unrelated-1.0.0.tar.gz", hash = "sha256:888
         toml::from_str(
             r#"
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 conflicts = [
     [
@@ -1225,6 +1255,7 @@ sdist = { url = "https://example.com/gpu_backend-1.0.0.tar.gz", hash = "sha256:4
 name = "project"
 version = "1.0.0"
 source = { registry = "https://example.com/simple" }
+declared-extras = ["foo", "bar"]
 sdist = { url = "https://example.com/project-1.0.0.tar.gz", hash = "sha256:5555555555555555555555555555555555555555555555555555555555555555" }
 
 [package.optional-dependencies]
@@ -1248,6 +1279,7 @@ sdist = { url = "https://example.com/runtime-1.0.0.tar.gz", hash = "sha256:66666
 name = "tool"
 version = "1.0.0"
 source = { registry = "https://example.com/simple" }
+declared-extras = ["cpu", "gpu"]
 dependencies = [{ name = "runtime" }]
 sdist = { url = "https://example.com/tool-1.0.0.tar.gz", hash = "sha256:7777777777777777777777777777777777777777777777777777777777777777" }
 
@@ -1260,6 +1292,90 @@ provides-extras = ["cpu", "gpu"]
 "#,
         )
         .expect("valid lock")
+    }
+
+    /// A uv 0.12.13 lock retains conditional conflicting requests as separate guarded edges.
+    fn conditional_conflict_lock() -> Lock {
+        toml::from_str(r#"
+version = 1
+revision = 3
+requires-python = ">=3.11"
+conflicts = [[
+    { package = "child", extra = "a" },
+    { package = "child", extra = "b" },
+]]
+
+[manifest]
+members = [
+    "child",
+    "project",
+    "tool",
+]
+
+[[package]]
+name = "child"
+version = "0.1.0"
+source = { editable = "child" }
+
+[package.optional-dependencies]
+a = [
+    { name = "leaf-a" },
+]
+b = [
+    { name = "leaf-b" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "leaf-a", marker = "extra == 'a'" },
+    { name = "leaf-b", marker = "extra == 'b'" },
+]
+provides-extras = ["a", "b"]
+
+[[package]]
+name = "leaf-a"
+version = "1.0"
+source = { registry = "https://example.org/simple" }
+wheels = [
+    { url = "https://example.org/leaf_a-1.0-py3-none-any.whl", hash = "sha256:a62b410a127d039bbbca06afb95a3280831c54e6c26c4e210b6f1e0ec4c309dd" },
+]
+
+[[package]]
+name = "leaf-b"
+version = "1.0"
+source = { registry = "https://example.org/simple" }
+wheels = [
+    { url = "https://example.org/leaf_b-1.0-py3-none-any.whl", hash = "sha256:2582ec8b2ffef8817116236350fc24dfb0b0081f2253d77bef0fc0e2e8aa93f7" },
+]
+
+[[package]]
+name = "project"
+version = "0.1.0"
+source = { virtual = "." }
+
+[package.dev-dependencies]
+dev = [
+    { name = "tool" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "tool", editable = "tool" }]
+
+[[package]]
+name = "tool"
+version = "0.1.0"
+source = { editable = "tool" }
+dependencies = [
+    { name = "child", marker = "python_full_version < '3.13' or (extra == 'extra-5-child-a' and extra == 'extra-5-child-b')" },
+    { name = "child", extra = ["a"], marker = "(python_full_version < '3.13' and extra == 'extra-5-child-a') or (extra == 'extra-5-child-a' and extra == 'extra-5-child-b')" },
+    { name = "child", extra = ["b"], marker = "(python_full_version < '3.13' and extra == 'extra-5-child-b') or (extra == 'extra-5-child-a' and extra == 'extra-5-child-b')" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "child", extras = ["a", "b"], marker = "python_full_version < '3.13'", editable = "child" }]
+"#).expect("valid legacy lock")
     }
 
     fn dependency_selection_lock() -> Lock {
@@ -1397,6 +1513,41 @@ provides-extras = ["cli"]
             &InstallOptions::default(),
         )
         .expect("valid resolution")
+    }
+
+    #[test]
+    fn immutable_root_ignores_known_missing_extra() -> Result<(), Box<dyn std::error::Error>> {
+        let lock: Lock = toml::from_str(
+            r#"
+version = 1
+revision = 5
+requires-python = ">=3.11"
+conflicts = [[
+    { package = "tool", extra = "feature" },
+    { package = "tool", extra = "missing" },
+]]
+
+[[package]]
+name = "tool"
+version = "1.0.0"
+source = { registry = "https://example.com/simple" }
+declared-extras = ["feature"]
+sdist = { url = "https://example.com/tool-1.0.0.tar.gz", hash = "sha256:7777777777777777777777777777777777777777777777777777777777777777" }
+
+[package.optional-dependencies]
+feature = []
+missing = []
+"#,
+        )?;
+        let resolution = materialize_with_extras(
+            &lock,
+            &[package(&lock, "tool", "1.0.0")],
+            &DARWIN_MARKERS,
+            &ExtrasSpecification::from_all_extras(),
+        )?;
+        assert_eq!(resolution.graph().node_count(), 2);
+        assert_eq!(resolution.graph().edge_count(), 1);
+        Ok(())
     }
 
     #[test]
@@ -1671,6 +1822,55 @@ source = { registry = "https://example.com/simple" }
         )
         "#);
         });
+    }
+
+    #[test]
+    fn rejects_conditional_conflicting_requests_from_concrete_roots() {
+        let lock = conditional_conflict_lock();
+        let root = package(&lock, "tool", "0.1.0");
+        let extras = ExtrasSpecification::default().with_defaults(DefaultExtras::default());
+        let error = lock
+            .to_resolution(
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                [root],
+                None,
+                &DARWIN_MARKERS,
+                &TAGS,
+                &extras,
+                &DependencyGroupsWithDefaults::none(),
+                &BuildOptions::default(),
+                &InstallOptions::default(),
+            )
+            .expect_err("both conditional extras must be validated before marker constraints");
+        let error = error.to_string();
+        insta::assert_snapshot!(anstream::adapter::strip_str(&error), @"Found conflicting extras `child[a]` and `child[b]` enabled simultaneously");
+    }
+
+    #[test]
+    fn rejects_conditional_conflicting_requests_from_selected_dependency()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let lock = conditional_conflict_lock();
+        let project = "project".parse::<PackageName>()?;
+        let tool = "tool".parse::<PackageName>()?;
+        let selection =
+            lock.dependency_selection(Some(&project), &tool, DARWIN_MARKERS.markers())?;
+        let dependency = selection
+            .group(&"dev".parse()?)
+            .ok_or("missing tool dependency")?;
+        let error = lock
+            .to_resolution_from_dependency(
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                dependency,
+                Some(&project),
+                &DARWIN_MARKERS,
+                &TAGS,
+                &BuildOptions::default(),
+                &InstallOptions::default(),
+            )
+            .expect_err("both conditional extras must be validated before marker constraints");
+        let error = error.to_string();
+        insta::assert_snapshot!(anstream::adapter::strip_str(&error), @"Found conflicting extras `child[a]` and `child[b]` enabled simultaneously");
+        Ok(())
     }
 
     #[test]

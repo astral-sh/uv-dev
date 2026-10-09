@@ -14394,6 +14394,170 @@ fn unsupported_git_scheme() -> Result<()> {
     Ok(())
 }
 
+/// A dependency-requested extra still conflicts with a selected group during synchronization.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_dependency_extra_group_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[feature]"]
+
+        [project.optional-dependencies]
+        feature = []
+
+        [dependency-groups]
+        shared = []
+
+        [tool.uv]
+        conflicts = [[{ package = "child", extra = "feature" }, { group = "shared" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--extra", "feature", "--group", "shared", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Found conflicting selections `child[feature]` and `project:shared` enabled simultaneously
+    ");
+    uv_snapshot!(context.filters(), context.lock().args([
+        "--preview-features", "lock-without-metadata", "--offline",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature", "--group", "shared", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting selections `child[feature]` and `project:shared` enabled simultaneously
+    ");
+    Ok(())
+}
+
+/// An activated child extra also conflicts with the root's production selection.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_dependency_extra_project_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[feature]"]
+
+        [tool.uv]
+        conflicts = [[{ package = "child", extra = "feature" }, { package = "project" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--preview-features", "package-conflicts", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Found conflicting selections `child[feature]` and `project` enabled simultaneously
+    ");
+    Ok(())
+}
+
+/// An extra requested only for another Python version cannot conflict in this environment.
+#[cfg(feature = "test-universal")]
+#[test]
+fn sync_inactive_dependency_extra_group_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[feature] ; python_version >= '3.13'"]
+
+        [dependency-groups]
+        shared = []
+
+        [tool.uv]
+        conflicts = [[{ package = "child", extra = "feature" }, { group = "shared" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--group", "shared", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    Ok(())
+}
+
 /// See: <https://github.com/astral-sh/uv/issues/11648>
 #[test]
 fn multiple_group_conflicts() -> Result<()> {
