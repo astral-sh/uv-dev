@@ -1413,17 +1413,24 @@ mod tests {
         let root = dunce::canonicalize(temp_dir.root())?;
         let downloads = ManagedPythonDownloadList::new_only_embedded()?;
 
+        // These placeholder executables do not run the selected distributions.
         let changed = ManagedPythonInstallation::new(
             root.join("shared"),
-            downloads.find(&PythonDownloadRequest::from_str("3.12.8")?.fill()?)?,
+            downloads.find(&PythonDownloadRequest::from_str(
+                "cpython-3.12.8-linux-x86_64-gnu",
+            )?)?,
         )?;
         let existing = ManagedPythonInstallation::new(
             root.join("shared"),
-            downloads.find(&PythonDownloadRequest::from_str("3.12.6")?.fill()?)?,
+            downloads.find(&PythonDownloadRequest::from_str(
+                "cpython-3.12.6-linux-x86_64-gnu",
+            )?)?,
         )?;
         let other = ManagedPythonInstallation::new(
             root.join("other"),
-            downloads.find(&PythonDownloadRequest::from_str("3.11.9")?.fill()?)?,
+            downloads.find(&PythonDownloadRequest::from_str(
+                "cpython-3.11.9-linux-x86_64-gnu",
+            )?)?,
         )?;
 
         let shared_executable = changed.executable(false);
