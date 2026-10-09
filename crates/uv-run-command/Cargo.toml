@@ -14,7 +14,6 @@ workspace = true
 [dependencies]
 uv-cache = { workspace = true }
 uv-child-process = { workspace = true }
-uv-cli-arguments = { workspace = true }
 uv-cli-error = { workspace = true }
 uv-cli-output = { workspace = true }
 uv-cli-settings = { workspace = true }

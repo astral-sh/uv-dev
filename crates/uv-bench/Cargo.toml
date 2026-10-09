@@ -59,7 +59,6 @@ uv = { workspace = true }
 uv-cache = { workspace = true }
 uv-cli-arguments = { workspace = true }
 uv-client = { workspace = true }
-uv-command-support = { workspace = true }
 uv-configuration = { workspace = true }
 uv-dispatch = { workspace = true }
 uv-distribution = { workspace = true }
