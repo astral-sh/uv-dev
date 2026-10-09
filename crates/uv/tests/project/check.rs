@@ -3,7 +3,7 @@ use std::process::Command;
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, method, path};
@@ -3093,6 +3093,65 @@ fn check_type_error() -> Result<()> {
     warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
     "#);
 
+    Ok(())
+}
+
+/// Type-checker metadata must not overwrite a resolution selected only through CLI settings.
+#[test]
+fn check_metadata_keeps_cli_resolution() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
+        name = "check-metadata-resolution"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.check-dependency.versions."1.0.0"]
+        sdist = false
+        [packages.check-dependency.versions."2.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context!("3.12");
+    let index = server.index_url();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["check-dependency>=1"]
+
+        [[tool.uv.index]]
+        url = "{index}"
+        default = true
+    "#})?;
+    context
+        .temp_dir
+        .child("main.py")
+        .write_str("import check_dependency\n")?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--resolution").arg("lowest-direct"), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    let checked_lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), workspace_check(&context)
+        .arg("--resolution").arg("lowest-direct"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Installed 1 package in [TIME]
+    "#);
+    assert_eq!(checked_lock, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.pip_freeze(), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    check-dependency==1.0.0
+    "#);
     Ok(())
 }
 

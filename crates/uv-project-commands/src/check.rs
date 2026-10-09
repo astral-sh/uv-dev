@@ -751,7 +751,6 @@ pub async fn check(
             .map(|project| project.workspace().install_path().as_path()),
         lock_check,
         frozen,
-        isolated || isolated_lock,
         &check_targets,
         &excluded_targets,
         explicit_targets,

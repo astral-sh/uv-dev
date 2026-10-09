@@ -30,7 +30,6 @@ pub(super) async fn run(
     workspace_root: Option<&Path>,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
-    isolated_lock: bool,
     check_targets: &[PathBuf],
     excluded_targets: &[PathBuf],
     explicit_targets: bool,
@@ -236,12 +235,8 @@ pub(super) async fn run(
         },
     );
 
-    // Metadata subprocesses must use the same lockfile write policy, including for scripts.
-    if isolated_lock {
-        command.env(EnvVars::UV_ISOLATED_LOCK, "1");
-    } else {
-        command.env_remove(EnvVars::UV_ISOLATED_LOCK);
-    }
+    // Metadata queries are read-only; the parent check owns lockfile updates.
+    command.env(EnvVars::UV_ISOLATED_LOCK, "1");
 
     if workspace_root.is_some() {
         // Forward enabled settings and remove disabled ones so CLI overrides of inherited
