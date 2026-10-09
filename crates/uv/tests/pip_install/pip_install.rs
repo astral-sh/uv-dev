@@ -17,7 +17,7 @@ use fs_err::os::unix::fs::symlink;
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
-use predicates::prelude::{PredicateBooleanExt, predicate};
+use predicates::prelude::predicate;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -9139,11 +9139,15 @@ fn require_hashes_missing_local_dependency() -> Result<()> {
     requirements.write_str(&format!(
         "hash-parent==1.0.0 --hash=sha256:{parent_hash}\nhash-leaf==2.0.0 --hash=sha256:{malformed_hash}"
     ))?;
-    command()
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Failed to read"))
-        .stderr(predicate::str::contains("--require-hashes").not());
+    uv_snapshot!(context.filters(), command(), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because hash-leaf==2.0.0 has an invalid package format and you require hash-leaf==2.0.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: The structure of `hash-leaf` (v2.0.0) was invalid:
+      Failed to read from zip file
+    ");
 
     // Both valid hashes still permit the same resolution.
     fs::write(leaf_path.path(), leaf_wheel)?;
