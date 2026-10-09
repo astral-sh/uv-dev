@@ -192,7 +192,7 @@ impl FlatDependencyGroups {
         let groups = Self::from_pyproject_toml_with_workspace(
             path,
             pyproject_toml,
-            Some(&workspace_groups),
+            &workspace_groups,
             selected_groups.as_ref(),
         )?;
         for (group, dependencies) in &groups.0 {
@@ -204,7 +204,7 @@ impl FlatDependencyGroups {
     fn from_pyproject_toml_with_workspace(
         path: &Path,
         pyproject_toml: &PyProjectToml,
-        workspace_groups: Option<&WorkspaceDependencyGroups>,
+        workspace_groups: &WorkspaceDependencyGroups,
         selected_groups: Option<&BTreeSet<GroupName>>,
     ) -> Result<Self, DependencyGroupError> {
         // First, collect `tool.uv.dev_dependencies`
@@ -282,13 +282,13 @@ impl FlatDependencyGroups {
     fn from_dependency_groups(
         groups: &BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
         settings: &BTreeMap<GroupName, DependencyGroupSettings>,
-        workspace_groups: Option<&WorkspaceDependencyGroups>,
+        workspace_groups: &WorkspaceDependencyGroups,
     ) -> Result<Self, DependencyGroupErrorInner> {
         fn resolve_group<'data>(
             resolved: &mut BTreeMap<GroupName, FlatDependencyGroup>,
             groups: &'data BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
             settings: &BTreeMap<GroupName, DependencyGroupSettings>,
-            workspace_groups: Option<&WorkspaceDependencyGroups>,
+            workspace_groups: &WorkspaceDependencyGroups,
             name: &'data GroupName,
             parents: &mut Vec<&'data GroupName>,
         ) -> Result<(), DependencyGroupErrorInner> {
@@ -373,14 +373,12 @@ impl FlatDependencyGroups {
             for include in include_workspace_groups {
                 let included = match include {
                     WorkspaceGroupInclude::Root(workspace_group) => {
-                        let workspace_groups = workspace_groups
-                            .and_then(|groups| groups.root.as_ref())
-                            .ok_or_else(|| {
-                                DependencyGroupErrorInner::WorkspaceGroupOutsideWorkspace(
-                                    workspace_group.clone(),
-                                    name.clone(),
-                                )
-                            })?;
+                        let workspace_groups = workspace_groups.root.as_ref().ok_or_else(|| {
+                            DependencyGroupErrorInner::WorkspaceGroupOutsideWorkspace(
+                                workspace_group.clone(),
+                                name.clone(),
+                            )
+                        })?;
                         workspace_groups.get(workspace_group).ok_or_else(|| {
                             DependencyGroupErrorInner::WorkspaceGroupNotFound(
                                 workspace_group.clone(),
@@ -390,7 +388,8 @@ impl FlatDependencyGroups {
                     }
                     WorkspaceGroupInclude::Package(include) => {
                         let workspace_groups = workspace_groups
-                            .and_then(|groups| groups.packages.get(&include.package))
+                            .packages
+                            .get(&include.package)
                             .ok_or_else(|| {
                                 DependencyGroupErrorInner::WorkspacePackageNotFound(
                                     include.package.clone(),
