@@ -4226,6 +4226,37 @@ fn python_install_with_ndjson_manifest() {
     Installed Python 3.14.[LATEST] in [TIME]
      ~ cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
     ");
+    // An implicit catalog can contain multiple builds of the same Python version.
+    let build = download
+        .build()
+        .expect("CPython download has a build identifier");
+    let artifact = serde_json::json!({
+        "url": download.url(),
+        "platform": Platform::from_env().unwrap().as_cargo_dist_triple(),
+        "sha256": sha256,
+        "variant": "install_only",
+    });
+    let newer = serde_json::json!({
+        "version": format!("{}+99999999", download.key().version()),
+        "artifacts": [artifact.clone()],
+    });
+    let requested = serde_json::json!({
+        "version": format!("{}+{build}", download.key().version()),
+        "artifacts": [artifact],
+    });
+    manifest
+        .write_str(&format!("{newer}\n{requested}\n"))
+        .unwrap();
+    uv_snapshot!(context.filters(), context.python_install()
+        .args(["3.14", "--reinstall"])
+        .env(EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL, manifest.path())
+        .env(EnvVars::UV_PREVIEW_FEATURES, "remote-python-download-metadata")
+        .env(EnvVars::UV_PYTHON_CPYTHON_BUILD, build), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.14.[LATEST] in [TIME]
+     ~ cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
+    ");
 }
 
 #[cfg(unix)]

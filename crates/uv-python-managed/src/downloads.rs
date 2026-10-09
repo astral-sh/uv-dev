@@ -41,7 +41,7 @@ use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
 use uv_fs::{Simplified, rename_with_retry, write_atomic};
 use uv_macros::DebugNoInline;
-use uv_platform::{self as platform, Arch, Libc, Os, Platform};
+use uv_platform::{Arch, Libc, Os, Platform};
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_static::{
@@ -1194,17 +1194,18 @@ fn merge_with_embedded_non_cpython(
     let mut merged = BTreeMap::new();
 
     for download in downloads {
-        merged.entry(download.key().clone()).or_insert(download);
+        merged
+            .entry((download.key().clone(), download.build()))
+            .or_insert(download);
     }
 
     for download in filter_downloads(embedded_non_cpython_downloads()?, filter) {
-        merged.entry(download.key().clone()).or_insert(download);
+        merged
+            .entry((download.key().clone(), download.build()))
+            .or_insert(download);
     }
 
-    let mut downloads = merged.into_values().collect::<Vec<_>>();
-    downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
-
-    Ok(downloads)
+    Ok(merged.into_values().rev().collect())
 }
 
 fn find_in_embedded_non_cpython(
@@ -1913,12 +1914,18 @@ fn parse_json_download_bytes(
 
 fn parse_version_with_build(s: &str) -> Result<(PythonVersion, Option<&str>), Error> {
     if let Some((version_str, build)) = s.split_once('+') {
-        let version = PythonVersion::from_str(version_str)
-            .map_err(|_| Error::InvalidPythonVersion(s.to_string()))?;
+        let version = PythonVersion::from_str(version_str).map_err(|_| {
+            Error::Request(PythonDownloadRequestError::InvalidPythonVersion(
+                s.to_string(),
+            ))
+        })?;
         Ok((version, Some(build)))
     } else {
-        let version =
-            PythonVersion::from_str(s).map_err(|_| Error::InvalidPythonVersion(s.to_string()))?;
+        let version = PythonVersion::from_str(s).map_err(|_| {
+            Error::Request(PythonDownloadRequestError::InvalidPythonVersion(
+                s.to_string(),
+            ))
+        })?;
         Ok((version, None))
     }
 }
@@ -2808,6 +2815,27 @@ mod tests {
     }
 
     #[test]
+    fn implicit_ndjson_catalog_retains_requested_builds() -> anyhow::Result<()> {
+        let content = br#"{"version":"3.14.1+20260102","artifacts":[{"url":"https://example.com/new.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
+{"version":"3.14.1+20260101","artifacts":[{"url":"https://example.com/old.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only"}]}
+"#;
+        let downloads = ManagedPythonDownloadList {
+            downloads: merge_with_embedded_non_cpython(
+                parse_ndjson_bytes("builds.ndjson", content)?,
+                None,
+            )?,
+        };
+        let mut request = PythonDownloadRequest::from_str("cpython-3.14.1-linux-x86_64-gnu")?;
+        assert_eq!(downloads.find(&request)?.build(), Some("20260102"));
+        request.build = Some("20260101".to_owned());
+        assert_eq!(
+            downloads.find(&request)?.url().as_ref(),
+            "https://example.com/old.tar.gz"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn implicit_ndjson_merge_respects_platform_filter() {
         let request = PythonDownloadRequest::from_str("cpython-3.14-macos-aarch64-none")
             .unwrap()
@@ -2834,7 +2862,7 @@ mod tests {
                     let etag = if method == "HEAD" { "old" } else { "new" };
                     write!(
                         stream,
-                        "HTTP/1.1 200 OK\r\nETag: \"{etag}\"\r\nContent-Length: {}\r\n\r\n",
+                        "HTTP/1.1 200 OK\r\nETag: \"{etag}\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         content.len()
                     )
                     .unwrap();
@@ -3171,12 +3199,10 @@ mod tests {
         .unwrap();
 
         let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu").unwrap();
-        let download = ManagedPythonDownloadList::find_streaming(
-            &BaseClientBuilder::default().retries(0),
-            &cache,
-            Some(url.as_str()),
-            &request,
-        )
+        let client = BaseClientBuilder::default().retries(0).build().unwrap();
+        let download = fetch_ndjson_find_cached(&client, &url, &cache, |download| {
+            download.matches_request(&request)
+        })
         .await
         .unwrap()
         .expect("matching download should be found");
@@ -3294,12 +3320,10 @@ mod tests {
         .unwrap();
 
         let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu").unwrap();
-        let download = ManagedPythonDownloadList::find_streaming(
-            &BaseClientBuilder::default().retries(0),
-            &cache,
-            Some(url.as_str()),
-            &request,
-        )
+        let client = BaseClientBuilder::default().retries(0).build().unwrap();
+        let download = fetch_ndjson_find_cached(&client, &url, &cache, |download| {
+            download.matches_request(&request)
+        })
         .await
         .unwrap()
         .expect("matching download should be found");
