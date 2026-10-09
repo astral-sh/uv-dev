@@ -20,7 +20,7 @@ use uv_configuration::{
 };
 use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
-use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
+use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, Dist, ExtraBuildVariables, HashCollection, Identifier,
     Index, IndexLocations, MinimumLibcVersion, NameRequirementSpecification, Origin,
@@ -356,6 +356,26 @@ pub async fn pip_compile(
         interpreter.sys_executable().user_display().cyan()
     );
 
+    if include_build_dependencies {
+        if python_platform
+            .as_ref()
+            .is_some_and(|target| target.platform() != *interpreter.platform())
+        {
+            return Err(anyhow!(
+                "`--include-build-dependencies` requires the target platform to match the build interpreter platform"
+            ));
+        }
+        if python_version.as_ref().is_some_and(|target| {
+            target.major() != interpreter.python_major()
+                || target.minor() != interpreter.python_minor()
+                || (target.patch().is_some() && target.version() != interpreter.python_version())
+        }) {
+            return Err(anyhow!(
+                "`--include-build-dependencies` requires the target Python version to match the build interpreter version"
+            ));
+        }
+    }
+
     if let Some(python_version) = python_version.as_ref() {
         // If the requested version does not match the version we're using warn the user
         // _unless_ they have not specified a patch version and that is the only difference
@@ -561,8 +581,7 @@ pub async fn pip_compile(
         workspace_cache,
         concurrency.clone(),
         preview,
-    )
-    .with_build_requirement_capture(include_build_dependencies);
+    );
 
     if universal
         && minimum_libc_version.is_some()
@@ -661,22 +680,15 @@ pub async fn pip_compile(
         options,
     )) = build_resolution_inputs
     {
-        // The initial resolver may build candidates that are not selected. Only include build
-        // requirements rediscovered while probing distributions in the final resolution.
-        build_dispatch.take_build_requirements().await;
-
-        let database = DistributionDatabase::new(
-            &client,
-            &build_dispatch,
-            concurrency.downloads_semaphore.clone(),
-        );
         let mut requirements_by_source = FxHashMap::default();
-        let mut previous_requirements = FxHashSet::default();
+        let mut previous_requirements = (FxHashSet::default(), FxHashSet::default());
         let mut requirement_states = Vec::new();
 
         loop {
             let mut active_requirements = Vec::new();
             let mut active_seen = FxHashSet::default();
+            let mut active_constraints = Vec::new();
+            let mut constraints_seen = FxHashSet::default();
             for distribution in resolution.distributions() {
                 let ResolvedDist::Installable { dist, .. } = distribution else {
                     continue;
@@ -686,35 +698,50 @@ pub async fn pip_compile(
                 };
                 let id = source.distribution_id();
                 if !requirements_by_source.contains_key(&id) {
-                    database
-                        .resolve_build_requirements(source, hasher.archive_policy(source))
-                        .await?;
-                    requirements_by_source
-                        .insert(id.clone(), build_dispatch.take_build_requirements().await);
+                    let discovered = build_dispatch
+                        .discover_build_requirements(source, hasher.metadata_policy(source))
+                        .await
+                        .map_err(|err| {
+                            if err.is_user_failure() {
+                                UvError::User(err.into())
+                            } else {
+                                UvError::Unexpected(err.into())
+                            }
+                        })?;
+                    requirements_by_source.insert(id.clone(), discovered);
                 }
                 if let Some(build_requirements) = requirements_by_source.get(&id) {
                     active_requirements.extend(
                         build_requirements
+                            .requirements
                             .iter()
                             .filter(|requirement| active_seen.insert((*requirement).clone()))
                             .cloned()
                             .map(UnresolvedRequirementSpecification::from),
                     );
+                    active_constraints.extend(
+                        build_requirements
+                            .constraints
+                            .iter()
+                            .filter(|constraint| constraints_seen.insert((*constraint).clone()))
+                            .cloned(),
+                    );
                 }
             }
+            let active_state = (active_seen, constraints_seen);
 
             // Requirements belong to selected sources; replaced source releases cannot retain
             // their backend requirements in the next resolution.
-            if active_seen == previous_requirements {
+            if active_state == previous_requirements {
                 break;
             }
-            if requirement_states.contains(&active_seen) {
+            if requirement_states.contains(&active_state) {
                 return Err(anyhow!(
                     "Build dependency requirements do not converge across selected source distributions"
                 ));
             }
             requirement_states.push(previous_requirements);
-            previous_requirements = active_seen;
+            previous_requirements = active_state;
 
             resolution = match uv_resolve_operations::resolve(
                 requirements
@@ -722,7 +749,15 @@ pub async fn pip_compile(
                     .cloned()
                     .chain(active_requirements)
                     .collect(),
-                constraints.clone(),
+                constraints
+                    .iter()
+                    .cloned()
+                    .chain(
+                        active_constraints
+                            .into_iter()
+                            .map(NameRequirementSpecification::from),
+                    )
+                    .collect(),
                 overrides.clone(),
                 override_dependencies.clone(),
                 excludes.clone(),
@@ -758,10 +793,6 @@ pub async fn pip_compile(
                     return Err(UvError::from(err).into());
                 }
             };
-
-            // As above, builds performed while considering rejected candidates must not become
-            // direct requirements in the next pass.
-            build_dispatch.take_build_requirements().await;
         }
     }
 
