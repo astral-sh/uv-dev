@@ -2084,14 +2084,6 @@ mod tests {
             .await;
 
         Mock::given(method("GET"))
-            .and(path_regex("/prefix_2.*"))
-            .and(basic_auth("other-user", password_2))
-            .respond_with(ResponseTemplate::new(200))
-            .expect(2)
-            .mount(&server)
-            .await;
-
-        Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
@@ -2173,38 +2165,6 @@ mod tests {
                 .status(),
             200,
             "Requests to other paths with that prefix will also succeed"
-        );
-
-        // With `authenticate = "always"`, each index can discover a different username.
-        let indexes = Indexes::from_indexes([&base_url_1, &base_url_2].map(|url| Index {
-            url: DisplaySafeUrl::from_url(url.clone()),
-            root_url: DisplaySafeUrl::from_url(url.clone()),
-            auth_policy: AuthPolicy::Always,
-        }));
-        let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_netrc(None)
-                    .with_text_store(None)
-                    .with_keyring(Some(KeyringProvider::dummy([
-                        (base_url_1.clone(), username, password_1),
-                        (base_url_2.clone(), "other-user", password_2),
-                    ])))
-                    .with_indexes(indexes),
-            )
-            .build();
-
-        assert_eq!(client.get(base_url_1).send().await?.status(), 200);
-        assert_eq!(client.get(base_url_2).send().await?.status(), 200);
-        assert_eq!(
-            client
-                .get(base_url.join("prefix_2/foo")?)
-                .send()
-                .await?
-                .status(),
-            200,
-            "File requests should also use the second index's credentials"
         );
 
         Ok(())
@@ -2351,6 +2311,77 @@ mod tests {
             root_url: url.clone(),
             auth_policy: policy,
         }])
+    }
+
+    /// Each always-authenticated index uses its own keyring username and password.
+    #[test(tokio::test)]
+    async fn test_auth_policy_always_different_index_usernames() -> Result<(), Error> {
+        let username = "user";
+        let other_username = "other-user";
+        let password_1 = "password1";
+        let password_2 = "password2";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/prefix_1.*"))
+            .and(basic_auth(username, password_1))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("/prefix_2.*"))
+            .and(basic_auth(other_username, password_2))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let base_url = Url::parse(&server.uri())?;
+        let base_url_1 = base_url.join("prefix_1")?;
+        let base_url_2 = base_url.join("prefix_2")?;
+        let indexes = Indexes::from_indexes(vec![
+            Index {
+                url: DisplaySafeUrl::from_url(base_url_1.clone()),
+                root_url: DisplaySafeUrl::from_url(base_url_1.clone()),
+                auth_policy: AuthPolicy::Always,
+            },
+            Index {
+                url: DisplaySafeUrl::from_url(base_url_2.clone()),
+                root_url: DisplaySafeUrl::from_url(base_url_2.clone()),
+                auth_policy: AuthPolicy::Always,
+            },
+        ]);
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_keyring(Some(KeyringProvider::dummy([
+                        (base_url_1.clone(), username, password_1),
+                        (base_url_2.clone(), other_username, password_2),
+                    ])))
+                    .with_indexes(indexes),
+            )
+            .build();
+
+        assert_eq!(client.get(base_url_1).send().await?.status(), 200);
+        assert_eq!(client.get(base_url_2).send().await?.status(), 200);
+        assert_eq!(
+            client
+                .get(base_url.join("prefix_2/foo")?)
+                .send()
+                .await?
+                .status(),
+            200,
+            "File requests use the second index's credentials"
+        );
+        Ok(())
     }
 
     /// With the "always" auth policy, requests should succeed on
