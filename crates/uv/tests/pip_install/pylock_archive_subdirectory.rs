@@ -31,20 +31,10 @@ async fn local_archive_subdirectory_is_not_built_as_root() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let root_marker = context.temp_dir.child("root-backend-ran");
     let nested_marker = context.temp_dir.child("nested-backend-ran");
-    let root_name = "root-demo".parse()?;
-    let nested_name = "nested-demo".parse()?;
-    let (root_filename, root_wheel) = generate_wheel(
-        &root_name,
+    let name = "demo".parse()?;
+    let (filename, wheel) = generate_wheel(
+        &name,
         &"1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
-    let (nested_filename, nested_wheel) = generate_wheel(
-        &nested_name,
-        &"2.0".parse()?,
         &[],
         &BTreeMap::new(),
         None,
@@ -57,21 +47,18 @@ async fn local_archive_subdirectory_is_not_built_as_root() -> Result<()> {
         build-backend = "backend"
         backend-path = ["."]
     "#};
-    let root_backend = backend(&root_filename, root_marker.path());
-    let nested_backend = backend(&nested_filename, nested_marker.path());
+    let root_backend = backend(&filename, root_marker.path());
+    let nested_backend = backend(&filename, nested_marker.path());
     let mut archive = Vec::new();
     write_tar_gz(
         &mut archive,
         &[
             ("projects/pyproject.toml", project.as_bytes()),
             ("projects/backend.py", root_backend.as_bytes()),
-            (&format!("projects/{root_filename}"), root_wheel.as_slice()),
+            (&format!("projects/{filename}"), wheel.as_slice()),
             ("projects/nested/pyproject.toml", project.as_bytes()),
             ("projects/nested/backend.py", nested_backend.as_bytes()),
-            (
-                &format!("projects/nested/{nested_filename}"),
-                nested_wheel.as_slice(),
-            ),
+            (&format!("projects/nested/{filename}"), wheel.as_slice()),
         ],
     )?;
     context
@@ -88,7 +75,7 @@ async fn local_archive_subdirectory_is_not_built_as_root() -> Result<()> {
         requires-python = ">=3.12"
 
         [[packages]]
-        name = "root-demo"
+        name = "demo"
         version = "1.0"
         archive = {{ path = "projects.tar.gz", hashes = {{ sha256 = "{hash}" }} }}
     "#})?;
@@ -102,6 +89,8 @@ async fn local_archive_subdirectory_is_not_built_as_root() -> Result<()> {
         .assert()
         .success();
     assert!(root_marker.exists());
+    context.pip_uninstall().arg("demo").assert().success();
+    context.assert_not_installed("demo");
     fs_err::remove_file(root_marker.path())?;
 
     lock.write_str(&formatdoc! {r#"
@@ -110,36 +99,36 @@ async fn local_archive_subdirectory_is_not_built_as_root() -> Result<()> {
         requires-python = ">=3.12"
 
         [[packages]]
-        name = "nested-demo"
-        version = "2.0"
+        name = "demo"
+        version = "1.0"
         archive = {{ path = "projects.tar.gz", subdirectory = "nested", hashes = {{ sha256 = "{hash}" }} }}
     "#})?;
+    // Matching identities make the cached root wheel eligible, but its source selection differs.
+    let output = uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg(lock.path())
+        .arg("--preview-features").arg("pylock").arg("--no-index"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `demo` selects subdirectory `nested` in local archive `projects.tar.gz`, which is not supported
+    ");
+    assert!(!output.status.success());
+    assert!(!root_marker.exists());
+    assert!(!nested_marker.exists());
+
     // A cold request rejects the selected subtree without importing either backend.
     let output = uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r").arg(lock.path())
         .arg("--preview-features").arg("pylock").arg("--no-index").arg("--no-cache"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Package `nested-demo` selects subdirectory `nested` in local archive `projects.tar.gz`, which is not supported
-    ");
-    assert!(!output.status.success());
-    assert!(!root_marker.exists());
-    assert!(!nested_marker.exists());
-
-    // The cached root build cannot satisfy a request for the nested project.
-    let output = uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r").arg(lock.path())
-        .arg("--preview-features").arg("pylock").arg("--no-index"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Package `nested-demo` selects subdirectory `nested` in local archive `projects.tar.gz`, which is not supported
+    error: Package `demo` selects subdirectory `nested` in local archive `projects.tar.gz`, which is not supported
     ");
     assert!(!output.status.success());
     assert!(!root_marker.exists());
     assert!(!nested_marker.exists());
 
     // The same selected project is supported when the archive has a URL source.
-    let server = PackageServer::new(&nested_name).await;
+    let server = PackageServer::new(&name).await;
     server.serve("projects.tar.gz", &archive, Some(&hash)).await;
     let url = server.file_url("projects.tar.gz");
     lock.write_str(&formatdoc! {r#"
@@ -148,8 +137,8 @@ async fn local_archive_subdirectory_is_not_built_as_root() -> Result<()> {
         requires-python = ">=3.12"
 
         [[packages]]
-        name = "nested-demo"
-        version = "2.0"
+        name = "demo"
+        version = "1.0"
         archive = {{ url = "{url}", subdirectory = "nested", hashes = {{ sha256 = "{hash}" }} }}
     "#})?;
     context
@@ -161,7 +150,7 @@ async fn local_archive_subdirectory_is_not_built_as_root() -> Result<()> {
         .arg("--no-index")
         .assert()
         .success();
-    context.assert_installed("nested_demo", "2.0");
+    context.assert_installed("demo", "1.0");
     assert!(!root_marker.exists());
     assert!(nested_marker.exists());
     Ok(())
