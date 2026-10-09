@@ -168,6 +168,42 @@
         "run": "/workflow_run/id",
         "head_sha": "/workflow_run/head_sha"
       }
+    },
+    {
+      "repository": "uv",
+      "on": {
+        "workflow_run": ["in_progress"]
+      },
+      "head_repositories": ["uv"],
+      "conditions": {
+        "/workflow_run/event": "push",
+        "/workflow_run/head_branch": "main",
+        "/workflow/path": ".github/workflows/ci.yml"
+      },
+      "workflow": "test-integration-workflow-run.yml",
+      "inputs": {
+        "run": "/workflow_run/id",
+        "attempt": "/workflow_run/run_attempt",
+        "head_sha": "/workflow_run/head_sha"
+      }
+    },
+    {
+      "repository": "uv-dev",
+      "on": {
+        "workflow_run": ["in_progress"]
+      },
+      "head_repositories": ["uv-dev"],
+      "conditions": {
+        "/workflow_run/event": "push",
+        "/workflow_run/head_branch": "main",
+        "/workflow/path": ".github/workflows/ci.yml"
+      },
+      "workflow": "test-integration-workflow-run.yml",
+      "inputs": {
+        "run": "/workflow_run/id",
+        "attempt": "/workflow_run/run_attempt",
+        "head_sha": "/workflow_run/head_sha"
+      }
     }
   ]
 }
