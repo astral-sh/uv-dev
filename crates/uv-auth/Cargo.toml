@@ -12,6 +12,9 @@ license = { workspace = true }
 [lib]
 doctest = false
 
+[features]
+native-auth = []
+
 [lints]
 workspace = true
 

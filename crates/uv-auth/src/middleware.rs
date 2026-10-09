@@ -614,6 +614,9 @@ impl AuthMiddleware {
                     trace!("Updating cached credentials for `{url}` to {credentials:?}");
                     self.cache().insert(&url, credentials);
                 }
+                CredentialsCacheScope::KeyringFallback => {
+                    self.cache().insert_keyring_realm(&url, &credentials);
+                }
                 CredentialsCacheScope::Stored(snapshot) => {
                     self.cache().insert_stored(&url, snapshot);
                 }
@@ -927,7 +930,10 @@ impl AuthMiddleware {
         let realm = Realm::from(url);
         let store_credentials = if let Some(text_store) = text_store {
             debug!("Checking text store for credentials for `{url}`");
-            let snapshot = StoredCredentials::from(text_store.realm_credentials(&realm));
+            let snapshot = self
+                .cache()
+                .get_stored_snapshot(&realm)
+                .unwrap_or_else(|| StoredCredentials::from(text_store.realm_credentials(&realm)));
             match CredentialsCache::select_stored(&snapshot, url, &username) {
                 Ok(Some(credentials)) => {
                     debug!("Found credentials in plaintext store for `{url}`");
@@ -997,6 +1003,13 @@ impl AuthMiddleware {
             return Ok(store_credentials);
         }
 
+        if let Some(credentials) = self.cache().get_keyring_realm(realm, username.clone()) {
+            return Ok(Some(FetchedCredentials {
+                credentials,
+                cache_scope: CredentialsCacheScope::FetchOnly,
+            }));
+        }
+
         // The subprocess provider is slow, but its lookup target is realm- or index-scoped. Keep
         // its memoization separate so path-sensitive store lookups still run first on every path.
         if let Some(credentials) = self
@@ -1060,7 +1073,7 @@ impl AuthMiddleware {
         let keyring_credentials = keyring_credentials.map(|credentials| FetchedCredentials {
             credentials: Arc::new(Authentication::from(credentials)),
             cache_scope: if path_sensitive_store_enabled {
-                CredentialsCacheScope::FetchOnly
+                CredentialsCacheScope::KeyringFallback
             } else {
                 CredentialsCacheScope::Realm
             },
@@ -2743,6 +2756,90 @@ mod tests {
             "Credentials should be pulled from the text store"
         );
 
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_keyring_realm_fallback_with_empty_text_store() -> Result<(), Error> {
+        let server = start_test_server("user", "password").await;
+        let base_url = Url::parse(&server.uri())?;
+        let index_url = base_url.join("private/simple")?;
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_text_store(Some(TextCredentialStore::default()))
+                    .with_keyring(Some(KeyringProvider::dummy([(
+                        index_url.to_string(),
+                        "user",
+                        "password",
+                    )])))
+                    .with_indexes(indexes_for(&index_url, AuthPolicy::Always)),
+            )
+            .build();
+        assert_eq!(client.get(index_url).send().await?.status(), 200);
+        assert_eq!(
+            client
+                .get(base_url.join("packages/wheel.whl")?)
+                .send()
+                .await?
+                .status(),
+            200
+        );
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_keyring_realm_fallback_does_not_mask_text_store() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/private/simple.*"))
+            .and(basic_auth("keyring-user", "keyring-password"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("/packages/private.*"))
+            .and(basic_auth("stored-user", "stored-password"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let base_url = Url::parse(&server.uri())?;
+        let index_url = base_url.join("private/simple")?;
+        let mut store = TextCredentialStore::default();
+        store.insert(
+            crate::Service::try_from(DisplaySafeUrl::from_url(base_url.join("packages/private")?))?,
+            Credentials::basic(
+                Some("stored-user".to_owned()),
+                Some("stored-password".to_owned()),
+            ),
+        );
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(CredentialsCache::new())
+                    .with_text_store(Some(store))
+                    .with_keyring(Some(KeyringProvider::dummy([(
+                        index_url.to_string(),
+                        "keyring-user",
+                        "keyring-password",
+                    )])))
+                    .with_indexes(indexes_for(&index_url, AuthPolicy::Always)),
+            )
+            .build();
+        assert_eq!(client.get(index_url).send().await?.status(), 200);
+        assert_eq!(
+            client
+                .get(base_url.join("packages/private/wheel.whl")?)
+                .send()
+                .await?
+                .status(),
+            200
+        );
         Ok(())
     }
 

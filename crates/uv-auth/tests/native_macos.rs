@@ -1,4 +1,4 @@
-#![cfg(target_os = "macos")]
+#![cfg(all(feature = "native-auth", target_os = "macos"))]
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

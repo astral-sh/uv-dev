@@ -1,4 +1,7 @@
-#![cfg(any(target_os = "macos", target_os = "windows"))]
+#![cfg(all(
+    feature = "native-auth",
+    any(target_os = "macos", target_os = "windows")
+))]
 
 use std::sync::Arc;
 

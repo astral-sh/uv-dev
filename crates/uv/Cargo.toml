@@ -154,7 +154,7 @@ uv-unix = { workspace = true }
 
 [features]
 default = ["performance", "test-defaults"]
-native-auth = []
+native-auth = ["uv-auth/native-auth"]
 # Use better memory allocators, etc.
 performance = ["performance-memory-allocator"]
 performance-memory-allocator = ["dep:uv-performance-memory-allocator"]
