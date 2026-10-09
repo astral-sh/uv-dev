@@ -5962,8 +5962,7 @@ fn tool_install_lock_supports_local_wheel() {
 /// Build settings do not affect tool locks whose metadata comes from prebuilt wheels.
 #[test]
 fn tool_install_lock_ignores_unconsumed_config_settings() {
-    let context = uv_test::test_context!("3.12");
-    let tool_dir = context.temp_dir.child("tools");
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
     let wheel = context
         .workspace_root
@@ -5977,8 +5976,6 @@ fn tool_install_lock_ignores_unconsumed_config_settings() {
         .arg("--config-settings-package")
         .arg("simple-launcher:feature=enabled")
         .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
         .success();
@@ -6014,8 +6011,6 @@ fn tool_install_lock_ignores_unconsumed_config_settings() {
         .arg("--config-settings-package")
         .arg("simple-launcher:feature=enabled")
         .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -6030,8 +6025,6 @@ fn tool_install_lock_ignores_unconsumed_config_settings() {
         .arg("--config-settings-package")
         .arg("simple-launcher:feature=disabled")
         .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, bin_dir.as_os_str())
         .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
         .success();
