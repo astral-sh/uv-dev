@@ -22,8 +22,9 @@ use uv_distribution::{
     DistributionDatabase, LoweredExtraBuildDependencies, StaticMetadataDatabase,
 };
 use uv_distribution_types::{
-    DependencyMetadata, HashCollection, IndexLocations, InstalledDist, Name,
-    NameRequirementSpecification, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
+    DependencyMetadata, ExtraBuildRequires, HashCollection, IndexLocations, InstalledDist, Name,
+    NameRequirementSpecification, Requirement, RequirementSource, RequiresPython, Resolution,
+    UnresolvedRequirement,
 };
 use uv_errors::{ErrorWithHints, Hinted, Hints};
 #[cfg(unix)]
@@ -319,6 +320,9 @@ pub(crate) async fn locked_tool_project(
         .await
         ?
         .ok_or_else(|| {
+            if matches!(requirement.source, RequirementSource::Directory { .. } | RequirementSource::GitDirectory { .. }) {
+                return ToolLockError::Anyhow(anyhow::anyhow!("`--locked` requires a source tree with a `[project]` table for `{}`", requirement.name));
+            }
             ToolLockError::Anyhow(anyhow::anyhow!(
                 "`--locked` requires a tool from a source tree (e.g., a Git repository or local directory), but `{}` is not a source tree",
                 requirement.name.cyan()
@@ -903,6 +907,7 @@ pub(super) fn finalize_tool_install(
     overrides: Vec<Override<Requirement>>,
     excludes: Vec<ExcludeDependency>,
     build_constraints: Vec<NameRequirementSpecification>,
+    extra_build_requires: Option<&ExtraBuildRequires>,
     lock: Option<&ToolLock>,
     printer: Printer,
 ) -> anyhow::Result<()> {
@@ -1100,7 +1105,8 @@ pub(super) fn finalize_tool_install(
         python,
         installed_entrypoints,
         options.clone(),
-    );
+    )
+    .with_extra_build_requires(extra_build_requires.cloned().unwrap_or_default());
     ToolLock::write(&installed_tools.tool_dir(name), lock)?;
     installed_tools.add_tool_receipt(name, tool)?;
 

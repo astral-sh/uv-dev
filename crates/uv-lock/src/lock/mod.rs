@@ -2463,12 +2463,6 @@ impl<'lock> DependencySelection<'lock> {
     }
 }
 
-fn requirement_into_absolute(requirement: Requirement, root: &Path) -> Requirement {
-    NameRequirementSpecification::from(requirement)
-        .into_absolute(root)
-        .requirement
-}
-
 impl Lock {
     /// Initialize a [`Lock`] from a [`ResolverOutput`] and [`ResolverManifest`], applying any
     /// index-specific hash requirements to registry artifacts.
@@ -2869,12 +2863,12 @@ impl Lock {
 
             package.metadata.requires_dist = std::mem::take(&mut package.metadata.requires_dist)
                 .into_iter()
-                .map(|requirement| requirement_into_absolute(requirement, root))
+                .map(|requirement| requirement.into_absolute(root))
                 .collect();
             for requirements in package.metadata.dependency_groups.values_mut() {
                 *requirements = std::mem::take(requirements)
                     .into_iter()
-                    .map(|requirement| requirement_into_absolute(requirement, root))
+                    .map(|requirement| requirement.into_absolute(root))
                     .collect();
             }
         }
@@ -3567,7 +3561,7 @@ impl Lock {
                 .constraints
                 .iter()
                 .cloned()
-                .map(|requirement| requirement_into_absolute(requirement, root)),
+                .map(|requirement| requirement.into_absolute(root)),
         )
     }
 
@@ -3582,7 +3576,7 @@ impl Lock {
             .cloned()
             .map(move |entry| match entry {
                 Override::Requirement(requirement) => {
-                    Override::Requirement(requirement_into_absolute(requirement, root))
+                    Override::Requirement(requirement.into_absolute(root))
                 }
                 Override::Package(package) => Override::Package(PackageOverride {
                     package: package.package,
@@ -3590,7 +3584,7 @@ impl Lock {
                         .dependencies
                         .into_vec()
                         .into_iter()
-                        .map(|requirement| requirement_into_absolute(requirement, root))
+                        .map(|requirement| requirement.into_absolute(root))
                         .collect::<Vec<_>>()
                         .into_boxed_slice(),
                 }),

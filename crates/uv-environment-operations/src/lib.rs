@@ -1,5 +1,6 @@
 //! Shared project, script, and tool environment workflows.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::io;
@@ -1344,6 +1345,8 @@ pub struct EnvironmentSpecification<'lock> {
     requirements: RequirementsSpecification,
     /// The preferences to respect when resolving.
     preferences: Option<PreferenceLocation<'lock>>,
+    /// Build dependencies already lowered against their source workspace.
+    extra_build_requires: Option<&'lock ExtraBuildRequires>,
 }
 
 impl From<RequirementsSpecification> for EnvironmentSpecification<'_> {
@@ -1351,11 +1354,24 @@ impl From<RequirementsSpecification> for EnvironmentSpecification<'_> {
         Self {
             requirements,
             preferences: None,
+            extra_build_requires: None,
         }
     }
 }
 
 impl<'lock> EnvironmentSpecification<'lock> {
+    /// Use build dependencies already lowered against their source workspace.
+    #[must_use]
+    pub fn with_extra_build_requires(
+        self,
+        extra_build_requires: &'lock ExtraBuildRequires,
+    ) -> Self {
+        Self {
+            extra_build_requires: Some(extra_build_requires),
+            ..self
+        }
+    }
+
     /// Set the [`PreferenceLocation`] for the specification.
     #[must_use]
     pub fn with_preferences(self, preferences: PreferenceLocation<'lock>) -> Self {
@@ -1560,10 +1576,16 @@ pub async fn resolve_environment(
     // Resolve the flat indexes from `--find-links`.
     let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
 
-    // Lower the extra build dependencies, if any.
-    let extra_build_requires =
-        LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
-            .into_inner();
+    // Preserve sources already resolved against a source project's workspace.
+    let extra_build_requires = spec
+        .extra_build_requires
+        .map(Cow::Borrowed)
+        .unwrap_or_else(|| {
+            Cow::Owned(
+                LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
+                    .into_inner(),
+            )
+        });
 
     // Create a build dispatch.
     let resolve_dispatch = BuildDispatch::new(
