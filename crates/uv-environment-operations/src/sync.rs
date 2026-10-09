@@ -150,14 +150,11 @@ pub async fn sync_from_lock(
     let malware_check_client_builder = client_builder.clone();
 
     // Validate that the Python version is supported by the lockfile.
-    if !target
-        .lock()
-        .requires_python()
-        .contains(venv.interpreter().python_version())
-    {
+    let requires_python = target.python_requirement(groups)?.requires_python;
+    if !requires_python.contains(venv.interpreter().python_version()) {
         return Err(EnvironmentError::LockedPythonIncompatibility(
             venv.interpreter().python_version().clone(),
-            target.lock().requires_python().clone(),
+            requires_python,
         ));
     }
     target.validate_python(venv.interpreter().python_version())?;
@@ -171,6 +168,7 @@ pub async fn sync_from_lock(
 
     // Determine the markers to use for resolution.
     let marker_env = resolution_markers(None, python_platform, venv.interpreter());
+    target.validate_extra_resolution(extras, groups, Some(&marker_env))?;
 
     // Validate that the platform is supported by the lockfile.
     let environments = target.lock().supported_environments();

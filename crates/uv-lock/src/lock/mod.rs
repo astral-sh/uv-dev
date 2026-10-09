@@ -62,6 +62,7 @@ use uv_pypi_types::{
     ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, PyProjectToml,
 };
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
+use uv_resolver_types::universal_marker::resolve_activated_extras;
 use uv_resolver_types::{
     AnnotatedDist, ConflictMarker, DistributionMetadataIndex, MetadataResponse,
     ResolutionGraphNode, ResolverOutput, UniversalMarker,
@@ -446,7 +447,7 @@ impl<'lock> DependencySelectionContext<'lock> {
 }
 
 /// The dependency section in which a locked edge is stored.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum DependencyContext<'a> {
     Production,
     Extra(&'a ExtraName),
@@ -2564,15 +2565,14 @@ impl Lock {
                 package.metadata = PackageMetadata::from_distribution(metadata, root)?;
             }
             // Non-root workspace members do not contribute to the lock's global Python range.
-            // Record their declarations so edits invalidate the affected resolved packages.
-            if !metadata_free
-                && manifest.workspace_members().contains(dist.name())
+            // Record their bounds for freshness and direct frozen member selection.
+            if manifest.workspace_members().contains(dist.name())
                 && !manifest.members.contains(dist.name())
             {
                 package.metadata.requires_python = dist
                     .metadata
                     .as_ref()
-                    .and_then(|metadata| metadata.requires_python.clone());
+                    .map(|metadata| metadata.requires_python.clone().unwrap_or_default());
             }
             let mut wheel_marker = dist.marker;
             if let Some(supported_environments_marker) = supported_environments_marker {
@@ -2620,10 +2620,14 @@ impl Lock {
                     }
                     .into());
                 };
-                if metadata_free && matches!(package.id.source, Source::Registry(_)) {
-                    // A metadata-free lock must distinguish an extra that resolved to no
-                    // dependencies (including nonexistent extras) from one never requested.
-                    // Keeping the section also preserves its incoming, marker-bearing edge.
+                if (metadata_free && matches!(package.id.source, Source::Registry(_)))
+                    || (manifest.workspace_members().contains(&package.id.name)
+                        && !manifest.members.contains(&package.id.name)
+                        && package.metadata.provides_extra.contains(extra))
+                {
+                    // Empty resolved extras need their incoming, marker-bearing edges. These
+                    // distinguish metadata-free registry requests and non-root workspace requests
+                    // from extras that were declared but never selected for resolution.
                     package
                         .optional_dependencies
                         .entry(extra.clone())
@@ -2925,10 +2929,11 @@ impl Lock {
         self
     }
 
-    /// Omit package metadata except for remote URL and Git dependencies.
+    /// Omit declaration metadata except for remote URL and Git dependencies.
     ///
     /// Local declarations can be reread from disk. Remote URL and Git declarations remain in the
     /// lockfile so freshness checks can determine offline whether a source is requested or stale.
+    /// Non-root workspace Python bounds remain available for frozen member selection.
     #[must_use]
     fn without_package_metadata(mut self) -> Self {
         let workspace_root = self.root().map(|package| package.id.clone());
@@ -2949,7 +2954,10 @@ impl Lock {
                     package.dependency_groups.entry(group.clone()).or_default();
                 }
             }
-            package.metadata = PackageMetadata::default();
+            package.metadata = PackageMetadata {
+                requires_python: package.metadata.requires_python.take(),
+                ..PackageMetadata::default()
+            };
         }
 
         self
@@ -3271,6 +3279,164 @@ impl Lock {
                 .clone()
                 .unwrap_or_else(|| DefaultGroups::from_groups(vec![DEV_DEPENDENCIES.clone()])),
         )
+    }
+
+    /// Return the environments in which incoming locked edges resolved workspace extras.
+    ///
+    /// Retaining parent markers distinguishes resolved empty extras from metadata-free placeholders.
+    pub fn resolved_workspace_extras(
+        &self,
+        root: &Path,
+        activated: &[ConflictItem],
+    ) -> Result<BTreeMap<(&PackageName, &ExtraName), MarkerTree>, LockError> {
+        let root_marker = implicit_constraints_marker(
+            self.requires_python.to_marker_tree(),
+            self.supported_environments(),
+        );
+        let mut queue = VecDeque::new();
+        for package in self
+            .workspace_packages()
+            .filter(|package| self.is_resolution_root(package))
+        {
+            for context in iter::once(DependencyContext::Production)
+                .chain(
+                    package
+                        .optional_dependencies
+                        .keys()
+                        .map(DependencyContext::Extra),
+                )
+                .chain(
+                    package
+                        .dependency_groups
+                        .keys()
+                        .map(DependencyContext::Group),
+                )
+            {
+                let mut marker =
+                    root_marker.and(context.conflict_marker(package.name(), &self.conflicts));
+                if let DependencyContext::Group(group) = context
+                    && let Some(requires_python) = package
+                        .group_requires_python
+                        .get(group)
+                        .and_then(|metadata| metadata.requires_python.as_ref())
+                {
+                    marker = marker.and(
+                        RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree(),
+                    );
+                }
+                queue.push_back((package, context, marker));
+            }
+        }
+        let modifiers = DependencyModifiers::new(
+            Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
+                .map_err(LockErrorKind::InvalidScopedOverride)?,
+            Excludes::from_entries(self.manifest.excludes.iter().cloned()),
+        );
+        for (requirements, marker) in iter::once((&self.manifest.requirements, root_marker)).chain(
+            self.manifest
+                .dependency_groups
+                .iter()
+                .map(|(group, requirements)| {
+                    let marker = self
+                        .manifest
+                        .group_requires_python
+                        .get(group)
+                        .and_then(|metadata| metadata.requires_python.as_ref())
+                        .map_or(root_marker, |requires_python| {
+                            root_marker.and(
+                                RequiresPython::from_specifiers(requires_python.clone())
+                                    .to_marker_tree(),
+                            )
+                        });
+                    (requirements, marker)
+                }),
+        ) {
+            for requirement in modifiers.apply(DependencyModifierScope::Global, requirements) {
+                let requirement =
+                    normalize_requirement(requirement.into_owned(), root, &self.requires_python)?;
+                for package in self.packages_for_name(&requirement.name) {
+                    if !Self::package_satisfies_requirement(package, &requirement, root)? {
+                        continue;
+                    }
+                    let marker = marker.and(requirement.marker);
+                    queue.push_back((package, DependencyContext::Production, marker));
+                    for extra in &requirement.extras {
+                        if let Some(extra) = package
+                            .optional_dependencies
+                            .get_key_value(extra)
+                            .map(|(extra, _)| extra)
+                            .or_else(|| {
+                                package
+                                    .metadata
+                                    .provides_extra
+                                    .iter()
+                                    .find(|provided| *provided == extra)
+                            })
+                        {
+                            queue.push_back((package, DependencyContext::Extra(extra), marker));
+                        }
+                    }
+                }
+            }
+        }
+        let mut seen = FxHashMap::<(&PackageId, DependencyContext<'_>), MarkerTree>::default();
+        let mut selected = BTreeMap::<(&PackageName, &ExtraName), MarkerTree>::new();
+        while let Some((package, context, mut marker)) = queue.pop_front() {
+            if !package.fork_markers.is_empty() {
+                marker = marker.and(
+                    package
+                        .fork_markers
+                        .iter()
+                        .fold(MarkerTree::FALSE, |combined, fork| {
+                            combined.or(fork.combined())
+                        }),
+                );
+            }
+            if let Some(requires_python) = package.workspace_requires_python() {
+                marker = marker
+                    .and(RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree());
+            }
+            let previous = seen
+                .entry((&package.id, context))
+                .or_insert(MarkerTree::FALSE);
+            let marker = previous.or(marker);
+            if marker == *previous {
+                continue;
+            }
+            *previous = marker;
+            if let DependencyContext::Extra(extra) = context
+                && self.is_workspace_member(package)
+            {
+                selected
+                    .entry((package.name(), extra))
+                    .and_modify(|current| *current = current.or(marker))
+                    .or_insert(marker);
+            }
+            for dependency in context.dependencies(package) {
+                let dependency_marker = marker.and(dependency.complexified_marker.combined());
+                let dependency_package = self.package(dependency.index);
+                queue.push_back((
+                    dependency_package,
+                    DependencyContext::Production,
+                    dependency_marker,
+                ));
+                for extra in &dependency.extra {
+                    queue.push_back((
+                        dependency_package,
+                        DependencyContext::Extra(extra),
+                        dependency_marker,
+                    ));
+                }
+            }
+        }
+        let activated = activated
+            .iter()
+            .map(|item| (item.clone(), MarkerTree::TRUE))
+            .collect();
+        for ((package, _), marker) in &mut selected {
+            *marker = resolve_activated_extras(*marker, Some(package), &activated);
+        }
+        Ok(selected)
     }
 
     /// Return local workspace member names and their paths relative to the workspace root.
@@ -3949,7 +4115,7 @@ impl Lock {
         allow_missing_package_metadata: bool,
     ) -> SatisfiesResult<'lock> {
         if !self.supports_provides_extra()
-            || allow_missing_package_metadata && !package.has_metadata()
+            || allow_missing_package_metadata && !package.has_declaration_metadata()
         {
             return SatisfiesResult::Satisfied;
         }
@@ -3987,18 +4153,20 @@ impl Lock {
         root: &Path,
         allow_missing_package_metadata: bool,
     ) -> Result<SatisfiesResult<'lock>, LockError> {
-        if !allow_missing_package_metadata
-            && self.manifest.workspace_members().contains(&package.id.name)
+        if self.manifest.workspace_members().contains(&package.id.name)
             && !self.manifest.members.contains(&package.id.name)
-            && package.metadata.requires_python.as_ref() != package_requires_python
         {
-            return Ok(SatisfiesResult::MismatchedPackageRequiresPython(
-                &package.id.name,
-                package_requires_python.cloned(),
-                package.metadata.requires_python.as_ref(),
-            ));
+            let expected = package_requires_python.cloned().unwrap_or_default();
+            if package.metadata.requires_python.as_ref() != Some(&expected) {
+                return Ok(SatisfiesResult::MismatchedPackageRequiresPython(
+                    &package.id.name,
+                    Some(expected),
+                    package.metadata.requires_python.as_ref(),
+                ));
+            }
         }
-        let missing_metadata = allow_missing_package_metadata && !package.has_metadata();
+        let missing_metadata =
+            allow_missing_package_metadata && !package.has_declaration_metadata();
         let indexes = requires_dist
             .iter()
             .chain(dependency_groups.values().flatten())
@@ -4769,7 +4937,7 @@ impl Lock {
             }
 
             if allow_missing_package_metadata
-                && !package.has_metadata()
+                && !package.has_declaration_metadata()
                 && matches!(package.id.source, Source::Direct(..))
             {
                 if package.all_dependencies().next().is_some() {
@@ -7441,9 +7609,16 @@ impl Package {
         self.id.version.is_none()
     }
 
-    /// Returns `true` if the package contains the validation-only package metadata.
-    fn has_metadata(&self) -> bool {
-        self.metadata != PackageMetadata::default()
+    /// Returns `true` if the package contains declaration metadata for freshness validation.
+    fn has_declaration_metadata(&self) -> bool {
+        !self.metadata.requires_dist.is_empty()
+            || !self.metadata.provides_extra.is_empty()
+            || !self.metadata.dependency_groups.is_empty()
+    }
+
+    /// Return the recorded Python bound of a non-root workspace member.
+    pub fn workspace_requires_python(&self) -> Option<&VersionSpecifiers> {
+        self.metadata.requires_python.as_ref()
     }
 
     /// Returns the extras the package provides, if any.

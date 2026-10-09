@@ -546,6 +546,7 @@ async fn render_export<'output>(
     // Validate that the set of requested extras and development groups are defined in the lockfile.
     target.validate_extras(extras)?;
     target.validate_groups(groups)?;
+    target.validate_extra_resolution(extras, groups, None)?;
 
     if output_file
         .and_then(Path::file_name)

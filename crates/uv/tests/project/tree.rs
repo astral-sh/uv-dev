@@ -5255,3 +5255,118 @@ fn json_tree_package_names(command: &mut Command) -> Result<Vec<String>> {
         })
         .collect()
 }
+
+/// Workspace membership includes reached non-roots while the tree keeps its selected roots.
+#[cfg(feature = "test-universal")]
+#[test]
+fn json_output_distinguishes_resolution_roots_and_members() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        shared = { workspace = true }
+        [tool.uv.workspace]
+        members = ["shared", "unused"]
+        roots = ["app"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("unused/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "unused"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree().args([
+        "--frozen", "--universal", "--format", "json", "--preview-features", "json-output",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "roots": [
+        {
+          "id": "app==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "inverted": false,
+      "members": [
+        {
+          "name": "app",
+          "path": "[TEMP_DIR]/",
+          "id": "app==0.1.0@virtual+[TEMP_DIR]/"
+        },
+        {
+          "name": "shared",
+          "path": "[TEMP_DIR]/shared",
+          "id": "shared==0.1.0@virtual+[TEMP_DIR]/shared"
+        }
+      ],
+      "resolution": {
+        "app==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "app",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": [
+            {
+              "id": "shared==0.1.0@virtual+[TEMP_DIR]/shared"
+            }
+          ]
+        },
+        "shared==0.1.0@virtual+[TEMP_DIR]/shared": {
+          "name": "shared",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/shared"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+    "#);
+    Ok(())
+}
