@@ -395,7 +395,7 @@ impl<'a> IndexLocations {
     pub fn is_flat_index(&self, url: &IndexUrl) -> bool {
         self.flat_index
             .iter()
-            .chain(&self.indexes)
+            .chain(self.simple_indexes())
             .any(|index| index.format == IndexFormat::Flat && is_same_index(index.url(), url))
     }
 
@@ -671,6 +671,17 @@ mod tests {
         assert!(is_disambiguated_path(
             "git+https://github.com/example/repo.git"
         ));
+    }
+
+    #[test]
+    fn shadowed_flat_index_does_not_exempt_cutoffs() -> Result<(), Box<dyn Error>> {
+        let simple = Index::from_str("shared=https://example.com/simple")?;
+        let url = simple.url().clone();
+        let mut shadowed = simple.clone();
+        shadowed.format = IndexFormat::Flat;
+        let locations = IndexLocations::new(vec![simple, shadowed], vec![], false);
+        assert!(!locations.is_flat_index(&url));
+        Ok(())
     }
 
     #[test]

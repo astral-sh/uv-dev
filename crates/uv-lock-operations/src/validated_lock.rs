@@ -91,16 +91,6 @@ impl ValidatedLock {
             );
             return Ok(Self::Unusable(lock));
         }
-        if let Some((package, cutoff)) =
-            lock.find_exclude_newer_mismatch(install_path, &options.exclude_newer, index_locations)?
-        {
-            let _ = writeln!(
-                printer.stderr(),
-                "Resolving despite existing lockfile because package `{package}` contains artifacts that do not satisfy the `exclude-newer` cutoff of `{cutoff}`",
-            );
-            return Ok(Self::Preferable(lock));
-        }
-
         if upgrade.is_all() {
             // If the user specified `--upgrade`, then we can't use the existing lockfile.
             //
@@ -212,6 +202,16 @@ impl ValidatedLock {
             } else {
                 Ok(Self::Versions(lock))
             };
+        }
+
+        if let Some((package, cutoff)) =
+            lock.find_exclude_newer_mismatch(install_path, &options.exclude_newer, index_locations)?
+        {
+            let _ = writeln!(
+                printer.stderr(),
+                "Resolving despite existing lockfile because package `{package}` contains artifacts that do not satisfy the `exclude-newer` cutoff of `{cutoff}`",
+            );
+            return Ok(Self::Preferable(lock));
         }
 
         // If the pre-release mode has changed, we have to re-resolve, but can retain the existing

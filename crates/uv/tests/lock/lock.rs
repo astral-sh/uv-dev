@@ -47836,7 +47836,7 @@ fn lock_resolution_inputs_refresh_new_exclusion() -> Result<()> {
     Ok(())
 }
 
-/// Retained settings consulted before backtracking still matter for packages absent from the lock.
+/// Retained dependency settings survive backtracking; upload cutoffs apply to locked artifacts.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_backtracking() -> Result<()> {
@@ -48161,7 +48161,7 @@ fn lock_resolution_inputs_backtracking() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
 
-    // Upload cutoffs consulted for packages absent from the final graph remain relevant.
+    // Upload cutoffs for packages absent from the final graph do not invalidate locked artifacts.
     pyproject.write_str(indoc! {r#"
         [project]
         name = "project"
@@ -48186,13 +48186,9 @@ fn lock_resolution_inputs_backtracking() -> Result<()> {
         .arg("--locked")
         .arg("--index-url")
         .arg(server.index_url()), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer timestamp from `2025-01-01T00:00:00Z` to `2024-03-25T00:00:00Z` for package `discarded`
     Resolved 2 packages in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
     ");
 
     // An upgrade applies the previously ignored exclusion and selects the discarded branch.
