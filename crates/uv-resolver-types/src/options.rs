@@ -41,7 +41,6 @@ pub struct OptionsBuilder {
     minimum_libc_version: Option<MinimumLibcVersion>,
     required_environments: SupportedEnvironments,
     required_environments_mode: Option<RequiredEnvironmentsMode>,
-    workspace_wheel_exemptions: BTreeSet<PathBuf>,
     flexibility: Flexibility,
     build_options: BuildOptions,
     torch_backend: Option<TorchStrategy>,
@@ -150,13 +149,6 @@ impl OptionsBuilder {
         self
     }
 
-    /// Set local workspace directories exempt from external wheel coverage requirements.
-    #[must_use]
-    pub fn workspace_wheel_exemptions(mut self, paths: BTreeSet<PathBuf>) -> Self {
-        self.workspace_wheel_exemptions = paths;
-        self
-    }
-
     /// Builds the options.
     pub fn build(self) -> Options {
         let mut artifact_environments = self.artifact_environments.into_markers();
@@ -176,7 +168,7 @@ impl OptionsBuilder {
             minimum_libc_version: self.minimum_libc_version,
             required_environments: self.required_environments,
             required_environments_mode: self.required_environments_mode,
-            workspace_wheel_exemptions: self.workspace_wheel_exemptions,
+            workspace_wheel_exemptions: BTreeSet::new(),
             flexibility: self.flexibility,
             build_options: self.build_options,
             torch_backend: self.torch_backend,

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -41,7 +41,7 @@ use uv_python_types::{
     PythonVersion, VersionRequest,
 };
 use uv_requirements::{
-    GroupsSpecification, RequirementsSource, RequirementsSpecification, SourceTree, is_pylock_toml,
+    GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
 };
 use uv_resolver::{
     AnnotationStyle, DependencyMode, DisplayResolutionGraph, ExcludeNewer, FlatIndex, ForkStrategy,
@@ -51,10 +51,10 @@ use uv_resolver::{
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode, TorchStrategy};
-use uv_types::{BuildContext, HashStrategy, SourceTreeEditablePolicy};
+use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once};
+use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
-use uv_workspace::{DiscoveryOptions, ProjectWorkspace, WorkspaceCache};
 
 use uv_command_support::Printer;
 use uv_command_support::{ExitStatus, OutputWriter, UvError};
@@ -563,42 +563,6 @@ pub async fn pip_compile(
         None
     };
 
-    // Exempt discovered local workspace paths without changing registry source selection.
-    let mut workspace_wheel_exemptions = BTreeSet::new();
-    if universal
-        && required_environments_mode == Some(RequiredEnvironmentsMode::RequireWheels)
-        && !build_dispatch.sources().all()
-    {
-        for source_tree in &source_trees {
-            let path = match source_tree {
-                SourceTree::PyProjectToml(path, _)
-                | SourceTree::SetupPy(path)
-                | SourceTree::SetupCfg(path) => path,
-            };
-            let path = fs_err::canonicalize(path)?;
-            let Some(root) = path.parent() else {
-                continue;
-            };
-            if let Some(project) = ProjectWorkspace::from_maybe_project_root(
-                root,
-                &DiscoveryOptions::default(),
-                &cache,
-                build_dispatch.workspace_cache(),
-            )
-            .await?
-            {
-                workspace_wheel_exemptions.extend(
-                    project
-                        .workspace()
-                        .packages()
-                        .iter()
-                        .filter(|(name, _)| !build_dispatch.sources().for_package(name))
-                        .map(|(_, member)| member.root().to_owned()),
-                );
-            }
-        }
-    }
-
     let options = OptionsBuilder::new()
         .resolution_mode(resolution_mode)
         .prerelease(prerelease)
@@ -620,7 +584,6 @@ pub async fn pip_compile(
             SupportedEnvironments::default()
         })
         .required_environments_mode(required_environments_mode)
-        .workspace_wheel_exemptions(workspace_wheel_exemptions)
         .build();
 
     // Resolve the requirements.

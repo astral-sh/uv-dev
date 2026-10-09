@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -55,6 +56,8 @@ pub struct SourceTreeResolution {
     project: PackageName,
     /// The extras used when resolving the requirements.
     extras: Box<[ExtraName]>,
+    /// Local workspace members discovered while lowering the source tree.
+    workspace_member_paths: BTreeSet<PathBuf>,
 }
 
 impl SourceTreeResolution {
@@ -68,9 +71,9 @@ impl SourceTreeResolution {
         &self.extras
     }
 
-    /// Return the requirements sourced from the source tree.
-    pub fn into_requirements(self) -> Box<[Requirement]> {
-        self.requirements
+    /// Return the lowered requirements and the discovered local workspace members.
+    pub fn into_parts(self) -> (Box<[Requirement]>, BTreeSet<PathBuf>) {
+        (self.requirements, self.workspace_member_paths)
     }
 }
 
@@ -162,6 +165,7 @@ impl<'a, Context: BuildContext> SourceTreeResolver<'a, Context> {
             requirements,
             project,
             extras,
+            workspace_member_paths: metadata.workspace_member_paths,
         })
     }
 

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -74,6 +74,8 @@ pub struct Metadata {
     pub provides_extra: Box<[ExtraName]>,
     pub dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
     pub dynamic: bool,
+    /// Local workspace members discovered while lowering the requirements.
+    pub workspace_member_paths: BTreeSet<PathBuf>,
 }
 
 impl Metadata {
@@ -103,6 +105,7 @@ impl Metadata {
             provides_extra: metadata.provides_extra,
             dependency_groups: BTreeMap::default(),
             dynamic: metadata.dynamic,
+            workspace_member_paths: BTreeSet::new(),
         }
     }
 
@@ -132,6 +135,7 @@ impl Metadata {
             provides_extra,
             dependency_groups,
             dynamic,
+            workspace_member_paths,
         } = RequiresDist::from_project_maybe_workspace(
             requires_dist,
             install_path,
@@ -154,6 +158,7 @@ impl Metadata {
             provides_extra,
             dependency_groups,
             dynamic,
+            workspace_member_paths,
         })
     }
 

@@ -20340,7 +20340,7 @@ fn universal_required_environment_offline_wheel_metadata() -> Result<()> {
         .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: No solution found when resolving dependencies
+    error: No solution found when resolving dependencies for split (markers: python_full_version != '3.13.*')
       cause: Because example==1.0.0 needs to be downloaded from a registry and only example==1.0.0 is available, we can conclude that all versions of example cannot be used.
              And because project depends on example, we can conclude that your requirements are unsatisfiable.
 
@@ -20388,12 +20388,251 @@ async fn universal_required_environment_invalid_wheel_metadata() -> Result<()> {
         .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: No solution found when resolving dependencies
+    error: No solution found when resolving dependencies for split (markers: python_full_version != '3.13.*')
       cause: Because example==1.0.0 has invalid metadata and only example==1.0.0 is available, we can conclude that all versions of example cannot be used.
              And because project depends on example, we can conclude that your requirements are unsatisfiable.
 
     hint: Metadata for `example` (v1.0.0) could not be parsed:
       Invalid version: expected version to start with a number, but no leading ASCII digits were found
+    "#);
+    Ok(())
+}
+
+/// Unavailable wheel metadata rejects only the Python fork requiring that wheel.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn universal_required_environment_metadata_failure_is_fork_local() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/example/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            formatdoc! {r#"
+                <a href="{base}/files/example-2.0.0-1-cp312-cp312-any.whl" data-core-metadata="true">example-2.0.0-1-cp312-cp312-any.whl</a>
+                <a href="{base}/files/example-2.0.0-cp313-cp313-any.whl" data-core-metadata="true">example-2.0.0-cp313-cp313-any.whl</a>
+                <a href="{base}/files/example-1.0.0-cp313-cp313-any.whl" data-core-metadata="true">example-1.0.0-cp313-cp313-any.whl</a>
+            "#, base = server.uri()},
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/example-2.0.0-1-cp312-cp312-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "Metadata-Version: 2.3\nName: example\nVersion: 2.0.0\nRequires-Python: >=3.12\n",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/example-2.0.0-cp313-cp313-any.whl.metadata"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(
+                "Metadata-Version: 2.3\nName: example\nVersion: invalid-version\n",
+            ),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/example-1.0.0-cp313-cp313-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "Metadata-Version: 2.3\nName: example\nVersion: 1.0.0\nRequires-Python: >=3.13\n",
+        ))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pyproject.toml", "--universal", "--no-header", "--no-annotate"])
+        .arg("--index-url").arg(format!("{}/simple", server.uri()))
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0 ; python_full_version == '3.13.*'
+    example==2.0.0 ; python_full_version != '3.13.*'
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    Ok(())
+}
+
+/// A wheel disjoint from required Python coverage cannot make its unused metadata a hard error.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn universal_required_environment_skips_irrelevant_wheel_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/example/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            formatdoc! {r#"
+                <a href="{base}/files/example-1.0.0-cp312-cp312-any.whl" data-core-metadata="true">example-1.0.0-cp312-cp312-any.whl</a>
+                <a href="{base}/files/example-1.0.0-1-cp313-cp313-any.whl" data-core-metadata="true">example-1.0.0-1-cp313-cp313-any.whl</a>
+            "#, base = server.uri()},
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/example-1.0.0-cp312-cp312-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/example-1.0.0-1-cp313-cp313-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "Metadata-Version: 2.3\nName: example\nVersion: 1.0.0\nRequires-Python: >=3.12\n",
+        ))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pyproject.toml", "--universal", "--no-header", "--no-annotate"])
+        .arg("--index-url").arg(format!("{}/simple", server.uri()))
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Source-tree wheel exemptions use the same member-discovery policy as requirement lowering.
+#[cfg(feature = "test-universal")]
+#[test]
+fn universal_required_environment_source_policy_discovery() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "required-environment-source-discovery"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        [tool.uv.workspace]
+        members = ["broken"]
+    "#})?;
+    context.temp_dir.child("broken").create_dir_all()?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pyproject.toml", "--universal", "--no-header", "--no-annotate", "--no-sources-package", "broken"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Dynamically built input metadata retains the workspace paths discovered during lowering.
+#[cfg(feature = "test-universal")]
+#[test]
+fn universal_required_environment_dynamic_workspace_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        [tool.uv.workspace]
+        members = ["member"]
+        [tool.uv.sources]
+        member = { workspace = true }
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            directory = Path(metadata_directory) / "project-0.1.0.dist-info"
+            directory.mkdir()
+            (directory / "METADATA").write_text(
+                "Metadata-Version: 2.3\n"
+                "Name: project\n"
+                "Version: 0.1.0\n"
+                "Requires-Dist: member\n"
+            )
+            return directory.name
+    "#})?;
+    context
+        .temp_dir
+        .child("member/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pyproject.toml", "--universal", "--offline", "--no-header", "--no-annotate"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e file://[TEMP_DIR]/member
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
     "#);
     Ok(())
 }

@@ -544,11 +544,19 @@ impl PrioritizedDist {
     pub(crate) fn implied_wheel_markers<E>(
         &self,
         minimum_libc_version: Option<MinimumLibcVersion>,
+        required_markers: MarkerTree,
         mut metadata_markers: impl FnMut(&RegistryBuiltWheel) -> Result<MarkerTree, E>,
     ) -> Result<MarkerTree, E> {
         let mut markers = [MarkerTree::FALSE; 2];
         for (wheel, compatibility) in &self.0.wheels {
             if !compatibility.is_compatible() {
+                continue;
+            }
+
+            let python = implied_python_markers(&wheel.filename);
+            let wheel_markers = implied_libc_markers(&wheel.filename, python, minimum_libc_version)
+                .map(|marker| marker.and(required_markers));
+            if wheel_markers.iter().all(|marker| marker.is_false()) {
                 continue;
             }
 
@@ -558,14 +566,8 @@ impl PrioritizedDist {
             } else {
                 metadata_markers(wheel)?
             };
-            let python = implied_python_markers(&wheel.filename);
-            for (coverage, mut marker) in markers.iter_mut().zip(implied_libc_markers(
-                &wheel.filename,
-                python,
-                minimum_libc_version,
-            )) {
-                marker = marker.and(requires_python);
-                *coverage = coverage.or(marker);
+            for (coverage, marker) in markers.iter_mut().zip(wheel_markers) {
+                *coverage = coverage.or(marker.and(requires_python));
             }
         }
         let [glibc, musl] = markers;
