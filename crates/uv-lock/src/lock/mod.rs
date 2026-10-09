@@ -42,7 +42,7 @@ use uv_distribution_types::{
     MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
     PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
     Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString, VersionId, implied_markers,
+    StaticMetadata, ToUrlError, UrlString, VersionId,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -3918,6 +3918,90 @@ impl Lock {
         SatisfiesResult::Satisfied
     }
 
+    /// Recover package reachability while retaining the activation markers of requested extras.
+    pub fn package_reachability(
+        &self,
+        root: &Path,
+    ) -> Result<impl Iterator<Item = (&Package, MarkerTree)>, LockError> {
+        let mut package_markers = PackageMarkers::default();
+        let mut pending = VecDeque::new();
+        let root_marker = self.fork_markers_union();
+
+        for package in self.workspace_packages() {
+            pending.push_back((package, None, root_marker));
+            for extra in package.optional_dependencies.keys() {
+                pending.push_back((package, Some(extra), root_marker));
+            }
+        }
+
+        // Scripts and projectless roots keep their direct requirements in the manifest.
+        for requirement in self
+            .manifest
+            .requirements
+            .iter()
+            .chain(self.manifest.dependency_groups.values().flatten())
+        {
+            let requirement = requirement.clone().into_absolute(root);
+            for package in self.packages_for_name(&requirement.name) {
+                if !Self::package_satisfies_requirement(package, &requirement, root)? {
+                    continue;
+                }
+                let Some(marker) = self.root_requirement_marker(&requirement, package) else {
+                    continue;
+                };
+                let marker = root_marker.and(marker);
+                pending.push_back((package, None, marker));
+                for extra in &requirement.extras {
+                    if let Some((extra, _)) = package.optional_dependencies.get_key_value(extra) {
+                        pending.push_back((package, Some(extra), marker));
+                    }
+                }
+            }
+        }
+
+        while let Some((package, extra, marker)) = pending.pop_front() {
+            let Some(marker) = package_markers.merge(&package.id, extra, marker) else {
+                continue;
+            };
+            if extra.is_some() {
+                pending.push_back((package, None, marker));
+            }
+            let context = extra
+                .map(DependencyContext::Extra)
+                .unwrap_or(DependencyContext::Production);
+            for context in iter::once(context).chain(
+                package
+                    .dependency_groups
+                    .keys()
+                    .filter(|_| extra.is_none())
+                    .map(DependencyContext::Group),
+            ) {
+                for dependency in context.dependencies(package) {
+                    let marker = marker.and(dependency.complexified_marker.pep508());
+                    if marker.is_false() {
+                        continue;
+                    }
+                    let child = self.package(dependency.index);
+                    pending.push_back((child, None, marker));
+                    for extra in &dependency.extra {
+                        if let Some((extra, _)) = child.optional_dependencies.get_key_value(extra) {
+                            pending.push_back((child, Some(extra), marker));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(self.packages.iter().map(move |package| {
+            (
+                package,
+                package_markers
+                    .get(&package.id)
+                    .unwrap_or(MarkerTree::FALSE),
+            )
+        }))
+    }
+
     /// Return a [`SatisfiesResult`] if the given requirements do not match the [`Package`] metadata.
     fn satisfies_requires_dist<'lock>(
         &self,
@@ -7259,6 +7343,11 @@ impl Package {
         self.id.version.as_ref()
     }
 
+    /// Returns the filenames of the locked wheels for this package.
+    pub fn wheel_filenames(&self) -> impl Iterator<Item = &WheelFilename> {
+        self.wheels.iter().map(|wheel| &wheel.filename)
+    }
+
     /// Returns the Git SHA of the package, if it is a Git source.
     pub fn git_sha(&self) -> Option<&GitOid> {
         match &self.id.source {
@@ -7279,17 +7368,6 @@ impl Package {
                 .fork_markers
                 .iter()
                 .any(|fork_marker| !fork_marker.pep508().is_disjoint(marker))
-    }
-
-    /// Returns whether the locked package contains a wheel for the given environment.
-    pub fn has_wheel_for_marker(
-        &self,
-        marker: MarkerTree,
-        minimum_libc_version: Option<MinimumLibcVersion>,
-    ) -> bool {
-        self.wheels.iter().any(|wheel| {
-            !implied_markers(&wheel.filename, minimum_libc_version).is_disjoint(marker)
-        })
     }
 
     /// Returns the [`IndexUrl`] for the package, if it is a registry source.

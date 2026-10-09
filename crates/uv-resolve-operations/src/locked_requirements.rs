@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
+use itertools::Either;
 use tracing::info_span;
 
 use uv_configuration::Upgrade;
@@ -10,7 +11,7 @@ use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
 use uv_pep508::{MarkerTree, VerbatimUrl};
 use uv_requirements_txt::RequirementsTxt;
-use uv_resolver::{Preference, PreferenceError, UpgradePackages};
+use uv_resolver::{Preference, PreferenceError, UpgradePackages, implied_markers_for_wheels};
 
 #[derive(Debug, Default)]
 pub struct LockedRequirements {
@@ -84,18 +85,34 @@ pub fn read_lock_requirements(
     let mut preferences = Vec::new();
     let mut git = Vec::new();
 
-    for package in lock.packages() {
+    let packages = if required_environments.is_empty() {
+        Either::Left(
+            lock.packages()
+                .iter()
+                .map(|package| (package, MarkerTree::TRUE)),
+        )
+    } else {
+        Either::Right(lock.package_reachability(install_path)?)
+    };
+    for (package, activation) in packages {
         // Skip the distribution if it's included in the upgrade strategy (either by explicit
         // package name or via a dependency group).
         if upgrade_packages.contains(package.name()) {
             continue;
         }
 
+        // Wheel readiness can discard a version preference without upgrading a pinned Git ref.
+        if let Some(git_ref) = package.as_git_ref()? {
+            git.push(git_ref);
+        }
+
         // If a required environment is active for this package and the existing lock entry has no
         // matching wheel, drop the lock preference so the resolver can eagerly upgrade it.
         if required_environments.iter().copied().any(|marker| {
-            package.is_included_by_marker(marker)
-                && !package.has_wheel_for_marker(marker, minimum_libc_version)
+            let applicable = activation.and(marker);
+            !applicable.is_false()
+                && implied_markers_for_wheels(package.wheel_filenames(), minimum_libc_version)
+                    .is_disjoint(applicable)
         }) {
             continue;
         }
@@ -108,11 +125,6 @@ pub fn read_lock_requirements(
                 package.index(install_path)?,
                 package.fork_markers().to_vec(),
             ));
-        }
-
-        // Map each entry in the lockfile to a Git SHA.
-        if let Some(git_ref) = package.as_git_ref()? {
-            git.push(git_ref);
         }
     }
 

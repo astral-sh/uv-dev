@@ -855,8 +855,25 @@ pub(crate) fn implied_markers(
     filename: &WheelFilename,
     minimum_libc_version: Option<MinimumLibcVersion>,
 ) -> MarkerTree {
-    let python = implied_python_markers(filename);
-    let [glibc, musl] = implied_libc_markers(filename, python, minimum_libc_version);
+    implied_markers_for_wheels(std::iter::once(filename), minimum_libc_version)
+}
+
+/// Union a release's wheel coverage for each libc before requiring every configured baseline.
+pub fn implied_markers_for_wheels<'a>(
+    filenames: impl IntoIterator<Item = &'a WheelFilename>,
+    minimum_libc_version: Option<MinimumLibcVersion>,
+) -> MarkerTree {
+    let mut coverage = [MarkerTree::FALSE; 2];
+    for filename in filenames {
+        for (coverage, marker) in coverage.iter_mut().zip(implied_libc_markers(
+            filename,
+            implied_python_markers(filename),
+            minimum_libc_version,
+        )) {
+            *coverage = coverage.or(marker);
+        }
+    }
+    let [glibc, musl] = coverage;
     glibc.and(musl)
 }
 

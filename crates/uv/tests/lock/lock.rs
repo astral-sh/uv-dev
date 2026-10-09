@@ -221,10 +221,7 @@ fn lock_required_environment_drops_stale_preference() -> Result<()> {
     lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
     lock.arg("--index-url").arg(server.index_url());
     uv_snapshot!(context.filters(), lock, @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
@@ -246,10 +243,7 @@ fn lock_required_environment_drops_stale_preference() -> Result<()> {
     lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
     lock.arg("--index-url").arg(server.index_url());
     uv_snapshot!(context.filters(), lock, @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
@@ -271,10 +265,7 @@ fn lock_required_environment_drops_stale_preference() -> Result<()> {
     lock.env_remove(EnvVars::UV_EXCLUDE_NEWER);
     lock.arg("--index-url").arg(server.index_url());
     uv_snapshot!(context.filters(), lock, @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     Updated holdout v1.0.0 -> v2.0.0
@@ -48831,5 +48822,216 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
+    Ok(())
+}
+
+/// An environment that never installs a package must not discard that package's locked version.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_preserves_inactive_package_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "inactive-required-environment-pin"
+        [root]
+        requires = ["platform-only"]
+        [expected]
+        satisfiable = true
+        [packages.platform-only.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+        [packages.platform-only.versions."2.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["platform-only; sys_platform == 'win32'"]
+    "#})?;
+    context
+        .lock()
+        .args(["--upgrade-package", "platform-only==1.0.0"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        fs_err::read_to_string(pyproject.path())?
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(
+        lock["package"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|package| package["name"].as_str() == Some("platform-only"))
+            .unwrap()["version"]
+            .as_str(),
+        Some("1.0.0")
+    );
+    Ok(())
+}
+
+/// Separate manylinux and musllinux wheels jointly retain a pin covering both configured baselines.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_preserves_combined_libc_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "combined-libc-required-environment-pin"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["py3-none-manylinux_2_17_x86_64", "py3-none-musllinux_1_2_x86_64"]
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["py3-none-manylinux_2_17_x86_64", "py3-none-musllinux_1_2_x86_64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        preview-features = ["minimum-libc-version"]
+        minimum-libc-version = { glibc = "2.17", musl = "1.2" }
+    "#})?;
+    context
+        .lock()
+        .args(["--upgrade-package", "example==1.0.0"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    pyproject.write_str(&format!(
+        "{}\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        fs_err::read_to_string(pyproject.path())?
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert_eq!(
+        lock["package"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|package| package["name"].as_str() == Some("example"))
+            .unwrap()["version"]
+            .as_str(),
+        Some("1.0.0")
+    );
+    Ok(())
+}
+
+/// Wheel-based preference removal does not advance a Git branch's recorded commit.
+#[cfg(all(feature = "test-universal", feature = "test-git"))]
+#[test]
+fn lock_required_environment_preserves_git_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let repository = context.temp_dir.child("repository");
+    let project = repository.child("pyproject.toml");
+    project.write_str(indoc! {r#"
+        [project]
+        name = "provider"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    Command::new("git")
+        .args(["init", "--initial-branch", "main"])
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial version",
+        ])
+        .assert()
+        .success();
+    let commit = Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?
+        .assert()
+        .success();
+    let pinned = String::from_utf8(commit.get_output().stdout.clone())?
+        .trim()
+        .to_owned();
+    let context = context
+        .with_filter((pinned.clone(), "[PINNED_COMMIT]"))
+        .with_filter((pinned[..12].to_owned(), "[PINNED_COMMIT]"));
+    let url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository URL"))?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["provider"]
+        [tool.uv.sources]
+        provider = {{ git = "{url}", branch = "main" }}
+    "#})?;
+    context.lock().assert().success();
+    project.write_str(&fs_err::read_to_string(project.path())?.replace("1.0.0", "2.0.0"))?;
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-am",
+            "New version",
+        ])
+        .assert()
+        .success();
+    pyproject.write_str(&format!(
+        "{}\n[tool.uv]\nrequired-environments = [\"python_version == '3.13'\"]\n",
+        fs_err::read_to_string(pyproject.path())?
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert!(context.read("uv.lock").contains(&pinned));
     Ok(())
 }
