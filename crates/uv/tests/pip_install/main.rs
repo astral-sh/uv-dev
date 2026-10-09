@@ -11,4 +11,6 @@ mod json;
 mod pip_install;
 
 #[cfg(feature = "test-python")]
+mod pylock_archive_subdirectory;
+#[cfg(feature = "test-python")]
 mod wheel_variants;
