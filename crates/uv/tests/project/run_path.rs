@@ -1,50 +1,33 @@
 use std::collections::BTreeMap;
-use std::process::Command;
 
 use anyhow::Result;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
 use uv_static::EnvVars;
-use uv_test::{TestContext, packse::generate_wheel, uv_snapshot};
-
-fn project(context: &TestContext) -> Result<()> {
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            requires-python = ">=3.12"
-            dependencies = []
-
-            [tool.uv]
-            package = false
-        "#})?;
-    Ok(())
-}
-
-fn run(context: &TestContext) -> Command {
-    let mut command = context.run();
-    command
-        .arg("--no-config")
-        .arg("--offline")
-        .arg("--no-index")
-        .arg("--no-build")
-        .arg("--python")
-        .arg("3.12")
-        .env_remove(EnvVars::UV_SHOW_RESOLUTION)
-        .env_remove(EnvVars::VIRTUAL_ENV);
-    command
-}
+use uv_test::{packse::generate_wheel, uv_snapshot};
 
 #[test]
 fn run_path_rejects_unjoinable_project_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_virtualenv_bin();
-    project(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
 
-    uv_snapshot!(context.filters(), run(&context)
+        [tool.uv]
+        package = false
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--offline", "--python", "3.12"])
+        .env_remove(EnvVars::UV_SHOW_RESOLUTION)
+        .env_remove(EnvVars::VIRTUAL_ENV)
         .env(EnvVars::UV_PROJECT_ENVIRONMENT, "environment:base")
         .arg("python")
         .arg("--version"), @"
@@ -62,9 +45,24 @@ fn run_path_rejects_unjoinable_project_environment() -> Result<()> {
 #[test]
 fn run_path_accepts_joinable_project_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    project(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
 
-    uv_snapshot!(context.filters(), run(&context)
+        [tool.uv]
+        package = false
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--offline", "--python", "3.12"])
+        .env_remove(EnvVars::UV_SHOW_RESOLUTION)
+        .env_remove(EnvVars::VIRTUAL_ENV)
         .env(EnvVars::UV_PROJECT_ENVIRONMENT, "environment with spaces")
         .arg("python")
         .arg("--version"), @"
@@ -85,7 +83,19 @@ fn run_path_rejects_unjoinable_ephemeral_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"])
         .with_cache_dir("cache:ephemeral")
         .with_filtered_virtualenv_bin();
-    project(&context)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv]
+        package = false
+    "#})?;
 
     let (filename, contents) = generate_wheel(
         &"path-dep".parse()?,
@@ -100,7 +110,10 @@ fn run_path_rejects_unjoinable_ephemeral_environment() -> Result<()> {
     wheel.write_binary(&contents)?;
 
     // The base environment is valid; the additional wheel needs a cached environment.
-    uv_snapshot!(context.filters(), run(&context)
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--offline", "--python", "3.12"])
+        .env_remove(EnvVars::UV_SHOW_RESOLUTION)
+        .env_remove(EnvVars::VIRTUAL_ENV)
         .arg("--with")
         .arg(wheel.path())
         .arg("python")
