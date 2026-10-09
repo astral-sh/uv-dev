@@ -15,7 +15,7 @@ use owo_colors::OwoColorize;
 use tracing::{debug, trace};
 
 use crate::{Error, Prompt};
-use uv_fs::{CWD, PythonExt, Simplified, cachedir};
+use uv_fs::{CWD, PythonExt, Simplified, cachedir, copy_atomic_sync};
 use uv_platform_tags::Os;
 use uv_preview::PreviewFeature;
 use uv_pypi_types::Scheme;
@@ -495,7 +495,7 @@ pub(crate) fn create(
                         .flatten(),
                 )
             {
-                fs_err::copy(
+                copy_atomic_sync(
                     scripts.join(executable.exe(interpreter.python_tuple())),
                     scripts.join(executable.source_exe(interpreter.python_tuple(), debug)),
                 )?;

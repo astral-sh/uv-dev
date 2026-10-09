@@ -14,6 +14,8 @@ use uv_static::EnvVars;
 
 #[cfg(unix)]
 use fs_err::os::unix::fs::symlink;
+#[cfg(all(windows, feature = "test-python-managed"))]
+use fs_err::os::windows::fs::symlink_file;
 #[cfg(unix)]
 use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 #[cfg(windows)]
@@ -164,6 +166,62 @@ fn create_managed_debug_venv() {
     Expected prefix: True
     Virtual environment: True
     ");
+}
+
+/// Reusing debug environments replaces aliases without writing through their symlink targets.
+#[cfg(all(windows, feature = "test-python-managed"))]
+#[test]
+fn create_managed_debug_venv_replaces_symlink_aliases() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context
+        .python_install()
+        .args(["--preview", "3.13d"])
+        .assert()
+        .success();
+    context
+        .venv()
+        .args(["--python", "3.13d"])
+        .assert()
+        .success();
+
+    let console_target = context.temp_dir.child("base/python_d.exe");
+    console_target.write_binary(b"console interpreter")?;
+    let console_alias = context.venv.join("Scripts/python_d.exe");
+    fs_err::remove_file(&console_alias)?;
+    if let Err(error) = symlink_file(console_target.path(), &console_alias) {
+        // Windows can require developer mode or administrator privileges to create file symlinks.
+        if error.raw_os_error() == Some(1314) {
+            return Ok(());
+        }
+        return Err(error.into());
+    }
+    let windowed_target = context.temp_dir.child("base/pythonw_d.exe");
+    windowed_target.write_binary(b"windowed interpreter")?;
+    let windowed_alias = context.venv.join("Scripts/pythonw_d.exe");
+    fs_err::remove_file(&windowed_alias)?;
+    symlink_file(windowed_target.path(), &windowed_alias)?;
+
+    context
+        .venv()
+        .args(["--allow-existing", "--python", "3.13d"])
+        .assert()
+        .success();
+
+    assert_eq!(fs_err::read(console_target.path())?, b"console interpreter");
+    assert_eq!(
+        fs_err::read(windowed_target.path())?,
+        b"windowed interpreter"
+    );
+    assert!(!console_alias.is_symlink());
+    assert!(!windowed_alias.is_symlink());
+    uv_snapshot!(context.filters(), context.external_command(&console_alias)
+        .arg("-c")
+        .arg("import sys; print(f'Virtual environment: {sys.prefix != sys.base_prefix}')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Virtual environment: True
+    ");
+    Ok(())
 }
 
 /// Cached metadata matches Python after recreating an upgradeable venv.
