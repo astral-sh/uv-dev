@@ -10,7 +10,7 @@ use uv_configuration::{Constraints, ExcludeDependency, Override, Upgrade};
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{DependencyMetadata, IndexLocations, Requirement, RequiresPython};
-use uv_lock::{GroupMetadata, Lock, SatisfiesResult};
+use uv_lock::{GroupMetadata, Lock, SatisfiesResult, implicit_constraints_marker};
 use uv_normalize::{DefaultGroups, GroupName, PackageName};
 use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
@@ -232,12 +232,20 @@ impl ValidatedLock {
         }
 
         if let Some(root_markers) = root_markers {
+            let environment = implicit_constraints_marker(
+                lock.requires_python().to_marker_tree(),
+                lock.supported_environments(),
+            );
             for (name, expected) in root_markers {
+                let expected = expected.and(environment);
                 let Some(package) = lock.find_by_name(name).ok().flatten() else {
+                    if expected.is_false() {
+                        continue;
+                    }
                     return Ok(Self::Versions(lock));
                 };
-                let actual = package.environment_marker();
-                if lock.simplify_environment(*expected) != lock.simplify_environment(actual) {
+                let actual = package.environment_marker().and(environment);
+                if expected != actual {
                     debug!(
                         "Resolving despite existing lockfile due to change in Python requirement for root `{name}`"
                     );
@@ -303,6 +311,7 @@ impl ValidatedLock {
                 install_path,
                 packages,
                 members,
+                root_markers,
                 required_members,
                 requirements,
                 constraints,
