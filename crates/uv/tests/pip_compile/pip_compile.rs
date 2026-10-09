@@ -6,9 +6,9 @@ use std::fs;
 use std::process::Command;
 use std::str::FromStr;
 
-use anyhow::Result;
 #[cfg(all(feature = "test-git", feature = "test-universal"))]
-use anyhow::{Context, anyhow};
+use anyhow::Context;
+use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 #[cfg(unix)]
@@ -21469,6 +21469,76 @@ fn include_build_dependencies_rediscovers_changed_backend_hook() -> Result<()> {
     Resolved 2 packages in [TIME]
     Resolved 4 packages in [TIME]
     Resolved 4 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Build roots authorize their direct and transitive URLs without duplicate runtime declarations.
+#[test]
+fn include_build_dependencies_direct_url_root() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (helper_filename, helper) = generate_wheel(
+        &PackageName::from_str("helper")?,
+        &Version::from_str("1.0.0")?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let helper_path = context.temp_dir.child(helper_filename);
+    helper_path.write_binary(&helper)?;
+    let helper_url = Url::from_file_path(helper_path.path())
+        .map_err(|()| anyhow!("invalid helper wheel path"))?;
+    let (backend_filename, backend) = generate_wheel(
+        &PackageName::from_str("backend")?,
+        &Version::from_str("1.0.0")?,
+        &[Requirement::from_str(&format!("helper @ {helper_url}"))?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let backend_path = context.temp_dir.child(backend_filename);
+    backend_path.write_binary(&backend)?;
+    let backend_url = Url::from_file_path(backend_path.path())
+        .map_err(|()| anyhow!("invalid backend wheel path"))?;
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [build-system]
+        requires = ["backend @ {backend_url}"]
+        build-backend = "custom"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+    "#})?;
+    context
+        .temp_dir
+        .child("project/custom.py")
+        .write_str(indoc! {r"
+        def get_requires_for_build_wheel(config_settings=None):
+            return []
+    "})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies",
+        "--offline", "--no-index", "--no-header", "--no-annotate",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    backend @ file://[TEMP_DIR]/backend-1.0.0-py3-none-any.whl
+    helper @ file://[TEMP_DIR]/helper-1.0.0-py3-none-any.whl
+    ./project
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Resolved 3 packages in [TIME]
     ");
     Ok(())
 }

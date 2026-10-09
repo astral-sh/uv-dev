@@ -883,7 +883,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             resolutions,
             self.project.as_ref(),
             &self.workspace_members,
-            self.requirements.clone(),
+            self.requirements
+                .iter()
+                .chain(&self.build_dependencies.requirements)
+                .cloned()
+                .collect(),
             self.constraints.clone(),
             self.build_dependencies.clone(),
             self.modifiers.clone(),
@@ -3232,7 +3236,7 @@ impl<'index> ForkState<'index> {
 
                 let self_package = &self.pubgrub.package_store[self_package];
                 let dependency_package = &self.pubgrub.package_store[dependency_package];
-                if self_package.is_build() || dependency_package.is_build() {
+                if self_package.is_build() {
                     continue;
                 }
 
