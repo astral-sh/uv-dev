@@ -13373,6 +13373,182 @@ async fn lock_index_hash_algorithm_missing() -> Result<()> {
     Ok(())
 }
 
+/// Disallowed source archives do not need to satisfy the configured index hash algorithm.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_build_policy_skips_sdist_hash_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let simple_index = json!({
+        "meta": { "api-version": "1.1" },
+        "name": "example",
+        "files": [{
+            "filename": "example-1.0.0-py3-none-any.whl",
+            "url": format!("{}/example-1.0.0-py3-none-any.whl", server.uri()),
+            "hashes": { "sha256": "1111111111111111111111111111111111111111111111111111111111111111" }
+        }, {
+            "filename": "example-1.0.0.tar.gz",
+            "url": format!("{}/example-1.0.0.tar.gz", server.uri()),
+            "hashes": { "sha512": "22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222" }
+        }]
+    });
+    Mock::given(method("GET"))
+        .and(path("/simple/example/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            simple_index.to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        preview-features = ["build-policy", "index-hash-algorithm"]
+        build-policy = "disallow"
+        [[tool.uv.dependency-metadata]]
+        name = "example"
+        version = "1.0.0"
+        [[tool.uv.index]]
+        url = "{}/simple"
+        default = true
+        hash-algorithm = "sha256"
+    "#, server.uri()})?;
+    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+
+    [options]
+    build-policy = "disallow"
+
+    [[manifest.dependency-metadata]]
+    name = "example"
+    version = "1.0.0"
+
+    [[package]]
+    name = "example"
+    version = "1.0.0"
+    source = { registry = "http://[LOCALHOST]/simple" }
+    wheels = [
+        { url = "http://[LOCALHOST]/example-1.0.0-py3-none-any.whl", hash = "sha256:1111111111111111111111111111111111111111111111111111111111111111" },
+    ]
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    dependencies = [
+        { name = "example" },
+    ]
+
+    [package.metadata]
+    requires-dist = [{ name = "example" }]
+    "#);
+    });
+    Ok(())
+}
+
+/// Excluded wheels do not need to satisfy the configured index hash algorithm when builds are forced.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_build_policy_skips_wheel_hash_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let simple_index = json!({
+        "meta": { "api-version": "1.1" },
+        "name": "example",
+        "files": [{
+            "filename": "example-1.0.0-py3-none-any.whl",
+            "url": format!("{}/example-1.0.0-py3-none-any.whl", server.uri()),
+            "hashes": { "sha512": "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111" }
+        }, {
+            "filename": "example-1.0.0.tar.gz",
+            "url": format!("{}/example-1.0.0.tar.gz", server.uri()),
+            "hashes": { "sha256": "2222222222222222222222222222222222222222222222222222222222222222" }
+        }]
+    });
+    Mock::given(method("GET"))
+        .and(path("/simple/example/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            simple_index.to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        preview-features = ["build-policy", "index-hash-algorithm"]
+        build-policy = "force"
+        [[tool.uv.dependency-metadata]]
+        name = "example"
+        version = "1.0.0"
+        [[tool.uv.index]]
+        url = "{}/simple"
+        default = true
+        hash-algorithm = "sha256"
+    "#, server.uri()})?;
+    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+
+    [options]
+    build-policy = "force"
+
+    [[manifest.dependency-metadata]]
+    name = "example"
+    version = "1.0.0"
+
+    [[package]]
+    name = "example"
+    version = "1.0.0"
+    source = { registry = "http://[LOCALHOST]/simple" }
+    sdist = { url = "http://[LOCALHOST]/example-1.0.0.tar.gz", hash = "sha256:2222222222222222222222222222222222222222222222222222222222222222" }
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    dependencies = [
+        { name = "example" },
+    ]
+
+    [package.metadata]
+    requires-dist = [{ name = "example" }]
+    "#);
+    });
+    Ok(())
+}
+
 /// Vary the `--resolution-mode`, and ensure that the lockfile is updated.
 #[cfg(feature = "test-universal")]
 #[test]

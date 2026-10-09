@@ -2529,8 +2529,13 @@ impl Lock {
                 vec![]
             };
 
-            let mut package =
-                Package::from_annotated_dist(dist, fork_markers, root, index_locations)?;
+            let mut package = Package::from_annotated_dist(
+                dist,
+                fork_markers,
+                root,
+                index_locations,
+                build_options,
+            )?;
             // Git declarations can introduce direct sources needed by offline freshness checks.
             if metadata_free
                 && matches!(package.id.source, Source::Git(..))
@@ -2551,16 +2556,6 @@ impl Lock {
                     None,
                 )
             });
-
-            if build_options.has_build_policy() && matches!(package.id.source, Source::Registry(_))
-            {
-                if build_options.no_build_package(&package.id.name) {
-                    package.sdist = None;
-                }
-                if build_options.no_binary_package(&package.id.name) {
-                    package.wheels.clear();
-                }
-            }
 
             package.add_dependencies(
                 DependencyContext::Production,
@@ -6687,10 +6682,21 @@ impl Package {
         fork_markers: Vec<UniversalMarker>,
         root: &Path,
         index_locations: &IndexLocations,
+        build_options: &BuildOptions,
     ) -> Result<Self, LockError> {
         let id = PackageId::from_annotated_dist(annotated_dist, root)?;
-        let sdist = SourceDist::from_annotated_dist(&id, annotated_dist, index_locations)?;
-        let wheels = Wheel::from_annotated_dist(annotated_dist, index_locations)?;
+        let registry_policy =
+            build_options.has_build_policy() && matches!(id.source, Source::Registry(_));
+        let sdist = if registry_policy && build_options.no_build_package(&id.name) {
+            None
+        } else {
+            SourceDist::from_annotated_dist(&id, annotated_dist, index_locations)?
+        };
+        let wheels = if registry_policy && build_options.no_binary_package(&id.name) {
+            Vec::new()
+        } else {
+            Wheel::from_annotated_dist(annotated_dist, index_locations)?
+        };
         let metadata = if id.source.is_immutable() {
             PackageMetadata::default()
         } else {
