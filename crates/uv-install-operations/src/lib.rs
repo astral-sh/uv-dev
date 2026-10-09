@@ -441,6 +441,14 @@ impl InstallationPlan {
             return Ok(Changelog::default());
         }
 
+        // Reject known version-changing replacements before either installation phase mutates
+        // the environment. Deferred source versions are checked again after wheel preparation.
+        let replacement_versions = resolution
+            .distributions()
+            .filter_map(|dist| dist.version().map(|version| (dist.name(), version)))
+            .collect::<BTreeMap<_, _>>();
+        validate_replacement_records(extraneous.iter().chain(&reinstalls), &replacement_versions)?;
+
         // Partition into two sets: those that require build isolation, and those that disable it. This
         // is effectively a heuristic to make `--no-build-isolation` work "more often" by way of giving
         // `--no-build-isolation` packages "access" to the rest of the environment.
@@ -669,6 +677,31 @@ impl InstallPhase {
     }
 }
 
+/// Check that every known version-changing replacement has an uninstall record.
+fn validate_replacement_records<'a>(
+    uninstalls: impl IntoIterator<Item = &'a InstalledDist>,
+    replacement_versions: &BTreeMap<&PackageName, &Version>,
+) -> Result<(), Error> {
+    for dist_info in uninstalls {
+        if matches!(
+            &dist_info.kind,
+            InstalledDistKind::Registry(_) | InstalledDistKind::Url(_)
+        ) && replacement_versions
+            .get(dist_info.name())
+            .is_some_and(|version| *version != dist_info.version())
+        {
+            let record_path = dist_info.install_path().join("RECORD");
+            if !record_path.try_exists()? {
+                return Err(uv_installer::UninstallError::Uninstall(
+                    uv_install_wheel::Error::MissingRecord(record_path),
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Execute a [`Plan`] to install distributions into a Python environment.
 async fn execute_plan(
     plan: Plan,
@@ -739,25 +772,7 @@ async fn execute_plan(
             .map(|dist| (dist.name(), dist.installed_version().version()))
             .collect::<BTreeMap<_, _>>();
 
-        // Ensure every version-changing wheel replacement can be uninstalled before modifying the
-        // environment. A same-version reinstall can still repair an incomplete installation.
-        for dist_info in &uninstalls {
-            if matches!(
-                &dist_info.kind,
-                InstalledDistKind::Registry(_) | InstalledDistKind::Url(_)
-            ) && replacement_versions
-                .get(dist_info.name())
-                .is_some_and(|version| *version != dist_info.version())
-            {
-                let record_path = dist_info.install_path().join("RECORD");
-                if !record_path.try_exists()? {
-                    return Err(uv_installer::UninstallError::Uninstall(
-                        uv_install_wheel::Error::MissingRecord(record_path),
-                    )
-                    .into());
-                }
-            }
-        }
+        validate_replacement_records(&uninstalls, &replacement_versions)?;
 
         let start = std::time::Instant::now();
 

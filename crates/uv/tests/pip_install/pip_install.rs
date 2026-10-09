@@ -1758,10 +1758,22 @@ fn reinstall_incomplete() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    Prepared 1 package in [TIME]
     error: Cannot uninstall package; `RECORD` file not found at: [SITE_PACKAGES]/anyio-3.7.0.dist-info/RECORD
     "
     );
+
+    // A shared-build replacement must also fail before isolated-build packages are changed.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-cache")
+        .arg("--no-build-isolation-package").arg("anyio")
+        .arg("--exclude-newer").arg("2024-05-01T00:00:00Z")
+        .arg("anyio==4.0.0").arg("idna==3.7"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Cannot uninstall package; `RECORD` file not found at: [SITE_PACKAGES]/anyio-3.7.0.dist-info/RECORD
+    ");
+    context.assert_installed("idna", "3.6");
 
     assert!(
         context
