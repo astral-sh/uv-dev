@@ -7217,3 +7217,55 @@ fn tool_upgrade_migration_to_unwritable_directory_preserves_entrypoints() -> Res
     Command::new(bin.join("simple_launcher")).assert().success();
     Ok(())
 }
+
+#[test]
+#[cfg(unix)]
+fn tool_upgrade_migrates_hardlinked_bin_directory() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let original = context.temp_dir.child("bin");
+    let destination = context.temp_dir.child("new-bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .env(EnvVars::PATH, original.path())
+        .assert()
+        .success();
+    destination.create_dir_all()?;
+    fs_err::hard_link(
+        original.child("simple_launcher"),
+        destination.child("simple_launcher"),
+    )?;
+    let old = fs_err::symlink_metadata(original.child("simple_launcher"))?;
+    let new = fs_err::symlink_metadata(destination.child("simple_launcher"))?;
+    assert_eq!((old.dev(), old.ino()), (new.dev(), new.ino()));
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination.path()).env(EnvVars::PATH, destination.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 executable: simple_launcher
+    Nothing to upgrade
+    "#);
+    original
+        .child("simple_launcher")
+        .assert(predicate::path::missing());
+    let receipt: toml::Value =
+        toml::from_str(&context.read("tools/simple-launcher/uv-receipt.toml"))?;
+    assert_eq!(
+        receipt["tool"]["entrypoints"][0]["install-path"].as_str(),
+        destination.child("simple_launcher").path().to_str()
+    );
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_BIN_DIR, destination.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 executable: simple_launcher
+    ");
+    destination
+        .child("simple_launcher")
+        .assert(predicate::path::missing());
+    Ok(())
+}

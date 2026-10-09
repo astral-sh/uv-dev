@@ -167,12 +167,14 @@ pub(crate) fn tool_entrypoints_are_fresh(tool: &Tool) -> bool {
 
 /// Compare destination entries using filesystem identity without following executable symlinks.
 fn same_entrypoint_destination(left: &Path, right: &Path) -> bool {
-    if left.file_name() == right.file_name()
-        && left
-            .parent()
-            .zip(right.parent())
-            .is_some_and(|(left, right)| is_same_file_allow_missing(left, right) == Some(true))
+    if left
+        .parent()
+        .zip(right.parent())
+        .is_none_or(|(left, right)| is_same_file_allow_missing(left, right) != Some(true))
     {
+        return false;
+    }
+    if left.file_name() == right.file_name() {
         return true;
     }
 
