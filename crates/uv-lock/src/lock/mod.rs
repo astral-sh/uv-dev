@@ -525,6 +525,23 @@ impl DependencyContext<'_> {
         marker
     }
 
+    /// Root extras omit workspace extra labels that conflict with the dependency's project node.
+    fn omits_conflicting_extra(
+        self,
+        lock: &Lock,
+        parent: &Package,
+        dependency: &PackageName,
+        extra: &ExtraName,
+    ) -> bool {
+        matches!(self, Self::Extra(_))
+            && lock.root().is_some_and(|root| root.id == parent.id)
+            && lock.members().contains(dependency)
+            && lock.conflicts.iter().any(|conflicts| {
+                conflicts.contains(dependency, ConflictKindRef::Project)
+                    && conflicts.contains(dependency, extra)
+            })
+    }
+
     /// Returns the resolved dependencies recorded for this context.
     fn dependencies(self, package: &Package) -> &[Dependency] {
         match self {
@@ -654,13 +671,14 @@ impl<'a> LockedDependencyBuilder<'a> {
                         && conflicts.contains(&requirement.name, extra)
                 })
             };
-            let root_extra_project_conflict = matches!(context, DependencyContext::Extra(_))
-                && expected
-                    .lock
-                    .root()
-                    .is_some_and(|root| root.id == expected.package.id)
-                && expected.lock.members().contains(&requirement.name)
-                && requirement.extras.iter().any(&project_conflicts_with_extra);
+            let root_extra_project_conflict = requirement.extras.iter().any(|extra| {
+                context.omits_conflicting_extra(
+                    expected.lock,
+                    expected.package,
+                    &requirement.name,
+                    extra,
+                )
+            });
             let item_conflicts_with_project = |item: &ConflictItem| {
                 expected.lock.conflicts.iter().any(|conflicts| {
                     conflicts.contains(&requirement.name, ConflictKindRef::Project)
@@ -4268,9 +4286,10 @@ impl Lock {
                     .simplify_markers(dependency.complexified_marker.pep508().and(parent_marker));
                 covered = covered.or(marker);
                 for (extra, coverage) in &mut extra_coverage {
-                    // Lock construction drops labels without a resolved optional section.
+                    // Lock construction drops empty sections and conflicting workspace labels.
                     if dependency.extra.contains(*extra)
                         || !target.optional_dependencies.contains_key(*extra)
+                        || context.omits_conflicting_extra(self, package, &requirement.name, extra)
                     {
                         *coverage = coverage.or(marker);
                     }
@@ -4634,7 +4653,10 @@ impl Lock {
             ))
             .await?
         } else {
-            DependencySources::default()
+            DependencySources {
+                package_markers: self.locked_package_markers(&root_requirements, root)?,
+                ..DependencySources::default()
+            }
         };
 
         // Collect the set of available indexes (both `--index-url` and `--find-links` entries).
@@ -5604,6 +5626,91 @@ impl Lock {
         }
 
         Ok(changes)
+    }
+
+    /// Compute incoming reachability for dependency coverage when package declarations are retained.
+    ///
+    /// These markers bound validation of the recorded declarations; they do not authorize inspecting
+    /// dependency sources. Metadata-free locks require the refreshed-source traversal instead.
+    fn locked_package_markers(
+        &self,
+        root_requirements: &[Cow<'_, Requirement>],
+        root: &Path,
+    ) -> Result<PackageMarkers<'_>, LockError> {
+        let root_marker = self.fork_markers_union();
+        let mut queue = VecDeque::new();
+        for package in &self.packages {
+            if self.is_workspace_package(package) {
+                queue.push_back((package, None, root_marker));
+                for extra in package.optional_dependencies.keys() {
+                    let marker = root_marker.and(
+                        DependencyContext::Extra(extra)
+                            .conflict_marker(&package.id.name, &self.conflicts),
+                    );
+                    queue.push_back((package, Some(extra), marker));
+                }
+            }
+        }
+        for requirement in root_requirements {
+            for package in self.packages_for_name(&requirement.name) {
+                if !Self::package_satisfies_requirement(package, requirement, root)? {
+                    continue;
+                }
+                let Some(marker) = self.root_requirement_marker(requirement, package) else {
+                    continue;
+                };
+                let marker = root_marker.and(marker);
+                queue.push_back((package, None, marker));
+                for extra in &requirement.extras {
+                    if let Some((extra, _)) = package.optional_dependencies.get_key_value(extra) {
+                        let marker = marker.and(
+                            DependencyContext::Extra(extra)
+                                .conflict_marker(&package.id.name, &self.conflicts),
+                        );
+                        queue.push_back((package, Some(extra), marker));
+                    }
+                }
+            }
+        }
+
+        let mut package_markers = PackageMarkers::default();
+        while let Some((package, extra, marker)) = queue.pop_front() {
+            let Some(marker) = package_markers.merge(&package.id, extra, marker) else {
+                continue;
+            };
+            if extra.is_some() {
+                queue.push_back((package, None, marker));
+            }
+            let context = extra
+                .map(DependencyContext::Extra)
+                .unwrap_or(DependencyContext::Production);
+            for context in iter::once(context).chain(
+                package
+                    .dependency_groups
+                    .keys()
+                    .filter(|_| extra.is_none())
+                    .map(DependencyContext::Group),
+            ) {
+                let marker = marker.and(context.conflict_marker(&package.id.name, &self.conflicts));
+                for dependency in context.dependencies(package) {
+                    let marker = marker.and(dependency.complexified_marker.combined());
+                    let target = self.package(dependency.index);
+                    queue.push_back((target, None, marker));
+                    for extra in &dependency.extra {
+                        let Some((extra, _)) = target.optional_dependencies.get_key_value(extra)
+                        else {
+                            continue;
+                        };
+                        let marker = marker.and(
+                            DependencyContext::Extra(extra)
+                                .conflict_marker(&target.id.name, &self.conflicts),
+                        );
+                        queue.push_back((target, Some(extra), marker));
+                    }
+                }
+            }
+        }
+        Ok(package_markers)
     }
 
     /// Collect reachable direct sources without trusting stale locked edges.

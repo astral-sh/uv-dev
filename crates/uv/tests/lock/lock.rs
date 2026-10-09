@@ -19867,6 +19867,142 @@ fn lock_dependency_edges_apply_overrides_before_marker_normalization() -> Result
     Ok(())
 }
 
+/// Dependency coverage is bounded by the environments in which the parent package is reachable.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_dependency_edges_respect_package_reachability() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["middle; sys_platform == 'win32'"]
+
+        [tool.uv.sources]
+        middle = { path = "middle" }
+    "#})?;
+    context
+        .temp_dir
+        .child("middle/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "middle"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["sentinel; sys_platform != 'win32'"]
+
+        [tool.uv.sources]
+        sentinel = { path = "../sentinel" }
+    "#})?;
+    context
+        .temp_dir
+        .child("sentinel/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "sentinel"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--no-cache")
+        .env("RUST_LOG", "uv_lock_operations::validated_lock=debug"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Existing `uv.lock` satisfies workspace requirements
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Root extras do not select a workspace extra that conflicts with its own project node.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_dependency_edges_accept_conflict_omitted_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = ["provider[one]"]
+
+        [tool.uv]
+        conflicts = [[
+            { package = "provider" },
+            { package = "provider", extra = "one" },
+        ]]
+
+        [tool.uv.workspace]
+        members = ["provider", "leaf"]
+
+        [tool.uv.sources]
+        provider = { workspace = true }
+        leaf = { workspace = true }
+        "#})?;
+    context
+        .temp_dir
+        .child("provider/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "provider"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        one = ["leaf"]
+        "#})?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("package-conflicts")
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features")
+        .arg("package-conflicts")
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--no-cache")
+        .env("RUST_LOG", "uv_lock_operations::validated_lock=debug"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Existing `uv.lock` satisfies workspace requirements
+    Resolved 3 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 /// Empty declared extras do not require an incoming extra label in the lock.
 #[cfg(all(feature = "test-universal", feature = "test-pypi"))]
 #[test]
