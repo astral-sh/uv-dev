@@ -186,20 +186,6 @@ fn build_record(dist_info: &str, entries: &[(String, String)]) -> String {
 /// `PKG-INFO` with full metadata, and a stub module.
 ///
 /// Returns `(filename, bytes)`.
-pub fn generate_sdist(
-    name: &PackageName,
-    version: &Version,
-    requires: &[Requirement],
-    extras: &BTreeMap<ExtraName, Vec<Requirement>>,
-    requires_python: Option<&VersionSpecifiers>,
-    entry_points: &[String],
-) -> (String, Vec<u8>) {
-    let scripts = GeneratedScripts::new(name, version, entry_points, &BTreeMap::new())
-        .expect("Packse package entry points should be valid");
-    generate_sdist_with_scripts(name, version, requires, extras, requires_python, &scripts)
-}
-
-/// Generate a source distribution with the package's validated console scripts.
 pub(super) fn generate_sdist_with_scripts(
     name: &PackageName,
     version: &Version,
@@ -444,13 +430,13 @@ mod tests {
         let requires = vec![Requirement::from_str("dep>=1.0").expect("valid requirement")];
         let requires_python =
             VersionSpecifiers::from_str(">=3.12").expect("valid version specifier");
-        let (filename, bytes) = generate_sdist(
+        let (filename, bytes) = generate_sdist_with_scripts(
             &PackageName::from_str("my-package").expect("valid package name"),
             &Version::from_str("1.0.0").expect("valid version"),
             &requires,
             &BTreeMap::new(),
             Some(&requires_python),
-            &[],
+            &GeneratedScripts::default(),
         );
         assert_eq!(filename, "my_package-1.0.0.tar.gz");
 
