@@ -202,6 +202,11 @@ fn lock_required_environment_requires_matching_wheel() -> Result<()> {
         "#,
     )?;
     let server = PackseServer::from_scenario(&scenario);
+    let context = context.with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -329,28 +334,72 @@ fn lock_required_environment_requires_matching_wheel() -> Result<()> {
     Updated upgradeable v1.0.0 -> v1.0.0, v2.0.0
     ");
 
-    let versions_and_options = context
-        .read("uv.lock")
-        .lines()
-        .filter(|line| {
-            line.starts_with("name = ")
-                || line.starts_with("version = ")
-                || line.starts_with("required-environments-mode = ")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert_snapshot!(versions_and_options, @r#"
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
     version = 1
+    revision = 5
+    requires-python = ">=3.12"
+    resolution-markers = [
+        "python_full_version != '3.13.*'",
+        "python_full_version == '3.13.*'",
+    ]
+    required-markers = [
+        "python_full_version == '3.13.*'",
+    ]
+
+    [options]
     required-environments-mode = "require-wheels"
+
+    [[package]]
     name = "holdout"
     version = "1.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    sdist = { url = "http://[LOCALHOST]/files/holdout-1.0.0.tar.gz", hash = "sha256:[SHA256:holdout-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/holdout-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:holdout-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
     name = "project"
     version = "0.1.0"
+    source = { virtual = "." }
+    dependencies = [
+        { name = "holdout", marker = "python_full_version < '3.13'" },
+        { name = "upgradeable", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version != '3.13.*'" },
+        { name = "upgradeable", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "python_full_version == '3.13.*'" },
+    ]
+
+    [package.metadata]
+    requires-dist = [
+        { name = "holdout", marker = "python_full_version < '3.13'" },
+        { name = "upgradeable" },
+    ]
+
+    [[package]]
     name = "upgradeable"
     version = "1.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    resolution-markers = [
+        "python_full_version != '3.13.*'",
+    ]
+    sdist = { url = "http://[LOCALHOST]/files/upgradeable-1.0.0.tar.gz", hash = "sha256:[SHA256:upgradeable-1.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/upgradeable-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:upgradeable-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
     name = "upgradeable"
     version = "2.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    resolution-markers = [
+        "python_full_version == '3.13.*'",
+    ]
+    sdist = { url = "http://[LOCALHOST]/files/upgradeable-2.0.0.tar.gz", hash = "sha256:[SHA256:upgradeable-2.0.0.tar.gz]", upload-time = "2024-03-24T00:00:00Z" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/upgradeable-2.0.0-cp313-cp313-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:upgradeable-2.0.0-cp313-cp313-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+    ]
     "#);
+    });
 
     Ok(())
 }
@@ -48990,5 +49039,50 @@ fn lock_required_environment_allows_workspace_sources() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    Ok(())
+}
+
+/// Local wheel metadata constrains required Python coverage when no index metadata exists.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_local_wheel_python_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.12,<3.13".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--no-index", "--find-links", "wheels"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*')
+      cause: Because example==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels and only example==1.0.0 is available, we can conclude that all versions of example cannot be used.
+             And because your project depends on example, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
+    "#);
     Ok(())
 }

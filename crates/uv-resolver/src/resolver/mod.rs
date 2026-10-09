@@ -23,14 +23,16 @@ use uv_configuration::{Constraints, DependencyModifiers, RequiredEnvironmentsMod
 use uv_distribution::{ArchiveMetadata, DistributionDatabase};
 use uv_distribution_types::{
     BuiltDist, DerivationChain, Dist, DistErrorKind, Identifier, IndexCapabilities, IndexLocations,
-    IndexMetadata, IndexUrl, InstalledDist, Name, RemoteSource, Requirement, RequiresPython,
-    ResolutionRecorder, ResolvedDist, SourceDist, VersionOrUrlRef,
+    IndexMetadata, IndexUrl, InstalledDist, Name, RegistryBuiltDist, RegistryBuiltWheel,
+    RemoteSource, Requirement, RequiresPython, ResolutionRecorder, ResolvedDist, SourceDist,
+    VersionOrUrlRef,
 };
 use uv_git::GitResolver;
 use uv_normalize::PackageName;
 use uv_pep440::{MIN_VERSION, Version, VersionSpecifiers, release_specifiers_to_ranges};
 use uv_pep508::{
     MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree, MarkerValueString,
+    MarkerValueVersion,
 };
 use uv_platform_tags::{IncompatibleTag, Tags};
 use uv_pypi_types::{ConflictItem, ConflictItemRef, ConflictKindRef, Conflicts, VerbatimParsedUrl};
@@ -1548,11 +1550,20 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         .iter()
                         .any(|required| *required == marker)
                 {
-                    *wheel_markers.get_or_insert_with(|| {
-                        dist.prioritized().map_or(MarkerTree::TRUE, |prioritized| {
-                            prioritized.implied_wheel_markers(self.options.minimum_libc_version)
-                        })
-                    })
+                    if let Some(markers) = wheel_markers {
+                        markers
+                    } else {
+                        let markers = if let Some(prioritized) = dist.prioritized() {
+                            prioritized.implied_wheel_markers(
+                                self.options.minimum_libc_version,
+                                |wheel| self.wheel_metadata_marker(wheel, id, pubgrub, requests),
+                            )?
+                        } else {
+                            MarkerTree::TRUE
+                        };
+                        wheel_markers = Some(markers);
+                        markers
+                    }
                 } else {
                     artifact_markers
                 };
@@ -1733,6 +1744,54 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             },
         ];
         Ok(Some(ResolverVersion::Forked(forks)))
+    }
+
+    /// Read wheel metadata when its index record omits the supported Python versions.
+    fn wheel_metadata_marker(
+        &self,
+        wheel: &RegistryBuiltWheel,
+        id: Id<PubGrubPackage>,
+        pubgrub: &State<UvDependencyProvider>,
+        requests: &MetadataRequests,
+    ) -> Result<MarkerTree, ResolveError> {
+        let request = MetadataRequest::Dist(Dist::Built(BuiltDist::Registry(RegistryBuiltDist {
+            wheels: vec![wheel.clone()],
+            best_wheel_index: 0,
+            sdist: None,
+        })));
+        let registered = requests.request_metadata(request, |_| {
+            if !self
+                .hasher
+                .allows_package(wheel.name(), &wheel.filename.version)
+            {
+                return Err(ResolveError::UnhashedPackage(wheel.name().clone()));
+            }
+            Ok(())
+        })?;
+        match &*registered.wait() {
+            MetadataResponse::Found(archive) => Ok(archive
+                .metadata
+                .requires_python
+                .as_ref()
+                .map_or(MarkerTree::TRUE, |requires_python| {
+                    requires_python
+                        .iter()
+                        .fold(MarkerTree::TRUE, |marker, specifier| {
+                            marker.and(MarkerTree::expression(MarkerExpression::Version {
+                                key: MarkerValueVersion::PythonFullVersion,
+                                specifier: specifier.clone(),
+                            }))
+                        })
+                })),
+            MetadataResponse::Unavailable(_) => Ok(MarkerTree::FALSE),
+            MetadataResponse::Error(dist, err) => Err(ResolveError::Dist(
+                DistErrorKind::from_requested_dist(dist, &**err),
+                dist.clone(),
+                DerivationChainBuilder::from_state(id, &wheel.filename.version, pubgrub)
+                    .unwrap_or_default(),
+                err.clone(),
+            )),
+        }
     }
 
     /// Visit a selected candidate.

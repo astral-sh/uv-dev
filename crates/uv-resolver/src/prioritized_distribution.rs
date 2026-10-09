@@ -542,17 +542,19 @@ impl PrioritizedDist {
 
     /// Return the environments supported by the compatible wheels in this distribution, without
     /// treating a source distribution as support for every environment.
-    pub fn implied_wheel_markers(
+    pub(crate) fn implied_wheel_markers<E>(
         &self,
         minimum_libc_version: Option<MinimumLibcVersion>,
-    ) -> MarkerTree {
+        mut metadata_markers: impl FnMut(&RegistryBuiltWheel) -> Result<MarkerTree, E>,
+    ) -> Result<MarkerTree, E> {
         let mut markers = [MarkerTree::FALSE; 2];
         for (wheel, compatibility) in &self.0.wheels {
             if !compatibility.is_compatible() {
                 continue;
             }
 
-            let requires_python = wheel.file.requires_python.as_ref().map(|requires_python| {
+            let requires_python = if let Some(requires_python) = wheel.file.requires_python.as_ref()
+            {
                 requires_python
                     .iter()
                     .fold(MarkerTree::TRUE, |marker, specifier| {
@@ -561,21 +563,21 @@ impl PrioritizedDist {
                             specifier: specifier.clone(),
                         }))
                     })
-            });
+            } else {
+                metadata_markers(wheel)?
+            };
             let python = implied_python_markers(&wheel.filename);
             for (coverage, mut marker) in markers.iter_mut().zip(implied_libc_markers(
                 &wheel.filename,
                 python,
                 minimum_libc_version,
             )) {
-                if let Some(requires_python) = requires_python {
-                    marker = marker.and(requires_python);
-                }
+                marker = marker.and(requires_python);
                 *coverage = coverage.or(marker);
             }
         }
         let [glibc, musl] = markers;
-        glibc.and(musl)
+        Ok(glibc.and(musl))
     }
 
     /// Returns true if and only if this distribution does not contain any

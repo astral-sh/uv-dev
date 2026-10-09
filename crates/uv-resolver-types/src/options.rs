@@ -147,6 +147,12 @@ impl OptionsBuilder {
 
     /// Builds the options.
     pub fn build(self) -> Options {
+        let mut artifact_environments = self.artifact_environments.into_markers();
+        for marker in self.required_environments.iter() {
+            if !artifact_environments.contains(marker) {
+                artifact_environments.push(*marker);
+            }
+        }
         Options {
             resolution_mode: self.resolution_mode,
             prerelease: self.prerelease,
@@ -154,7 +160,7 @@ impl OptionsBuilder {
             fork_strategy: self.fork_strategy,
             exclude_newer: self.exclude_newer,
             index_strategy: self.index_strategy,
-            artifact_environments: self.artifact_environments,
+            artifact_environments: SupportedEnvironments::from_markers(artifact_environments),
             minimum_libc_version: self.minimum_libc_version,
             required_environments: self.required_environments,
             required_environments_mode: self.required_environments_mode,

@@ -41,7 +41,7 @@ use uv_python_types::{
     PythonVersion, VersionRequest,
 };
 use uv_requirements::{
-    GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
+    GroupsSpecification, RequirementsSource, RequirementsSpecification, SourceTree, is_pylock_toml,
 };
 use uv_resolver::{
     AnnotationStyle, DependencyMode, DisplayResolutionGraph, ExcludeNewer, FlatIndex, ForkStrategy,
@@ -51,10 +51,10 @@ use uv_resolver::{
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode, TorchStrategy};
-use uv_types::{HashStrategy, SourceTreeEditablePolicy};
+use uv_types::{BuildContext, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once};
-use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
+use uv_workspace::{DiscoveryOptions, ProjectWorkspace, WorkspaceCache};
 
 use uv_command_support::Printer;
 use uv_command_support::{ExitStatus, OutputWriter, UvError};
@@ -386,13 +386,7 @@ pub async fn pip_compile(
     };
 
     let artifact_environments = if universal {
-        SupportedEnvironments::from_markers(
-            environments
-                .iter()
-                .chain(required_environments.iter())
-                .copied()
-                .collect(),
-        )
+        environments.clone()
     } else {
         SupportedEnvironments::default()
     };
@@ -557,7 +551,7 @@ pub async fn pip_compile(
 
     let required_environments_mode = if universal {
         if required_environments_mode.is_some()
-            && !uv_preview::is_enabled(PreviewFeature::RequiredEnvironmentsMode)
+            && !preview.is_enabled(PreviewFeature::RequiredEnvironmentsMode)
         {
             warn_user_once!(
                 "The `required-environments-mode` setting is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
@@ -592,6 +586,43 @@ pub async fn pip_compile(
         .required_environments_mode(required_environments_mode)
         .build();
 
+    // Source trees resolve within their discovered workspace, whose members are built locally.
+    let mut workspace_members = BTreeMap::new();
+    if universal
+        && required_environments_mode == Some(RequiredEnvironmentsMode::RequireWheels)
+        && !build_dispatch.sources().all()
+    {
+        for source_tree in &source_trees {
+            let path = match source_tree {
+                SourceTree::PyProjectToml(path, _)
+                | SourceTree::SetupPy(path)
+                | SourceTree::SetupCfg(path) => path,
+            };
+            let path = std::path::absolute(path)?;
+            let Some(root) = path.parent() else {
+                continue;
+            };
+            if let Some(project) = ProjectWorkspace::from_maybe_project_root(
+                root,
+                &DiscoveryOptions::default(),
+                &cache,
+                build_dispatch.workspace_cache(),
+            )
+            .await?
+            {
+                workspace_members.extend(
+                    project
+                        .workspace()
+                        .members_requirements()
+                        .filter(|requirement| {
+                            !build_dispatch.sources().for_package(&requirement.name)
+                        })
+                        .map(|requirement| (requirement.name, requirement.source)),
+                );
+            }
+        }
+    }
+
     // Resolve the requirements.
     let mut resolution = match uv_resolve_operations::resolve(
         requirements,
@@ -601,7 +632,7 @@ pub async fn pip_compile(
         excludes,
         source_trees,
         project,
-        BTreeMap::default(),
+        workspace_members,
         &extras,
         &groups,
         preferences,

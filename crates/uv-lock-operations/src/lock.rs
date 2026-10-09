@@ -545,7 +545,7 @@ async fn do_lock(
     };
     let required_environments_mode = target.required_environments_mode();
     if required_environments_mode.is_some()
-        && !uv_preview::is_enabled(PreviewFeature::RequiredEnvironmentsMode)
+        && !preview.is_enabled(PreviewFeature::RequiredEnvironmentsMode)
     {
         warn_user_once!(
             "The `required-environments-mode` setting is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
@@ -646,13 +646,6 @@ async fn do_lock(
 
     let lock_supported_environments = environments.cloned().unwrap_or_default();
     let lock_required_environments = required_environments.cloned().unwrap_or_default();
-    let artifact_environments = SupportedEnvironments::from_markers(
-        lock_supported_environments
-            .iter()
-            .copied()
-            .chain(lock_required_environments.iter().copied())
-            .collect(),
-    );
 
     let options = OptionsBuilder::new()
         .resolution_mode(*resolution)
@@ -661,7 +654,7 @@ async fn do_lock(
         .exclude_newer(exclude_newer.clone())
         .index_strategy(*index_strategy)
         .build_options(build_options.clone())
-        .artifact_environments(artifact_environments.clone())
+        .artifact_environments(lock_supported_environments.clone())
         .minimum_libc_version(minimum_libc_version)
         .required_environments(lock_required_environments.clone())
         .required_environments_mode(required_environments_mode)
