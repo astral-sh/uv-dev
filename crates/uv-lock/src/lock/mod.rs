@@ -6291,14 +6291,27 @@ impl ResolverIndex {
     fn from_index(index: &Index, find_links: bool, root: &Path) -> Result<Self, LockError> {
         let url = match index.url() {
             IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
-                // Routing query parameters are part of an index's identity. Remove only
-                // credentials and fragments, which are not sent to the index server.
+                // Routing parameters define index identity; signing credentials and metadata do
+                // not. Fragments are never sent to the index server.
                 let mut url = index.url().without_credentials().into_owned();
                 url.remove_sensitive_query_parameters();
+                url.remove_query_parameters(|key| {
+                    [
+                        "X-Amz-Algorithm",
+                        "X-Amz-Date",
+                        "X-Amz-Expires",
+                        "X-Amz-SignedHeaders",
+                    ]
+                    .iter()
+                    .any(|parameter| key.eq_ignore_ascii_case(parameter))
+                });
                 url.set_fragment(None);
                 if index.format == IndexFormat::Simple {
-                    let path = url.path().trim_end_matches('/').to_owned();
-                    url.set_path(&path);
+                    // Match the client's single `pop_if_empty` before appending a package name.
+                    if let Some(path) = url.path().strip_suffix('/') {
+                        let path = path.to_owned();
+                        url.set_path(&path);
+                    }
                 }
                 RegistrySource::Url(UrlString::from(url))
             }

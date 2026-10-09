@@ -28710,7 +28710,7 @@ fn lock_index_policy_credentials() -> Result<()> {
 
         [[tool.uv.index]]
         name = "signed"
-        url = "https://user:password@example.invalid/simple?channel=linux/x86_64&token=secret&X-Amz-Credential=credential&X-Amz-Signature=signature&X-Amz-Security-Token=session#secret"
+        url = "https://user:password@example.invalid/simple?channel=linux/x86_64&token=secret&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260101T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Credential=credential&X-Amz-Signature=signature&X-Amz-Security-Token=session#secret"
         explicit = true
         "#,
     )?;
@@ -28739,7 +28739,7 @@ fn lock_index_policy_credentials() -> Result<()> {
 
         [[tool.uv.index]]
         name = "signed"
-        url = "https://other:rotated@example.invalid/simple?channel=linux/x86_64&token=rotated&X-Amz-Credential=other&X-Amz-Signature=rotated&X-Amz-Security-Token=rotated#rotated"
+        url = "https://other:rotated@example.invalid/simple?channel=linux/x86_64&token=rotated&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260201T000000Z&X-Amz-Expires=7200&X-Amz-SignedHeaders=host&X-Amz-Credential=other&X-Amz-Signature=rotated&X-Amz-Security-Token=rotated#rotated"
         explicit = true
         "#,
     )?;
@@ -28751,7 +28751,7 @@ fn lock_index_policy_credentials() -> Result<()> {
     ");
 
     pyproject_toml.write_str(&context.read("pyproject.toml").replace(
-        "https://other:rotated@example.invalid/simple?channel=linux/x86_64&token=rotated&X-Amz-Credential=other&X-Amz-Signature=rotated&X-Amz-Security-Token=rotated#rotated",
+        "https://other:rotated@example.invalid/simple?channel=linux/x86_64&token=rotated&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20260201T000000Z&X-Amz-Expires=7200&X-Amz-SignedHeaders=host&X-Amz-Credential=other&X-Amz-Signature=rotated&X-Amz-Security-Token=rotated#rotated",
         "https://example.invalid/simple?channel=linux/x86_64",
     ))?;
     uv_snapshot!(context.filters(), context.lock().arg("--default-index").arg(default.index_url()).arg("--locked").arg("--offline").arg("--no-cache"), @"
@@ -49669,5 +49669,41 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
+    Ok(())
+}
+
+/// Distinct empty path segments remain part of a Simple index's request destination.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_policy_multiple_trailing_slashes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let header = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#};
+    let single = indoc! {r#"
+        [[tool.uv.index]]
+        url = "https://example.invalid/simple/"
+    "#};
+    let double = indoc! {r#"
+        [[tool.uv.index]]
+        url = "https://example.invalid/simple//"
+    "#};
+    pyproject.write_str(&format!("{header}{single}{double}"))?;
+    context.lock().assert().success();
+    pyproject.write_str(&format!("{header}{double}{single}"))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    "#);
     Ok(())
 }

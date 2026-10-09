@@ -210,22 +210,22 @@ impl DisplaySafeUrl {
 
     /// Remove sensitive query parameters while retaining routing parameters and their order.
     pub fn remove_sensitive_query_parameters(&mut self) {
+        self.remove_query_parameters(is_sensitive_query_parameter);
+    }
+
+    /// Remove matching query parameters without changing retained parameters or their encoding.
+    pub fn remove_query_parameters(&mut self, matches: impl Fn(&str) -> bool) {
         let Some(query) = self.0.query() else {
             return;
         };
-        if !self
-            .0
-            .query_pairs()
-            .any(|(key, _)| is_sensitive_query_parameter(&key))
-        {
+        if !self.0.query_pairs().any(|(key, _)| matches(&key)) {
             return;
         }
         // Decode keys only for classification. Routing values retain their original encoding.
         let query = query
             .split('&')
             .filter(|pair| {
-                !url::form_urlencoded::parse(pair.as_bytes())
-                    .any(|(key, _)| is_sensitive_query_parameter(&key))
+                !url::form_urlencoded::parse(pair.as_bytes()).any(|(key, _)| matches(&key))
             })
             .collect::<Vec<_>>()
             .join("&");
