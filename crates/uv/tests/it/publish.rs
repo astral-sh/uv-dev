@@ -205,24 +205,47 @@ fn no_credentials() {
 /// be obscured by an unrelated GitHub Actions OIDC permissions error.
 #[test]
 fn artifact_registry_no_credentials() {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_sizes()
+        .with_filtered_missing_file_error();
 
     uv_snapshot!(context.filters(), context.publish()
         .arg("--publish-url")
         .arg("https://us-central1-python.pkg.dev/project/repository/")
         .arg(dummy_wheel())
         .env(EnvVars::GITHUB_ACTIONS, "true")
-        .env("GOOGLE_APPLICATION_CREDENTIALS", context.temp_dir.join("missing-credentials.json")), @"
+        .env("GOOGLE_APPLICATION_CREDENTIALS", context.temp_dir.join("missing-credentials.json")), @r#"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to https://us-central1-python.pkg.dev/project/repository/
-    Hashing ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    Uploading ok-1.0.0-py3-none-any.whl ([SIZE]B)
-    error: Failed to publish `[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl` to `https://us-central1-python.pkg.dev/project/repository/`
-      cause: Failed to send POST request
-      cause: Missing credentials for: https://us-central1-python.pkg.dev/project/repository/
-    "
+    error: Failed to retrieve Google Application Default Credentials
+      cause: failed to read file
+      cause: [OS ERROR 2]
+    "#
     );
+}
+
+/// Malformed explicit ADC reports its parse failure instead of falling through to missing credentials.
+#[test]
+fn artifact_registry_malformed_credentials() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("credentials.json")
+        .write_str("{malformed}")?;
+    uv_snapshot!(context.filters(), context.publish()
+        .arg("--publish-url")
+        .arg("https://us-central1-python.pkg.dev/project/repository/")
+        .arg(dummy_wheel())
+        .env("GOOGLE_APPLICATION_CREDENTIALS", context.temp_dir.child("credentials.json").path()), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Publishing 1 file to https://us-central1-python.pkg.dev/project/repository/
+    error: Failed to retrieve Google Application Default Credentials
+      cause: failed to parse credential file
+      cause: key must be a string at line 1 column 2
+    "#);
+    Ok(())
 }
 
 /// Hint people that it's not `--skip-existing` but `--check-url`.

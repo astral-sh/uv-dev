@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use console::Term;
 use owo_colors::OwoColorize;
 use tracing::{debug, info, trace};
-use uv_auth::{ArtifactRegistryProvider, Credentials};
+use uv_auth::{ArtifactRegistryProvider, Credentials, CredentialsCache};
 use uv_cache::Cache;
 use uv_client::{
     AuthIntegration, BaseClient, BaseClientBuilder, RedirectPolicy, RegistryClientBuilder,
@@ -144,6 +144,7 @@ pub async fn publish(
         trusted_publishing,
         keyring_provider,
         &oidc_client,
+        client_builder.credentials_cache(),
         check_url.as_ref(),
         Prompt::Enabled,
         printer,
@@ -331,6 +332,7 @@ async fn gather_credentials(
     trusted_publishing: TrustedPublishing,
     keyring_provider: KeyringProviderType,
     oidc_client: &BaseClient,
+    credentials_cache: &CredentialsCache,
     check_url: Option<&IndexUrl>,
     prompt: Prompt,
     printer: Printer,
@@ -380,8 +382,8 @@ async fn gather_credentials(
         && ArtifactRegistryProvider::is_artifact_registry(&publish_url)
     {
         ArtifactRegistryProvider::default()
-            .has_credentials_for(&publish_url)
-            .await
+            .cache_credentials_for(&publish_url, credentials_cache)
+            .await?
     } else {
         false
     };
@@ -505,6 +507,7 @@ mod tests {
             TrustedPublishing::Never,
             KeyringProviderType::Disabled,
             &client,
+            &CredentialsCache::new(),
             None,
             Prompt::Disabled,
             Printer::Quiet,

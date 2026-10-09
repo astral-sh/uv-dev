@@ -686,9 +686,9 @@ impl AuthMiddleware {
                 key.0
             );
 
-            return Ok(self
+            return self
                 .fetch_artifact_registry_credentials(url, requested_username)
-                .await);
+                .await;
         }
 
         // Support for known providers, like Hugging Face and S3.
@@ -892,31 +892,31 @@ impl AuthMiddleware {
             return Ok(credentials);
         }
 
-        Ok(self
-            .fetch_artifact_registry_credentials(url, requested_username)
-            .await)
+        self.fetch_artifact_registry_credentials(url, requested_username)
+            .await
     }
 
     async fn fetch_artifact_registry_credentials(
         &self,
         url: &DisplaySafeUrl,
         requested_username: Option<&str>,
-    ) -> Option<Arc<Authentication>> {
+    ) -> Result<Option<Arc<Authentication>>, Error> {
         if self.keyring.is_none()
             && ArtifactRegistryProvider::is_artifact_registry(url)
             && ArtifactRegistryProvider::supports_username(requested_username)
-            && self
+            && let Some(credentials) = self
                 .artifact_registry_provider
                 .credentials_for(url)
                 .await
-                .is_some()
+                .map_err(|err| Error::Middleware(err.into()))?
         {
             debug!("Found Google Artifact Registry credentials for {url}");
-            Some(Arc::new(Authentication::from(
+            Ok(Some(Arc::new(Authentication::artifact_registry(
                 self.artifact_registry_provider.clone(),
-            )))
+                credentials,
+            ))))
         } else {
-            None
+            Ok(None)
         }
     }
 }
@@ -1533,6 +1533,80 @@ mod tests {
             ))
         );
 
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_artifact_registry_credentials_reuse_initial_lookup() -> anyhow::Result<()> {
+        let url = Url::parse("https://us-central1-python.pkg.dev/project/index/simple")?;
+        let provider = ArtifactRegistryProvider::with_signer(
+            reqsign::google::default_signer("artifactregistry.googleapis.com")
+                .with_credential_provider(reqsign::google::TokenCredentialProvider::new(
+                    "test-token",
+                )),
+        );
+        let middleware = AuthMiddleware::new()
+            .with_cache(CredentialsCache::new())
+            .with_artifact_registry_provider(provider.clone());
+        let authentication = middleware
+            .fetch_credentials(None, DisplaySafeUrl::ref_cast(&url), None, AuthPolicy::Auto)
+            .await?
+            .ok_or_else(|| anyhow!("expected provider credentials"))?;
+        provider.cache_missing_credentials().await;
+        let request = authentication
+            .authenticate(Request::new(Method::GET, url.clone()))
+            .await?;
+        assert_eq!(
+            Credentials::from_request(&request)?,
+            Some(Credentials::basic(
+                Some("oauth2accesstoken".to_owned()),
+                Some("test-token".to_owned()),
+            ))
+        );
+        assert!(matches!(
+            authentication
+                .authenticate(Request::new(Method::GET, url))
+                .await,
+            Err(AuthenticationError::ArtifactRegistry)
+        ));
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_artifact_registry_credentials_reuse_publish_probe() -> anyhow::Result<()> {
+        let url = Url::parse("https://us-central1-python.pkg.dev/project/repository/")?;
+        let provider = ArtifactRegistryProvider::with_signer(
+            reqsign::google::default_signer("artifactregistry.googleapis.com")
+                .with_credential_provider(reqsign::google::TokenCredentialProvider::new(
+                    "test-token",
+                )),
+        );
+        let cache = CredentialsCache::new();
+        assert!(
+            provider
+                .cache_credentials_for(DisplaySafeUrl::ref_cast(&url), &cache)
+                .await?
+        );
+        provider.cache_missing_credentials().await;
+        let authentication = cache
+            .get_realm(Realm::from(&url), Username::none())
+            .ok_or_else(|| anyhow!("expected prepared provider authentication"))?;
+        let request = authentication
+            .authenticate(Request::new(Method::GET, url.clone()))
+            .await?;
+        assert_eq!(
+            Credentials::from_request(&request)?,
+            Some(Credentials::basic(
+                Some("oauth2accesstoken".to_owned()),
+                Some("test-token".to_owned()),
+            ))
+        );
+        assert!(matches!(
+            authentication
+                .authenticate(Request::new(Method::GET, url))
+                .await,
+            Err(AuthenticationError::ArtifactRegistry)
+        ));
         Ok(())
     }
 

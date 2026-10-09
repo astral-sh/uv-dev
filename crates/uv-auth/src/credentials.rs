@@ -3,6 +3,8 @@ use std::fmt;
 use std::io::Read;
 use std::io::Write;
 use std::str::{FromStr, Utf8Error};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use base64::prelude::BASE64_STANDARD;
 use base64::read::DecoderReader;
@@ -21,7 +23,7 @@ use uv_netrc::Netrc;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 
-use crate::providers::ArtifactRegistryProvider;
+use crate::providers::{ArtifactRegistryError, ArtifactRegistryProvider};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Credentials {
@@ -405,7 +407,10 @@ pub(crate) enum Authentication {
     AzureSigner(AzureDefaultSigner),
 
     /// Google Artifact Registry authentication.
-    ArtifactRegistry(ArtifactRegistryProvider),
+    ArtifactRegistry {
+        provider: ArtifactRegistryProvider,
+        initial_credentials: Arc<Mutex<Option<Credentials>>>,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -432,6 +437,9 @@ pub(crate) enum AuthenticationError {
 
     #[error("Failed to retrieve Google Artifact Registry credentials")]
     ArtifactRegistry,
+
+    #[error(transparent)]
+    ArtifactRegistryCredentials(#[from] ArtifactRegistryError),
 }
 
 impl PartialEq for Authentication {
@@ -441,7 +449,7 @@ impl PartialEq for Authentication {
             (Self::AwsSigner(..), Self::AwsSigner(..)) => true,
             (Self::GcsSigner(..), Self::GcsSigner(..)) => true,
             (Self::AzureSigner(..), Self::AzureSigner(..)) => true,
-            (Self::ArtifactRegistry(..), Self::ArtifactRegistry(..)) => true,
+            (Self::ArtifactRegistry { .. }, Self::ArtifactRegistry { .. }) => true,
             _ => false,
         }
     }
@@ -473,13 +481,17 @@ impl From<AzureDefaultSigner> for Authentication {
     }
 }
 
-impl From<ArtifactRegistryProvider> for Authentication {
-    fn from(provider: ArtifactRegistryProvider) -> Self {
-        Self::ArtifactRegistry(provider)
-    }
-}
-
 impl Authentication {
+    pub(crate) fn artifact_registry(
+        provider: ArtifactRegistryProvider,
+        credentials: Credentials,
+    ) -> Self {
+        Self::ArtifactRegistry {
+            provider,
+            initial_credentials: Arc::new(Mutex::new(Some(credentials))),
+        }
+    }
+
     /// Return the password used for authentication, if any.
     pub(crate) fn password(&self) -> Option<&str> {
         match self {
@@ -487,7 +499,7 @@ impl Authentication {
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
-            | Self::ArtifactRegistry(..) => None,
+            | Self::ArtifactRegistry { .. } => None,
         }
     }
 
@@ -498,7 +510,7 @@ impl Authentication {
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
-            | Self::ArtifactRegistry(..) => None,
+            | Self::ArtifactRegistry { .. } => None,
         }
     }
 
@@ -509,7 +521,7 @@ impl Authentication {
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
-            | Self::ArtifactRegistry(..) => Cow::Owned(Username::none()),
+            | Self::ArtifactRegistry { .. } => Cow::Owned(Username::none()),
         }
     }
 
@@ -520,7 +532,7 @@ impl Authentication {
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
-            | Self::ArtifactRegistry(..) => Username::none(),
+            | Self::ArtifactRegistry { .. } => Username::none(),
         }
     }
 
@@ -531,7 +543,7 @@ impl Authentication {
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
-            | Self::ArtifactRegistry(..) => true,
+            | Self::ArtifactRegistry { .. } => true,
         }
     }
 
@@ -542,7 +554,7 @@ impl Authentication {
             Self::AwsSigner(..)
             | Self::GcsSigner(..)
             | Self::AzureSigner(..)
-            | Self::ArtifactRegistry(..) => false,
+            | Self::ArtifactRegistry { .. } => false,
         }
     }
 
@@ -651,8 +663,16 @@ impl Authentication {
                 }
                 Ok(request)
             }
-            Self::ArtifactRegistry(provider) => {
-                let Some(credentials) = provider.credentials_for(request.url()).await else {
+            Self::ArtifactRegistry {
+                provider,
+                initial_credentials,
+            } => {
+                let initial_credentials = initial_credentials.lock().await.take();
+                let credentials = match initial_credentials {
+                    Some(credentials) => Some(credentials),
+                    None => provider.credentials_for(request.url()).await?,
+                };
+                let Some(credentials) = credentials else {
                     return Err(AuthenticationError::ArtifactRegistry);
                 };
                 Ok(credentials.authenticate(request)?)
