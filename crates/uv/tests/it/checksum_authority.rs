@@ -1190,9 +1190,6 @@ async fn checksum_authority_retains_source_lock_through_extraction() -> Result<(
             .with_file(format!("{}-{digest}", filename.cache_key()))
             .path(),
     )?;
-    #[cfg(windows)]
-    let lock_name = format!("{}.lock", filename.stem());
-    #[cfg(not(windows))]
     let lock_name = format!("{}.lock", filename.cache_key());
     let wheel_lock = wheel_entry.with_file(&lock_name).lock().await?;
     let source_lock_path = built_wheel
@@ -1224,7 +1221,7 @@ async fn checksum_authority_retains_source_lock_through_extraction() -> Result<(
         .spawn()?;
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            let stderr = fs_err::read_to_string(&stderr_path)?;
+            let stderr = context.read("install.log");
             if stderr.contains("Waiting to acquire exclusive lock") && stderr.contains(&lock_name) {
                 return Ok::<_, anyhow::Error>(());
             }
