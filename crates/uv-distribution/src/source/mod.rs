@@ -1026,12 +1026,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         };
         let req = Self::request(url.clone(), client.unmanaged)?;
         let packed_entry = source.name().map(|name| {
-            PackedArchiveEntry::new(
+            PackedArchiveEntry::source(
                 self.build_context.cache(),
-                index,
+                index.zip(source.version()),
                 name,
                 url,
-                &PackedArchiveEntry::source_key(index.and(source.version()), ext),
+                ext,
             )
         });
         let revision = client
@@ -1358,6 +1358,31 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         })
     }
 
+    /// Recover a removed local source archive from its verified packed cache entry.
+    async fn packed_local_archive(
+        &self,
+        source: &BuildableSource<'_>,
+        resource: &PathSourceUrl<'_>,
+    ) -> Result<Option<(fs_err::tokio::File, uv_cache_info::Timestamp)>, Error> {
+        let Some(name) = source.name() else {
+            return Ok(None);
+        };
+        let registry = match source {
+            BuildableSource::Dist(SourceDist::Registry(dist)) => Some((&dist.index, &dist.version)),
+            _ => None,
+        };
+        PackedArchiveEntry::source(
+            self.build_context.cache(),
+            registry,
+            name,
+            resource.url,
+            resource.ext,
+        )
+        .read_local()
+        .await
+        .map_err(|err| Error::CacheRead(std::io::Error::other(err)))
+    }
+
     /// Return the [`Revision`] for a local archive, refreshing it if necessary.
     async fn archive_revision(
         &self,
@@ -1366,13 +1391,22 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         cache_shard: &CacheShard,
         hashes: ArchiveHashPolicy<'_>,
     ) -> Result<LocalRevisionPointer, Error> {
-        // Verify that the archive exists.
-        if !resource.path.is_file() {
-            return Err(Error::NotFound(resource.url.clone()));
-        }
-
-        // Determine the last-modified time of the source distribution.
-        let cache_info = CacheInfo::from_file(&resource.path).map_err(Error::CacheRead)?;
+        let packed = if resource.path.try_exists().map_err(Error::CacheRead)? {
+            None
+        } else {
+            self.packed_local_archive(source, resource).await?
+        };
+        let (path, cache_info) = if let Some((file, timestamp)) = &packed {
+            (file.path(), CacheInfo::from_timestamp(*timestamp))
+        } else {
+            if !resource.path.is_file() {
+                return Err(Error::NotFound(resource.url.clone()));
+            }
+            (
+                resource.path.as_ref(),
+                CacheInfo::from_file(&resource.path).map_err(Error::CacheRead)?,
+            )
+        };
 
         // Read the existing metadata from the cache.
         let revision_entry = cache_shard.entry(LOCAL_REVISION);
@@ -1394,14 +1428,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         debug!("Unpacking source distribution: {source}");
         let entry = cache_shard.shard(revision.id()).entry(SOURCE);
         let hashes = self
-            .persist_archive(
-                source,
-                &resource.path,
-                resource.ext,
-                entry.path(),
-                hashes,
-                &[],
-            )
+            .persist_archive(source, path, resource.ext, entry.path(), hashes, &[])
             .await?;
 
         // Include the hashes and cache info in the revision.
@@ -2763,10 +2790,19 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<Revision, Error> {
         warn!("Re-extracting missing source distribution: {source}");
 
+        let packed = if resource.path.try_exists().map_err(Error::CacheRead)? {
+            None
+        } else {
+            self.packed_local_archive(source, resource).await?
+        };
+        let path = packed
+            .as_ref()
+            .map_or(resource.path.as_ref(), |(file, _)| file.path());
+
         let hashes = self
             .persist_archive(
                 source,
-                &resource.path,
+                path,
                 resource.ext,
                 entry.path(),
                 hashes,
@@ -2832,12 +2868,12 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .instrument(info_span!("download", source_dist = %source))
         };
         let packed_entry = source.name().map(|name| {
-            PackedArchiveEntry::new(
+            PackedArchiveEntry::source(
                 self.build_context.cache(),
-                index,
+                index.zip(source.version()),
                 name,
                 url,
-                &PackedArchiveEntry::source_key(index.and(source.version()), ext),
+                ext,
             )
         });
         client

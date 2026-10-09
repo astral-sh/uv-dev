@@ -965,7 +965,7 @@ impl RegistryClient {
 
                 match location {
                     WheelLocation::Path(path) => {
-                        Self::wheel_metadata_local(&path, &path, &wheel.filename, built_dist)
+                        self.wheel_metadata_local(&path, &path, &wheel.filename, built_dist)
                             .await?
                     }
                     WheelLocation::Url(url) => {
@@ -985,7 +985,7 @@ impl RegistryClient {
                 .await?
             }
             BuiltDist::Path(wheel) => {
-                Self::wheel_metadata_local(
+                self.wheel_metadata_local(
                     &wheel.install_path,
                     &wheel.install_path,
                     &wheel.filename,
@@ -1021,7 +1021,7 @@ impl RegistryClient {
                 }
 
                 // Read the metadata.
-                Self::wheel_metadata_local(
+                self.wheel_metadata_local(
                     &fetch.path().join(&wheel.install_path),
                     &wheel.install_path,
                     &wheel.filename,
@@ -1045,17 +1045,54 @@ impl RegistryClient {
     ///
     /// `metadata_path` identifies the wheel in diagnostics and may be relative to a Git checkout.
     async fn wheel_metadata_local(
+        &self,
         path: &Path,
         metadata_path: &Path,
         filename: &WheelFilename,
         built_dist: &BuiltDist,
     ) -> Result<ResolutionMetadata, Error> {
-        let path = path.to_path_buf();
+        let file = match fs_err::tokio::File::open(path).await {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let entry = match built_dist {
+                    BuiltDist::Registry(wheels) => {
+                        let wheel = wheels.best_wheel();
+                        Some(PackedArchiveEntry::wheel(
+                            &self.cache,
+                            Some(&wheel.index),
+                            &wheel.file.url.to_url().map_err(ErrorKind::InvalidUrl)?,
+                            filename,
+                        ))
+                    }
+                    BuiltDist::Path(wheel) => Some(PackedArchiveEntry::wheel(
+                        &self.cache,
+                        None,
+                        &wheel.url,
+                        filename,
+                    )),
+                    BuiltDist::DirectUrl(_) | BuiltDist::GitPath(_) => None,
+                };
+                let packed = if let Some(entry) = entry {
+                    entry
+                        .read_local()
+                        .await
+                        .map_err(|err| ErrorKind::Io(std::io::Error::other(err)))?
+                } else {
+                    None
+                };
+                let Some((file, _)) = packed else {
+                    return Err(ErrorKind::Io(err).into());
+                };
+                file
+            }
+            Err(err) => return Err(ErrorKind::Io(err).into()),
+        }
+        .into_std()
+        .await;
         let metadata_path = metadata_path.to_string_lossy().into_owned();
         let filename = filename.clone();
         let built_dist = built_dist.to_string();
         tokio::task::spawn_blocking(move || {
-            let file = fs_err::File::open(path).map_err(ErrorKind::Io)?;
             let contents = read_archive_metadata(&filename, BufReader::new(file))
                 .map_err(|err| ErrorKind::Metadata(metadata_path, err))?;
             ResolutionMetadata::parse_metadata(&contents).map_err(|err| {
@@ -1073,13 +1110,7 @@ impl RegistryClient {
         url: &DisplaySafeUrl,
         index: Option<&IndexUrl>,
     ) -> Result<Option<ResolutionMetadata>, Error> {
-        let entry = PackedArchiveEntry::new(
-            &self.cache,
-            index,
-            &filename.name,
-            url,
-            &PackedArchiveEntry::wheel_key(filename),
-        );
+        let entry = PackedArchiveEntry::wheel(&self.cache, index, url, filename);
         let request = self
             .uncached_client(url)
             .get(url.as_str())

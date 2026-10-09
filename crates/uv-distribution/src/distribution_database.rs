@@ -95,6 +95,11 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         }
     }
 
+    /// Return the cache used for distribution metadata and archives.
+    pub fn cache(&self) -> &Cache {
+        self.build_context.cache()
+    }
+
     /// Allow metadata builds for the given first-party workspace source trees.
     #[must_use]
     pub fn with_first_party_packages(
@@ -897,13 +902,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
-        let packed_entry = PackedArchiveEntry::new(
-            self.build_context.cache(),
-            index,
-            &filename.name,
-            &url,
-            &PackedArchiveEntry::wheel_key(filename),
-        );
+        let packed_entry =
+            PackedArchiveEntry::wheel(self.build_context.cache(), index, &url, filename);
         let archive = self
             .client
             .managed(|client| {
@@ -1043,13 +1043,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             Connectivity::Offline => CacheControl::AllowStale,
         };
 
-        let packed_entry = PackedArchiveEntry::new(
-            self.build_context.cache(),
-            index,
-            &filename.name,
-            &url,
-            &PackedArchiveEntry::wheel_key(filename),
-        );
+        let packed_entry =
+            PackedArchiveEntry::wheel(self.build_context.cache(), index, &url, filename);
         let archive = self
             .client
             .managed(|client| {
@@ -1429,8 +1424,42 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         // Acquire an advisory lock, to guard against concurrent writes.
         let _lock = Self::lock_wheel(&wheel_entry, filename).await?;
 
-        // Determine the last-modified time of the wheel.
-        let modified = Timestamp::from_path(path).map_err(Error::CacheRead)?;
+        // A prefetched archive can outlive the original local file.
+        let packed = if !path.try_exists().map_err(Error::CacheRead)? {
+            let entry = match dist {
+                BuiltDist::Registry(wheels) => {
+                    let wheel = wheels.best_wheel();
+                    Some(PackedArchiveEntry::wheel(
+                        self.build_context.cache(),
+                        Some(&wheel.index),
+                        &wheel.file.url.to_url()?,
+                        filename,
+                    ))
+                }
+                BuiltDist::Path(wheel) => Some(PackedArchiveEntry::wheel(
+                    self.build_context.cache(),
+                    None,
+                    &wheel.url,
+                    filename,
+                )),
+                BuiltDist::DirectUrl(_) | BuiltDist::GitPath(_) => None,
+            };
+            if let Some(entry) = entry {
+                entry
+                    .read_local()
+                    .await
+                    .map_err(|err| Error::CacheRead(std::io::Error::other(err)))?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let (path, modified) = if let Some((file, timestamp)) = &packed {
+            (file.path(), *timestamp)
+        } else {
+            (path, Timestamp::from_path(path).map_err(Error::CacheRead)?)
+        };
 
         // Attempt to read the archive pointer from the cache.
         let pointer_entry = wheel_entry.with_file(format!("{}.rev", filename.cache_key()));

@@ -20,7 +20,6 @@ use tracing::{debug, instrument, trace};
 use url::Url;
 
 use uv_cache_key::RepositoryUrl;
-use uv_client::PackedArchiveEntry;
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, DependencyModifierScope,
     DependencyModifiers, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, Excludes,
@@ -6641,11 +6640,23 @@ pub struct Package {
 /// A distribution archive recorded in a lockfile, independent of platform compatibility.
 #[derive(Debug, Clone)]
 pub struct LockedArtifact {
-    pub index: Option<IndexUrl>,
-    pub cache_key: String,
+    pub kind: LockedArtifactKind,
     pub url: DisplaySafeUrl,
     pub hash: Option<HashDigest>,
     pub size: Option<u64>,
+}
+
+/// The source-aware identity of an archive recorded in a lockfile.
+#[derive(Debug, Clone)]
+pub enum LockedArtifactKind {
+    Wheel {
+        filename: WheelFilename,
+        index: Option<IndexUrl>,
+    },
+    Source {
+        extension: SourceDistExtension,
+        registry: Option<(IndexUrl, Version)>,
+    },
 }
 
 impl Package {
@@ -6675,8 +6686,10 @@ impl Package {
                 _ => continue,
             };
             artifacts.push(LockedArtifact {
-                index,
-                cache_key: PackedArchiveEntry::wheel_key(&wheel.filename),
+                kind: LockedArtifactKind::Wheel {
+                    filename: wheel.filename.clone(),
+                    index,
+                },
                 url,
                 hash: wheel.hash.clone(),
                 size: wheel.size,
@@ -6688,26 +6701,31 @@ impl Package {
             let artifact = match dist {
                 uv_distribution_types::SourceDist::Registry(dist) => Some((
                     dist.file.url.to_url().map_err(LockErrorKind::InvalidUrl)?,
-                    Some(dist.index),
-                    PackedArchiveEntry::source_key(Some(&dist.version), dist.ext),
+                    LockedArtifactKind::Source {
+                        extension: dist.ext,
+                        registry: Some((dist.index, dist.version)),
+                    },
                 )),
                 uv_distribution_types::SourceDist::DirectUrl(dist) => Some((
                     *dist.location,
-                    None,
-                    PackedArchiveEntry::source_key(None, dist.ext),
+                    LockedArtifactKind::Source {
+                        extension: dist.ext,
+                        registry: None,
+                    },
                 )),
                 uv_distribution_types::SourceDist::Path(dist) => Some((
                     dist.url.to_url(),
-                    None,
-                    PackedArchiveEntry::source_key(None, dist.ext),
+                    LockedArtifactKind::Source {
+                        extension: dist.ext,
+                        registry: None,
+                    },
                 )),
                 _ => None,
             };
-            if let Some((url, index, cache_key)) = artifact {
+            if let Some((url, kind)) = artifact {
                 artifacts.push(LockedArtifact {
                     url,
-                    index,
-                    cache_key,
+                    kind,
                     hash: sdist.hash().cloned(),
                     size: sdist.size(),
                 });

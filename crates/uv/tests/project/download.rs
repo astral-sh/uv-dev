@@ -195,15 +195,9 @@ async fn download_packed_offline() -> Result<()> {
             .workspace_root
             .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
     )?;
-    let zstd = fs_err::read(
-        context
-            .workspace_root
-            .join("test/links/basic_package-0.1.0-py3-none-any.whl.tar.zst"),
-    )?;
     let sdist = source_archive(&wheel)?;
     let files = [
         ("basic_package-0.1.0-py3-none-any.whl", wheel.clone()),
-        ("basic_package-0.1.0-py3-none-any.whl.tar.zst", zstd.clone()),
         (
             "basic_package-0.1.0-cp313-cp313-win_amd64.whl",
             wheel.clone(),
@@ -224,7 +218,6 @@ async fn download_packed_offline() -> Result<()> {
     }
     let url = server.uri();
     let wheel_hash = digest(&wheel);
-    let zstd_hash = digest(&zstd);
     let sdist_hash = digest(&sdist);
     write_project(
         &context,
@@ -235,16 +228,16 @@ async fn download_packed_offline() -> Result<()> {
         source = {{ registry = "{url}/simple" }}
         sdist = {{ url = "{url}/files/basic_package-0.1.0.tar.gz", hash = "sha256:{sdist_hash}", size = {sdist_size} }}
         wheels = [
-            {{ url = "{url}/files/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:{wheel_hash}", size = {wheel_size}, zstd = {{ hash = "sha256:{zstd_hash}", size = {zstd_size} }} }},
+            {{ url = "{url}/files/basic_package-0.1.0-py3-none-any.whl", hash = "sha256:{wheel_hash}", size = {wheel_size} }},
             {{ url = "{url}/files/basic_package-0.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:{wheel_hash}", size = {wheel_size} }},
         ]
-    "#, sdist_size=sdist.len(), wheel_size=wheel.len(), zstd_size=zstd.len()},
+    "#, sdist_size=sdist.len(), wheel_size=wheel.len()},
     )?;
     let original_lock = fs_err::read(context.temp_dir.join("uv.lock"))?;
     uv_snapshot!(context.filters(), download(&context), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Downloaded 4 distributions (4 total)
+    Downloaded 3 distributions (3 total)
     ");
     assert_eq!(
         fs_err::read(context.temp_dir.join("uv.lock"))?,
@@ -257,16 +250,11 @@ async fn download_packed_offline() -> Result<()> {
     let packed = cache
         .bucket(CacheBucket::Packed)
         .join(WheelCache::Index(&index).wheel_dir("basic-package"));
-    for (hash, bytes) in [
-        (&wheel_hash, &wheel),
-        (&zstd_hash, &zstd),
-        (&sdist_hash, &sdist),
-    ] {
+    for (hash, bytes) in [(&wheel_hash, &wheel), (&sdist_hash, &sdist)] {
         assert_eq!(fs_err::read(packed.join(hash))?, *bytes);
     }
     for key in [
         "0.1.0-py3-none-any.whl",
-        "0.1.0-py3-none-any.whl.tar.zst",
         "0.1.0-cp313-cp313-win_amd64.whl",
         "0.1.0.tar.gz",
     ] {
@@ -279,7 +267,7 @@ async fn download_packed_offline() -> Result<()> {
     uv_snapshot!(context.filters(), download(&context).arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Downloaded 0 distributions (4 total)
+    Downloaded 0 distributions (3 total)
     ");
     uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 0 (success)
@@ -989,6 +977,112 @@ async fn download_local_revision() -> Result<()> {
         .assert()
         .success();
     assert!(!shard.exists());
+    Ok(())
+}
+
+/// Local wheel metadata and installation can use a prefetched archive after its source is removed.
+#[tokio::test]
+async fn download_removed_local_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let filename = "basic_package-0.1.0-py3-none-any.whl";
+    let bytes = wheel("prefetched").await?;
+    let hash = digest(&bytes);
+    let path = context.temp_dir.child(filename);
+    path.write_binary(&bytes)?;
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ path = "{filename}" }}
+        wheels = [{{ filename = "{filename}", hash = "sha256:{hash}" }}]
+    "#},
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&format!(
+            "{}\n[tool.uv.sources]\nbasic-package = {{ path = \"{filename}\" }}\n",
+            context.read("pyproject.toml"),
+        ))?;
+    download(&context).arg("--offline").assert().success();
+    fs_err::remove_file(path.path())?;
+    download(&context).arg("--offline").assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0 (from file://[TEMP_DIR]/basic_package-0.1.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), context.run().args(["--offline", "python", "-c", "import basic_package; print(basic_package.REVISION)"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    prefetched
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ basic-package==0.1.0 (from file://[TEMP_DIR]/basic_package-0.1.0-py3-none-any.whl)
+    ");
+    Ok(())
+}
+
+/// A local source archive can be built from its prefetched bytes after its source is removed.
+#[tokio::test]
+async fn download_removed_local_sdist() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let filename = "basic_package-0.1.0.tar.gz";
+    let bytes = source_archive(&wheel("prefetched").await?)?;
+    let hash = digest(&bytes);
+    let path = context.temp_dir.child(filename);
+    path.write_binary(&bytes)?;
+    write_project(
+        &context,
+        &formatdoc! {r#"
+        [[package]]
+        name = "basic-package"
+        version = "0.1.0"
+        source = {{ path = "{filename}" }}
+        sdist = {{ hash = "sha256:{hash}" }}
+    "#},
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&format!(
+            "{}\n[tool.uv.sources]\nbasic-package = {{ path = \"{filename}\" }}\n",
+            context.read("pyproject.toml"),
+        ))?;
+    download(&context).arg("--offline").assert().success();
+    fs_err::remove_file(path.path())?;
+    download(&context).arg("--offline").assert().success();
+
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + basic-package==0.1.0 (from file://[TEMP_DIR]/basic_package-0.1.0.tar.gz)
+    ");
+    uv_snapshot!(context.filters(), context.run().args(["--offline", "python", "-c", "import basic_package; print(basic_package.REVISION)"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    prefetched
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ basic-package==0.1.0 (from file://[TEMP_DIR]/basic_package-0.1.0.tar.gz)
+    ");
     Ok(())
 }
 
