@@ -23,8 +23,7 @@ use uv_redacted::DisplaySafeUrl;
 
 use crate::httpcache::{BeforeRequest, CachePolicy, CachePolicyBuilder};
 use crate::{
-    CacheControl, CachedClientError, Connectivity, DataWithCachePolicy, ErrorKind, RegistryClient,
-    RetryState,
+    CacheControl, Connectivity, DataWithCachePolicy, ErrorKind, RegistryClient, RetryState,
 };
 
 /// An original distribution archive, retained without extracting or building it.
@@ -263,7 +262,7 @@ impl PackedArchiveEntry {
                 &download,
             )
             .await
-            .map_err(packed_client_error)?;
+            .map_err(crate::Error::from)?;
         if downloaded.load(Ordering::Relaxed) {
             return Ok(true);
         }
@@ -285,7 +284,7 @@ impl PackedArchiveEntry {
                     &download,
                 )
                 .await
-                .map_err(packed_client_error)?;
+                .map_err(crate::Error::from)?;
         }
         Ok(downloaded.load(Ordering::Relaxed))
     }
@@ -631,13 +630,6 @@ pub fn prune_packed_archives(cache: &Cache) -> Result<uv_cache::Removal> {
 impl PackedArchive {
     pub(crate) fn into_file(self) -> fs_err::tokio::File {
         self.file
-    }
-}
-
-fn packed_client_error(error: CachedClientError<crate::Error>) -> anyhow::Error {
-    match error {
-        CachedClientError::Client(error) => error.into(),
-        CachedClientError::Callback { err, .. } => err.into(),
     }
 }
 
