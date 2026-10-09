@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use itertools::Either;
 use rustc_hash::FxHashSet;
 use toml_parser::Source;
@@ -402,7 +403,10 @@ impl<'lock> LockTarget<'lock> {
     /// Write the lockfile to disk.
     pub(crate) async fn commit(self, lock: &Lock) -> Result<(), LockError> {
         let encoded = lock.to_toml()?;
-        uv_fs::write_atomic(self.lock_path(), encoded).await?;
+        let lock_path = self.lock_path();
+        uv_fs::write_atomic(&lock_path, encoded)
+            .await
+            .with_context(|| format!("Failed to write lockfile at `{}`", lock_path.display()))?;
         Ok(())
     }
 
