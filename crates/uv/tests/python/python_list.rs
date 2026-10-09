@@ -958,7 +958,7 @@ async fn python_list_remote_python_downloads_ndjson_url() -> Result<()> {
         .arg("--python-downloads-json-url").arg(format!("{}/invalid.ndjson", server.uri())), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Unable to parse NDJSON line at http://[LOCALHOST]/invalid.ndjson
+    error: Unable to parse NDJSON line 1 at http://[LOCALHOST]/invalid.ndjson
      cause: EOF while parsing an object at line 1 column 1
     ");
 
@@ -1042,9 +1042,7 @@ async fn python_list_remote_python_downloads_ndjson_cache_reuse() -> Result<()> 
         .mount(&server)
         .await;
 
-    let command = || {
-        let mut command = context.python_list();
-        command
+    uv_snapshot!(context.filters(), context.python_list()
             .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
             .env(
                 EnvVars::UV_PREVIEW_FEATURES,
@@ -1058,18 +1056,28 @@ async fn python_list_remote_python_downloads_ndjson_cache_reuse() -> Result<()> 
             .arg("--all-versions")
             .arg("--all-platforms")
             .arg("--all-arches")
-            .arg("--show-urls");
-        command
-    };
-
-    uv_snapshot!(context.filters(), command(), @"
+            .arg("--show-urls"), @"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.14.1-macos-aarch64-none https://custom.com/cpython-3.14.1-aarch64-apple-darwin.tar.gz
 
     ");
 
-    uv_snapshot!(context.filters(), command(), @"
+    uv_snapshot!(context.filters(), context.python_list()
+            .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+            .env(
+                EnvVars::UV_PREVIEW_FEATURES,
+                "remote-python-download-metadata",
+            )
+            .env(
+                EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL,
+                format!("{}/versions.ndjson", server.uri()),
+            )
+            .arg("cpython-3.14-macos-aarch64-none")
+            .arg("--all-versions")
+            .arg("--all-platforms")
+            .arg("--all-arches")
+            .arg("--show-urls"), @"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.14.1-macos-aarch64-none https://custom.com/cpython-3.14.1-aarch64-apple-darwin.tar.gz
@@ -1097,27 +1105,33 @@ async fn python_list_remote_metadata_requires_explicit_preview() -> Result<()> {
         .mount(&server)
         .await;
 
-    let command = || {
-        let mut command = context.python_list();
-        command
+    uv_snapshot!(context.filters(), context.python_list()
             .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
             .env("UV_ASTRAL_MIRROR_URL", format!("{}/mirror/", server.uri()))
             .arg("3.99")
             .arg("--all-platforms")
             .arg("--all-arches")
-            .arg("--show-urls");
-        command
-    };
-
-    uv_snapshot!(context.filters(), command(), @"
+            .arg("--show-urls"), @"
     exit_code: 0 (success)
     ");
-    uv_snapshot!(context.filters(), command().arg("--preview"), @"
+    uv_snapshot!(context.filters(), context.python_list()
+            .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+            .env("UV_ASTRAL_MIRROR_URL", format!("{}/mirror/", server.uri()))
+            .arg("3.99")
+            .arg("--all-platforms")
+            .arg("--all-arches")
+            .arg("--show-urls").arg("--preview"), @"
     exit_code: 0 (success)
     ");
     assert_eq!(server.received_requests().await.unwrap().len(), 0);
 
-    uv_snapshot!(context.filters(), command()
+    uv_snapshot!(context.filters(), context.python_list()
+            .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+            .env("UV_ASTRAL_MIRROR_URL", format!("{}/mirror/", server.uri()))
+            .arg("3.99")
+            .arg("--all-platforms")
+            .arg("--all-arches")
+            .arg("--show-urls")
         .arg("--preview-features")
         .arg("remote-python-download-metadata"), @"
     exit_code: 0 (success)
@@ -1132,7 +1146,7 @@ async fn python_list_remote_python_downloads_ndjson_parse_error_is_not_cached() 
     let context = uv_test::test_context_with_versions!(&[]).with_collapsed_whitespace();
     let server = MockServer::start().await;
 
-    let invalid_ndjson = "{";
+    let invalid_ndjson = "\n{\"version\":\"3.14.0\",\"artifacts\":[]}\n{";
     let valid_ndjson = r#"{"version":"3.14.1+20260420","artifacts":[{"url":"https://custom.com/cpython-3.14.1-aarch64-apple-darwin.tar.gz","platform":"aarch64-apple-darwin","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
 "#;
 
@@ -1167,9 +1181,7 @@ async fn python_list_remote_python_downloads_ndjson_parse_error_is_not_cached() 
         .mount(&server)
         .await;
 
-    let command = || {
-        let mut command = context.python_list();
-        command
+    uv_snapshot!(context.filters(), context.python_list()
             .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
             .arg("3.14")
             .arg("--all-versions")
@@ -1177,18 +1189,22 @@ async fn python_list_remote_python_downloads_ndjson_parse_error_is_not_cached() 
             .arg("--all-arches")
             .arg("--show-urls")
             .arg("--python-downloads-json-url")
-            .arg(format!("{}/versions.ndjson", server.uri()));
-        command
-    };
-
-    uv_snapshot!(context.filters(), command(), @"
+            .arg(format!("{}/versions.ndjson", server.uri())), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Unable to parse NDJSON line at http://[LOCALHOST]/versions.ndjson
+    error: Unable to parse NDJSON line 3 at http://[LOCALHOST]/versions.ndjson
      cause: EOF while parsing an object at line 1 column 1
     ");
 
-    uv_snapshot!(context.filters(), command(), @"
+    uv_snapshot!(context.filters(), context.python_list()
+            .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+            .arg("3.14")
+            .arg("--all-versions")
+            .arg("--all-platforms")
+            .arg("--all-arches")
+            .arg("--show-urls")
+            .arg("--python-downloads-json-url")
+            .arg(format!("{}/versions.ndjson", server.uri())), @"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.14.1-macos-aarch64-none https://custom.com/cpython-3.14.1-aarch64-apple-darwin.tar.gz
@@ -1262,9 +1278,7 @@ async fn python_list_remote_python_downloads_ndjson_cache_keys_include_credentia
         url.to_string()
     };
 
-    let command = |metadata_url: String| {
-        let mut command = context.python_list();
-        command
+    uv_snapshot!(context.filters(), context.python_list()
             .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
             .arg("3.14")
             .arg("--all-versions")
@@ -1272,18 +1286,22 @@ async fn python_list_remote_python_downloads_ndjson_cache_keys_include_credentia
             .arg("--all-arches")
             .arg("--show-urls")
             .arg("--python-downloads-json-url")
-            .arg(metadata_url);
-        command
-    };
-
-    uv_snapshot!(context.filters(), command(metadata_url("tokenA")), @"
+            .arg(metadata_url("tokenA")), @"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.14.1-macos-aarch64-none https://custom.com/token-a.tar.gz
 
     ");
 
-    uv_snapshot!(context.filters(), command(metadata_url("tokenB")), @"
+    uv_snapshot!(context.filters(), context.python_list()
+            .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+            .arg("3.14")
+            .arg("--all-versions")
+            .arg("--all-platforms")
+            .arg("--all-arches")
+            .arg("--show-urls")
+            .arg("--python-downloads-json-url")
+            .arg(metadata_url("tokenB")), @"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.14.1-macos-aarch64-none https://custom.com/token-b.tar.gz
@@ -1571,5 +1589,29 @@ fn python_list_with_mirrors() -> Result<()> {
     pyodide-3.13.2-emscripten-wasm32-musl https://mirror.example.com/[FILE-PATH]
     ");
 
+    Ok(())
+}
+
+/// Presentation sorting must not replace a preferred catalog build with an older build.
+#[tokio::test]
+async fn python_list_remote_catalog_preserves_build_priority() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_collapsed_whitespace();
+    let server = MockServer::start().await;
+    let catalog = r#"{"version":"3.99.1+20260102","artifacts":[{"url":"https://example.com/new.tar.gz","platform":"aarch64-apple-darwin","variant":"install_only"}]}
+{"version":"3.99.1+20260101","artifacts":[{"url":"https://example.com/old.tar.gz","platform":"aarch64-apple-darwin","variant":"install_only"}]}
+"#;
+    Mock::given(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(catalog, "application/x-ndjson"))
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .args(["3.99", "--all-versions", "--all-platforms", "--all-arches", "--show-urls"])
+        .arg("--python-downloads-json-url").arg(format!("{}/versions.ndjson", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.99.1-macos-aarch64-none https://example.com/new.tar.gz
+
+    ");
     Ok(())
 }
