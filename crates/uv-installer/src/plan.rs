@@ -279,8 +279,8 @@ impl<'a> Planner<'a> {
     /// Partition a set of requirements into those that should be linked from the cache, those that
     /// need to be downloaded, and those that should be removed.
     ///
-    /// The install plan will respect cache [`Freshness`]. Specifically, if refresh is enabled, the
-    /// plan will respect cache entries created after the current time (as per the [`Refresh`]
+    /// The install plan will respect cache [`uv_cache::Freshness`]. Specifically, if refresh is enabled, the
+    /// plan will respect cache entries created after the current time (as per the [`uv_cache::Refresh`]
     /// policy). Otherwise, entries will be ignored. The downstream distribution database may still
     /// read those entries from the cache after revalidating them.
     ///

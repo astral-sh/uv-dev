@@ -436,3 +436,24 @@ async fn active_script_waits_for_environment_destination() -> Result<()> {
     run.finish().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn venv_creation_waits_through_missing_parent_component() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let parent = fs_err::canonicalize(context.temp_dir.path())?;
+    let destination = parent.join("environment");
+    let indirect = parent.join("absent").join("..").join("environment");
+    assert!(!destination.exists());
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
+    let guard = EnvironmentLock::acquire(std::slice::from_ref(&destination), &cache).await?;
+    let mut command = context.venv();
+    command.arg(&indirect).arg("--no-project");
+    let mut creation = QueuedCommand::spawn(command)?;
+    creation.wait_for_destination(&destination).await?;
+    assert!(!destination.exists());
+    assert!(creation.child.try_wait()?.is_none());
+    drop(guard);
+    creation.finish().await?;
+    assert!(destination.join("pyvenv.cfg").is_file());
+    Ok(())
+}

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use uv_cache::Cache;
@@ -122,13 +122,17 @@ fn canonicalize_destination(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let absolute = std::path::absolute(path)?;
             let parent = absolute.parent().ok_or(error)?;
-            let name = absolute.file_name().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "environment requires a filename",
-                )
-            })?;
             let (parent, exists) = canonicalize_destination(parent, keys)?;
+            let destination = match absolute.components().next_back() {
+                Some(Component::Normal(name)) => parent.join(name),
+                Some(Component::ParentDir) => parent.parent().unwrap_or(&parent).to_path_buf(),
+                Some(Component::Prefix(_) | Component::RootDir | Component::CurDir) | None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "environment requires a filename",
+                    ));
+                }
+            };
             if exists {
                 // A missing filename has no canonical spelling. The nearest existing parent is
                 // exclusive; shared ancestors keep this claim connected when another creator
@@ -139,7 +143,7 @@ fn canonicalize_destination(
                         .or_insert(index == 0);
                 }
             }
-            Ok((parent.join(name), false))
+            Ok((destination, false))
         }
         Err(error) => Err(error),
     }
