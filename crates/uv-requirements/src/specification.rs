@@ -161,7 +161,7 @@ impl RequirementsSpecification {
                 .unwrap_or_else(|| CWD.to_path_buf()),
         };
 
-        let mut specification = script_metadata_specification(
+        let (mut specification, indexes) = script_metadata_specification(
             metadata,
             &script_dir,
             lowering_context.sources,
@@ -171,6 +171,8 @@ impl RequirementsSpecification {
             lowering_context.credentials_cache,
         )
         .await?;
+        // Requirements-file inputs add their selected definitions to the caller's settings.
+        specification.indexes = indexes;
 
         // Requirements files are consumed relative to the invoking directory. Script sources
         // instead use the script's directory, so emit their resolved paths when compiling them.

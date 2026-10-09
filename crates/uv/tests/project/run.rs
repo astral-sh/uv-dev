@@ -14,7 +14,11 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
+use uv_test::{
+    TestContext,
+    packse::{PackseServer, scenario::Scenario},
+    uv_snapshot,
+};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -902,6 +906,82 @@ fn run_pep723_script_relative_index() -> Result<()> {
      + validation==1.0.0
     ");
 
+    Ok(())
+}
+
+/// Selected source indexes do not reorder the complete configuration of a direct script.
+#[test]
+fn run_script_preserves_index_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = toml::from_str::<Scenario>(indoc! {r#"
+        name = "first-script-index"
+        [root]
+        requires = ["a"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let second = toml::from_str::<Scenario>(indoc! {r#"
+        name = "second-script-index"
+        [root]
+        requires = ["a", "b"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."2.0.0"]
+        sdist = false
+        [packages.b.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let first = PackseServer::from_scenario(&first);
+    let second = PackseServer::from_scenario(&second);
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a", "b"]
+        # [[tool.uv.index]]
+        # name = "first"
+        # url = "{first}"
+        # [[tool.uv.index]]
+        # name = "second"
+        # url = "{second}"
+        # [tool.uv.sources]
+        # b = {{ index = "second" }}
+        # ///
+        import importlib.metadata
+        print(importlib.metadata.version("a"))
+        print(importlib.metadata.version("b"))
+    "#, first = first.index_url(), second = second.index_url()})?;
+
+    uv_snapshot!(context.filters(), context.run().arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + a==1.0.0
+     + b==1.0.0
+    ");
+
+    context
+        .sync()
+        .arg("--script")
+        .arg("script.py")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.run().arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    1.0.0
+    ");
     Ok(())
 }
 
