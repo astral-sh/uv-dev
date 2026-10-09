@@ -1,5 +1,6 @@
 use std::collections::Bound;
 
+use rustc_hash::FxHashMap;
 use version_ranges::Ranges;
 
 use uv_distribution_filename::WheelFilename;
@@ -7,7 +8,9 @@ use uv_pep440::{
     LowerBound, UpperBound, Version, VersionSpecifier, VersionSpecifiers,
     release_specifiers_to_ranges,
 };
-use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion};
+use uv_pep508::{
+    CanonicalMarkerValueVersion, MarkerExpression, MarkerTree, MarkerTreeKind, MarkerValueVersion,
+};
 use uv_platform_tags::{AbiTag, CPythonAbiVariants, LanguageTag};
 
 /// The `Requires-Python` requirement specifier.
@@ -56,6 +59,75 @@ impl RequiresPython {
             specifiers,
             range: RequiresPythonRange(LowerBound::new(lower_bound), UpperBound::new(upper_bound)),
         }
+    }
+
+    /// Project a marker onto the Python versions for which it can be satisfied.
+    pub fn from_marker_tree(marker: MarkerTree) -> Option<Self> {
+        fn python_versions(
+            tree: MarkerTree,
+            cache: &mut FxHashMap<MarkerTree, Ranges<Version>>,
+        ) -> Ranges<Version> {
+            if let Some(range) = cache.get(&tree) {
+                return range.clone();
+            }
+            let range = match tree.kind() {
+                MarkerTreeKind::True => Ranges::full(),
+                MarkerTreeKind::False => Ranges::empty(),
+                MarkerTreeKind::Version(marker) => {
+                    marker
+                        .edges()
+                        .fold(Ranges::empty(), |range, (edge, child)| {
+                            let child = python_versions(child, cache);
+                            range.union(&match marker.key() {
+                                CanonicalMarkerValueVersion::PythonFullVersion => {
+                                    edge.intersection(&child)
+                                }
+                                CanonicalMarkerValueVersion::ImplementationVersion => child,
+                            })
+                        })
+                }
+                MarkerTreeKind::VersionString(marker) => {
+                    marker.edges().fold(Ranges::empty(), |range, (_, child)| {
+                        range.union(&python_versions(child, cache))
+                    })
+                }
+                MarkerTreeKind::String(marker) => marker
+                    .children()
+                    .fold(Ranges::empty(), |range, (_, child)| {
+                        range.union(&python_versions(child, cache))
+                    }),
+                MarkerTreeKind::In(marker) => marker
+                    .children()
+                    .fold(Ranges::empty(), |range, (_, child)| {
+                        range.union(&python_versions(child, cache))
+                    }),
+                MarkerTreeKind::Contains(marker) => marker
+                    .children()
+                    .fold(Ranges::empty(), |range, (_, child)| {
+                        range.union(&python_versions(child, cache))
+                    }),
+                MarkerTreeKind::Extra(marker) => marker
+                    .children()
+                    .fold(Ranges::empty(), |range, (_, child)| {
+                        range.union(&python_versions(child, cache))
+                    }),
+                MarkerTreeKind::List(marker) => marker
+                    .children()
+                    .fold(Ranges::empty(), |range, (_, child)| {
+                        range.union(&python_versions(child, cache))
+                    }),
+            };
+            cache.insert(tree, range.clone());
+            range
+        }
+
+        let range = python_versions(marker, &mut FxHashMap::default());
+        if range.is_empty() {
+            return None;
+        }
+        Some(Self::from_specifiers(
+            VersionSpecifiers::from_release_only_bounds(range.iter()),
+        ))
     }
 
     /// Returns a [`RequiresPython`] to express the intersection of the given version specifiers.
@@ -643,6 +715,17 @@ mod tests {
     use uv_pep440::{LowerBound, UpperBound, Version, VersionSpecifiers};
 
     use crate::RequiresPython;
+
+    #[test]
+    fn python_projection_preserves_disjoint_ranges() -> Result<(), Box<dyn std::error::Error>> {
+        let marker = "(python_full_version == '3.12.*' and sys_platform == 'linux') or (python_full_version == '3.14.*' and sys_platform == 'win32')".parse()?;
+        let requirement = RequiresPython::from_marker_tree(marker).expect("satisfiable marker");
+        assert!(requirement.contains(&"3.12.4".parse()?));
+        assert!(!requirement.contains(&"3.13.4".parse()?));
+        assert!(requirement.contains(&"3.14.4".parse()?));
+        assert!(!requirement.contains(&"3.15.0".parse()?));
+        Ok(())
+    }
 
     #[test]
     fn requires_python_union() -> Result<(), Box<dyn std::error::Error>> {

@@ -288,13 +288,37 @@ impl<'lock> Installable<'lock> for InstallTarget<'lock> {
 }
 
 impl<'lock> InstallTarget<'lock> {
-    /// Intersect the lockfile's Python requirement with the selected groups' requirements.
+    /// Intersect the lockfile's Python requirement with selected roots and groups.
     pub fn python_requirement(
         &self,
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<ProjectPythonRequirement, EnvironmentError> {
         let lock = self.lock();
         let mut group_requirements = RequiresPythonSources::new();
+
+        for name in self.roots() {
+            let Ok(Some(package)) = lock.find_by_name(name) else {
+                // Lockfile selection reports missing or ambiguous roots.
+                continue;
+            };
+            if package.fork_markers().is_empty() {
+                continue;
+            }
+            let marker = package
+                .fork_markers()
+                .iter()
+                .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508()));
+            let Some(requirement) = RequiresPython::from_marker_tree(marker) else {
+                return Err(EnvironmentError::DisjointLockedRequiresPython {
+                    locked: lock.requires_python().clone(),
+                    groups: group_requirements,
+                });
+            };
+            group_requirements.insert(
+                RequiresPythonDeclaration::Member(name.clone(), None),
+                requirement.specifiers().clone(),
+            );
+        }
 
         if let Some(members) = lock.member_group_metadata() {
             let group_root = self.group_root(groups);
@@ -414,16 +438,6 @@ impl<'lock> InstallTarget<'lock> {
 
     /// Reject selected roots whose locked graph is unavailable on this Python version.
     pub(crate) fn validate_python(self, version: &Version) -> Result<(), EnvironmentError> {
-        let workspace = match self {
-            Self::Project { workspace, .. }
-            | Self::Projects { workspace, .. }
-            | Self::Workspace { workspace, .. }
-            | Self::NonProjectWorkspace { workspace, .. } => workspace,
-            Self::Lockfile { .. } | Self::Script { .. } => return Ok(()),
-        };
-        if workspace.resolution_roots().is_none() {
-            return Ok(());
-        }
         let marker = MarkerTree::expression(MarkerExpression::Version {
             key: MarkerValueVersion::PythonFullVersion,
             specifier: VersionSpecifier::equals_version(version.only_release()),
@@ -898,7 +912,7 @@ impl<'lock> InstallTarget<'lock> {
                 }
 
                 while let Some((package_name, extra)) = queue.pop_front() {
-                    if lock.members().contains(package_name) {
+                    if lock.workspace_members().contains(package_name) {
                         required_members.insert(package_name);
                     }
 
@@ -935,7 +949,10 @@ impl<'lock> InstallTarget<'lock> {
             }
             Some(PackageSelection::Workspace | PackageSelection::NonProjectWorkspace) => {
                 // Return all workspace members
-                self.lock().members().iter().collect()
+                self.lock()
+                    .workspace_member_paths()
+                    .map(|(name, _)| name)
+                    .collect()
             }
             None => {
                 // Scripts don't have workspace members
