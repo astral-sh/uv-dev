@@ -11,7 +11,7 @@ use uv_redacted::DisplaySafeUrl;
 use wiremock::matchers::{basic_auth, method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn native_credentials_are_cached_by_service_path() -> Result<(), Box<dyn std::error::Error>> {
     let preview =
         Preview::from_feature_names([&MaybePreviewFeature::Known(PreviewFeature::NativeAuth)]);
@@ -42,26 +42,26 @@ async fn native_credentials_are_cached_by_service_path() -> Result<(), Box<dyn s
 
     let root = DisplaySafeUrl::parse(&format!("{}/root", server.uri()))?;
     let private = DisplaySafeUrl::parse(&format!("{}/root/private", server.uri()))?;
-    provider
-        .store(
-            &root,
-            &Credentials::basic(
-                Some("root-user".to_string()),
-                Some("root-password".to_string()),
-            ),
-        )
-        .await?;
-    provider
-        .store(
-            &private,
-            &Credentials::basic(
-                Some("private-user".to_string()),
-                Some("private-password".to_string()),
-            ),
-        )
-        .await?;
-
     let result = async {
+        provider
+            .store(
+                &root,
+                &Credentials::basic(
+                    Some("root-user".to_string()),
+                    Some("root-password".to_string()),
+                ),
+            )
+            .await?;
+        provider
+            .store(
+                &private,
+                &Credentials::basic(
+                    Some("private-user".to_string()),
+                    Some("private-password".to_string()),
+                ),
+            )
+            .await?;
+
         let cache = Arc::new(CredentialsCache::new());
         let first_client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
             .with(
@@ -78,32 +78,38 @@ async fn native_credentials_are_cached_by_service_path() -> Result<(), Box<dyn s
             )
             .build();
 
-        assert_eq!(first_client.get(root.as_str()).send().await?.status(), 200);
+        if first_client.get(root.as_str()).send().await?.status() != 200 {
+            return Err(std::io::Error::other("root credential did not authenticate").into());
+        }
 
         // A second request must use the complete realm snapshot, not reload the keyring or reuse
         // the broader root credential.
         provider.remove(&root, "root-user").await?;
         provider.remove(&private, "private-user").await?;
 
-        assert_eq!(
-            second_client
-                .get(format!("{private}/package"))
-                .send()
-                .await?
-                .status(),
-            200,
-            "the cached realm must retain the more-specific credential"
-        );
+        if second_client
+            .get(format!("{private}/package"))
+            .send()
+            .await?
+            .status()
+            != 200
+        {
+            return Err(std::io::Error::other(
+                "the cached realm did not retain the more-specific credential",
+            )
+            .into());
+        }
 
         let requests = server
             .received_requests()
             .await
             .ok_or_else(|| std::io::Error::other("mock server did not record requests"))?;
-        assert_eq!(
-            requests.len(),
-            3,
-            "only the first request should require an authentication challenge"
-        );
+        if requests.len() != 3 {
+            return Err(std::io::Error::other(
+                "only the first request should require an authentication challenge",
+            )
+            .into());
+        }
 
         Ok::<(), Box<dyn std::error::Error>>(())
     }
@@ -115,7 +121,7 @@ async fn native_credentials_are_cached_by_service_path() -> Result<(), Box<dyn s
     result
 }
 
-#[tokio::test]
+#[test_log::test(tokio::test)]
 async fn migrated_native_credentials_are_cached_by_realm() -> Result<(), Box<dyn std::error::Error>>
 {
     let preview =
@@ -157,8 +163,8 @@ async fn migrated_native_credentials_are_cached_by_realm() -> Result<(), Box<dyn
         .with_priority(2)
         .mount(&other)
         .await;
-    legacy.set_password("legacy-password").await?;
     let result = async {
+        legacy.set_password("legacy-password").await?;
         let cache = Arc::new(CredentialsCache::new());
         let first_client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
             .with(
@@ -178,20 +184,32 @@ async fn migrated_native_credentials_are_cached_by_realm() -> Result<(), Box<dyn
         request
             .set_username("legacy-user")
             .map_err(|()| std::io::Error::other("invalid username"))?;
-        assert_eq!(
-            first_client.get(request.as_str()).send().await?.status(),
-            200
-        );
+        if first_client.get(request.as_str()).send().await?.status() != 200 {
+            return Err(std::io::Error::other("legacy credential did not authenticate").into());
+        }
+        if !matches!(legacy.get_password().await, Err(uv_keyring::Error::NoEntry)) {
+            return Err(std::io::Error::other("legacy credential was not migrated").into());
+        }
 
         // Removing the migrated entry makes any subsequent native lookup fail. Shared clients
         // must retain the migrated service scope in their cached realm snapshot.
-        provider.remove(&realm, "legacy-user").await?;
+        provider
+            .remove(&realm, "legacy-user")
+            .await
+            .map_err(|error| {
+                std::io::Error::other(format!(
+                    "could not remove migrated realm credential: {error}"
+                ))
+            })?;
         request.set_path("/private/package");
-        assert_eq!(
-            second_client.get(request.as_str()).send().await?.status(),
-            200
-        );
-        assert_eq!(second_client.get(other.uri()).send().await?.status(), 401);
+        if second_client.get(request.as_str()).send().await?.status() != 200 {
+            return Err(std::io::Error::other("migrated realm credential was not cached").into());
+        }
+        if second_client.get(other.uri()).send().await?.status() != 401 {
+            return Err(
+                std::io::Error::other("realm credential was used for another origin").into(),
+            );
+        }
         Ok::<(), Box<dyn std::error::Error>>(())
     }
     .await;

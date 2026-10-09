@@ -3,6 +3,7 @@ use std::hash::BuildHasherDefault;
 use std::sync::{Arc, PoisonError, RwLock};
 
 use rustc_hash::{FxHashMap, FxHasher};
+use tokio::sync::{Mutex as AsyncMutex, MutexGuard};
 use tracing::trace;
 use url::Url;
 
@@ -15,9 +16,64 @@ use crate::persistent::PersistentCredential;
 use crate::{Credentials, Realm};
 
 type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
-pub(crate) type StoredCredentials = Arc<[PersistentCredential]>;
 type RealmCredentials = RwLock<FxHashMap<(Realm, Username), Arc<Authentication>>>;
 type NativeRealmCredentials = Result<StoredCredentials, Arc<crate::keyring::Error>>;
+
+/// Shared realm contents retained by both pending requests and the authenticated cache.
+#[derive(Debug, Clone)]
+pub(crate) struct StoredCredentials(Arc<StoredCredentialsInner>);
+
+#[derive(Debug)]
+struct StoredCredentialsInner {
+    credentials: RwLock<Arc<[PersistentCredential]>>,
+    /// Serialize native lookups through publication of their updated realm contents.
+    native_lookup: AsyncMutex<()>,
+}
+
+impl From<Vec<PersistentCredential>> for StoredCredentials {
+    fn from(credentials: Vec<PersistentCredential>) -> Self {
+        Self(Arc::new(StoredCredentialsInner {
+            credentials: RwLock::new(Arc::from(credentials)),
+            native_lookup: AsyncMutex::new(()),
+        }))
+    }
+}
+
+impl StoredCredentials {
+    fn snapshot(&self) -> Arc<[PersistentCredential]> {
+        self.0
+            .credentials
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Serialize native migration and publication before another lookup can start.
+    pub(crate) async fn lock_native_lookup(&self) -> NativeLookup<'_> {
+        NativeLookup {
+            credentials: self,
+            _guard: self.0.native_lookup.lock().await,
+        }
+    }
+}
+
+/// Exclusive permission to publish the result of a native lookup.
+#[derive(Debug)]
+pub(crate) struct NativeLookup<'a> {
+    credentials: &'a StoredCredentials,
+    _guard: MutexGuard<'a, ()>,
+}
+
+impl NativeLookup<'_> {
+    pub(crate) fn replace(&self, credentials: Vec<PersistentCredential>) {
+        *self
+            .credentials
+            .0
+            .credentials
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Arc::from(credentials);
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum FetchUrl {
@@ -215,10 +271,11 @@ impl CredentialsCache {
 
     /// Select the most specific service and account in a complete realm snapshot.
     pub(crate) fn select_stored(
-        credentials: &[PersistentCredential],
+        credentials: &StoredCredentials,
         url: &DisplaySafeUrl,
         username: &Username,
     ) -> Result<Option<Arc<Authentication>>, AmbiguousCredential> {
+        let credentials = credentials.snapshot();
         matching::select_credential(
             credentials.iter().map(|credential| {
                 (
@@ -235,7 +292,7 @@ impl CredentialsCache {
 
     /// Remember a complete realm snapshot after its credentials authenticate successfully.
     pub(crate) fn insert_stored(&self, url: &DisplaySafeUrl, credentials: StoredCredentials) {
-        if credentials.is_empty() {
+        if credentials.snapshot().is_empty() {
             return;
         }
         let realm = Realm::from(url);

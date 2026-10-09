@@ -969,10 +969,12 @@ impl AuthMiddleware {
                 .await
                 .inspect_err(|err| debug!("Failed to get credentials from native store: {err}"))
                 .map_err(Self::native_store_error)?;
+            // The lock spans lookup and publication, so later migrations cannot publish first.
+            let lookup = snapshot.lock_native_lookup().await;
             match CredentialsCache::select_stored(&snapshot, url, &username) {
                 Ok(Some(credentials)) => Some(FetchedCredentials {
                     credentials,
-                    cache_scope: CredentialsCacheScope::Stored(snapshot),
+                    cache_scope: CredentialsCacheScope::Stored(snapshot.clone()),
                 }),
                 Ok(None) if username.is_none() => None,
                 Ok(None) => crate::keyring::fetch_native(url, username.as_deref())
@@ -982,12 +984,9 @@ impl AuthMiddleware {
                     })
                     .map_err(Self::native_store_error)?
                     .map(|fetched| {
-                        let cache_scope = if let Some(snapshot) = fetched.snapshot {
-                            let snapshot = StoredCredentials::from(snapshot);
-                            self.cache()
-                                .native_realms
-                                .done(realm.clone(), Ok(Arc::clone(&snapshot)));
-                            CredentialsCacheScope::Stored(snapshot)
+                        let cache_scope = if let Some(credentials) = fetched.snapshot {
+                            lookup.replace(credentials);
+                            CredentialsCacheScope::Stored(snapshot.clone())
                         } else {
                             CredentialsCacheScope::FetchOnly
                         };
@@ -1117,11 +1116,14 @@ mod tests {
     use std::assert_matches;
     use std::io::Write;
     use std::str::FromStr;
+    use std::time::Duration;
 
     use http::Method;
     use reqwest::Client;
     use tempfile::NamedTempFile;
     use test_log::test;
+    use tokio::sync::Notify;
+    use tokio::time::timeout;
 
     use url::Url;
     use wiremock::matchers::{basic_auth, method, path_regex};
@@ -1187,6 +1189,125 @@ mod tests {
         Ok(())
     }
 
+    #[derive(Debug)]
+    struct PausedAuthenticationRequest {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl Middleware for PausedAuthenticationRequest {
+        async fn handle(
+            &self,
+            request: Request,
+            extensions: &mut Extensions,
+            next: Next<'_>,
+        ) -> reqwest_middleware::Result<Response> {
+            if request.url().path() == "/first" {
+                self.started.notify_one();
+                self.release.notified().await;
+            }
+            next.run(request, extensions).await
+        }
+    }
+
+    #[test(tokio::test)]
+    async fn native_realm_cache_retains_newer_accounts_after_an_older_response() -> Result<(), Error>
+    {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(basic_auth("first", "first-password"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(basic_auth("second", "second-password"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let url = DisplaySafeUrl::parse(&server.uri())?;
+        let service = crate::Service::from_str(url.as_str())?;
+        let first = crate::persistent::PersistentCredential {
+            service: service.clone(),
+            credentials: Credentials::basic(
+                Some("first".to_string()),
+                Some("first-password".to_string()),
+            ),
+        };
+        let second = crate::persistent::PersistentCredential {
+            service,
+            credentials: Credentials::basic(
+                Some("second".to_string()),
+                Some("second-password".to_string()),
+            ),
+        };
+        let snapshot = StoredCredentials::from(vec![first.clone()]);
+        let cache = Arc::new(CredentialsCache::new());
+        cache
+            .native_realms
+            .done(Realm::from(&url), Ok(snapshot.clone()));
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_preview(Preview::all())
+                    .with_cache_arc(cache.clone()),
+            )
+            .with(PausedAuthenticationRequest {
+                started: started.clone(),
+                release: release.clone(),
+            })
+            .build();
+        let mut first_url = url.clone();
+        first_url
+            .set_username("first")
+            .map_err(|()| "invalid username")?;
+        first_url.set_path("/first");
+        let pending = {
+            let client = client.clone();
+            tokio::spawn(async move { client.get(first_url.as_str()).send().await })
+        };
+        timeout(Duration::from_secs(5), started.notified()).await?;
+
+        // A later legacy migration discovers a second account before the first response returns.
+        {
+            let lookup = snapshot.lock_native_lookup().await;
+            lookup.replace(vec![first, second]);
+        }
+        let mut second_url = url.clone();
+        second_url
+            .set_username("second")
+            .map_err(|()| "invalid username")?;
+        second_url.set_path("/second");
+        let second_response = timeout(
+            Duration::from_secs(5),
+            client.get(second_url.as_str()).send(),
+        )
+        .await;
+        release.notify_one();
+        let first_response = pending.await?;
+        assert_eq!(second_response??.status(), 200);
+        assert_eq!(first_response?.status(), 200);
+        let error =
+            client.get(server.uri()).send().await.expect_err(
+                "both accounts must remain ambiguous after the older response completes",
+            );
+        insta::assert_snapshot!(format!("{error:?}").replace(&server.uri(), "[URL]"), @"
+        Middleware(Failed to fetch credentials from the native credential store
+
+        Caused by:
+            Multiple credentials found for URL '[URL]/', specify which username to use)
+        ");
+        Ok(())
+    }
+
     fn ambiguous_native_cache(url: &DisplaySafeUrl) -> CredentialsCache {
         let cache = CredentialsCache::new();
         let service = crate::Service::from_str(url.as_str()).unwrap();
@@ -1208,7 +1329,7 @@ mod tests {
         ]);
         cache
             .native_realms
-            .done(Realm::from(url), Ok(Arc::clone(&snapshot)));
+            .done(Realm::from(url), Ok(snapshot.clone()));
         cache.insert_stored(url, snapshot);
         cache
     }
