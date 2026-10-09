@@ -89,12 +89,7 @@ impl InstallReceipt {
         let directory = fs_err::canonicalize(directory)?;
         let path = directory.join(RECEIPT_NAME);
         let mut receipt = Self::read(&path)?;
-        let mut recorded = receipt.install_prefix.clone();
-        if uv_fs::is_same_file_allow_missing(&recorded, &directory) != Some(true)
-            && receipt.provider.source == "cargo-dist"
-        {
-            recorded.push("bin");
-        }
+        let recorded = receipt.normalized_install_prefix(&directory);
         anyhow::ensure!(
             uv_fs::is_same_file_allow_missing(&recorded, &directory) == Some(true),
             "The install receipt at `{}` belongs to a different installation at `{}`",
@@ -121,8 +116,9 @@ impl InstallReceipt {
             find_receipt_path("uv")?
                 .context("Self-management is only available for standalone uv installations")?
         };
-        let receipt = Self::read(&path)
+        let mut receipt = Self::read(&path)
             .context("Self-management is only available for standalone uv installations")?;
+        receipt.install_prefix = receipt.normalized_install_prefix(directory);
         let recorded = receipt
             .install_prefix
             .join(format!("uv{}", std::env::consts::EXE_SUFFIX));
@@ -139,6 +135,17 @@ impl InstallReceipt {
         Ok((path, receipt))
     }
 
+    /// Cargo-dist receipts can name the prefix above the executable's `bin` directory.
+    fn normalized_install_prefix(&self, directory: &Path) -> PathBuf {
+        let mut prefix = self.install_prefix.clone();
+        if uv_fs::is_same_file_allow_missing(&prefix, directory) != Some(true)
+            && self.provider.source == "cargo-dist"
+        {
+            prefix.push("bin");
+        }
+        prefix
+    }
+
     fn write(&self, path: &Path) -> Result<()> {
         fs_err::create_dir_all(path.parent().context("Receipt has no parent directory")?)?;
         uv_fs::write_atomic_sync(path, serde_json::to_vec_pretty(self)?)?;
@@ -146,8 +153,95 @@ impl InstallReceipt {
     }
 }
 
+#[cfg(windows)]
+const BACKUP_PREFIX: &str = ".uv-install-backup-";
+#[cfg(windows)]
+const BACKUP_OWNER: &str = "uv-self-install-v1\n";
+
+/// Remove owned backups once their executable mappings have been released.
+#[cfg(windows)]
+fn cleanup_previous_installations(destination: &Path) {
+    let Ok(entries) = fs_err::read_dir(destination) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(BACKUP_PREFIX)
+            || !entry.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            continue;
+        }
+        let path = entry.path();
+        if fs_err::read_to_string(path.join("owner")).ok().as_deref() != Some(BACKUP_OWNER) {
+            continue;
+        }
+        let Ok(contents) =
+            fs_err::read_dir(&path).and_then(Iterator::collect::<std::io::Result<Vec<_>>>)
+        else {
+            continue;
+        };
+        if !contents.iter().all(|entry| {
+            entry.file_type().is_ok_and(|kind| kind.is_file())
+                && (entry.file_name() == "owner"
+                    || executable_names()
+                        .iter()
+                        .any(|name| entry.file_name() == *name))
+        }) {
+            continue;
+        }
+        let mut pending = false;
+        for entry in contents.iter().filter(|entry| entry.file_name() != "owner") {
+            if let Err(error) = fs_err::remove_file(entry.path())
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                pending = true;
+                tracing::debug!(
+                    "Retaining executable backup at `{}`: {error}",
+                    path.display()
+                );
+            }
+        }
+        // Retain the ownership marker until every old executable can be removed.
+        if !pending && fs_err::remove_file(path.join("owner")).is_ok() {
+            let _ = fs_err::remove_dir(&path);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn replace_windows_binary(source: &Path, target: &Path) -> Result<()> {
+    if let Err(error) = fs_err::rename(source, target) {
+        if !fs_err::symlink_metadata(target).is_ok_and(|metadata| metadata.is_file()) {
+            return Err(error.into());
+        }
+        let backup = tempfile::Builder::new().prefix(BACKUP_PREFIX).tempdir_in(
+            target
+                .parent()
+                .context("Executable has no parent directory")?,
+        )?;
+        fs_err::write(backup.path().join("owner"), BACKUP_OWNER)?;
+        let previous = backup
+            .path()
+            .join(target.file_name().context("Executable has no filename")?);
+        // A running uvw launcher waits for this child, so retries cannot release its mapping.
+        // Keep the old executable in an owned directory for cleanup on a later installation.
+        fs_err::rename(target, &previous)?;
+        if let Err(error) = fs_err::rename(source, target) {
+            fs_err::rename(&previous, target)
+                .context("Failed to restore the previous executable")?;
+            return Err(error.into());
+        }
+        let _ = backup.keep();
+    }
+    Ok(())
+}
+
 /// Copy a complete distribution before replacing any installed executable.
 fn install_binaries(source: &Path, destination: &Path) -> Result<()> {
+    #[cfg(windows)]
+    cleanup_previous_installations(destination);
     let staged = tempfile::tempdir_in(destination)?;
     for name in executable_names() {
         let source = source.join(name);
@@ -167,8 +261,11 @@ fn install_binaries(source: &Path, destination: &Path) -> Result<()> {
             self_replace::self_replace(&source)?;
             continue;
         }
+        #[cfg(windows)]
+        replace_windows_binary(&source, &target)?;
         // Keep renames synchronous under the installation lock so cancellation cannot leave a
         // queued filesystem operation running after its guard is released.
+        #[cfg(not(windows))]
         uv_fs::with_retry_sync(&source, &target, "renaming", || {
             fs_err::rename(&source, &target)
         })?;
@@ -226,8 +323,11 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
         env!("CARGO_PKG_VERSION"),
         destination.simplified_display()
     )?;
-    if modify_path {
-        update_shell::update_shell(&destination, printer).await?;
+    if modify_path
+        && let update_shell::ShellUpdate::AlreadyConfigured(_) =
+            update_shell::configure_shell(&destination, printer).await?
+    {
+        writeln!(printer.stderr(), "Restart your shell to apply changes")?;
     }
     Ok(ExitStatus::Success)
 }

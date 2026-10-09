@@ -25,36 +25,26 @@ fn requires_preview() {
 #[test]
 #[cfg(any(not(windows), feature = "windows-gui-bin"))]
 fn installs_running_distribution_with_numeric_no_modify_path() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filter((r"uv [0-9]+\.[0-9]+\.[0-9]+[^ ]*", "uv [VERSION]"))
+        .with_filter((r"\([a-z0-9_]+-[a-z0-9_-]+\)", "([TARGET])"));
     let bin = context.temp_dir.child("bin");
-    let mut command = context.command();
-    command
-        .args([
-            "self",
-            "install",
-            "--preview-features",
-            "self-management",
-            "--install-dir",
-        ])
-        .arg(bin.path())
-        .env(EnvVars::UV_NO_MODIFY_PATH, "1");
-    let output = command.output()?;
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    uv_snapshot!(context.filters(), context.command().args([
+        "self", "install", "--preview-features", "self-management", "--install-dir",
+    ]).arg(bin.path()).env(EnvVars::UV_NO_MODIFY_PATH, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed uv [VERSION] to [TEMP_DIR]/bin
+    ");
     let installed = bin.child(format!("uv{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        std::process::Command::new(installed.path())
-            .arg("--version")
-            .status()?
-            .success()
-    );
+    uv_snapshot!(context.filters(), context.external_command(installed.path()).arg("--version"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    uv [VERSION] ([TARGET])
+    ");
     bin.child(format!("uvx{}", std::env::consts::EXE_SUFFIX))
         .assert(predicates::path::is_file());
-    let receipt: serde_json::Value =
-        serde_json::from_slice(&fs_err::read(bin.child(".uv-receipt.json"))?)?;
+    let receipt: serde_json::Value = serde_json::from_str(&context.read("bin/.uv-receipt.json"))?;
     assert_eq!(receipt["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(receipt["modify_path"], false);
     assert_eq!(receipt["provider"]["source"], "uv");
@@ -62,7 +52,13 @@ fn installs_running_distribution_with_numeric_no_modify_path() -> Result<()> {
         receipt["install_prefix"],
         fs_err::canonicalize(bin.path())?.to_string_lossy().as_ref()
     );
-    assert!(command.status()?.success());
+    uv_snapshot!(context.filters(), context.command().args([
+        "self", "install", "--preview-features", "self-management", "--install-dir",
+    ]).arg(bin.path()).env(EnvVars::UV_NO_MODIFY_PATH, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed uv [VERSION] to [TEMP_DIR]/bin
+    ");
     Ok(())
 }
 
@@ -140,7 +136,7 @@ fn legacy_receipt_falls_back_from_xdg_config_home() -> Result<()> {
         r"Installed uv [0-9]+\.[0-9]+\.[0-9]+[^ ]*",
         "Installed uv [VERSION]",
     ));
-    let original = context.temp_dir.child("original");
+    let original = context.temp_dir.child("original/bin");
     context
         .command()
         .args([
@@ -158,6 +154,8 @@ fn legacy_receipt_falls_back_from_xdg_config_home() -> Result<()> {
     let mut receipt: serde_json::Value =
         serde_json::from_slice(&fs_err::read(native_receipt.path())?)?;
     receipt["source"]["owner"] = serde_json::json!("custom-owner");
+    receipt["install_prefix"] = serde_json::json!(context.temp_dir.child("original").path());
+    receipt["provider"]["source"] = serde_json::json!("cargo-dist");
     let legacy = context.home_dir.child(".config/uv/uv-receipt.json");
     fs_err::create_dir_all(legacy.parent().context("legacy receipt parent")?)?;
     fs_err::write(legacy.path(), serde_json::to_vec(&receipt)?)?;
@@ -209,5 +207,94 @@ fn installation_lock_precedes_receipt_validation() -> Result<()> {
     "#);
     assert_eq!(fs_err::read(bin.child(".uv-receipt.json"))?, b"{}");
     bin.child("uv").assert(predicates::path::missing());
+    Ok(())
+}
+
+/// Reinstalling before restarting the shell leaves the configured PATH entry unchanged.
+#[cfg(unix)]
+#[test]
+fn repeated_install_with_configured_shell() {
+    let context = uv_test::test_context_with_versions!(&[]).with_filter((
+        r"Installed uv [0-9]+\.[0-9]+\.[0-9]+[^ ]*",
+        "Installed uv [VERSION]",
+    ));
+    let bin = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.command().args([
+        "self", "install", "--preview-features", "self-management", "--install-dir",
+    ]).arg(bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed uv [VERSION] to [TEMP_DIR]/bin
+    Created configuration file: [HOME]/.bash_profile
+    Created configuration file: [HOME]/.bashrc
+    Restart your shell to apply changes
+    ");
+    let profile = context.read(context.home_dir.child(".bash_profile"));
+    let rc = context.read(context.home_dir.child(".bashrc"));
+    uv_snapshot!(context.filters(), context.command().args([
+        "self", "install", "--preview-features", "self-management", "--install-dir",
+    ]).arg(bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed uv [VERSION] to [TEMP_DIR]/bin
+    Restart your shell to apply changes
+    ");
+    assert_eq!(
+        profile,
+        context.read(context.home_dir.child(".bash_profile"))
+    );
+    assert_eq!(rc, context.read(context.home_dir.child(".bashrc")));
+}
+
+/// The windowed launcher remains alive while its child replaces the installation.
+#[cfg(all(windows, feature = "windows-gui-bin"))]
+#[test]
+fn reinstalls_from_running_windowed_launcher() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filter((
+        r"Installed uv [0-9]+\.[0-9]+\.[0-9]+[^ ]*",
+        "Installed uv [VERSION]",
+    ));
+    let bin = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.command().args([
+        "self", "install", "--preview-features", "self-management", "--no-modify-path", "--install-dir",
+    ]).arg(bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed uv [VERSION] to [TEMP_DIR]/bin
+    ");
+    let unrelated = bin.child(".uv-install-backup-unrelated/sentinel.exe");
+    unrelated.write_str("unrelated")?;
+    uv_snapshot!(context.filters(), context.external_command(bin.child("uvw.exe").path()).args([
+        "self", "install", "--preview-features", "self-management", "--no-modify-path", "--install-dir",
+    ]).arg(bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed uv [VERSION] to [TEMP_DIR]/bin
+    ");
+    uv_snapshot!(context.filters(), context.command().args([
+        "self", "install", "--preview-features", "self-management", "--no-modify-path", "--install-dir",
+    ]).arg(bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed uv [VERSION] to [TEMP_DIR]/bin
+    ");
+    unrelated.assert("unrelated");
+    let entries = fs_err::read_dir(bin.path())?.collect::<std::io::Result<Vec<_>>>()?;
+    let backups = entries
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".uv-install-backup-")
+        })
+        .map(|entry| entry.file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        backups,
+        [std::ffi::OsString::from(".uv-install-backup-unrelated")]
+    );
+    let receipt: serde_json::Value = serde_json::from_str(&context.read("bin/.uv-receipt.json"))?;
+    assert_eq!(receipt["provider"]["source"], "uv");
     Ok(())
 }
