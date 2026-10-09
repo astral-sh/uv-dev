@@ -359,7 +359,7 @@ impl PyProjectTomlMut {
                 name = next;
             }
             if name != original && names.contains(name) {
-                self.rename_index_sources(std::slice::from_ref(&original), name);
+                self.rename_index_sources(&original, name);
             }
         }
         Ok(())
@@ -609,7 +609,7 @@ impl PyProjectTomlMut {
         Ok(previous_names)
     }
 
-    fn rename_index_sources(&mut self, previous_names: &[String], name: &str) {
+    fn rename_index_sources(&mut self, previous_name: &str, name: &str) {
         if let Some(sources) = self
             .doc
             .get_mut("tool")
@@ -621,14 +621,14 @@ impl PyProjectTomlMut {
         {
             for (_, source) in sources.iter_mut() {
                 if let Some(source) = source.as_table_like_mut() {
-                    rename_index_source(source, previous_names, name);
+                    rename_index_source(source, previous_name, name);
                 } else if let Some(source) = source.as_array_mut() {
                     for source in source.iter_mut().filter_map(Value::as_inline_table_mut) {
-                        rename_index_source(source, previous_names, name);
+                        rename_index_source(source, previous_name, name);
                     }
                 } else if let Some(source) = source.as_array_of_tables_mut() {
                     for source in source.iter_mut() {
-                        rename_index_source(source, previous_names, name);
+                        rename_index_source(source, previous_name, name);
                     }
                 }
             }
@@ -1794,15 +1794,11 @@ fn find_source(name: &PackageName, sources: &Table) -> Option<String> {
     None
 }
 
-fn rename_index_source(source: &mut dyn TableLike, previous_names: &[String], name: &str) {
+fn rename_index_source(source: &mut dyn TableLike, previous_name: &str, name: &str) {
     let Some(index) = source.get_mut("index").and_then(Item::as_value_mut) else {
         return;
     };
-    if index.as_str() == Some(name)
-        || !previous_names
-            .iter()
-            .any(|previous_name| index.as_str() == Some(previous_name.as_str()))
-    {
+    if previous_name == name || index.as_str() != Some(previous_name) {
         return;
     }
 
@@ -2663,11 +2659,19 @@ foo = { index = "old" }
         let member = Index::from_str("new=https://member.example.com/simple").unwrap();
         doc.add_indexes(&[&middle, &new], Path::new("."), &[&member])
             .unwrap();
-        assert_eq!(
-            doc.doc["tool"]["uv"]["sources"]["foo"]["index"].as_str(),
-            Some("middle")
-        );
-        assert_eq!(doc.index_tables().count(), 2);
+        assert_snapshot!(doc.to_string(), @r#"
+
+[[tool.uv.index]]
+name = "new"
+url = "https://example.com/simple"
+
+[[tool.uv.index]]
+name = "middle"
+url = "https://example.com/simple"
+explicit = true
+[tool.uv.sources]
+foo = { index = "middle" }
+"#);
     }
 
     #[test]
