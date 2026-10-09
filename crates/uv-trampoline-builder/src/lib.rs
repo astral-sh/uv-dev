@@ -6,7 +6,6 @@ use std::str::Utf8Error;
 use editpe::{
     Image, ResourceData, ResourceDirectory, ResourceEntry, ResourceEntryName, ResourceTable,
 };
-use fs_err::File;
 use thiserror::Error;
 
 use uv_fs::Simplified;
@@ -132,19 +131,18 @@ impl Launcher {
         result
     }
 
-    /// Write this trampoline launcher to a file.
+    /// Write this trampoline launcher to a writer.
     ///
     /// On Unix, this always returns [`Error::NotWindows`]. Trampolines are a Windows-specific
     /// feature and cannot be written on other platforms.
     #[cfg(not(windows))]
-    pub fn write_to_file(self, _file: &mut File, _is_gui: bool) -> Result<(), Error> {
+    pub fn write_to_file(self, _writer: &mut impl io::Write, _is_gui: bool) -> Result<(), Error> {
         Err(Error::NotWindows)
     }
 
-    /// Write this trampoline launcher to a file.
+    /// Write this trampoline launcher to a writer.
     #[cfg(windows)]
-    pub fn write_to_file(self, file: &mut File, is_gui: bool) -> Result<(), Error> {
-        use std::io::Write;
+    pub fn write_to_file(self, writer: &mut impl io::Write, is_gui: bool) -> Result<(), Error> {
         use uv_fs::Simplified;
 
         let python_path = self.python_path.simplified_display().to_string();
@@ -163,7 +161,7 @@ impl Launcher {
         }
 
         let output = write_resources(launcher_bin, &resources)?;
-        file.write_all(&output)?;
+        writer.write_all(&output)?;
 
         Ok(())
     }

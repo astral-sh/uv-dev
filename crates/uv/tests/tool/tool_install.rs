@@ -3734,6 +3734,124 @@ fn tool_install_preflight_relocates_retained_build_commands() -> Result<()> {
     Ok(())
 }
 
+/// Relocation preserves the installed provider when retained dependencies share a command.
+#[test]
+fn tool_install_preflight_preserves_shared_command_provider() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "shared-build-command-provider"
+        [root]
+        requires = ["tool", "a-provider", "z-provider"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["tool"]
+        [packages.a-provider.versions."1.0.0"]
+        sdist = false
+        entry_points = ["shared-backend"]
+        [packages.z-provider.versions."1.0.0"]
+        sdist = false
+        entry_points = ["shared-backend"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let bin = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .arg("tool")
+        .arg("--with")
+        .arg("z-provider==1.0.0")
+        .arg("--default-index")
+        .arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let scripts = context
+        .temp_dir
+        .child("tools/tool")
+        .child(if cfg!(windows) { "Scripts" } else { "bin" });
+    let python = scripts.child(format!("python{}", std::env::consts::EXE_SUFFIX));
+    context
+        .pip_install()
+        .arg("a-provider==1.0.0")
+        .arg("--python")
+        .arg(python.path())
+        .arg("--default-index")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let command = scripts.child(format!("shared-backend{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(command.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from a-provider!
+    ");
+    let project = context.temp_dir.child("tool");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "tool"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"tool".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["tool".to_owned()],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        import shutil
+        import subprocess
+        import zipfile
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            with zipfile.ZipFile(Path(__file__).parent / "{filename}") as wheel:
+                for name in wheel.namelist():
+                    if name.startswith("tool-2.0.0.dist-info/"):
+                        wheel.extract(name, metadata_directory)
+            return "tool-2.0.0.dist-info"
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            provider = subprocess.check_output(["shared-backend"], text=True).strip()
+            assert provider == "Hello from a-provider!", provider
+            source = Path(__file__).parent / "{filename}"
+            shutil.copyfile(source, Path(wheel_directory) / source.name)
+            return source.name
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
+        .arg("--with").arg("a-provider==1.0.0").arg("--with").arg("z-provider==1.0.0")
+        .arg("--no-build-isolation").arg("--default-index").arg(server.index_url())
+        .env(EnvVars::PATH, bin.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - tool==1.0.0
+     + tool==2.0.0 (from file://[TEMP_DIR]/tool)
+    Installed 1 executable: tool
+    ");
+    uv_snapshot!(context.filters(), Command::new(command.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from a-provider!
+    ");
+    Ok(())
+}
+
 /// Retained data scripts preserve their bodies while using the staged interpreter.
 #[test]
 #[cfg(unix)]

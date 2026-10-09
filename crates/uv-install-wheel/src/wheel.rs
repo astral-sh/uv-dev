@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Display;
 use std::io;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -19,6 +19,8 @@ use uv_normalize::PackageName;
 use uv_pypi_types::DirectUrl;
 use uv_shell::escape_posix_for_single_quotes;
 use uv_trampoline_builder::windows_script_launcher;
+#[cfg(windows)]
+use uv_trampoline_builder::{Launcher, LauncherKind};
 use uv_warnings::warn_user_once;
 
 use crate::record::RecordEntry;
@@ -358,32 +360,29 @@ pub fn relocate_installed_scripts(
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
+    let mut paths = BTreeSet::new();
+    for script in console_scripts.iter().chain(&gui_scripts) {
+        paths.insert(
+            ValidatedScript::try_from_script(script, layout)?
+                .as_path()
+                .to_path_buf(),
+        );
+    }
+    if let Some(record) = &record {
+        paths.extend(record.iter().filter_map(|entry| {
+            normalize_path_under(site_packages.join(&entry.path), &layout.scheme.scripts)
+        }));
+    }
     let mut generated = Vec::new();
-    write_script_entrypoints(
+    relocate_scripts(
+        previous_layout,
         layout,
         relocatable,
         site_packages,
-        &console_scripts,
+        paths,
         &mut generated,
-        false,
-    )?;
-    write_script_entrypoints(
-        layout,
-        relocatable,
-        site_packages,
-        &gui_scripts,
-        &mut generated,
-        true,
     )?;
     if let Some(mut record) = record {
-        relocate_recorded_scripts(
-            previous_layout,
-            layout,
-            relocatable,
-            site_packages,
-            &record,
-            &mut generated,
-        )?;
         if generated.is_empty() {
             return Ok(());
         }
@@ -398,13 +397,13 @@ pub fn relocate_installed_scripts(
     Ok(())
 }
 
-/// Rewrite interpreter prefixes in recorded data scripts while retaining their bodies and modes.
-fn relocate_recorded_scripts(
+/// Rewrite installed script interpreters while retaining their actual bodies and modes.
+fn relocate_scripts(
     previous_layout: &Layout,
     layout: &Layout,
     relocatable: bool,
     site_packages: &Path,
-    record: &[RecordEntry],
+    paths: BTreeSet<PathBuf>,
     generated: &mut Vec<RecordEntry>,
 ) -> Result<(), Error> {
     let prefixes = [false, true]
@@ -427,12 +426,7 @@ fn relocate_recorded_scripts(
         .map(|(prefix, _)| prefix.len() + 1)
         .max()
         .unwrap_or_default();
-    for entry in record {
-        let Some(path) =
-            normalize_path_under(site_packages.join(&entry.path), &layout.scheme.scripts)
-        else {
-            continue;
-        };
+    for path in paths {
         let file = match File::open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -444,7 +438,8 @@ fn relocate_recorded_scripts(
             .by_ref()
             .take(prefix_limit as u64)
             .read_to_end(&mut prefix)?;
-        let Some((previous, current)) = prefixes.iter().find(|(previous, _)| {
+        let permissions = reader.get_ref().metadata()?.permissions();
+        let contents = if let Some((previous, current)) = prefixes.iter().find(|(previous, _)| {
             prefix
                 .strip_prefix(previous.as_bytes())
                 .is_some_and(|suffix| {
@@ -452,13 +447,27 @@ fn relocate_recorded_scripts(
                         .first()
                         .is_none_or(|byte| matches!(byte, b'\n' | b'\r' | b' '))
                 })
-        }) else {
-            continue;
+        }) {
+            let mut contents = current.as_bytes().to_vec();
+            contents.extend_from_slice(&prefix[previous.len()..]);
+            reader.read_to_end(&mut contents)?;
+            contents
+        } else {
+            #[cfg(windows)]
+            {
+                let Some(contents) =
+                    relocate_windows_launcher(&path, previous_layout, layout, relocatable)?
+                else {
+                    continue;
+                };
+                contents
+            }
+            #[cfg(not(windows))]
+            {
+                continue;
+            }
         };
-        let permissions = reader.get_ref().metadata()?.permissions();
-        let mut contents = current.as_bytes().to_vec();
-        contents.extend_from_slice(&prefix[previous.len()..]);
-        reader.read_to_end(&mut contents)?;
+        drop(reader);
         let relative = pathdiff::diff_paths(&path, site_packages).ok_or_else(|| {
             Error::Io(io::Error::other(format!(
                 "Could not find relative path for {}",
@@ -469,6 +478,38 @@ fn relocate_recorded_scripts(
         fs::set_permissions(path, permissions)?;
     }
     Ok(())
+}
+
+/// Retain the installed launcher payload so overlapping entrypoint declarations keep their provider.
+#[cfg(windows)]
+fn relocate_windows_launcher(
+    path: &Path,
+    previous_layout: &Layout,
+    layout: &Layout,
+    relocatable: bool,
+) -> Result<Option<Vec<u8>>, Error> {
+    let Some(launcher) = Launcher::try_from_path(path)? else {
+        return Ok(None);
+    };
+    match launcher.kind {
+        LauncherKind::Script => {}
+        LauncherKind::Python => return Ok(None),
+    }
+    let is_gui = launcher.python_path.ends_with("pythonw.exe");
+    let previous = get_script_executable(&previous_layout.sys_executable, is_gui);
+    if launcher.python_path.simplified() != previous.simplified() {
+        return Ok(None);
+    }
+    let current = get_relocatable_executable(
+        get_script_executable(&layout.sys_executable, is_gui),
+        layout,
+        relocatable,
+    )?;
+    let mut contents = Vec::new();
+    launcher
+        .with_python_path(current)
+        .write_to_file(&mut contents, is_gui)?;
+    Ok(Some(contents))
 }
 
 /// Create the wrapper scripts in the bin folder of the venv for launching console scripts.
