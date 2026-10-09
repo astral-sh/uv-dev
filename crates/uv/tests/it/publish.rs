@@ -248,6 +248,30 @@ fn artifact_registry_malformed_credentials() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Publishing uses matching netrc credentials before attempting explicitly configured ADC.
+#[test]
+fn artifact_registry_netrc_precedes_malformed_adc() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_sizes();
+    context
+        .temp_dir
+        .child("credentials.json")
+        .write_str("{malformed}")?;
+    context.temp_dir.child("netrc").write_str(
+        "machine us-central1-python.pkg.dev login stored-user password stored-password",
+    )?;
+    uv_snapshot!(context.filters(), context.publish()
+        .args(["--dry-run", "--publish-url", "https://us-central1-python.pkg.dev/project/repository/"])
+        .arg(dummy_wheel())
+        .env(EnvVars::NETRC, context.temp_dir.child("netrc").path())
+        .env("GOOGLE_APPLICATION_CREDENTIALS", context.temp_dir.child("credentials.json").path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checking 1 file against https://us-central1-python.pkg.dev/project/repository/
+    Checking ok-1.0.0-py3-none-any.whl ([SIZE]B)
+    "#);
+    Ok(())
+}
+
 /// Hint people that it's not `--skip-existing` but `--check-url`.
 #[test]
 fn skip_existing_redirect() {

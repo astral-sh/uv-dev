@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use console::Term;
 use owo_colors::OwoColorize;
 use tracing::{debug, info, trace};
-use uv_auth::{ArtifactRegistryProvider, Credentials, CredentialsCache};
+use uv_auth::{ArtifactRegistryProvider, AuthMiddleware, Credentials};
 use uv_cache::Cache;
 use uv_client::{
     AuthIntegration, BaseClient, BaseClientBuilder, RedirectPolicy, RegistryClientBuilder,
@@ -144,7 +144,7 @@ pub async fn publish(
         trusted_publishing,
         keyring_provider,
         &oidc_client,
-        client_builder.credentials_cache(),
+        &client_builder.auth_middleware(),
         check_url.as_ref(),
         Prompt::Enabled,
         printer,
@@ -332,7 +332,7 @@ async fn gather_credentials(
     trusted_publishing: TrustedPublishing,
     keyring_provider: KeyringProviderType,
     oidc_client: &BaseClient,
-    credentials_cache: &CredentialsCache,
+    auth_middleware: &AuthMiddleware,
     check_url: Option<&IndexUrl>,
     prompt: Prompt,
     printer: Printer,
@@ -376,22 +376,19 @@ async fn gather_credentials(
         TrustedPublishResult::Ignored(err) => Some(err),
     };
 
-    let artifact_registry_credentials = if username.is_none()
+    let has_registry_credentials = if username.is_none()
         && password.is_none()
         && keyring_provider == KeyringProviderType::Disabled
         && ArtifactRegistryProvider::is_artifact_registry(&publish_url)
     {
-        ArtifactRegistryProvider::default()
-            .cache_credentials_for(&publish_url, credentials_cache)
-            .await?
+        auth_middleware.cache_credentials_for(&publish_url).await?
     } else {
         false
     };
 
     let (username, mut password) = if username.is_none() && password.is_none() {
-        // Skip prompting when a built-in provider has credentials; the auth middleware will handle
-        // authentication.
-        if artifact_registry_credentials {
+        // Skip prompting when normal credential resolution already prepared authentication.
+        if has_registry_credentials {
             (None, None)
         } else {
             match prompt {
@@ -414,7 +411,7 @@ async fn gather_credentials(
     if username.is_none()
         && password.is_none()
         && keyring_provider == KeyringProviderType::Disabled
-        && !artifact_registry_credentials
+        && !has_registry_credentials
         && let Some(err) = trusted_publishing_status
     {
         // The user has configured something incorrectly:
@@ -507,7 +504,7 @@ mod tests {
             TrustedPublishing::Never,
             KeyringProviderType::Disabled,
             &client,
-            &CredentialsCache::new(),
+            &AuthMiddleware::new(),
             None,
             Prompt::Disabled,
             Printer::Quiet,

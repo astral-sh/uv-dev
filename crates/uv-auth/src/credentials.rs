@@ -23,7 +23,9 @@ use uv_netrc::Netrc;
 use uv_redacted::DisplaySafeUrl;
 use uv_static::EnvVars;
 
-use crate::providers::{ArtifactRegistryError, ArtifactRegistryProvider};
+use crate::providers::{
+    ArtifactRegistryCredentials, ArtifactRegistryError, ArtifactRegistryProvider,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Credentials {
@@ -409,7 +411,7 @@ pub(crate) enum Authentication {
     /// Google Artifact Registry authentication.
     ArtifactRegistry {
         provider: ArtifactRegistryProvider,
-        initial_credentials: Arc<Mutex<Option<Credentials>>>,
+        initial_credentials: Arc<Mutex<Option<ArtifactRegistryCredentials>>>,
     },
 }
 
@@ -484,7 +486,7 @@ impl From<AzureDefaultSigner> for Authentication {
 impl Authentication {
     pub(crate) fn artifact_registry(
         provider: ArtifactRegistryProvider,
-        credentials: Credentials,
+        credentials: ArtifactRegistryCredentials,
     ) -> Self {
         Self::ArtifactRegistry {
             provider,
@@ -668,10 +670,11 @@ impl Authentication {
                 initial_credentials,
             } => {
                 let initial_credentials = initial_credentials.lock().await.take();
-                let credentials = match initial_credentials {
-                    Some(credentials) => Some(credentials),
-                    None => provider.credentials_for(request.url()).await?,
-                };
+                let credentials =
+                    match initial_credentials.and_then(ArtifactRegistryCredentials::into_fresh) {
+                        Some(credentials) => Some(credentials),
+                        None => provider.credentials_for(request.url()).await?,
+                    };
                 let Some(credentials) = credentials else {
                     return Err(AuthenticationError::ArtifactRegistry);
                 };
