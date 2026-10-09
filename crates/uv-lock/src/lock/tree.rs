@@ -15,7 +15,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use serde::Serialize;
 
 use uv_configuration::{
-    DependencyGroupsWithDefaults, DependencyModifierScope, DependencyModifiers, Excludes,
+    DependencyGroupsWithDefaults, DependencyModifierScope, DependencyModifiers, Excludes, Override,
     Overrides, ScopedOverrideSourceError,
 };
 use uv_console::human_readable_bytes;
@@ -24,7 +24,7 @@ use uv_distribution_types::{Requirement, RequirementSource};
 use uv_fs::PortablePathBuf;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
-use uv_pep508::MarkerTree;
+use uv_pep508::{MarkerTree, VerbatimUrl};
 use uv_pypi_types::ResolverMarkerEnvironment;
 
 use uv_resolver_types::{ConflictMarker, UniversalMarker};
@@ -33,7 +33,7 @@ use crate::lock::export::{
     MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript, MetadataWorkspace,
     MetadataWorkspaceMember,
 };
-use crate::lock::{Package, PackageId, PackageIndex};
+use crate::lock::{LockError, LockErrorKind, Package, PackageId, PackageIndex};
 use crate::{Lock, PackageMap};
 
 #[derive(Debug, Clone, Copy)]
@@ -77,6 +77,8 @@ pub struct TreeDisplay<'env> {
     markers: Option<&'env ResolverMarkerEnvironment>,
     /// The declarations used for opt-in, per-edge version specifier annotations.
     requirements: Option<PackageMap<TreeRequirements>>,
+    root_requirements: Box<[Requirement]>,
+    root_dependency_groups: BTreeMap<GroupName, Box<[Requirement]>>,
     /// The locked dependency modifiers, kept separate from package declarations.
     modifiers: DependencyModifiers,
     /// The marker constraints imposed by declared conflicting extras and groups.
@@ -538,6 +540,8 @@ impl<'env> TreeDisplay<'env> {
             show_sizes,
             markers,
             requirements: None,
+            root_requirements: Box::new([]),
+            root_dependency_groups: BTreeMap::new(),
             modifiers: DependencyModifiers::default(),
             conflict_marker,
         }
@@ -584,8 +588,46 @@ impl<'env> TreeDisplay<'env> {
     pub fn with_metadata(
         mut self,
         metadata: &PackageMap<DistributionMetadata>,
-    ) -> Result<Self, ScopedOverrideSourceError> {
-        self.modifiers = self.dependency_modifiers()?;
+        root: &Path,
+    ) -> Result<Self, LockError> {
+        let mut overrides = self
+            .lock
+            .manifest
+            .overrides
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        for entry in &mut overrides {
+            match entry {
+                Override::Requirement(requirement) => root_requirement_url(requirement, root)?,
+                Override::Package(package) => {
+                    for requirement in &mut package.dependencies {
+                        root_requirement_url(requirement, root)?;
+                    }
+                }
+            }
+        }
+        self.modifiers = DependencyModifiers::new(
+            Overrides::from_entries(overrides)?,
+            Excludes::from_entries(self.lock.manifest.excludes.iter().cloned()),
+        );
+        self.root_requirements = self.lock.requirements().iter().cloned().collect();
+        for requirement in &mut self.root_requirements {
+            root_requirement_url(requirement, root)?;
+        }
+        self.root_dependency_groups = self
+            .lock
+            .dependency_groups()
+            .iter()
+            .map(|(group, requirements)| (group.clone(), requirements.iter().cloned().collect()))
+            .collect();
+        for requirement in self
+            .root_dependency_groups
+            .values_mut()
+            .flat_map(|requirements| requirements.iter_mut())
+        {
+            root_requirement_url(requirement, root)?;
+        }
         let static_metadata = self.lock.dependency_metadata();
         let mut requirements = PackageMap::default();
         for node in self.graph.node_weights() {
@@ -597,7 +639,7 @@ impl<'env> TreeDisplay<'env> {
             let version = resolved_metadata
                 .map(|metadata| metadata.version.clone())
                 .or_else(|| package.version().cloned());
-            let (requires_dist, dependency_groups) = if let Some(metadata) =
+            let (requires_dist, mut dependency_groups) = if let Some(metadata) =
                 resolved_metadata.filter(|_| !package.has_metadata())
             {
                 (
@@ -640,13 +682,33 @@ impl<'env> TreeDisplay<'env> {
                     !self.modifiers.is_excluded(&requirement.name)
                 }
             });
+            for requirement in &mut requires_dist {
+                root_requirement_url(requirement, root)?;
+            }
+            for requirement in dependency_groups
+                .values_mut()
+                .flat_map(|requirements| requirements.iter_mut())
+            {
+                root_requirement_url(requirement, root)?;
+            }
+            let scope = version
+                .as_ref()
+                .map_or(DependencyModifierScope::Global, |version| {
+                    DependencyModifierScope::Package(package.name(), version)
+                });
+            let activation = self
+                .modifiers
+                .apply(scope, requires_dist.iter())
+                .map(std::borrow::Cow::into_owned)
+                .collect::<Vec<_>>();
             requirements.insert(
-                package.clone(),
+                package,
                 TreeRequirements {
                     version,
-                    requires_dist: FlatRequiresDist::from_requirements(
+                    requires_dist: FlatRequiresDist::from_requirements_with_activation(
                         requires_dist.into_boxed_slice(),
                         package.name(),
+                        &activation,
                     )
                     .into_iter()
                     .collect(),
@@ -684,11 +746,10 @@ impl<'env> TreeDisplay<'env> {
                 // The synthetic edge to a workspace member isn't a dependency declaration.
                 Edge::Prod(None, _) => return,
                 Edge::Prod(..) | Edge::Optional(..) => {
-                    self.lock.requirements().iter().collect::<Vec<_>>()
+                    self.root_requirements.iter().collect::<Vec<_>>()
                 }
                 Edge::Dev(group, ..) => self
-                    .lock
-                    .dependency_groups()
+                    .root_dependency_groups
                     .get(*group)
                     .into_iter()
                     .flatten()
@@ -1997,4 +2058,19 @@ impl std::fmt::Display for TreeDisplay<'_> {
 
         Ok(())
     }
+}
+
+/// Reconstruct local source URLs from paths relative to the lockfile root.
+fn root_requirement_url(requirement: &mut Requirement, root: &Path) -> Result<(), LockError> {
+    if let RequirementSource::Path {
+        install_path, url, ..
+    }
+    | RequirementSource::Directory {
+        install_path, url, ..
+    } = &mut requirement.source
+    {
+        *url = VerbatimUrl::from_path(&**install_path, root)
+            .map_err(LockErrorKind::RequirementVerbatimUrl)?;
+    }
+    Ok(())
 }

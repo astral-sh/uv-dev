@@ -5624,6 +5624,60 @@ fn show_version_specifiers_excluded_self_extra() -> Result<()> {
     Ok(())
 }
 
+/// Overrides of self references determine recursive-extra activation without changing declaration labels.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_overridden_self_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "tree-overridden-self-extra"
+        [root]
+        requires = ["parent"]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["child>=1", "parent[feature]"]
+        sdist = false
+        [packages.parent.versions."1.0.0".extras]
+        feature = ["child<2"]
+        [packages.child.versions."1.0.0"]
+        sdist = false
+        [packages.child.versions."3.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent"]
+        [tool.uv]
+        override-dependencies = [
+            {{ package = {{ name = "parent", version = "1.0.0" }}, dependencies = ["parent==1"] }},
+        ]
+        [[tool.uv.index]]
+        url = "{}"
+    "#, server.index_url()})?;
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--frozen", "--universal", "--show-version-specifiers"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── parent v1.0.0 [required: *]
+        └── child v3.0.0 [required: >=1]
+    ");
+    Ok(())
+}
+
 /// Scoped overrides use a resolved dynamic version even when declarations are already locked.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -6017,6 +6071,48 @@ async fn show_version_specifiers_direct_source_credentials() -> Result<()> {
     project v0.1.0
     └── parent v1.0.0 [required: http://user:****@[LOCALHOST]/parent-1.0.0.tar.gz]
         └── child v1.0.0 [required: >=1]
+    ");
+    Ok(())
+}
+
+/// Local declarations use the lockfile root when tree discovery starts in another directory.
+#[cfg(feature = "test-universal")]
+#[test]
+fn show_version_specifiers_local_source_from_subdirectory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv.sources]
+        child = { path = "child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    let subdirectory = context.temp_dir.child("subdirectory");
+    subdirectory.create_dir_all()?;
+    context.lock().arg("--offline").assert().success();
+
+    uv_snapshot!(context.filters(), context.tree()
+        .current_dir(subdirectory.path())
+        .arg("--project").arg(context.temp_dir.path())
+        .args(["--frozen", "--universal", "--offline", "--show-version-specifiers"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── child v1.0.0 [required: file://[TEMP_DIR]/child]
     ");
     Ok(())
 }

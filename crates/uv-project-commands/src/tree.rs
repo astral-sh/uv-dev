@@ -375,7 +375,7 @@ pub async fn tree(
                 };
                 reporter.on_fetch_version(package.name(), &version);
                 if package.version().is_some_and(|package| version > *package) {
-                    map.insert(package.clone(), version);
+                    map.insert(package, version);
                 }
             }
             reporter.on_fetch_complete();
@@ -435,7 +435,11 @@ pub async fn tree(
         PackageMap::default()
     };
     let tree = if show_version_specifiers {
-        tree.with_metadata(&metadata)?
+        let root = match source {
+            TreeSource::Manifest(target) => target.install_path(),
+            TreeSource::Lockfile(workspace) => workspace.root(),
+        };
+        tree.with_metadata(&metadata, root)?
     } else {
         tree
     };
@@ -616,7 +620,7 @@ async fn fetch_metadata(
                     package.name()
                 )
             })?;
-            Ok::<_, Error>((package.clone(), metadata))
+            Ok::<_, Error>((package, metadata))
         })
         .buffer_unordered(concurrency.downloads);
     let mut metadata = PackageMap::default();

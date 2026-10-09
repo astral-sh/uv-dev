@@ -362,19 +362,56 @@ pub struct FlatRequiresDist(Box<[Requirement]>);
 impl FlatRequiresDist {
     /// Flatten a set of requirements, resolving any self-references.
     pub fn from_requirements(requirements: Box<[Requirement]>, name: &PackageName) -> Self {
+        Self::flatten(requirements, name, None)
+    }
+
+    /// Flatten declarations using effective requirements to determine recursive-extra activation.
+    pub fn from_requirements_with_activation(
+        requirements: Box<[Requirement]>,
+        name: &PackageName,
+        activation: &[Requirement],
+    ) -> Self {
+        Self::flatten(requirements, name, Some(activation))
+    }
+
+    fn flatten(
+        requirements: Box<[Requirement]>,
+        name: &PackageName,
+        activation: Option<&[Requirement]>,
+    ) -> Self {
         // If there are no self-references, we can return early.
-        if requirements.iter().all(|req| req.name != *name) {
+        if requirements
+            .iter()
+            .all(|requirement| requirement.name != *name)
+            && activation.is_none_or(|requirements| {
+                requirements
+                    .iter()
+                    .all(|requirement| requirement.name != *name)
+            })
+        {
             return Self(requirements);
         }
+        let activation = activation.unwrap_or(&requirements);
+        let self_requirements = activation
+            .iter()
+            .filter(|requirement| requirement.name == *name)
+            .collect::<Vec<_>>();
 
         // Transitively process all extras that are recursively included.
         let mut flattened = requirements.to_vec();
         let mut seen = FxHashSet::<(ExtraName, MarkerTree)>::default();
-        let mut queue: VecDeque<_> = flattened
+        let mut queue: VecDeque<_> = self_requirements
             .iter()
-            .filter(|req| req.name == *name)
             .flat_map(|req| req.extras.iter().cloned().map(|extra| (extra, req.marker)))
             .collect();
+        let extra_marker = |requirement: &Requirement, extra: &ExtraName| {
+            let production_marker = requirement.marker.simplify_not_extras_with(|_| true);
+            requirement
+                .marker
+                .simplify_extras(slice::from_ref(extra))
+                .simplify_not_extras_with(|candidate| candidate != extra)
+                .and(production_marker.negate())
+        };
         while let Some((extra, marker)) = queue.pop_front() {
             if !seen.insert((extra.clone(), marker)) {
                 continue;
@@ -383,13 +420,7 @@ impl FlatRequiresDist {
             // Find the optional portion of each requirement for this extra. A requirement can
             // also apply in production, as in `sys_platform == 'win32' or extra == 'base'`.
             for requirement in &requirements {
-                let production_marker = requirement.marker.simplify_not_extras_with(|_| true);
-                let extra_marker = requirement
-                    .marker
-                    .simplify_extras(slice::from_ref(&extra))
-                    .simplify_not_extras_with(|candidate| candidate != &extra)
-                    .and(production_marker.negate());
-                let marker = marker.and(extra_marker);
+                let marker = marker.and(extra_marker(requirement, &extra));
                 if marker.is_false() {
                     continue;
                 }
@@ -402,19 +433,21 @@ impl FlatRequiresDist {
                     origin: requirement.origin.clone(),
                     marker,
                 };
-                if requirement.name == *name {
-                    // Add each transitively included extra.
+
+                // Retain the requirement, including any recursively reached self-constraint.
+                flattened.push(requirement);
+            }
+            for requirement in &self_requirements {
+                let marker = marker.and(extra_marker(requirement, &extra));
+                if !marker.is_false() {
                     queue.extend(
                         requirement
                             .extras
                             .iter()
                             .cloned()
-                            .map(|extra| (extra, requirement.marker)),
+                            .map(|extra| (extra, marker)),
                     );
                 }
-
-                // Retain the requirement, including any recursively reached self-constraint.
-                flattened.push(requirement);
             }
         }
 
