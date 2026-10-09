@@ -48,7 +48,7 @@ Ok(
                     {},
                 ),
             },
-            index_strategy: FirstIndex,
+            index_strategy: None,
         },
         packages: [
             Package {

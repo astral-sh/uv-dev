@@ -13439,6 +13439,7 @@ fn sync_build_tag() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]

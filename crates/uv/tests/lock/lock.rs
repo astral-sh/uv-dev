@@ -2235,7 +2235,11 @@ async fn lock_sdist_url_locked_build_dependency_hash_mismatch() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
-    let locked = context.read("uv.lock");
+    // The default strategy is known; adding find-links must still exercise locked build hashes.
+    let locked = context
+        .read("uv.lock")
+        .replace("[options]", "[options]\nindex-strategy = \"first-index\"");
+    context.temp_dir.child("uv.lock").write_str(&locked)?;
     assert!(locked.contains(&trusted_digest));
     assert!(!sentinel.exists(), "locking built a wheel");
 
@@ -12112,6 +12116,7 @@ fn lock_index_absolute_path_from_config() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -12950,6 +12955,9 @@ fn lock_mixed_hashes() -> Result<()> {
         revision = 5
         requires-python = ">=3.13"
 
+        [options]
+        index-strategy = "first-index"
+
         [[package]]
         name = "basic-package"
         version = "0.1.0"
@@ -13025,6 +13033,9 @@ fn lock_mixed_hashes() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.13"
+
+        [options]
+        index-strategy = "first-index"
 
         [[package]]
         name = "basic-package"
@@ -15614,6 +15625,7 @@ async fn lock_redact_index_sources() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17114,6 +17126,7 @@ fn lock_find_links_local_wheel() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17227,6 +17240,7 @@ fn lock_find_links_ignore_explicit_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17447,6 +17461,7 @@ fn lock_find_links_local_sdist() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17533,6 +17548,7 @@ fn lock_find_links_http_wheel() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17617,6 +17633,7 @@ fn lock_find_links_http_sdist() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17824,6 +17841,7 @@ fn lock_find_links_higher_priority_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17917,6 +17935,7 @@ fn lock_find_links_lower_priority_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -18049,6 +18068,9 @@ fn lock_local_index() -> Result<()> {
         version = 1
         revision = 5
         requires-python = ">=3.13"
+
+        [options]
+        index-strategy = "first-index"
 
         [[package]]
         name = "basic-package"
@@ -28231,6 +28253,7 @@ async fn lock_named_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -28298,6 +28321,7 @@ fn lock_default_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -28358,6 +28382,7 @@ fn lock_default_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -28433,6 +28458,7 @@ fn lock_named_index_cli() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [[package]]
@@ -28719,6 +28745,7 @@ fn lock_repeat_named_index_member() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -28806,6 +28833,7 @@ fn lock_unique_named_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -28878,6 +28906,7 @@ fn lock_repeat_named_index_cli() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -28943,6 +28972,7 @@ fn lock_repeat_named_index_cli() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -29044,6 +29074,7 @@ fn lock_named_index_overlap() -> Result<()> {
         ]
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -31999,6 +32030,7 @@ fn lock_multiple_sources_index_disjoint_markers() -> Result<()> {
         ]
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -32125,6 +32157,7 @@ fn lock_multiple_sources_index_mixed() -> Result<()> {
         ]
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -32254,6 +32287,7 @@ fn lock_multiple_sources_index_non_total() -> Result<()> {
         ]
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [[package]]
@@ -41484,6 +41518,7 @@ async fn lock_trailing_slash_index_url_in_pyproject_not_index_argument() -> Resu
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -41575,6 +41610,7 @@ async fn lock_trailing_slash_index_url_in_lockfile_not_pyproject() -> Result<()>
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -41668,6 +41704,7 @@ async fn lock_trailing_slash_index_url_in_pyproject_and_not_lockfile() -> Result
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -41761,6 +41798,7 @@ async fn lock_trailing_slash_index_url_in_lockfile_and_pyproject_toml() -> Resul
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -44791,6 +44829,7 @@ fn lock_supported_environment_abi3_wheel() -> Result<()> {
         ]
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
