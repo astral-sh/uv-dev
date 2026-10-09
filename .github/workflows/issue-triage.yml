@@ -131,6 +131,8 @@ jobs:
             "refs/heads/issue/$issue_number"
           git -C "$RUNNER_TEMP/issue-context" checkout --quiet FETCH_HEAD
 
+          printf '\n[features]\nnetwork_proxy = true\n' >> agents/codex/config.toml
+
           {
             printf 'Issue triage for #%s: %s\n\n' \
               "$issue_number" \
