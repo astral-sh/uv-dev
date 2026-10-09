@@ -1839,6 +1839,109 @@ fn reinstall_incomplete_same_version() -> Result<()> {
     Ok(())
 }
 
+/// A local version in only the wheel filename can repair the existing metadata directory.
+#[test]
+fn reinstall_incomplete_filename_local_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (_, bytes) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel = context.temp_dir.child("demo-1.0.0+local-py3-none-any.whl");
+    wheel.write_binary(&bytes)?;
+    context.pip_install().arg(wheel.path()).assert().success();
+    let record = context.site_packages().join("demo-1.0.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel.path()).arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    warning: Failed to uninstall package at `[SITE_PACKAGES]/demo-1.0.0.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - demo==1.0.0 (from file://[TEMP_DIR]/demo-1.0.0+local-py3-none-any.whl)
+     + demo==1.0.0+local (from file://[TEMP_DIR]/demo-1.0.0+local-py3-none-any.whl)
+    ");
+    assert!(record.is_file());
+    context.assert_installed("demo", "1.0.0");
+    Ok(())
+}
+
+/// Matching public versions do not authorize leaving an old metadata directory behind.
+#[test]
+fn reinstall_incomplete_different_local_metadata_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, bytes) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let initial = context.temp_dir.child(filename);
+    initial.write_binary(&bytes)?;
+    context.pip_install().arg(initial.path()).assert().success();
+    let record = context.site_packages().join("demo-1.0.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    let (filename, bytes) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0+local".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let replacement = context.temp_dir.child(filename);
+    replacement.write_binary(&bytes)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(replacement.path()).arg("--reinstall"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Cannot uninstall package; `RECORD` file not found at: [SITE_PACKAGES]/demo-1.0.0.dist-info/RECORD
+    ");
+    context.assert_installed("demo", "1.0.0");
+    assert!(
+        !context
+            .site_packages()
+            .join("demo-1.0.0+local.dist-info")
+            .exists()
+    );
+    Ok(())
+}
+
+/// A failed filesystem lookup identifies the affected uninstall record.
+#[test]
+#[cfg(unix)]
+fn reinstall_incomplete_record_lookup_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((
+        r"Too many levels of symbolic links \(os error \d+\)",
+        "[SYMLINK LOOP]",
+    ));
+    context.pip_install().arg("anyio==3.7.0").assert().success();
+    let record = context.site_packages().join("anyio-3.7.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    symlink("RECORD", &record)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg("anyio==4.0.0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Failed to inspect uninstall record at `[SITE_PACKAGES]/anyio-3.7.0.dist-info/RECORD`
+      cause: [SYMLINK LOOP]
+    ");
+    context.assert_command("import anyio; from importlib.metadata import version; assert version('anyio') == '3.7.0'").success();
+    Ok(())
+}
+
 #[test]
 fn exact_install_removes_extraneous_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_counts();

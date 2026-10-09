@@ -442,12 +442,20 @@ impl InstallationPlan {
         }
 
         // Reject known version-changing replacements before either installation phase mutates
-        // the environment. Deferred source versions are checked again after wheel preparation.
+        // the environment. Source versions and filename-only local versions are checked against
+        // the actual destination after wheel preparation.
         let replacement_versions = resolution
             .distributions()
             .filter_map(|dist| dist.version().map(|version| (dist.name(), version)))
             .collect::<BTreeMap<_, _>>();
-        validate_replacement_records(extraneous.iter().chain(&reinstalls), &replacement_versions)?;
+        validate_replacement_records(extraneous.iter().chain(&reinstalls), |dist_info| {
+            Ok(replacement_versions
+                .get(dist_info.name())
+                .is_some_and(|version| {
+                    *version != dist_info.version()
+                        && (*version).clone().without_local() != *dist_info.version()
+                }))
+        })?;
 
         // Partition into two sets: those that require build isolation, and those that disable it. This
         // is effectively a heuristic to make `--no-build-isolation` work "more often" by way of giving
@@ -677,21 +685,24 @@ impl InstallPhase {
     }
 }
 
-/// Check that every known version-changing replacement has an uninstall record.
+/// Check that every replacement changing the installed metadata directory has an uninstall record.
 fn validate_replacement_records<'a>(
     uninstalls: impl IntoIterator<Item = &'a InstalledDist>,
-    replacement_versions: &BTreeMap<&PackageName, &Version>,
+    replaces_dist_info: impl Fn(&InstalledDist) -> Result<bool, Error>,
 ) -> Result<(), Error> {
     for dist_info in uninstalls {
         if matches!(
             &dist_info.kind,
             InstalledDistKind::Registry(_) | InstalledDistKind::Url(_)
-        ) && replacement_versions
-            .get(dist_info.name())
-            .is_some_and(|version| *version != dist_info.version())
+        ) && replaces_dist_info(dist_info)?
         {
             let record_path = dist_info.install_path().join("RECORD");
-            if !record_path.try_exists()? {
+            if !record_path.try_exists().with_context(|| {
+                format!(
+                    "Failed to inspect uninstall record at `{}`",
+                    record_path.user_display()
+                )
+            })? {
                 return Err(uv_installer::UninstallError::Uninstall(
                     uv_install_wheel::Error::MissingRecord(record_path),
                 )
@@ -766,13 +777,22 @@ async fn execute_plan(
     // Remove any upgraded or extraneous installations.
     let uninstalls = extraneous.into_iter().chain(reinstalls).collect::<Vec<_>>();
     if !uninstalls.is_empty() {
-        let replacement_versions = wheels
+        let replacements = wheels
             .iter()
             .chain(&cached)
-            .map(|dist| (dist.name(), dist.installed_version().version()))
+            .map(|dist| (dist.name(), dist))
             .collect::<BTreeMap<_, _>>();
-
-        validate_replacement_records(&uninstalls, &replacement_versions)?;
+        let layout = venv.interpreter().layout();
+        validate_replacement_records(&uninstalls, |dist_info| {
+            let Some(replacement) = replacements.get(dist_info.name()) else {
+                return Ok(false);
+            };
+            let destination =
+                installed_dist_info_path(&layout, replacement.path()).with_context(|| {
+                    format!("Failed to locate replacement distribution: {replacement}")
+                })?;
+            Ok(destination != dist_info.install_path())
+        })?;
 
         let start = std::time::Instant::now();
 
