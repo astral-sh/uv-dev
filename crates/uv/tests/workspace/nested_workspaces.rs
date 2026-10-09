@@ -121,6 +121,8 @@ struct LockedPackages {
 struct LockedPackage {
     name: String,
     version: Option<String>,
+    #[serde(default, rename = "resolution-markers")]
+    resolution_markers: Vec<String>,
     source: BTreeMap<String, toml::Value>,
 }
 
@@ -612,6 +614,59 @@ fn nested_workspaces_scope_inherited_fork_preferences() -> Result<()> {
       "shared": [
         "1.0.0",
         "2.0.0"
+      ]
+    }
+    "#);
+    Ok(())
+}
+
+/// A valid pin from the other parent fork must not override ordinary child selection.
+#[test]
+fn nested_workspaces_disjoint_inherited_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = index()?;
+    let parent = context.temp_dir.child("parent");
+    let child = parent.child("services/child");
+    write_workspace(
+        &parent,
+        "parent",
+        &[
+            "shared==1.0.0; python_version < '3.13'",
+            "shared==2.0.0; python_version >= '3.13'",
+        ],
+        &["services/*"],
+    )?;
+    write_workspace(
+        &child,
+        "child",
+        &[
+            "shared>=1.5,<3; python_version < '3.13'",
+            "shared>=3; python_version >= '3.13'",
+        ],
+        &[],
+    )?;
+    lock(&context, parent.path(), &server).assert().success();
+    lock(&context, child.path(), &server).assert().success();
+
+    let lock: LockedPackages = toml::from_str(&fs_err::read_to_string(child.join("uv.lock"))?)?;
+    let selected: BTreeMap<_, _> = lock
+        .package
+        .into_iter()
+        .filter(|package| package.name == "shared")
+        .map(|package| {
+            (
+                package.version.expect("registry package version"),
+                package.resolution_markers,
+            )
+        })
+        .collect();
+    assert_json_snapshot!(selected, @r#"
+    {
+      "2.5.0": [
+        "python_full_version < '3.13'"
+      ],
+      "3.0.0": [
+        "python_full_version >= '3.13'"
       ]
     }
     "#);
