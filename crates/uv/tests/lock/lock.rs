@@ -30603,6 +30603,91 @@ fn lock_dependency_metadata() -> Result<()> {
     Ok(())
 }
 
+/// A lock generated in a nested checkout retains unrelated parent metadata when moved out.
+#[cfg(all(feature = "test-universal", feature = "test-git"))]
+#[test]
+fn lock_dependency_metadata_nested_project() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let parent = context.temp_dir.child("parent");
+    parent.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "parent"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [[tool.uv.dependency-metadata]]
+        name = "unused"
+        version = "1.0.0"
+    "#})?;
+    Command::new("git")
+        .arg("init")
+        .current_dir(&parent)
+        .assert()
+        .success();
+
+    let child = parent.child("child");
+    child.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    Command::new("git")
+        .arg("init")
+        .current_dir(&child)
+        .assert()
+        .success();
+
+    // The child should not record metadata from an unrelated parent repository; see astral-sh/uv#22185.
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&child), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    ");
+    let lock = context.read("parent/child/uv.lock");
+    assert_snapshot!(lock, @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[manifest.dependency-metadata]]
+    name = "unused"
+    version = "1.0.0"
+
+    [[package]]
+    name = "child"
+    version = "0.1.0"
+    source = { virtual = "." }
+    "#);
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--check"]).current_dir(&child), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    ");
+
+    let sibling = context.temp_dir.child("child");
+    fs_err::rename(&child, &sibling)?;
+
+    // The lock becomes stale outside the parent checkout, despite no changes to the child project.
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--check"]).current_dir(&sibling), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("child/uv.lock"), lock);
+
+    Ok(())
+}
+
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_dependency_metadata_git() -> Result<()> {
