@@ -329,3 +329,77 @@ fn explicit_roots_conditional_python_requirement_and_legacy_metadata() -> Result
     assert_eq!(locked, context.read("uv.lock"));
     Ok(())
 }
+
+#[test]
+fn explicit_roots_frozen_selects_resolved_non_root_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        shared = { workspace = true }
+        [tool.uv.workspace]
+        members = ["shared", "unused"]
+        roots = ["app"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/src/shared/__init__.py")
+        .touch()?;
+    member(&context.temp_dir.child("unused"), "unused", Some(">=3.12"))?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--no-header", "--no-hashes",
+        "--preview-features", "frozen-lockfile",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./shared
+    "#);
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--offline", "--dry-run", "--package", "shared",
+        "--preview-features", "frozen-lockfile",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would use project environment at: .venv
+    Would download 1 package
+    Would install 1 package
+     + shared @ file://[TEMP_DIR]/shared
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "unused", "--no-header", "--no-hashes",
+        "--preview-features", "frozen-lockfile",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `unused` not found in lockfile workspace
+    "#);
+    Ok(())
+}
