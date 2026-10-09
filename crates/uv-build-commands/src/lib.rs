@@ -23,7 +23,7 @@ use uv_configuration::{
     DependencyGroupsWithDefaults, DependencyMode, DependencyModifiers, HashCheckingMode,
     IndexStrategy, KeyringProviderType, NoSources,
 };
-use uv_dispatch::{BuildDispatch, SharedState, configured_tar_backend};
+use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_filename::{
     DistFilename, SourceDistExtension, SourceDistFilename, WheelFilename,
@@ -51,6 +51,7 @@ use uv_requirements::RequirementsSource;
 use uv_resolve_operations as operations;
 use uv_resolver::{ExcludeNewer, FlatIndex};
 use uv_settings::PythonInstallMirrors;
+use uv_static::TarBackend;
 use uv_types::{AnyErrorBuild, BuildContext, BuildStack, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user;
 use uv_workspace::pyproject::ExtraBuildDependencies;
@@ -655,7 +656,7 @@ async fn build_package(
     };
 
     prepare_output_directory(output_dir, gitignore).await?;
-    let tar_backend = configured_tar_backend();
+    let tar_backend = TarBackend::from_env();
 
     // Determine the build plan.
     let plan = BuildPlan::determine(&source, sdist, wheel)?;
@@ -1130,7 +1131,7 @@ async fn build_sdist(
             let source_tree = source_tree.to_path_buf();
             let output_dir_ = output_dir.to_path_buf();
             let sources_enabled = sources.is_none();
-            let tar_backend = configured_tar_backend();
+            let tar_backend = TarBackend::from_env();
             let filename = tokio::task::spawn_blocking(move || {
                 uv_build_backend::build_source_dist(
                     &source_tree,
