@@ -36,7 +36,7 @@ use uv_python_types::{
     ImplementationName, LenientImplementationName, Prefix, PythonDownloadRequest,
     PythonInstallationKey, PythonRequest, PythonVariant, Target, VersionRequest,
 };
-use which::which;
+use which::which_all;
 
 #[cfg(windows)]
 use windows::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_CANT_ACCESS_FILE, WIN32_ERROR};
@@ -891,8 +891,14 @@ impl Interpreter {
                 }
                 // ... check in `PATH`. The name we find here does not need to be the name we
                 // install, so we can find `foopython` here which got installed as `python`.
-                if let Ok(executable) = which(name) {
-                    return self.matches_request(&PythonRequest::File(executable), cache);
+                for executable in which_all(name).into_iter().flatten() {
+                    match Self::query(&executable, cache) {
+                        Ok(_) => {
+                            return self.matches_request(&PythonRequest::File(executable), cache);
+                        }
+                        Err(err) if err.is_critical() => return false,
+                        Err(_) => {}
+                    }
                 }
                 false
             }
@@ -1060,6 +1066,24 @@ pub enum Error {
     },
     #[error("Failed to write to cache")]
     Encode(#[from] rmp_serde::encode::Error),
+}
+
+impl Error {
+    /// Return whether a query failure prevents searching for another Python installation.
+    /// Missing interpreters in active virtual environments also require source-specific handling.
+    pub fn is_critical(&self) -> bool {
+        match self {
+            Self::Encode(_) | Self::Io(_) | Self::SpawnFailed { .. } => true,
+            Self::BrokenLink(_)
+            | Self::NotFound(_)
+            | Self::PermissionDenied { .. }
+            | Self::UnexpectedResponse(_)
+            | Self::StatusCode(_)
+            | Self::QueryScript { .. } => false,
+            #[cfg(windows)]
+            Self::CorruptWindowsPackage { .. } => false,
+        }
+    }
 }
 
 impl uv_errors::Hinted for Error {

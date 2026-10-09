@@ -32,8 +32,7 @@ use crate::virtualenv_discovery::virtualenv_from_working_dir;
 #[cfg(windows)]
 use crate::windows_registry::{WindowsPython, registry_pythons};
 use uv_python_interpreter::{
-    BrokenLink, Interpreter, InterpreterError, StatusCodeError, UnexpectedResponseError,
-    VirtualEnvError, virtualenv_python_executable,
+    Interpreter, InterpreterError, VirtualEnvError, virtualenv_python_executable,
 };
 use uv_python_managed::ManagedPythonInstallations;
 use uv_python_managed::PythonMinorVersionLink;
@@ -826,54 +825,24 @@ impl Error {
         match self {
             // When querying the Python interpreter fails, we will only raise errors that demonstrate that something is broken
             // If the Python interpreter returned a bad response, we'll continue searching for one that works
-            Self::Query(err, _, source) => match &**err {
-                InterpreterError::Encode(_)
-                | InterpreterError::Io(_)
-                | InterpreterError::SpawnFailed { .. } => true,
-                InterpreterError::UnexpectedResponse(UnexpectedResponseError { path, .. })
-                | InterpreterError::StatusCode(StatusCodeError { path, .. }) => {
-                    debug!(
-                        "Skipping bad interpreter at `{}` from {source}: {err}",
-                        path.display()
-                    );
-                    false
+            Self::Query(err, path, source) => {
+                if err.is_critical() {
+                    return true;
                 }
-                InterpreterError::QueryScript { path, err } => {
-                    debug!(
-                        "Skipping bad interpreter at `{}` from {source}: {err}",
-                        path.display()
-                    );
-                    false
+                if matches!(
+                    &**err,
+                    InterpreterError::NotFound(_) | InterpreterError::BrokenLink(_)
+                ) && matches!(source, PythonSource::ActiveEnvironment)
+                    && uv_fs::is_virtualenv_executable(path)
+                {
+                    return true;
                 }
-                #[cfg(windows)]
-                InterpreterError::CorruptWindowsPackage { path, err } => {
-                    debug!(
-                        "Skipping bad interpreter at `{}` from {source}: {err}",
-                        path.display()
-                    );
-                    false
-                }
-                InterpreterError::PermissionDenied { path, err } => {
-                    debug!(
-                        "Skipping unexecutable interpreter at `{}` from {source}: {err}",
-                        path.display()
-                    );
-                    false
-                }
-                InterpreterError::NotFound(path)
-                | InterpreterError::BrokenLink(BrokenLink { path, .. }) => {
-                    // If the interpreter is from an active, valid virtual environment, we should
-                    // fail because it's broken
-                    if matches!(source, PythonSource::ActiveEnvironment)
-                        && uv_fs::is_virtualenv_executable(path)
-                    {
-                        true
-                    } else {
-                        trace!("Skipping missing interpreter at `{}`", path.display());
-                        false
-                    }
-                }
-            },
+                debug!(
+                    "Skipping bad interpreter at `{}` from {source}: {err}",
+                    path.display()
+                );
+                false
+            }
             Self::VirtualEnv(VirtualEnvError::MissingPyVenvCfg(path)) => {
                 trace!("Skipping broken virtualenv at `{}`", path.display());
                 false

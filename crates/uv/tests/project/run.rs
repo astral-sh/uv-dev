@@ -202,6 +202,67 @@ fn run_with_python_executable_wrapper_reuses_environment() -> Result<()> {
 
 #[test]
 #[cfg(unix)]
+fn run_with_broken_first_python_wrapper_reuses_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let python_dir = context.temp_dir.child("python-bin");
+    python_dir.create_dir_all()?;
+    let wrapper = python_dir.child("requested-python");
+    wrapper.write_str(&formatdoc! {r#"
+        #!/bin/sh
+        exec "{python}" "$@"
+    "#, python = context.python_versions[0].1.display()})?;
+    fs_err::set_permissions(wrapper.path(), Permissions::from_mode(0o755))?;
+
+    let broken_dir = context.temp_dir.child("broken-bin");
+    broken_dir.create_dir_all()?;
+    let broken_wrapper = broken_dir.child("requested-python");
+    broken_wrapper.write_str("#!/bin/sh\nexit 1\n")?;
+    fs_err::set_permissions(broken_wrapper.path(), Permissions::from_mode(0o755))?;
+    let search_path = std::env::join_paths([broken_dir.path(), python_dir.path()])?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("-p").arg("requested-python").arg("python").arg("--version")
+        .env(EnvVars::PATH, &search_path)
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, &search_path), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    let retained = context.temp_dir.child(".venv/keep");
+    retained.write_str("keep")?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("-p").arg("requested-python").arg("python").arg("--version")
+        .env(EnvVars::PATH, &search_path)
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, &search_path), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    retained.assert(predicate::path::exists());
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
 fn run_with_python_executable_name() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
