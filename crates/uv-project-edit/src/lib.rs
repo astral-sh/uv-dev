@@ -1701,12 +1701,12 @@ fn add_dependencies(
     let mut has_updates = false;
     for (requirement, _) in requirements {
         let key = (requirement.name.clone(), requirement.marker);
-        let matches = existing.get(&key).into_iter().flatten().collect::<Vec<_>>();
+        let matches = existing.get(&key).map_or(&[][..], Vec::as_slice);
         if matches.len() > 1 {
             return Err(Error::Ambiguous {
                 package_name: requirement.name.clone(),
                 requirements: matches
-                    .into_iter()
+                    .iter()
                     .map(|(_, requirement)| requirement.clone())
                     .collect(),
             });
