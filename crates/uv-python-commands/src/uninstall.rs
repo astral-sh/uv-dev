@@ -342,7 +342,7 @@ async fn do_uninstall(
 }
 
 /// Limit simultaneous recursive removals and their open filesystem handles.
-const MAX_CONCURRENT_REMOVALS: usize = 16;
+const MAX_CONCURRENT_REMOVALS: usize = 8;
 
 fn removal_tasks(
     installations: &BTreeSet<ManagedPythonInstallation>,
