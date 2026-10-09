@@ -36,11 +36,11 @@ use uv_cli_output::printer::Printer;
 use uv_cli_report::install::{PackageChangesReport, SchemaReport};
 use uv_cli_settings::{FrozenSource, LockCheck, LockedSource, ResolverInstallerSettings};
 use uv_cli_types::exit::ExitStatus;
-use uv_lock_command::lock::{LockMode, LockOperation, LockResult};
 use uv_operations::installation::{Changelog, Modifications};
 use uv_operations::loggers::{DefaultInstallLogger, DefaultResolveLogger};
 use uv_project::discovery::DiscoveredProject;
 use uv_project::install_target::{InstallTarget, PackageSelection};
+use uv_project::lock_operation::{LockMode, LockOperation, LockResult};
 use uv_project::lock_target::LockTarget;
 use uv_project::lockfile::FrozenWorkspace;
 use uv_project::{

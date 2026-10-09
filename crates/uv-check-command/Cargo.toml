@@ -24,7 +24,6 @@ uv-client = { workspace = true }
 uv-configuration = { workspace = true }
 uv-dispatch = { workspace = true }
 uv-fs = { workspace = true }
-uv-lock-command = { workspace = true }
 uv-normalize = { workspace = true }
 uv-operations = { workspace = true }
 uv-pep440 = { workspace = true }
