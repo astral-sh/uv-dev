@@ -401,7 +401,7 @@ impl<'a> IndexLocations {
             .iter()
             .chain(self.simple_indexes())
             .chain(self.default_index())
-            .chain(source_indexes)
+            .chain(source_indexes.iter().filter(|_| !self.no_index))
         {
             if is_same_index(index.url(), url) {
                 match index.format {
@@ -719,6 +719,19 @@ mod tests {
         assert!(!locations.is_flat_index(&url, &[]));
         let locations = IndexLocations::new(vec![], vec![flat], true);
         assert!(locations.is_flat_index(&url, &[]));
+        Ok(())
+    }
+
+    #[test]
+    fn no_index_ignores_source_definitions_for_flat_classification() -> Result<(), Box<dyn Error>> {
+        let simple = Index::from_str("source=https://example.com/packages")?;
+        let url = simple.url().clone();
+        let mut flat = simple.clone();
+        flat.format = IndexFormat::Flat;
+        let locations = IndexLocations::new(vec![simple.clone()], vec![flat.clone()], true);
+        assert!(locations.is_flat_index(&url, &[simple]));
+        let locations = IndexLocations::new(vec![], vec![], true);
+        assert!(!locations.is_flat_index(&url, &[flat]));
         Ok(())
     }
 
