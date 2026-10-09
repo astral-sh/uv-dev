@@ -1748,7 +1748,12 @@ fn remove_dependency_batch(
         if let Some(index) = matched {
             removed[*index] = true;
             if let Some(existing) = dependency.decor().prefix().and_then(|raw| raw.as_str()) {
-                prefix.push_str(existing);
+                // Transfer comments, leaving indentation to the surviving item's prefix.
+                if existing.contains('#') {
+                    prefix.push_str(existing.trim_end_matches([' ', '\t']));
+                } else if existing.contains(['\r', '\n']) && !prefix.ends_with(['\r', '\n']) {
+                    prefix.push('\n');
+                }
             }
         } else if !prefix.is_empty() {
             if let Some(existing) = dependency.decor().prefix().and_then(|raw| raw.as_str()) {
@@ -1997,6 +2002,36 @@ mod test {
     use uv_normalize::{ExtraName, GroupName, PackageName};
     use uv_pep508::{Requirement, RequirementOrigin};
     use uv_workspace::pyproject::DependencyType;
+
+    #[test]
+    fn remove_batch_inline_indentation_does_not_grow_with_batch_size() -> Result<()> {
+        let entries = (0..1600)
+            .map(|index| format!("\"package-{index}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut document = PyProjectTomlMut::from_toml(
+            &format!("[project]\ndependencies = [{entries}]\n"),
+            DependencyTarget::PyProjectToml,
+        )?;
+        let names = (0..800)
+            .map(|index| format!("package-{index}").parse())
+            .collect::<Result<Vec<PackageName>, _>>()?;
+        document.remove_dependencies(&names, &DependencyType::Production)?;
+        let output = document.to_string();
+        assert!(
+            output.len() < 20_000,
+            "separator spaces must not accumulate as indentation"
+        );
+        let parsed: DocumentMut = output.parse()?;
+        assert_eq!(
+            parsed["project"]["dependencies"]
+                .as_array()
+                .expect("dependencies")
+                .len(),
+            800
+        );
+        Ok(())
+    }
 
     #[test]
     fn split() {

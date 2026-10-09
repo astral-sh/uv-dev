@@ -15895,3 +15895,34 @@ async fn add_malware_detected() {
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
 }
+
+#[test]
+fn remove_batch_inline_array_retains_indentation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a", "b", "c", "d"]
+    "#})?;
+    context
+        .remove()
+        .args(["a", "b", "--frozen"])
+        .assert()
+        .success();
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+     "c",
+     "d",
+    ]
+    "#);
+    Ok(())
+}
