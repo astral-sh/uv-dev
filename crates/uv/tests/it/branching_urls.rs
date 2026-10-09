@@ -645,6 +645,7 @@ fn branching_urls_of_different_sources_disjoint() -> Result<()> {
     ]
 
     [options]
+    config-settings-provenance = 1
     config-settings-digest = "0965f2a258462618"
     config-settings-packages = ["iniconfig"]
     exclude-newer = "2024-03-25T00:00:00Z"

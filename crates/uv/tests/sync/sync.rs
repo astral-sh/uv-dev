@@ -10939,6 +10939,7 @@ fn sync_dynamic_extra() -> Result<()> {
             requires-python = ">=3.12"
 
             [options]
+            config-settings-provenance = 1
             config-settings-digest = "3e86bc62d7d129ea"
             config-settings-packages = ["project"]
             exclude-newer = "2024-03-25T00:00:00Z"
@@ -12338,6 +12339,7 @@ fn sync_stale_egg_info() -> Result<()> {
             requires-python = ">=3.13"
 
             [options]
+            config-settings-provenance = 1
             config-settings-digest = "32fb298e791cdd8a"
             config-settings-packages = ["member", "root"]
             exclude-newer = "2024-03-25T00:00:00Z"
@@ -12529,6 +12531,7 @@ fn sync_git_repeated_member_dynamic_metadata() -> Result<()> {
             requires-python = ">=3.13"
 
             [options]
+            config-settings-provenance = 1
             config-settings-digest = "bfc5083d21b4234b"
             config-settings-packages = ["package"]
             exclude-newer = "2024-03-25T00:00:00Z"
@@ -13160,6 +13163,7 @@ fn lock_git_poetry_path_dependency() -> Result<()> {
             requires-python = ">=3.13"
 
             [options]
+            config-settings-provenance = 1
             config-settings-digest = "8f5896a7a4372370"
             config-settings-packages = ["root"]
             exclude-newer = "2024-03-25T00:00:00Z"
@@ -13299,6 +13303,7 @@ fn sync_git_metadata_archive_dependency() -> Result<()> {
             requires-python = ">=3.13"
 
             [options]
+            config-settings-provenance = 1
             config-settings-digest = "8f5896a7a4372370"
             config-settings-packages = ["root"]
             exclude-newer = "2024-03-25T00:00:00Z"
@@ -14931,6 +14936,7 @@ fn sync_build_constraints() -> Result<()> {
             requires-python = ">=3.12"
 
             [options]
+            config-settings-provenance = 1
             config-settings-digest = "a02e9a06363118d5"
             config-settings-packages = ["json-merge-patch"]
             exclude-newer = "2025-03-24T19:00:00Z"
