@@ -136,13 +136,15 @@ pub async fn metadata(
                             }
                             ScriptInterpreter::Environment(environment) => {
                                 let interpreter = environment.into_interpreter();
-                                let base_interpreter =
-                                    CachedEnvironment::base_interpreter(&interpreter, cache)?;
-                                let request = PythonRequest::File(
-                                    base_interpreter.sys_executable().to_path_buf(),
-                                );
-                                script_interpreter_request =
-                                    Some(RequestedInterpreter::new(base_interpreter, request));
+                                if sync.is_some() {
+                                    let base_interpreter =
+                                        CachedEnvironment::base_interpreter(&interpreter, cache)?;
+                                    let request = PythonRequest::File(
+                                        base_interpreter.sys_executable().to_path_buf(),
+                                    );
+                                    script_interpreter_request =
+                                        Some(RequestedInterpreter::new(base_interpreter, request));
+                                }
                                 interpreter
                             }
                         };

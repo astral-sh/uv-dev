@@ -3429,3 +3429,81 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
 
     Ok(())
 }
+
+/// Reading script metadata can use a copied environment after its base executable is removed.
+#[cfg(all(target_os = "linux", feature = "test-python"))]
+#[test]
+fn workspace_metadata_script_active_without_base_executable() -> Result<()> {
+    use std::process::Command;
+
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    let python = &context.python_versions[0].1;
+    let base = Command::new(python)
+        .args(["-c", "import sys; print(sys.base_prefix)"])
+        .output()?
+        .assert()
+        .success();
+    let base = String::from_utf8(base.get_output().stdout.clone())?;
+    let active = context.temp_dir.child("active");
+    Command::new(python)
+        .args(["-m", "venv", "--copies", "--without-pip"])
+        .arg(active.path())
+        .assert()
+        .success();
+    let missing_base = context.temp_dir.child("missing-base");
+    missing_base.child("bin").create_dir_all()?;
+    fs_err::os::unix::fs::symlink(
+        Path::new(base.trim()).join("lib"),
+        missing_base.child("lib"),
+    )?;
+    let configuration = active.child("pyvenv.cfg");
+    let contents = fs_err::read_to_string(configuration.path())?;
+    configuration.write_str(
+        &contents
+            .lines()
+            .map(|line| {
+                if line.starts_with("home = ") {
+                    format!("home = {}", missing_base.child("bin").path().display())
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    let output = context
+        .workspace_metadata()
+        .args([
+            "--script",
+            "script.py",
+            "--active",
+            "--offline",
+            "--no-cache",
+        ])
+        .env(EnvVars::VIRTUAL_ENV, active.path())
+        .output()?
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["environment"], @r#"
+        {
+          "python": {
+            "implementation": "cpython",
+            "path": "[TEMP_DIR]/active/[BIN]/[PYTHON]",
+            "version": "3.12.[X]"
+          },
+          "root": "[TEMP_DIR]/active"
+        }
+        "#);
+    });
+    Ok(())
+}
