@@ -8,8 +8,7 @@ use std::sync::{
 
 use assert_fs::fixture::{FileWriteStr, PathChild};
 use uv_platform::{Arch, Os, Platform};
-use uv_python_managed::{downloads::ManagedPythonDownloadList, platform_key_from_env};
-use uv_python_types::{PythonDownloadRequest, PythonRequest};
+use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 
 use anyhow::Result;
@@ -525,33 +524,16 @@ fn python_list_downloads() {
 }
 
 #[test]
-fn python_list_implicit_ndjson_source_preserves_non_cpython_downloads() {
+fn python_list_implicit_ndjson_source_preserves_non_cpython_downloads() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
-        .with_filtered_latest_python_versions();
+        .with_collapsed_whitespace();
 
-    let download_list = ManagedPythonDownloadList::new_only_embedded().unwrap();
-    let download_request = PythonDownloadRequest::from_request(&PythonRequest::parse("3.10"))
-        .unwrap()
-        .fill()
-        .unwrap();
-    let download = download_list.find(&download_request).unwrap();
-
-    let version = if let Some(build) = download.build() {
-        format!("{}+{build}", download.key().version())
-    } else {
-        download.key().version().to_string()
-    };
-    let sha256 = download.sha256().unwrap().as_str();
+    let platform = Platform::from_env()?.as_cargo_dist_triple();
     let manifest = context.temp_dir.child("python-downloads.ndjson");
-    manifest
-        .write_str(&format!(
-            "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"install_only\"}}]}}\n",
-            download.url(),
-            Platform::from_env().unwrap().as_cargo_dist_triple(),
-            sha256,
-        ))
-        .unwrap();
+    manifest.write_str(&format!(
+        r#"{{"version":"3.10.99+20990101","artifacts":[{{"url":"https://example.com/cpython-3.10.99.tar.gz","platform":"{platform}","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}}]}}"#,
+    ))?;
 
     uv_snapshot!(context.filters(), context
         .python_list()
@@ -564,11 +546,12 @@ fn python_list_implicit_ndjson_source_preserves_non_cpython_downloads() {
         ), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM]    <download available>
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
+    cpython-3.10.99-[PLATFORM] <download available>
+    pypy-3.10.16-[PLATFORM] <download available>
+    graalpy-3.10.0-[PLATFORM] <download available>
 
     ");
+    Ok(())
 }
 
 #[tokio::test]
