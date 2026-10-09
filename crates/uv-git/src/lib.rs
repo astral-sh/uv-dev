@@ -1,5 +1,5 @@
 pub use crate::credentials::{store_credentials, store_credentials_from_url};
-pub use crate::git::{GIT, GIT_LFS, GitError};
+pub use crate::git::{GIT, GIT_LFS, GitError, supports_relative_worktrees};
 pub use crate::resolver::{
     GitFetchSettings, GitResolver, GitResolverError, RepositoryReference,
     ResolvedRepositoryReference,

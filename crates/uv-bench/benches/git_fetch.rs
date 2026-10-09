@@ -16,7 +16,7 @@ use criterion::{
     BatchSize, BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main,
     measurement::WallTime,
 };
-use uv_git::{Fetch, GitFetchSettings, GitResolver};
+use uv_git::{Fetch, GitFetchSettings, GitResolver, supports_relative_worktrees};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl};
 use uv_redacted::DisplaySafeUrl;
 
@@ -104,6 +104,10 @@ fn git_fetch(criterion: &mut Criterion<WallTime>) {
                 fetch(&runtime, &precise, cache.path(), settings);
                 bencher.iter(|| black_box(fetch(&runtime, &git, cache.path(), settings)));
             });
+        }
+
+        if !supports_relative_worktrees() {
+            continue;
         }
 
         // A long-lived CI cache accumulates checkouts as Git dependencies are upgraded.

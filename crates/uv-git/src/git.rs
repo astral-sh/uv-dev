@@ -76,7 +76,7 @@ pub static GIT: LazyLock<Result<ProcessBuilder, GitError>> = LazyLock::new(|| {
 });
 
 /// Whether Git can create worktrees that remain valid when the cache is moved.
-pub(crate) fn supports_relative_worktrees() -> bool {
+pub fn supports_relative_worktrees() -> bool {
     static SUPPORTED: LazyLock<bool> = LazyLock::new(|| {
         let Ok(mut git) = GIT.as_ref().cloned() else {
             return false;
@@ -524,32 +524,25 @@ impl GitRemote {
             fetch(&mut db.repo, &self.url, reference, settings)
                 .with_context(|| format!("failed to fetch into: {}", into.user_display()))?;
 
-            let resolved_commit_hash = match locked_rev {
-                Some(rev) => db.contains(rev).then_some(rev),
-                None => reference.resolve(&db.repo).ok(),
-            };
-
-            if let Some(rev) = resolved_commit_hash {
-                if with_lfs {
-                    let lfs_ready = fetch_lfs(
-                        &db.repo,
-                        &self.url,
-                        &rev,
-                        settings.disable_ssl,
-                        settings.offline,
-                        None,
-                    )
-                    .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
-                    db = db.with_lfs_ready(Some(lfs_ready));
-                }
-                db.remote = self;
-                return Ok((db, rev));
+            // An opened database can back existing worktrees, so resolution errors must not replace it.
+            let rev = reference.resolve(&db.repo)?;
+            if with_lfs {
+                let lfs_ready = fetch_lfs(
+                    &db.repo,
+                    &self.url,
+                    &rev,
+                    settings.disable_ssl,
+                    settings.offline,
+                    None,
+                )
+                .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
+                db = db.with_lfs_ready(Some(lfs_ready));
             }
+            db.remote = self;
+            return Ok((db, rev));
         }
 
-        // Otherwise start from scratch to handle corrupt git repositories.
-        // After our fetch (which is interpreted as a clone now) we do the same
-        // resolution to figure out what we cloned.
+        // Start from scratch when no usable database could be opened, then resolve the clone.
         match fs_err::remove_dir_all(into) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
