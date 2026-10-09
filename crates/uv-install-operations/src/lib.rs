@@ -19,7 +19,7 @@ use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, DistributionMetadata,
     ExtraBuildRequires, ExtraBuildVariables, IndexLocations, InstalledDist, InstalledDistKind,
     InstalledMetadata, InstalledVersion, LocalDist, Name, PackageConfigSettings, Resolution,
-    VersionOrUrlRef,
+    ResolvedDist, VersionOrUrlRef,
 };
 use uv_fs::{CWD, Simplified, is_same_file_allow_missing, normalize_path_under};
 use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
@@ -446,14 +446,26 @@ impl InstallationPlan {
         // the actual destination after wheel preparation.
         let replacement_versions = resolution
             .distributions()
-            .filter_map(|dist| dist.version().map(|version| (dist.name(), version)))
+            .filter_map(|dist| {
+                let is_source = match dist {
+                    ResolvedDist::Installable { dist, .. } => {
+                        matches!(dist.as_ref(), Dist::Source(_))
+                    }
+                    ResolvedDist::Installed { .. } => false,
+                };
+                dist.version()
+                    .map(|version| (dist.name(), (version, is_source)))
+            })
             .collect::<BTreeMap<_, _>>();
         validate_replacement_records(extraneous.iter().chain(&reinstalls), |dist_info| {
             Ok(replacement_versions
                 .get(dist_info.name())
-                .is_some_and(|version| {
+                .is_some_and(|(version, is_source)| {
+                    let public_version = (*version).clone().without_local();
                     *version != dist_info.version()
-                        && (*version).clone().without_local() != *dist_info.version()
+                        && public_version != *dist_info.version()
+                        && (!is_source
+                            || public_version != dist_info.version().clone().without_local())
                 }))
         })?;
 

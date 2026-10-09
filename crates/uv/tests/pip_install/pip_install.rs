@@ -1919,6 +1919,74 @@ fn reinstall_incomplete_different_local_metadata_directory() -> Result<()> {
     Ok(())
 }
 
+/// An sdist's public filename version can build the local version already installed.
+#[test]
+fn reinstall_incomplete_sdist_local_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let mut archive = Vec::new();
+    write_tar_gz(
+        &mut archive,
+        &[
+            (
+                "demo-1.0.0/pyproject.toml",
+                indoc! {r#"
+            [project]
+            name = "demo"
+            dynamic = ["version"]
+            requires-python = ">=3.12"
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#},
+            ),
+            (
+                "demo-1.0.0/backend.py",
+                indoc! {r#"
+            from pathlib import Path
+            from zipfile import ZipFile
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                filename = "demo-1.0.0+local-py3-none-any.whl"
+                with ZipFile(Path(wheel_directory) / filename, "w") as wheel:
+                    wheel.writestr("demo/__init__.py", "__version__ = '1.0.0+local'\n")
+                    wheel.writestr("demo-1.0.0+local.dist-info/METADATA", "Metadata-Version: 2.3\nName: demo\nVersion: 1.0.0+local\n")
+                    wheel.writestr("demo-1.0.0+local.dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+                    wheel.writestr("demo-1.0.0+local.dist-info/RECORD", "")
+                return filename
+        "#},
+            ),
+        ],
+    )?;
+    let sdist = context.temp_dir.child("demo-1.0.0.tar.gz");
+    sdist.write_binary(&archive)?;
+    context
+        .pip_install()
+        .arg("demo==1.0.0")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(context.temp_dir.path())
+        .assert()
+        .success();
+    let record = context
+        .site_packages()
+        .join("demo-1.0.0+local.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg("demo==1.0.0").arg("--no-index").arg("--find-links").arg(context.temp_dir.path()).arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    warning: Failed to uninstall package at `[SITE_PACKAGES]/demo-1.0.0+local.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ demo==1.0.0+local
+    ");
+    assert!(record.is_file());
+    context.assert_installed("demo", "1.0.0+local");
+    Ok(())
+}
+
 /// A failed filesystem lookup identifies the affected uninstall record.
 #[test]
 #[cfg(unix)]
