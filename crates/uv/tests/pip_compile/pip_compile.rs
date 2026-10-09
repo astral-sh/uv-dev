@@ -5601,9 +5601,9 @@ fn include_build_dependencies_source_distribution() -> Result<()> {
     Ok(())
 }
 
-/// Discover dynamic backend requirements even when static metadata or cached metadata is present.
+/// Discover dynamic backend requirements when project metadata is static.
 #[test]
-fn include_build_dependencies_dynamic_hook_cached() -> Result<()> {
+fn include_build_dependencies_dynamic_hook_static_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::empty();
     let project = context.temp_dir.child("project");
@@ -5636,7 +5636,7 @@ fn include_build_dependencies_dynamic_hook_cached() -> Result<()> {
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("./project")?;
 
-    // Populate the source metadata cache before checking that backend requirements are rediscovered.
+    // Repeated static-metadata reads must rediscover the backend requirements.
     context
         .pip_compile()
         .arg("requirements.in")
@@ -5645,7 +5645,7 @@ fn include_build_dependencies_dynamic_hook_cached() -> Result<()> {
         .assert()
         .success();
 
-    // The second invocation must discover the same requirements from cached source metadata.
+    // Static project metadata does not describe the backend requirement hook.
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("requirements.in")
         .arg("--index-url").arg(server.index_url()), @r"
@@ -20273,5 +20273,374 @@ fn overrides_preserve_alternative_optional_extras() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
+    Ok(())
+}
+
+/// Backend requirements survive reuse of the frontend's default setuptools resolution.
+#[test]
+fn include_build_dependencies_default_requirements_cached_resolution() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::empty();
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = ["setuptools>=40.8.0"]
+        build-backend = "backend"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        dynamic = ["version"]
+    "#})?;
+    context.temp_dir.child("project/backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return []
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            info = Path(metadata_directory) / "local_project-1.0.0.dist-info"
+            info.mkdir()
+            (info / "METADATA").write_text("Metadata-Version: 2.3\nName: local-project\nVersion: 1.0.0\n")
+            return info.name
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project")?;
+    context
+        .temp_dir
+        .child("build-constraints.txt")
+        .write_str("setuptools==69.0.2")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies", "--no-header", "--build-constraint", "build-constraints.txt"])
+        .arg("--index-url").arg(server.index_url()), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ./project
+        # via -r requirements.in
+    setuptools==69.0.2
+        # via -r build-constraints.txt
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Backend-generated project metadata takes the cached-metadata branch on the second invocation.
+#[test]
+fn include_build_dependencies_dynamic_metadata_cached() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "cached-dynamic-build-requirements"
+        [root]
+        requires = ["build-helper"]
+        [expected]
+        satisfiable = true
+        [packages.build-helper.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        dynamic = ["version"]
+    "#})?;
+    context.temp_dir.child("project/backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return ["build-helper==1.0.0"]
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            marker = Path(__file__).with_name("metadata-called")
+            assert not marker.exists(), "cached metadata must be reused"
+            marker.touch()
+            info = Path(metadata_directory) / "local_project-1.0.0.dist-info"
+            info.mkdir()
+            (info / "METADATA").write_text("Metadata-Version: 2.3\nName: local-project\nVersion: 1.0.0\n")
+            return info.name
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project")?;
+    context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies", "--no-header"])
+        .arg("--index-url").arg(server.index_url()), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    build-helper==1.0.0
+    ./project
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
+    ");
+    // Cached directory metadata also enforces the backend execution policy.
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies", "--no-build", "--no-header"])
+        .arg("--index-url").arg(server.index_url()), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Building source distributions for `local-project` is disabled
+    ");
+    Ok(())
+}
+
+/// Replacing a source release with a wheel removes its backend requirements from the output.
+#[test]
+fn include_build_dependencies_removes_replaced_source_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "replace-source-build-requirements"
+        [root]
+        requires = ["old-backend"]
+        [expected]
+        satisfiable = true
+        [packages.old-backend.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let (filename, wheel) = generate_wheel(
+        &PackageName::from_str("alpha")?,
+        &Version::from_str("1.0.0")?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    links.child(filename).write_binary(&wheel)?;
+    let mut source = Vec::new();
+    write_tar_gz(
+        &mut source,
+        &[
+            (
+                "alpha-2.0.0/pyproject.toml",
+                indoc! {r#"
+            [build-system]
+            requires = ["old-backend==1.0.0"]
+            build-backend = "backend"
+            backend-path = ["."]
+            [project]
+            name = "alpha"
+            version = "2.0.0"
+        "#},
+            ),
+            (
+                "alpha-2.0.0/backend.py",
+                "def get_requires_for_build_wheel(config_settings=None):\n    return []\n",
+            ),
+        ],
+    )?;
+    links.child("alpha-2.0.0.tar.gz").write_binary(&source)?;
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = ["alpha<2"]
+        build-backend = "backend"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+    "#})?;
+    context
+        .temp_dir
+        .child("project/backend.py")
+        .write_str("def get_requires_for_build_wheel(config_settings=None):\n    return []\n")?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("alpha\n./project\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies", "--no-header", "--find-links", "links"])
+        .arg("--index-url").arg(server.index_url()), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    alpha==1.0.0
+        # via -r requirements.in
+    ./project
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Resolved 3 packages in [TIME]
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Cached local-archive metadata survives CI pruning when backend probing needs its source tree.
+#[test]
+fn include_build_dependencies_pruned_local_archive() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let marker = context.temp_dir.child("backend-imported");
+    let source = generate_source_archive(
+        &PackageName::from_str("source-package")?,
+        &Version::from_str("1.0.0")?,
+        "",
+        Some(marker.path()),
+    )?;
+    context
+        .temp_dir
+        .child("source_package-1.0.0.tar.gz")
+        .write_binary(&source)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./source_package-1.0.0.tar.gz")?;
+    context
+        .pip_compile()
+        .arg("requirements.in")
+        .assert()
+        .success();
+    assert!(marker.path().exists());
+    fs_err::remove_file(marker.path())?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies", "--no-build", "--no-header"]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Building source distributions for `source-package` is disabled
+    ");
+    assert!(!marker.path().exists());
+    context.prune().arg("--ci").assert().success();
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies", "--no-header"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ./source_package-1.0.0.tar.gz
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert!(marker.path().exists());
+    Ok(())
+}
+
+/// Retained URL metadata restores its pruned source before running a build requirement hook.
+#[tokio::test]
+async fn include_build_dependencies_pruned_url_archive() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let marker = context.temp_dir.child("backend-imported");
+    let source = generate_source_archive(
+        &PackageName::from_str("source-package")?,
+        &Version::from_str("1.0.0")?,
+        "",
+        Some(marker.path()),
+    )?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/source_package-1.0.0.tar.gz"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "max-age=3600")
+                .set_body_bytes(source),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!(
+            "source-package @ {}/source_package-1.0.0.tar.gz",
+            server.uri()
+        ))?;
+    context
+        .pip_compile()
+        .arg("requirements.in")
+        .assert()
+        .success();
+    assert!(marker.path().exists());
+    fs_err::remove_file(marker.path())?;
+    context.prune().arg("--ci").assert().success();
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies", "--no-header"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    source-package @ http://[LOCALHOST]/source_package-1.0.0.tar.gz
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert!(marker.path().exists());
+    Ok(())
+}
+
+/// Static source metadata cannot bypass the policy forbidding backend execution.
+#[test]
+fn include_build_dependencies_static_archive_build_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let mut source = Vec::new();
+    write_tar_gz(
+        &mut source,
+        &[
+            (
+                "source_package-1.0.0/pyproject.toml",
+                indoc! {r#"
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+            [project]
+            name = "source-package"
+            version = "1.0.0"
+        "#},
+            ),
+            (
+                "source_package-1.0.0/backend.py",
+                "raise RuntimeError('backend must not be imported')\n",
+            ),
+        ],
+    )?;
+    context
+        .temp_dir
+        .child("source_package-1.0.0.tar.gz")
+        .write_binary(&source)?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./source_package-1.0.0.tar.gz")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies", "--no-build", "--no-header"]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Building source distributions for `source-package` is disabled
+    ");
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies", "--only-binary", "source-package", "--no-header"]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Building source distributions for `source-package` is disabled
+    ");
     Ok(())
 }

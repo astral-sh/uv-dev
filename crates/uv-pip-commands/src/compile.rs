@@ -8,7 +8,7 @@ use std::str::FromStr;
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
 use uv_cache::Cache;
@@ -649,7 +649,7 @@ pub async fn pip_compile(
     };
 
     if let Some((
-        mut requirements,
+        requirements,
         constraints,
         overrides,
         override_dependencies,
@@ -670,10 +670,13 @@ pub async fn pip_compile(
             &build_dispatch,
             concurrency.downloads_semaphore.clone(),
         );
-        let mut seen_distributions = FxHashSet::default();
-        let mut seen_requirements = FxHashSet::default();
+        let mut requirements_by_source = FxHashMap::default();
+        let mut previous_requirements = FxHashSet::default();
+        let mut requirement_states = Vec::new();
 
         loop {
+            let mut active_requirements = Vec::new();
+            let mut active_seen = FxHashSet::default();
             for distribution in resolution.distributions() {
                 let ResolvedDist::Installable { dist, .. } = distribution else {
                     continue;
@@ -681,31 +684,44 @@ pub async fn pip_compile(
                 let Dist::Source(source) = dist.as_ref() else {
                     continue;
                 };
-                if !seen_distributions.insert(source.distribution_id()) {
-                    continue;
+                let id = source.distribution_id();
+                if !requirements_by_source.contains_key(&id) {
+                    database
+                        .resolve_build_requirements(source, hasher.archive_policy(source))
+                        .await?;
+                    requirements_by_source
+                        .insert(id.clone(), build_dispatch.take_build_requirements().await);
                 }
-
-                database
-                    .resolve_build_requirements(source, hasher.archive_policy(source))
-                    .await?;
+                if let Some(build_requirements) = requirements_by_source.get(&id) {
+                    active_requirements.extend(
+                        build_requirements
+                            .iter()
+                            .filter(|requirement| active_seen.insert((*requirement).clone()))
+                            .cloned()
+                            .map(UnresolvedRequirementSpecification::from),
+                    );
+                }
             }
 
-            let previous_len = requirements.len();
-            requirements.extend(
-                build_dispatch
-                    .take_build_requirements()
-                    .await
-                    .into_iter()
-                    .filter(|requirement| seen_requirements.insert(requirement.clone()))
-                    .map(UnresolvedRequirementSpecification::from),
-            );
-
-            if requirements.len() == previous_len {
+            // Requirements belong to selected sources; replaced source releases cannot retain
+            // their backend requirements in the next resolution.
+            if active_seen == previous_requirements {
                 break;
             }
+            if requirement_states.contains(&active_seen) {
+                return Err(anyhow!(
+                    "Build dependency requirements do not converge across selected source distributions"
+                ));
+            }
+            requirement_states.push(previous_requirements);
+            previous_requirements = active_seen;
 
             resolution = match uv_resolve_operations::resolve(
-                requirements.clone(),
+                requirements
+                    .iter()
+                    .cloned()
+                    .chain(active_requirements)
+                    .collect(),
                 constraints.clone(),
                 overrides.clone(),
                 override_dependencies.clone(),

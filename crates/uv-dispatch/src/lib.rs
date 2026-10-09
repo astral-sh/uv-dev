@@ -688,6 +688,18 @@ impl BuildContext for BuildDispatch<'_> {
         )
         .boxed_local()
         .await?;
+        if let Some(build_requirements) = &self.build_requirements {
+            // Backend discovery also runs when the default resolution is reused from its cache.
+            let mut build_requirements = build_requirements.lock().await;
+            build_requirements.extend(builder.build_requirements().cloned());
+            build_requirements.extend(
+                builder
+                    .build_requirements()
+                    .filter_map(|requirement| self.constraints.get(&requirement.name))
+                    .flatten()
+                    .cloned(),
+            );
+        }
         Ok(builder)
     }
 

@@ -851,6 +851,22 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             Ok(Some(metadata)) => {
                 if metadata.matches(source.name(), source.version()) {
                     debug!("Using cached metadata for: {source}");
+                    let revision =
+                        if self.resolve_build_requirements && !source_dist_entry.path().is_dir() {
+                            self.heal_url_revision(
+                                source,
+                                ext,
+                                url,
+                                index,
+                                &source_dist_entry,
+                                revision,
+                                hashes,
+                                client,
+                            )
+                            .await?
+                        } else {
+                            revision
+                        };
                     self.probe_build_requirements(
                         source,
                         source_dist_entry.path(),
@@ -1259,6 +1275,19 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             Ok(Some(metadata)) => {
                 if metadata.matches(source.name(), source.version()) {
                     debug!("Using cached metadata for: {source}");
+                    let revision =
+                        if self.resolve_build_requirements && !source_entry.path().is_dir() {
+                            self.heal_archive_revision(
+                                source,
+                                resource,
+                                &source_entry,
+                                revision,
+                                hashes,
+                            )
+                            .await?
+                        } else {
+                            revision
+                        };
                     self.probe_build_requirements(
                         source,
                         source_entry.path(),
@@ -3173,6 +3202,27 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         Ok(())
     }
 
+    /// Check whether backend execution is permitted for this source.
+    fn validate_build_policy(&self, source: &BuildableSource<'_>) -> Result<(), Error> {
+        let source_name = source.name();
+        if self
+            .build_context
+            .build_options()
+            .no_build_requirement(source_name)
+            // Unnamed editables need metadata to apply package-specific build settings.
+            && !(source_name.is_none() && source.is_editable())
+            && !self.is_first_party(source)
+        {
+            return if let Some(name) = source_name {
+                Err(Error::NoBuildPackage(name.clone()))
+            } else {
+                Err(Error::NoBuild)
+            };
+        }
+
+        Ok(())
+    }
+
     /// Initialize a [`BuildableSource`]'s isolated environment and run backend requirement hooks.
     ///
     /// Returns the initialized builder so metadata preparation can reuse the same environment.
@@ -3183,6 +3233,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         subdirectory: Option<&Path>,
         no_sources: NoSources,
     ) -> Result<T::SourceDistBuilder, Error> {
+        self.validate_build_policy(source)?;
+
         let build_kind = if source.is_editable() {
             BuildKind::Editable
         } else {
@@ -3227,21 +3279,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     ) -> Result<Option<ResolutionMetadata>, Error> {
         debug!("Preparing metadata for: {source}");
 
-        let source_name = source.name();
-        if self
-            .build_context
-            .build_options()
-            .no_build_requirement(source_name)
-            // Unnamed editables need metadata to apply package-specific build settings.
-            && !(source_name.is_none() && source.is_editable())
-            && !self.is_first_party(source)
-        {
-            return if let Some(name) = source_name {
-                Err(Error::NoBuildPackage(name.clone()))
-            } else {
-                Err(Error::NoBuild)
-            };
-        }
+        self.validate_build_policy(source)?;
 
         // Ensure that the _installed_ Python version is compatible with the `requires-python`
         // specifier.
