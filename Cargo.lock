@@ -6901,6 +6901,7 @@ dependencies = [
  "uv-distribution",
  "uv-distribution-types",
  "uv-errors",
+ "uv-flags",
  "uv-fs",
  "uv-install-wheel",
  "uv-installer",

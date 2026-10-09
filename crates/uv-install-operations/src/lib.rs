@@ -444,6 +444,8 @@ impl InstallationPlan {
         // Reject known version-changing replacements before either installation phase mutates
         // the environment. Source versions and filename-only local versions are checked against
         // the actual destination after wheel preparation.
+        let check_wheel_filenames =
+            !uv_flags::contains(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK);
         let replacement_versions = resolution
             .distributions()
             .filter_map(|dist| {
@@ -462,7 +464,8 @@ impl InstallationPlan {
                 .get(dist_info.name())
                 .is_some_and(|(version, is_source)| {
                     let public_version = (*version).clone().without_local();
-                    *version != dist_info.version()
+                    (*is_source || check_wheel_filenames)
+                        && *version != dist_info.version()
                         && public_version != *dist_info.version()
                         && (!is_source
                             || public_version != dist_info.version().clone().without_local())

@@ -31,7 +31,7 @@ use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
 use uv_fs::{PortablePath, Simplified};
 use uv_install_wheel::validate_and_heal_record;
 use uv_static::EnvVars;
-use uv_test::archive::write_tar_gz;
+use uv_test::archive::{generate_source_archive, write_tar_gz};
 #[cfg(feature = "test-git")]
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
@@ -1873,6 +1873,45 @@ fn reinstall_incomplete_filename_local_version() -> Result<()> {
     Ok(())
 }
 
+/// The filename-check escape hatch permits an in-place repair from an inconsistent wheel.
+#[test]
+fn reinstall_incomplete_disabled_filename_validation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (_, bytes) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel = context.temp_dir.child("demo-2.0.0-py3-none-any.whl");
+    wheel.write_binary(&bytes)?;
+    context
+        .pip_install()
+        .arg(wheel.path())
+        .env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1")
+        .assert()
+        .success();
+    let record = context.site_packages().join("demo-1.0.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel.path()).arg("--reinstall").env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    warning: Failed to uninstall package at `[SITE_PACKAGES]/demo-1.0.0.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - demo==1.0.0 (from file://[TEMP_DIR]/demo-2.0.0-py3-none-any.whl)
+     + demo==2.0.0 (from file://[TEMP_DIR]/demo-2.0.0-py3-none-any.whl)
+    ");
+    assert!(record.is_file());
+    context.assert_installed("demo", "1.0.0");
+    Ok(())
+}
+
 /// Matching public versions do not authorize leaving an old metadata directory behind.
 #[test]
 fn reinstall_incomplete_different_local_metadata_directory() -> Result<()> {
@@ -1923,41 +1962,7 @@ fn reinstall_incomplete_different_local_metadata_directory() -> Result<()> {
 #[test]
 fn reinstall_incomplete_sdist_local_version() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let mut archive = Vec::new();
-    write_tar_gz(
-        &mut archive,
-        &[
-            (
-                "demo-1.0.0/pyproject.toml",
-                indoc! {r#"
-            [project]
-            name = "demo"
-            dynamic = ["version"]
-            requires-python = ">=3.12"
-            [build-system]
-            requires = []
-            build-backend = "backend"
-            backend-path = ["."]
-        "#},
-            ),
-            (
-                "demo-1.0.0/backend.py",
-                indoc! {r#"
-            from pathlib import Path
-            from zipfile import ZipFile
-
-            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-                filename = "demo-1.0.0+local-py3-none-any.whl"
-                with ZipFile(Path(wheel_directory) / filename, "w") as wheel:
-                    wheel.writestr("demo/__init__.py", "__version__ = '1.0.0+local'\n")
-                    wheel.writestr("demo-1.0.0+local.dist-info/METADATA", "Metadata-Version: 2.3\nName: demo\nVersion: 1.0.0+local\n")
-                    wheel.writestr("demo-1.0.0+local.dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
-                    wheel.writestr("demo-1.0.0+local.dist-info/RECORD", "")
-                return filename
-        "#},
-            ),
-        ],
-    )?;
+    let archive = generate_source_archive(&"demo".parse()?, &"1.0.0+local".parse()?, "", None)?;
     let sdist = context.temp_dir.child("demo-1.0.0.tar.gz");
     sdist.write_binary(&archive)?;
     context
