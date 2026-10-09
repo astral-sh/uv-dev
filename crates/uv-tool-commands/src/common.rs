@@ -15,7 +15,7 @@ use uv_cache::{Cache, Refresh};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     BuildOptions, Concurrency, Constraints, DependencyGroupsWithDefaults, ExcludeDependency,
-    ExtrasSpecification, GitLfsSetting, HashCheckingMode, InstallOptions, Override, TargetTriple,
+    ExtrasSpecification, GitLfsSetting, InstallOptions, Override, TargetTriple,
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
 use uv_distribution::{
