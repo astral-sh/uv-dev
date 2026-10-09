@@ -4117,3 +4117,45 @@ fn explicit_roots_pylock_allows_disjoint_group_domains() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Conflicting selected groups identify their owning root and both incompatible bounds.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_pylock_conflicting_group_diagnostics() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.14"
+        [dependency-groups]
+        legacy = []
+        modern = []
+        [tool.uv]
+        package = false
+        [tool.uv.dependency-groups]
+        legacy = { requires-python = "<3.13" }
+        modern = { requires-python = ">=3.13" }
+        [tool.uv.workspace]
+        roots = ["app"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "legacy", "--group", "modern", "--format", "pylock.toml", "--no-header",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting Python requirements:
+    - lockfile: >=3.12, <3.14
+    - app:legacy: <3.13
+    - app:modern: >=3.13
+    ");
+    Ok(())
+}

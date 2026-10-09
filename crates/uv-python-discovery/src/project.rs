@@ -6,7 +6,6 @@ use crate::ConfigDiscovery;
 use crate::PythonInstallation;
 use crate::PythonVersionFile;
 use crate::VersionFileDiscoveryOptions;
-use itertools::Itertools;
 use tracing::debug;
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
@@ -20,7 +19,10 @@ use uv_python_types::{
 };
 use uv_settings::PythonInstallMirrors;
 use uv_warnings::warn_user_once;
-use uv_workspace::{PackageName, RequiresPythonDeclaration, RequiresPythonSources, Workspace};
+use uv_workspace::{
+    PackageName, RequiresPythonDeclaration, RequiresPythonSources, Workspace,
+    format_requires_python_sources,
+};
 
 use crate::PythonDownloadReporter;
 use crate::PythonSelectionError;
@@ -535,11 +537,4 @@ fn validate_python_requirement(
             ))
         }
     }
-}
-
-pub fn format_requires_python_sources(conflicts: &RequiresPythonSources) -> String {
-    conflicts
-        .iter()
-        .map(|(source, specifiers)| format!("- {source}: {specifiers}"))
-        .join("\n")
 }

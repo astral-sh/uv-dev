@@ -387,6 +387,14 @@ impl std::fmt::Display for RequiresPythonDeclaration {
 
 pub type RequiresPythonSources = BTreeMap<RequiresPythonDeclaration, VersionSpecifiers>;
 
+/// Format the declarations contributing to a Python requirement diagnostic.
+pub fn format_requires_python_sources(conflicts: &RequiresPythonSources) -> String {
+    conflicts
+        .iter()
+        .map(|(source, specifiers)| format!("- {source}: {specifiers}"))
+        .join("\n")
+}
+
 pub type Editability = Option<bool>;
 
 /// A workspace, consisting of a root directory and members. See [`ProjectWorkspace`].

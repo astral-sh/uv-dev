@@ -70,7 +70,9 @@ use uv_small_str::SmallString;
 use uv_types::{BuildContext, HashStrategy};
 use uv_warnings::warn_user_once;
 use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
-use uv_workspace::{Editability, WorkspaceMember};
+use uv_workspace::{
+    Editability, RequiresPythonSources, WorkspaceMember, format_requires_python_sources,
+};
 
 pub use crate::lock::deserialize::Error as CanonicalLockError;
 pub use crate::lock::export::RequirementsTxtExport;
@@ -10273,8 +10275,17 @@ enum LockErrorKind {
     )]
     UnrepresentableLockedRequiresPython(PackageName),
 
-    #[error("Selected workspace members have conflicting Python requirements with the lockfile")]
-    DisjointWorkspaceRequiresPython,
+    #[error(
+        "Found conflicting Python requirements:\n- lockfile: {locked}\n{sources}",
+        sources = format_requires_python_sources(.requirements)
+    )]
+    DisjointWorkspaceRequiresPython {
+        locked: RequiresPython,
+        requirements: RequiresPythonSources,
+    },
+
+    #[error("Locked workspace member `{0}` has an empty environment")]
+    EmptyWorkspaceEnvironment(PackageName),
 
     #[error("The selected workspace Python domains cannot be represented by `requires-python`")]
     UnrepresentableExportRequiresPython,

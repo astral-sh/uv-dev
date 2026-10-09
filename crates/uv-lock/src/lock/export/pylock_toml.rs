@@ -770,11 +770,10 @@ impl<'lock> PylockToml {
 
     /// Construct a [`PylockToml`] from a uv lockfile. Relative paths are based on `output_dir`.
     ///
-    /// `requires_python` is the selected Python range within the lockfile's resolved range.
+    /// The Python requirement is derived from the selected roots and dependency groups.
     pub fn from_lock(
         target: &impl Installable<'lock>,
         output_dir: &Path,
-        requires_python: RequiresPython,
         prune: &[PackageName],
         extras: &ExtrasSpecificationWithDefaults,
         dev: &DependencyGroupsWithDefaults,
@@ -782,6 +781,8 @@ impl<'lock> PylockToml {
         editable: Option<&EditableMode>,
         install_options: &'lock InstallOptions,
     ) -> Result<Self, PylockTomlErrorKind> {
+        let requires_python = target.export_python_requirement(dev)?;
+
         // Extract the packages from the lock file.
         let ExportableRequirements(mut nodes) = ExportableRequirements::from_lock(
             target,
