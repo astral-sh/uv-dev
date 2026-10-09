@@ -48834,7 +48834,7 @@ fn lock_required_environment_preserves_inactive_package_pin() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["platform-only; sys_platform == 'win32'"]
+        dependencies = ["platform-only>=1.*; sys_platform == 'win32'"]
         [tool.uv]
         override-dependencies = ["z", "a"]
         exclude-dependencies = ["z", "a"]
@@ -49180,6 +49180,60 @@ fn lock_required_environment_changed_dependency_marker() -> Result<()> {
         required-environments = ["python_version == '3.13'"]
     "#})?;
     uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated example v1.0.0 -> v2.0.0
+    "#);
+    Ok(())
+}
+
+/// Broadening supported platforms invalidates old reachability before wheel preferences are chosen.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_broadened_supported_environments() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "broaden-supported-wheel-preferences"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["py3-none-any"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        environments = ["sys_platform == 'win32'"]
+    "#})?;
+    context
+        .lock()
+        .args(["--upgrade-package", "example==1.0.0"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&context.read("pyproject.toml").replace(
+            "environments = [\"sys_platform == 'win32'\"]",
+            "required-environments = [\"sys_platform == 'linux'\"]",
+        ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]

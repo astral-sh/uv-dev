@@ -58,7 +58,8 @@ use uv_platform_tags::{
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{
     ConflictItem, ConflictKindRef, ConflictSet, Conflicts, HashAlgorithm, HashDigest, HashDigests,
-    ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, PyProjectToml,
+    LenientRequirement, ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, PyProjectToml,
+    VerbatimParsedUrl,
 };
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_resolver_types::{
@@ -3922,10 +3923,11 @@ impl Lock {
     ///
     /// Changed declarations make old edge markers unreliable. Until resolution refreshes those
     /// edges, wheel preference checks must conservatively consider every required environment.
-    pub fn root_activation_is_current(
+    fn root_activation_is_current(
         &self,
         root: &Path,
         requires_python: &RequiresPython,
+        supported_environments: &[MarkerTree],
         packages: &BTreeMap<PackageName, WorkspaceMember>,
         requirements: &[Requirement],
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
@@ -3955,6 +3957,24 @@ impl Lock {
                     requirement.marker,
                 )
             }))
+        }
+        let environment_union = |markers: &[MarkerTree]| {
+            if markers.is_empty() {
+                MarkerTree::TRUE
+            } else {
+                markers
+                    .iter()
+                    .copied()
+                    .fold(MarkerTree::FALSE, MarkerTree::or)
+            }
+        };
+        if requires_python.complexify_markers(environment_union(supported_environments))
+            != requires_python.complexify_markers(
+                self.requires_python
+                    .simplify_markers(environment_union(self.supported_environments())),
+            )
+        {
+            return Ok(false);
         }
         let normalizer = RequirementNormalizer::new(root, requires_python);
         let filter = ManifestFilter::from_lock(self);
@@ -4005,7 +4025,9 @@ impl Lock {
                     .iter()
                     .flat_map(|extras| extras.values().flatten()),
             ) {
-                let Ok(requirement) = uv_pep508::Requirement::<VerbatimUrl>::from_str(requirement)
+                let Ok(requirement) =
+                    LenientRequirement::<VerbatimParsedUrl>::from_str(requirement)
+                        .map(uv_pep508::Requirement::from)
                 else {
                     return Ok(false);
                 };
@@ -4049,12 +4071,35 @@ impl Lock {
         Ok(true)
     }
 
-    /// Recover package reachability while retaining the activation markers of requested extras.
-    pub fn package_reachability(
-        &self,
+    /// Calculate current package activation, falling back to all environments when stored edges
+    /// no longer describe the current roots, modifiers, or supported environments.
+    pub fn package_reachability<'lock>(
+        &'lock self,
         root: &Path,
         requires_python: &RequiresPython,
-    ) -> Result<impl Iterator<Item = (&Package, MarkerTree)>, LockError> {
+        supported_environments: &[MarkerTree],
+        packages: &BTreeMap<PackageName, WorkspaceMember>,
+        requirements: &[Requirement],
+        dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
+        overrides: &[Override<Requirement>],
+        excludes: &[ExcludeDependency],
+    ) -> Result<Vec<(&'lock Package, MarkerTree)>, LockError> {
+        if !self.root_activation_is_current(
+            root,
+            requires_python,
+            supported_environments,
+            packages,
+            requirements,
+            dependency_groups,
+            overrides,
+            excludes,
+        )? {
+            return Ok(self
+                .packages
+                .iter()
+                .map(|package| (package, MarkerTree::TRUE))
+                .collect());
+        }
         let mut package_markers = PackageMarkers::default();
         let mut pending = VecDeque::new();
         // Stored edges include the old Python bounds. Remove those bounds before applying the
@@ -4136,14 +4181,18 @@ impl Lock {
             }
         }
 
-        Ok(self.packages.iter().map(move |package| {
-            (
-                package,
-                package_markers
-                    .get(&package.id)
-                    .unwrap_or(MarkerTree::FALSE),
-            )
-        }))
+        Ok(self
+            .packages
+            .iter()
+            .map(move |package| {
+                (
+                    package,
+                    package_markers
+                        .get(&package.id)
+                        .unwrap_or(MarkerTree::FALSE),
+                )
+            })
+            .collect())
     }
 
     /// Return a [`SatisfiesResult`] if the given requirements do not match the [`Package`] metadata.
