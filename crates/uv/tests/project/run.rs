@@ -7636,7 +7636,7 @@ fn run_target_workspace_discovery_workspace_member_group_include_cycle() -> Resu
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project `child @ child` has malformed dependency groups
-      cause: Detected a cycle in workspace dependency groups: child:dev -> tools:test -> child:dev
+      cause: Detected a cycle in workspace dependency groups: `child:dev` -> `tools:test` -> `child:dev`
     ");
 
     Ok(())
@@ -8854,6 +8854,78 @@ fn run_workspace_group_root_includes_member() -> Result<()> {
 
     ----- stderr -----
     Resolved 4 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    ");
+    Ok(())
+}
+
+/// Non-project root groups can include member groups during locking and execution.
+#[test]
+fn run_workspace_group_nonproject_root_includes_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "nonproject-root-member-groups"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        lint = []
+        [tool.uv.dependency-groups]
+        lint = { include-workspace-groups = [{ package = "tools", group = "test" }] }
+        [tool.uv.workspace]
+        members = ["tools"]
+    "#})?;
+    context
+        .temp_dir
+        .child("tools/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "tools"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [dependency-groups]
+        test = ["example==1.0.0"]
+        [tool.uv.dependency-groups]
+        test = { requires-python = ">=3.12" }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "include-group-workspace", "--check", "--offline", "--no-cache"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--preview-features", "include-group-workspace", "--only-group", "lint", "--locked"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .args(["python", "-c", "import example; print(example.__version__)"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + example==1.0.0
