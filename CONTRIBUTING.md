@@ -169,8 +169,8 @@ docker run --rm -v .:/src/ -w /src/ node:alpine npx prettier@3.9.0 --write .
 ## Linting
 
 Install [shellcheck](https://github.com/koalaman/shellcheck) and
-[hawk](https://github.com/astral-sh/hawk/) separately before you run the linters.
-Install [jq](https://jqlang.org/) to validate `pyproject.toml` against the checked-in uv schema.
+[hawk](https://github.com/astral-sh/hawk/) separately before you run the linters. Install
+[jq](https://jqlang.org/) to validate `pyproject.toml` against the checked-in uv schema.
 
 ```shell
 # Rust
