@@ -3451,6 +3451,12 @@ fn workspace_metadata_script_active_without_base_executable() -> Result<()> {
         .arg(active.path())
         .assert()
         .success();
+    // Standalone shared builds load libpython relative to the copied executable.
+    let libpython = Path::new(base.trim()).join("lib/libpython3.12.so.1.0");
+    let library_target = active.child("lib/libpython3.12.so.1.0");
+    if libpython.is_file() && !library_target.path().exists() {
+        fs_err::os::unix::fs::symlink(libpython, library_target.path())?;
+    }
     let missing_base = context.temp_dir.child("missing-base");
     missing_base.child("bin").create_dir_all()?;
     fs_err::os::unix::fs::symlink(
@@ -3482,11 +3488,44 @@ fn workspace_metadata_script_active_without_base_executable() -> Result<()> {
     unavailable.create_dir_all()?;
     fs_err::remove_dir_all(context.venv.path())?;
     uv_snapshot!(context.filters(), context.workspace_metadata()
-        .args(["--script", "script.py", "--active", "--offline", "--no-cache", "--quiet", "--quiet"])
+        .args(["--script", "script.py", "--active", "--offline", "--no-cache", "--preview-features", "workspace-metadata"])
         .env(EnvVars::UV_PYTHON_SEARCH_PATH, unavailable.path())
         .env(EnvVars::UV_PYTHON_INSTALL_DIR, unavailable.path())
-        .env(EnvVars::VIRTUAL_ENV, active.path()), @"
+        .env(EnvVars::VIRTUAL_ENV, active.path()), @r#"
     exit_code: 0 (success)
-    ");
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[TEMP_DIR]/active",
+        "python": {
+          "path": "[TEMP_DIR]/active/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "script": {
+        "path": "[TEMP_DIR]/script.py",
+        "id": "script+[TEMP_DIR]/script.py"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "resolution": {
+        "script+[TEMP_DIR]/script.py": {
+          "kind": "script",
+          "path": "[TEMP_DIR]/script.py",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    Resolved in [TIME]
+    "#);
     Ok(())
 }
