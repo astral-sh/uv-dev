@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -404,10 +405,46 @@ impl<'lock> LockTarget<'lock> {
     pub(crate) async fn commit(self, lock: &Lock) -> Result<(), LockError> {
         let encoded = lock.to_toml()?;
         let lock_path = self.lock_path();
-        uv_fs::write_atomic(&lock_path, encoded)
-            .await
-            .with_context(|| format!("Failed to write lockfile at `{}`", lock_path.display()))?;
+        async {
+            let destination = Self::lockfile_destination(&lock_path).await?;
+            uv_fs::write_atomic(destination, encoded).await
+        }
+        .await
+        .with_context(|| format!("Failed to write lockfile at `{}`", lock_path.display()))?;
         Ok(())
+    }
+
+    /// Follow lockfile links before an atomic rename, including links to a missing destination.
+    async fn lockfile_destination(lock_path: &Path) -> io::Result<PathBuf> {
+        let mut destination = lock_path.to_path_buf();
+        let mut seen = FxHashSet::default();
+        loop {
+            match fs_err::tokio::symlink_metadata(&destination).await {
+                Ok(metadata) if metadata.file_type().is_symlink() => {}
+                Ok(_) => return Ok(destination),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(destination),
+                Err(error) => return Err(error),
+            }
+
+            // Resolve parent links before interpreting a relative target. The final component
+            // stays unresolved so a dangling link can still create its destination.
+            let parent = destination
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let parent = fs_err::tokio::canonicalize(parent).await?;
+            let filename = destination.file_name().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "lockfile path has no filename")
+            })?;
+            let link = parent.join(filename);
+            if !seen.insert(link.clone()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "lockfile symlink cycle",
+                ));
+            }
+            destination = parent.join(fs_err::tokio::read_link(link).await?);
+        }
     }
 
     /// Lower build constraints without losing hashes when a source expands into multiple requirements.
