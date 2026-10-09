@@ -124,153 +124,356 @@ async fn mount_wheel(server: &MockServer) -> Result<()> {
 }
 
 #[tokio::test]
-async fn artifactory_metadata_discovery() -> Result<()> {
-    for json in [false, true] {
-        for (product, advertisement, expected) in [
-            (
-                Some("Artifactory/7.0.0"),
-                None,
-                DistInfoMetadata::Unadvertised,
-            ),
-            (
-                Some("Artifactory/7.0.0"),
-                Some(false),
-                DistInfoMetadata::Unavailable,
-            ),
-            (
-                Some("Artifactory/7.0.0"),
-                Some(true),
-                DistInfoMetadata::Available(HashDigests::empty()),
-            ),
-            (Some("Other/7.0.0"), None, DistInfoMetadata::Unavailable),
-            (None, None, DistInfoMetadata::Unavailable),
-            (
-                None,
-                Some(true),
-                DistInfoMetadata::Available(HashDigests::empty()),
-            ),
-        ] {
-            let server = MockServer::start().await;
-            let mut response = simple(&format!("/{WHEEL}"), advertisement, json);
-            if let Some(product) = product {
-                response = response.insert_header("X-JFrog-Version", product);
-            }
-            Mock::given(method("GET"))
-                .and(path("/simple/ok/"))
-                .respond_with(response)
-                .expect(1)
-                .mount(&server)
-                .await;
-            let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
-            let cache = Cache::temp()?.init().await?;
-            // A second client must recover the per-file capability from the cached Simple response.
-            for _ in 0..2 {
-                let client = client(cache.clone(), &index)?;
-                let BuiltDist::Registry(dist) = distribution(&client).await? else {
-                    anyhow::bail!("expected registry distribution");
-                };
-                assert_eq!(dist.best_wheel().file.dist_info_metadata, expected);
-            }
-        }
-    }
+async fn artifactory_metadata_discovers_unadvertised_html() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), None, false)
+                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let cache = Cache::temp()?.init().await?;
+    let first = client(cache.clone(), &index)?;
+    let BuiltDist::Registry(dist) = distribution(&first).await? else {
+        anyhow::bail!("expected registry distribution");
+    };
+    assert_eq!(
+        dist.best_wheel().file.dist_info_metadata,
+        DistInfoMetadata::Unadvertised
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn artifactory_metadata_requires_same_origin() -> Result<()> {
+async fn artifactory_metadata_discovers_and_caches_unadvertised_json() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), None, true)
+                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let cache = Cache::temp()?.init().await?;
+    let first = client(cache.clone(), &index)?;
+    let BuiltDist::Registry(dist) = distribution(&first).await? else {
+        anyhow::bail!("expected registry distribution");
+    };
+    assert_eq!(
+        dist.best_wheel().file.dist_info_metadata,
+        DistInfoMetadata::Unadvertised
+    );
+    // A new client must recover the capability from the cached Simple response.
+    let second = client(cache, &index)?;
+    let BuiltDist::Registry(dist) = distribution(&second).await? else {
+        anyhow::bail!("expected registry distribution");
+    };
+    assert_eq!(
+        dist.best_wheel().file.dist_info_metadata,
+        DistInfoMetadata::Unadvertised
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_metadata_respects_explicit_false() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), Some(false), true)
+                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let cache = Cache::temp()?.init().await?;
+    let first = client(cache.clone(), &index)?;
+    let BuiltDist::Registry(dist) = distribution(&first).await? else {
+        anyhow::bail!("expected registry distribution");
+    };
+    assert_eq!(
+        dist.best_wheel().file.dist_info_metadata,
+        DistInfoMetadata::Unavailable
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_metadata_respects_advertised_sidecar() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), Some(true), false)
+                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let cache = Cache::temp()?.init().await?;
+    let first = client(cache.clone(), &index)?;
+    let BuiltDist::Registry(dist) = distribution(&first).await? else {
+        anyhow::bail!("expected registry distribution");
+    };
+    assert_eq!(
+        dist.best_wheel().file.dist_info_metadata,
+        DistInfoMetadata::Available(HashDigests::empty())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_metadata_ignores_other_products() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), None, true)
+                .insert_header("X-JFrog-Version", "Other/7.0.0"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let cache = Cache::temp()?.init().await?;
+    let first = client(cache.clone(), &index)?;
+    let BuiltDist::Registry(dist) = distribution(&first).await? else {
+        anyhow::bail!("expected registry distribution");
+    };
+    assert_eq!(
+        dist.best_wheel().file.dist_info_metadata,
+        DistInfoMetadata::Unavailable
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_metadata_requires_product_header() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(simple(&format!("/{WHEEL}"), None, false))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let cache = Cache::temp()?.init().await?;
+    let first = client(cache.clone(), &index)?;
+    let BuiltDist::Registry(dist) = distribution(&first).await? else {
+        anyhow::bail!("expected registry distribution");
+    };
+    assert_eq!(
+        dist.best_wheel().file.dist_info_metadata,
+        DistInfoMetadata::Unavailable
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn advertised_metadata_does_not_require_product_header() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(simple(&format!("/{WHEEL}"), Some(true), true))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let cache = Cache::temp()?.init().await?;
+    let first = client(cache.clone(), &index)?;
+    let BuiltDist::Registry(dist) = distribution(&first).await? else {
+        anyhow::bail!("expected registry distribution");
+    };
+    assert_eq!(
+        dist.best_wheel().file.dist_info_metadata,
+        DistInfoMetadata::Available(HashDigests::empty())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_metadata_rejects_cross_origin_wheel() -> Result<()> {
     let origin = MockServer::start().await;
     let other = MockServer::start().await;
-    for (index, target) in [
-        (
-            format!("{}/simple", origin.uri()),
-            format!("{}/{WHEEL}", other.uri()),
-        ),
-        (
-            format!("{}/redirect", origin.uri()),
-            format!("{}/{WHEEL}", origin.uri()),
-        ),
-    ] {
-        origin.reset().await;
-        other.reset().await;
-        Mock::given(method("GET"))
-            .and(path("/simple/ok/"))
-            .respond_with(
-                simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
-            )
-            .mount(&origin)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/redirect/ok/"))
-            .respond_with(
-                ResponseTemplate::new(302)
-                    .insert_header("Location", format!("{}/simple/ok/", other.uri())),
-            )
-            .mount(&origin)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/simple/ok/"))
-            .respond_with(
-                simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
-            )
-            .mount(&other)
-            .await;
-        let client = client(Cache::temp()?.init().await?, &IndexUrl::from_str(&index)?)?;
-        let BuiltDist::Registry(dist) = distribution(&client).await? else {
-            anyhow::bail!("expected registry distribution");
-        };
-        assert_eq!(
-            dist.best_wheel().file.dist_info_metadata,
-            DistInfoMetadata::Unavailable
-        );
-    }
+    let index = format!("{}/simple", origin.uri());
+    let target = format!("{}/{WHEEL}", other.uri());
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .mount(&origin)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/redirect/ok/"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}/simple/ok/", other.uri())),
+        )
+        .mount(&origin)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .mount(&other)
+        .await;
+    let client = client(Cache::temp()?.init().await?, &IndexUrl::from_str(&index)?)?;
+    let BuiltDist::Registry(dist) = distribution(&client).await? else {
+        anyhow::bail!("expected registry distribution");
+    };
+    assert_eq!(
+        dist.best_wheel().file.dist_info_metadata,
+        DistInfoMetadata::Unavailable
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn artifactory_metadata_matches_advertised_behavior() -> Result<()> {
-    // Different dependencies are accepted just as they are for an advertised digestless sidecar.
+async fn artifactory_metadata_rejects_cross_origin_index_redirect() -> Result<()> {
+    let origin = MockServer::start().await;
+    let other = MockServer::start().await;
+    let index = format!("{}/redirect", origin.uri());
+    let target = format!("{}/{WHEEL}", origin.uri());
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .mount(&origin)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/redirect/ok/"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}/simple/ok/", other.uri())),
+        )
+        .mount(&origin)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .mount(&other)
+        .await;
+    let client = client(Cache::temp()?.init().await?, &IndexUrl::from_str(&index)?)?;
+    let BuiltDist::Registry(dist) = distribution(&client).await? else {
+        anyhow::bail!("expected registry distribution");
+    };
+    assert_eq!(
+        dist.best_wheel().file.dist_info_metadata,
+        DistInfoMetadata::Unavailable
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_unadvertised_metadata_keeps_dependencies_and_query() -> Result<()> {
     let sidecar = METADATA.replace("\n\n", "\nRequires-Dist: other==2\n\n");
-    for advertisement in [None, Some(true)] {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/simple/ok/"))
-            .respond_with(
-                simple(
-                    &format!("/{WHEEL}?download=1#sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-                    advertisement,
-                    false,
-                )
-                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(
+                &format!("/{WHEEL}?download=1#sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                None,
+                false,
             )
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(format!("/{WHEEL}.metadata")))
-            .and(query_param("download", "1"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Cache-Control", "max-age=3600")
-                    .set_body_string(&sidecar),
+            .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{WHEEL}.metadata")))
+        .and(query_param("download", "1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "max-age=3600")
+                .set_body_string(&sidecar),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let cache = Cache::temp()?.init().await?;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let first_client = client(cache.clone(), &index)?;
+    let dist = distribution(&first_client).await?;
+    let first_metadata = metadata(&first_client, &dist).await?;
+    assert_eq!(first_metadata.name.as_ref(), "ok");
+    assert_eq!(first_metadata.version.to_string(), "1.0.0");
+    assert_eq!(first_metadata.requires_dist.len(), 1);
+    let second_client = client(cache.clone(), &index)?;
+    let dist = distribution(&second_client).await?;
+    let second_metadata = metadata(&second_client, &dist).await?;
+    assert_eq!(second_metadata.name.as_ref(), "ok");
+    assert_eq!(second_metadata.version.to_string(), "1.0.0");
+    assert_eq!(second_metadata.requires_dist.len(), 1);
+    assert_eq!(
+        server.received_requests().await.context("requests")?.len(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_advertised_metadata_keeps_dependencies_and_query() -> Result<()> {
+    let sidecar = METADATA.replace("\n\n", "\nRequires-Dist: other==2\n\n");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(
+                &format!("/{WHEEL}?download=1#sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                Some(true),
+                false,
             )
-            .expect(1)
-            .mount(&server)
-            .await;
-        let cache = Cache::temp()?.init().await?;
-        let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
-        for _ in 0..2 {
-            let client = client(cache.clone(), &index)?;
-            let dist = distribution(&client).await?;
-            let metadata = metadata(&client, &dist).await?;
-            assert_eq!(metadata.name.as_ref(), "ok");
-            assert_eq!(metadata.version.to_string(), "1.0.0");
-            assert_eq!(metadata.requires_dist.len(), 1);
-        }
-        assert_eq!(
-            server.received_requests().await.context("requests")?.len(),
-            2
-        );
-    }
+            .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{WHEEL}.metadata")))
+        .and(query_param("download", "1"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "max-age=3600")
+                .set_body_string(&sidecar),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let cache = Cache::temp()?.init().await?;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let first_client = client(cache.clone(), &index)?;
+    let dist = distribution(&first_client).await?;
+    let first_metadata = metadata(&first_client, &dist).await?;
+    assert_eq!(first_metadata.name.as_ref(), "ok");
+    assert_eq!(first_metadata.version.to_string(), "1.0.0");
+    assert_eq!(first_metadata.requires_dist.len(), 1);
+    let second_client = client(cache.clone(), &index)?;
+    let dist = distribution(&second_client).await?;
+    let second_metadata = metadata(&second_client, &dist).await?;
+    assert_eq!(second_metadata.name.as_ref(), "ok");
+    assert_eq!(second_metadata.version.to_string(), "1.0.0");
+    assert_eq!(second_metadata.requires_dist.len(), 1);
+    assert_eq!(
+        server.received_requests().await.context("requests")?.len(),
+        2
+    );
     Ok(())
 }
 
@@ -445,33 +648,60 @@ async fn artifactory_metadata_falls_back_on_sidecar_version_mismatch() -> Result
 }
 
 #[tokio::test]
-async fn artifactory_metadata_auth_errors_are_not_optional() -> Result<()> {
-    for status in [401, 403] {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/simple/ok/"))
-            .respond_with(
-                simple(&format!("/{WHEEL}"), None, true)
-                    .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(format!("/{WHEEL}.metadata")))
-            .respond_with(ResponseTemplate::new(status))
-            .mount(&server)
-            .await;
-        let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
-        let client = client(Cache::temp()?.init().await?, &index)?;
-        let dist = distribution(&client).await?;
-        assert!(metadata(&client, &dist).await.is_err());
-        let requests = server.received_requests().await.context("requests")?;
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.url.path() != format!("/{WHEEL}"))
-        );
-    }
+async fn artifactory_metadata_unauthorized_is_not_optional() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), None, true)
+                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{WHEEL}.metadata")))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let client = client(Cache::temp()?.init().await?, &index)?;
+    let dist = distribution(&client).await?;
+    assert!(metadata(&client, &dist).await.is_err());
+    let requests = server.received_requests().await.context("requests")?;
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.url.path() != format!("/{WHEEL}"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_metadata_forbidden_is_not_optional() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), None, true)
+                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{WHEEL}.metadata")))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let client = client(Cache::temp()?.init().await?, &index)?;
+    let dist = distribution(&client).await?;
+    assert!(metadata(&client, &dist).await.is_err());
+    let requests = server.received_requests().await.context("requests")?;
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.url.path() != format!("/{WHEEL}"))
+    );
     Ok(())
 }
 
