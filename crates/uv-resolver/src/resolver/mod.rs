@@ -450,7 +450,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 .pubgrub
                                 .partial_solution
                                 .extract_solution()
-                                .filter(|(p, _)| !state.pubgrub.package_store[*p].is_proxy())
+                                .filter(|(p, _)| {
+                                    let package = &state.pubgrub.package_store[*p];
+                                    !package.is_proxy() && !package.is_build()
+                                })
                                 .map(|(p, v)| format!("{}=={}", state.pubgrub.package_store[p], v))
                                 .join(", ")
                         );
@@ -511,7 +514,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                 .pubgrub
                                 .partial_solution
                                 .undecided_packages()
-                                .filter(|(p, _)| !state.pubgrub.package_store[**p].is_proxy())
+                                .filter(|(p, _)| {
+                                    let package = &state.pubgrub.package_store[**p];
+                                    !package.is_proxy() && !package.is_build()
+                                })
                                 .map(|(p, _)| state.pubgrub.package_store[*p].to_string())
                                 .join(", ")
                         );
