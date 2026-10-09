@@ -266,6 +266,12 @@ impl PackedArchiveEntry {
         if downloaded.load(Ordering::Relaxed) {
             return Ok(true);
         }
+        // A 304 updates the retained policy without invoking the download callback.
+        let bytes = fs_err::tokio::read(self.entry.path()).await?;
+        let cached = DataWithCachePolicy::from_reader(bytes.as_slice())?;
+        if !cached.cache_policy().is_storable() {
+            bail!("Response for {} does not permit caching", self.url);
+        }
         let missing = match self.read(&metadata, expected_hash, expected_size).await {
             Ok(archive) => archive.is_none(),
             Err(_) if force_revalidation => true,
