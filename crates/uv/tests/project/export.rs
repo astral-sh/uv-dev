@@ -10307,6 +10307,80 @@ fn requirements_txt_same_named_member_options_do_not_conflict() -> Result<()> {
     Ok(())
 }
 
+/// Undefined dependency extras warn without activating a conflict, while empty declared extras do.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_undefined_dependency_extra_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[missing]"]
+
+        [project.optional-dependencies]
+        feature = []
+
+        [tool.uv]
+        conflicts = [[{ extra = "feature" }, { package = "child", extra = "missing" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--extra", "feature", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./child
+        # via project
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    warning: The package `child @ file://[TEMP_DIR]/child` does not have an extra named `missing`
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "feature", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    -e ./child
+        # via project
+    ");
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(&format!(
+            "{}\n[project.optional-dependencies]\nmissing = []\n",
+            context.read("child/pyproject.toml"),
+        ))?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--extra", "feature", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Found conflicting extras `child[missing]` and `project[feature]` enabled simultaneously
+    ");
+    Ok(())
+}
+
 /// Dependency-activated extras also conflict with selected groups and production packages.
 #[cfg(feature = "test-universal")]
 #[test]

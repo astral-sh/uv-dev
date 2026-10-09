@@ -73,6 +73,13 @@ impl<'lock> ConflictRequests<'lock> {
         marker: MarkerTree,
     ) {
         let package = self.lock.package(index);
+        if extra.as_ref().is_some_and(|extra| {
+            !package.optional_dependencies.contains_key(extra)
+                && !package.metadata.provides_extra.contains(extra)
+        }) {
+            // Undefined dependency extras only produce a resolver warning.
+            return;
+        }
         let marker = if package.fork_markers.is_empty() {
             marker
         } else {
