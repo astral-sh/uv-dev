@@ -275,41 +275,172 @@ async fn artifactory_metadata_matches_advertised_behavior() -> Result<()> {
 }
 
 #[tokio::test]
-async fn artifactory_metadata_falls_back() -> Result<()> {
-    for response in [
-        ResponseTemplate::new(404),
-        ResponseTemplate::new(405),
-        ResponseTemplate::new(200).set_body_string("not metadata"),
-        ResponseTemplate::new(200).set_body_string(METADATA.replace("Name: ok", "Name: other")),
-        ResponseTemplate::new(200)
-            .set_body_string(METADATA.replace("Version: 1.0.0", "Version: 2.0.0")),
-    ] {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/simple/ok/"))
-            .respond_with(
-                simple(&format!("/{WHEEL}"), None, true)
-                    .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path(format!("/{WHEEL}.metadata")))
-            .respond_with(response)
-            .expect(1)
-            .mount(&server)
-            .await;
-        mount_wheel(&server).await?;
-        let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
-        let client = client(Cache::temp()?.init().await?, &index)?;
-        let dist = distribution(&client).await?;
-        for _ in 0..2 {
-            let metadata = metadata(&client, &dist).await?;
-            assert_eq!(metadata.name.as_ref(), "ok");
-            assert_eq!(metadata.version.to_string(), "1.0.0");
-            assert!(metadata.requires_dist.is_empty());
-        }
-    }
+async fn artifactory_metadata_falls_back_on_missing_sidecar() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), None, true)
+                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{WHEEL}.metadata")))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_wheel(&server).await?;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let client = client(Cache::temp()?.init().await?, &index)?;
+    let dist = distribution(&client).await?;
+    let downloaded = metadata(&client, &dist).await?;
+    assert_eq!(downloaded.name.as_ref(), "ok");
+    assert_eq!(downloaded.version.to_string(), "1.0.0");
+    assert!(downloaded.requires_dist.is_empty());
+
+    let cached = metadata(&client, &dist).await?;
+    assert_eq!(cached.name.as_ref(), "ok");
+    assert_eq!(cached.version.to_string(), "1.0.0");
+    assert!(cached.requires_dist.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_metadata_falls_back_on_unsupported_sidecar() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), None, true)
+                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{WHEEL}.metadata")))
+        .respond_with(ResponseTemplate::new(405))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_wheel(&server).await?;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let client = client(Cache::temp()?.init().await?, &index)?;
+    let dist = distribution(&client).await?;
+    let downloaded = metadata(&client, &dist).await?;
+    assert_eq!(downloaded.name.as_ref(), "ok");
+    assert_eq!(downloaded.version.to_string(), "1.0.0");
+    assert!(downloaded.requires_dist.is_empty());
+
+    let cached = metadata(&client, &dist).await?;
+    assert_eq!(cached.name.as_ref(), "ok");
+    assert_eq!(cached.version.to_string(), "1.0.0");
+    assert!(cached.requires_dist.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_metadata_falls_back_on_malformed_sidecar() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), None, true)
+                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{WHEEL}.metadata")))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not metadata"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_wheel(&server).await?;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let client = client(Cache::temp()?.init().await?, &index)?;
+    let dist = distribution(&client).await?;
+    let downloaded = metadata(&client, &dist).await?;
+    assert_eq!(downloaded.name.as_ref(), "ok");
+    assert_eq!(downloaded.version.to_string(), "1.0.0");
+    assert!(downloaded.requires_dist.is_empty());
+
+    let cached = metadata(&client, &dist).await?;
+    assert_eq!(cached.name.as_ref(), "ok");
+    assert_eq!(cached.version.to_string(), "1.0.0");
+    assert!(cached.requires_dist.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_metadata_falls_back_on_sidecar_name_mismatch() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), None, true)
+                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{WHEEL}.metadata")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(METADATA.replace("Name: ok", "Name: other")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_wheel(&server).await?;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let client = client(Cache::temp()?.init().await?, &index)?;
+    let dist = distribution(&client).await?;
+    let downloaded = metadata(&client, &dist).await?;
+    assert_eq!(downloaded.name.as_ref(), "ok");
+    assert_eq!(downloaded.version.to_string(), "1.0.0");
+    assert!(downloaded.requires_dist.is_empty());
+
+    let cached = metadata(&client, &dist).await?;
+    assert_eq!(cached.name.as_ref(), "ok");
+    assert_eq!(cached.version.to_string(), "1.0.0");
+    assert!(cached.requires_dist.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifactory_metadata_falls_back_on_sidecar_version_mismatch() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(
+            simple(&format!("/{WHEEL}"), None, true)
+                .insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{WHEEL}.metadata")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(METADATA.replace("Version: 1.0.0", "Version: 2.0.0")),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_wheel(&server).await?;
+    let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+    let client = client(Cache::temp()?.init().await?, &index)?;
+    let dist = distribution(&client).await?;
+    let downloaded = metadata(&client, &dist).await?;
+    assert_eq!(downloaded.name.as_ref(), "ok");
+    assert_eq!(downloaded.version.to_string(), "1.0.0");
+    assert!(downloaded.requires_dist.is_empty());
+
+    let cached = metadata(&client, &dist).await?;
+    assert_eq!(cached.name.as_ref(), "ok");
+    assert_eq!(cached.version.to_string(), "1.0.0");
+    assert!(cached.requires_dist.is_empty());
     Ok(())
 }
 
