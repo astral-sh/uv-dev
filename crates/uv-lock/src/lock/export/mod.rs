@@ -102,12 +102,10 @@ impl<'lock> ExportableRequirements<'lock> {
                     name: root_name.clone(),
                 })?;
 
-            if root_kind == InstallableRootKind::Production {
+            if root_kind == InstallableRootKind::Production && groups.prod() {
                 // Track the activated package in the list of known conflicts.
                 activated_items.insert(ConflictItem::from(dist.id.name.clone()), MarkerTree::TRUE);
-            }
 
-            if root_kind == InstallableRootKind::Production && groups.prod() {
                 let package_index = target.lock().by_id[&dist.id];
 
                 // Add the workspace package to the graph.
@@ -334,7 +332,8 @@ impl<'lock> ExportableRequirements<'lock> {
         }
 
         // Determine the reachability of each node in the graph.
-        let mut reachability = conflict_marker_reachability(&graph, &[], &activated_items);
+        let mut reachability =
+            conflict_marker_reachability(target.lock(), &graph, &[], &activated_items);
 
         // Collect all packages.
         let nodes = graph

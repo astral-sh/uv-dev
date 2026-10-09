@@ -94,6 +94,7 @@ fn lock_validation_warning_chain() -> Result<()> {
 }
 
 /// Generate the preview lock without package metadata.
+#[cfg(feature = "test-universal")]
 fn lock_without_package_metadata(lock: &str) -> Result<toml_edit::DocumentMut> {
     let mut lock = lock.parse::<toml_edit::DocumentMut>()?;
     let Some(packages) = lock["package"].as_array_of_tables_mut() else {
@@ -6696,6 +6697,7 @@ fn lock_conflicting_workspace_members_depends_transitive_extra() -> Result<()> {
 }
 
 /// Dependency groups activate the production contexts of their workspace dependencies.
+#[cfg(feature = "test-universal")]
 #[test]
 fn lock_conflicting_workspace_members_from_dependency_group() -> Result<()> {
     let context = uv_test::test_context!("3.12");
