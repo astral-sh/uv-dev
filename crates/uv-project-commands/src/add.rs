@@ -390,7 +390,7 @@ pub async fn add(
         requirements,
         constraints,
         ..
-    } = RequirementsSpecification::from_sources(
+    } = uv_resolve_operations::read_requirements_with_pylock_constraints(
         &requirements,
         &constraints,
         &[],

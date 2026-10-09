@@ -1021,7 +1021,7 @@ async fn get_or_create_environment(
     };
 
     // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
+    let spec = uv_resolve_operations::read_requirements_with_pylock_constraints(
         with,
         constraints,
         overrides,
