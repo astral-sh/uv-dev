@@ -3824,11 +3824,11 @@ pub struct SyncArgs {
 #[derive(Args)]
 pub struct DownloadArgs {
     #[command(flatten)]
-    pub(crate) index: IndexArgs,
+    index: IndexArgs,
     #[command(flatten)]
-    pub(crate) registry: RegistryClientArgs,
+    registry: RegistryClientArgs,
     #[command(flatten)]
-    pub(crate) refresh: RefreshArgs,
+    refresh: RefreshArgs,
 }
 
 #[derive(Args)]
