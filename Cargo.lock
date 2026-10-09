@@ -8059,6 +8059,7 @@ dependencies = [
  "rustc-hash",
  "self-replace",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",

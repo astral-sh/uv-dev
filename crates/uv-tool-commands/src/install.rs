@@ -842,14 +842,14 @@ pub async fn install(
                         existing_receipt,
                     )?;
                 } else {
-                    let (_temp_dir, preflight) = create_preflight_environment(
+                    let mut preflight = create_preflight_environment(
                         package_name,
                         environment.interpreter().clone(),
                         &cache,
                         Some(&environment),
                     )?;
-                    let preflight = sync_environment(
-                        preflight,
+                    preflight.environment = sync_environment(
+                        preflight.environment,
                         &resolution,
                         hash_strategy.clone(),
                         Modifications::Exact,
@@ -866,7 +866,7 @@ pub async fn install(
                     )
                     .await?;
                     check_tool_entrypoint_conflicts(
-                        &preflight,
+                        &preflight.environment,
                         package_name,
                         entrypoints,
                         existing_receipt,
@@ -923,15 +923,16 @@ pub async fn install(
                             ResolvedDist::Installable { .. } => true,
                         });
                         if changes_packages {
-                            let (_temp_dir, preflight) = create_preflight_environment(
+                            let mut preflight = create_preflight_environment(
                                 package_name,
                                 environment.interpreter().clone(),
                                 &cache,
                                 Some(environment),
                             )?;
-                            let preflight = sync_environment_with_platform(
-                                preflight,
+                            preflight.environment = sync_environment_with_platform(
+                                preflight.environment,
                                 python_platform.as_ref(),
+                                SourceTreeEditablePolicy::Tool,
                                 resolution,
                                 hash_strategy.clone(),
                                 Modifications::Exact,
@@ -950,7 +951,7 @@ pub async fn install(
                             )
                             .await?;
                             check_tool_entrypoint_conflicts(
-                                &preflight,
+                                &preflight.environment,
                                 package_name,
                                 entrypoints,
                                 existing_receipt,
@@ -1119,10 +1120,10 @@ pub async fn install(
             HashStrategy::default()
         };
         if !force && let Some(existing_receipt) = existing_tool_receipt.as_ref() {
-            let (_temp_dir, preflight) =
+            let mut preflight =
                 create_preflight_environment(package_name, interpreter.clone(), &cache, None)?;
-            let preflight = sync_environment(
-                preflight,
+            preflight.environment = sync_environment(
+                preflight.environment,
                 &resolution,
                 hash_strategy.clone(),
                 Modifications::Exact,
@@ -1137,9 +1138,10 @@ pub async fn install(
                 Printer::Silent,
                 preview,
             )
-            .await?;
+            .await
+            .map_err(UvError::from)?;
             check_tool_entrypoint_conflicts(
-                &preflight,
+                &preflight.environment,
                 package_name,
                 entrypoints,
                 existing_receipt,
@@ -1207,13 +1209,19 @@ pub async fn install(
     Ok(ExitStatus::Success)
 }
 
+/// Own a staged environment and the directory that keeps its files alive.
+struct PreflightEnvironment {
+    environment: PythonEnvironment,
+    _temp_dir: tempfile::TempDir,
+}
+
 /// Create a temporary environment for checking tool entrypoint conflicts before updating a tool.
 fn create_preflight_environment(
     name: &PackageName,
     interpreter: Interpreter,
     cache: &Cache,
     existing: Option<&PythonEnvironment>,
-) -> Result<(impl AsRef<Path>, PythonEnvironment)> {
+) -> Result<PreflightEnvironment> {
     let temp_dir = cache.venv_dir()?;
     let tools = InstalledTools::from_path(temp_dir.path());
     let environment = tools.create_environment(name, interpreter, cache)?;
@@ -1242,7 +1250,10 @@ fn create_preflight_environment(
             }
         }
     }
-    Ok((temp_dir, environment))
+    Ok(PreflightEnvironment {
+        environment,
+        _temp_dir: temp_dir,
+    })
 }
 
 /// Seed a private environment without sharing mutable installed files.

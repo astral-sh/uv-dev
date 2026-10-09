@@ -729,6 +729,32 @@ pub(super) async fn refine_interpreter(
     Ok(Some(interpreter))
 }
 
+/// Enumerate a package's executable sources and configured destinations.
+fn package_entrypoint_targets(
+    site_packages: &SitePackages,
+    package: &PackageName,
+    executable_directory: &Path,
+) -> anyhow::Result<Option<BTreeSet<(String, PathBuf, PathBuf)>>> {
+    let installed = site_packages.get_packages(package);
+    let Some(dist) = installed.first() else {
+        return Ok(None);
+    };
+    Ok(Some(
+        entrypoint_paths(site_packages, dist.name(), dist.version())?
+            .into_iter()
+            .map(|(name, source)| {
+                let target = executable_directory.join(
+                    source
+                        .file_name()
+                        .map(std::borrow::ToOwned::to_owned)
+                        .unwrap_or_else(|| OsString::from(name.clone())),
+                );
+                (name, source, target)
+            })
+            .collect(),
+    ))
+}
+
 /// Collect executable destinations for the requested packages in an environment.
 fn collect_tool_entrypoint_targets<'a>(
     environment: &PythonEnvironment,
@@ -738,21 +764,16 @@ fn collect_tool_entrypoint_targets<'a>(
     let site_packages = SitePackages::from_environment(environment)?;
     let mut targets = Vec::new();
     for package in packages.into_iter().collect::<BTreeSet<_>>() {
-        let installed = site_packages.get_packages(package);
-        let Some(distribution) = installed.first() else {
+        let Some(entrypoints) =
+            package_entrypoint_targets(&site_packages, package, &executable_directory)?
+        else {
             continue;
         };
-        for (name, source) in
-            entrypoint_paths(&site_packages, distribution.name(), distribution.version())?
-        {
-            let target = executable_directory.join(
-                source
-                    .file_name()
-                    .map(std::borrow::ToOwned::to_owned)
-                    .unwrap_or_else(|| OsString::from(name)),
-            );
-            targets.push((package.clone(), target));
-        }
+        targets.extend(
+            entrypoints
+                .into_iter()
+                .map(|(_, _, target)| (package.clone(), target)),
+        );
     }
     Ok(targets)
 }
@@ -865,8 +886,9 @@ pub(super) fn finalize_tool_install(
             debug!("Installing entrypoints for `{package}` as part of tool `{name}`");
         }
 
-        let installed = site_packages.get_packages(package);
-        let Some(dist) = installed.first() else {
+        let Some(target_entrypoints) =
+            package_entrypoint_targets(&site_packages, package, &executable_directory)?
+        else {
             if package != name {
                 bail!("Expected package `{package}` to be installed");
             }
@@ -889,22 +911,6 @@ pub(super) fn finalize_tool_install(
             }
             .into());
         };
-        let dist_entrypoints = entrypoint_paths(&site_packages, dist.name(), dist.version())?;
-
-        // Determine the entry points targets. Use a sorted collection for deterministic output.
-        let target_entrypoints = dist_entrypoints
-            .into_iter()
-            .map(|(name, source_path)| {
-                let target_path = executable_directory.join(
-                    source_path
-                        .file_name()
-                        .map(std::borrow::ToOwned::to_owned)
-                        .unwrap_or_else(|| OsString::from(name.clone())),
-                );
-                (name, source_path, target_path)
-            })
-            .collect::<BTreeSet<_>>();
-
         if target_entrypoints.is_empty() {
             let err = if package != name {
                 NoExecutablesError::Dependency {

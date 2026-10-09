@@ -3491,6 +3491,122 @@ fn tool_install_preflight_upgrades_shared_build_dependency() -> Result<()> {
     Ok(())
 }
 
+/// Workspace build dependencies use the tool's non-editable policy during preflight.
+#[test]
+fn tool_install_preflight_workspace_build_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    let (filename, wheel) = generate_wheel(
+        &"tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["tool".to_owned()],
+    );
+    let original = context.temp_dir.child(filename);
+    original.write_binary(&wheel)?;
+    context
+        .tool_install()
+        .arg(original.path())
+        .env(EnvVars::PATH, bin.as_os_str())
+        .assert()
+        .success();
+    let project = context.temp_dir.child("tool");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "tool"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv.workspace]
+        members = ["build-helper"]
+        [tool.uv.sources]
+        build-helper = { workspace = true }
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"tool".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["tool".to_owned()],
+    );
+    project.child(&filename).write_binary(&wheel)?;
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        import shutil
+        import zipfile
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            with zipfile.ZipFile(Path(__file__).parent / "{filename}") as wheel:
+                for name in wheel.namelist():
+                    if name.startswith("tool-2.0.0.dist-info/"):
+                        wheel.extract(name, metadata_directory)
+            return "tool-2.0.0.dist-info"
+
+        def get_requires_for_build_wheel(config_settings=None):
+            return ["build-helper"]
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            import build_helper
+            assert build_helper.__version__ == "1.0.0"
+            source = Path(__file__).parent / "{filename}"
+            shutil.copyfile(source, Path(wheel_directory) / source.name)
+            return source.name
+    "#})?;
+    let helper = project.child("build-helper");
+    helper.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "build-helper"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"build-helper".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    helper.child(&filename).write_binary(&wheel)?;
+    helper.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        import shutil
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            source = Path(__file__).parent / "{filename}"
+            shutil.copyfile(source, Path(wheel_directory) / source.name)
+            return source.name
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path()).env(EnvVars::PATH, bin.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - tool==1.0.0 (from file://[TEMP_DIR]/tool-1.0.0-py3-none-any.whl)
+     + tool==2.0.0 (from file://[TEMP_DIR]/tool)
+    Installed 1 executable: tool
+    ");
+    Ok(())
+}
+
 /// Retained build commands use the same staged interpreter as upgraded dependencies.
 #[test]
 fn tool_install_preflight_relocates_retained_build_commands() -> Result<()> {
@@ -4222,6 +4338,81 @@ fn tool_install_conflict_preserves_recreated_environment() -> Result<()> {
     ");
     external.assert(predicate::path::is_file());
 
+    Ok(())
+}
+
+/// A failed build during replacement preflight keeps its user-error status and the old tool.
+#[test]
+fn tool_install_preflight_preserves_build_failure_status() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&launcher)
+        .arg("--python")
+        .arg("3.12")
+        .assert()
+        .success();
+    let tool = context.temp_dir.child("tools/simple-launcher");
+    let receipt_path = tool.join("uv-receipt.toml");
+    let receipt = fs_err::read_to_string(&receipt_path)?;
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "simple-launcher"
+        version = "0.2.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            raise RuntimeError("deliberate preflight build failure")
+    "#})?;
+    let mut filters = context.filters();
+    filters.push((
+        r"(?s)Traceback \(most recent call last\):.*?RuntimeError:",
+        "[TRACEBACK]\n         RuntimeError:",
+    ));
+    uv_snapshot!(filters, context.tool_install().arg(project.path()).arg("--python").arg("3.13"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Ignoring existing environment for `simple-launcher`: the requested Python interpreter does not match the environment interpreter
+    Resolved 1 package in [TIME]
+    error: Failed to build `simple-launcher @ file://[TEMP_DIR]/project`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_wheel` failed (exit status: 1)
+
+             [stderr]
+             [TRACEBACK]
+             RuntimeError: deliberate preflight build failure
+
+    hint: Build failures usually indicate a problem with the package or the build environment
+    ");
+    assert_eq!(receipt, fs_err::read_to_string(receipt_path)?);
+    let python = tool.child(if cfg!(windows) {
+        "Scripts/python.exe"
+    } else {
+        "bin/python"
+    });
+    Command::new(python.path())
+        .args(["-c", "import sys; assert sys.version_info[:2] == (3, 12)"])
+        .assert()
+        .success();
+    let executable = context
+        .temp_dir
+        .child("bin")
+        .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    Command::new(executable.path())
+        .assert()
+        .success()
+        .stdout("Hi from the simple launcher!\n");
     Ok(())
 }
 

@@ -1606,6 +1606,7 @@ pub async fn sync_environment(
     sync_environment_with_platform(
         venv,
         None,
+        SourceTreeEditablePolicy::Project,
         resolution,
         hasher,
         modifications,
@@ -1623,10 +1624,11 @@ pub async fn sync_environment(
     .await
 }
 
-/// Sync using the wheel compatibility tags selected for a requested Python platform.
+/// Sync using the requested platform and source-tree editability policy.
 pub async fn sync_environment_with_platform(
     venv: PythonEnvironment,
     python_platform: Option<&TargetTriple>,
+    source_tree_editable_policy: SourceTreeEditablePolicy,
     resolution: &Resolution,
     hasher: HashStrategy,
     modifications: Modifications,
@@ -1723,7 +1725,7 @@ pub async fn sync_environment_with_platform(
         &build_hasher,
         exclude_newer.clone(),
         sources,
-        SourceTreeEditablePolicy::Project,
+        source_tree_editable_policy,
         workspace_cache,
         concurrency.clone(),
         preview,
