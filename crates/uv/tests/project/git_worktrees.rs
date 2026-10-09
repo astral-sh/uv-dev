@@ -8,10 +8,10 @@ use indoc::{formatdoc, indoc};
 use url::Url;
 
 use uv_cache_key::{RepositoryUrl, cache_digest};
-#[cfg(feature = "test-git-lfs")]
+#[cfg(all(feature = "test-git-lfs", feature = "test-pypi"))]
 use uv_static::EnvVars;
 use uv_test::TestContext;
-#[cfg(feature = "test-git-lfs")]
+#[cfg(all(feature = "test-git-lfs", feature = "test-pypi"))]
 use uv_test::uv_snapshot;
 
 fn git(repository: &Path, arguments: &[&str]) -> Result<String> {
@@ -141,6 +141,20 @@ fn run(partial_fetches: bool) -> Result<()> {
         return Ok(());
     }
 
+    // A missing revision must not destroy the database shared by existing worktrees.
+    set_revision(&context, &url, "deadbeef")?;
+    context
+        .lock()
+        .arg("--preview-features")
+        .arg(features)
+        .arg("--offline")
+        .assert()
+        .failure();
+    assert_eq!(
+        git(&paths[0], &["rev-parse", "--is-inside-work-tree"])?,
+        "true"
+    );
+
     // Git's automatic abbreviation length can change as the shared database grows.
     // Changing it must not create another checkout for an already cached revision.
     git(database.path(), &["config", "core.abbrev", "12"])?;
@@ -260,7 +274,7 @@ fn partial_fetches() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-git-lfs")]
+#[cfg(all(feature = "test-git-lfs", feature = "test-pypi"))]
 fn lfs() -> Result<()> {
     let context = uv_test::test_context!("3.13")
         .with_git_lfs_config()
