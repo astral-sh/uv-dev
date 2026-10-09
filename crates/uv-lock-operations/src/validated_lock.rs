@@ -97,11 +97,7 @@ impl ValidatedLock {
             // all strategies select from the same versions and default-policy reuse is safe.
             None => {
                 options.index_strategy == IndexStrategy::FirstIndex
-                    && index_locations
-                        .indexes()
-                        .chain(index_locations.flat_indexes())
-                        .nth(1)
-                        .is_none()
+                    && index_locations.fetch_indexes().nth(1).is_none()
             }
         };
         if !index_strategy_matches {

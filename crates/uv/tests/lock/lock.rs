@@ -13659,6 +13659,105 @@ fn lock_index_strategy() -> Result<()> {
     Ok(())
 }
 
+/// Repeated definitions of the same fetch URL are one competing package index.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_strategy_duplicate_index_definitions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index").arg(server.index_url())
+        .arg("--default-index").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    assert!(!lock.contains("index-strategy"));
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache")
+        .arg("--index").arg(server.index_url())
+        .arg("--default-index").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+/// Find-links locations are combined before index priority is applied.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_strategy_multiple_find_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = context.temp_dir.child("first");
+    first.create_dir_all()?;
+    let second = context.temp_dir.child("second");
+    second.create_dir_all()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"a".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    first.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"a".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    second.child(filename).write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index")
+        .arg("--find-links").arg(first.path())
+        .arg("--find-links").arg(second.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    assert!(!lock.contains("index-strategy"));
+    uv_snapshot!(context.filters(), context.tree().arg("--locked").arg("--offline").arg("--no-cache")
+        .arg("--no-index").arg("--find-links").arg(first.path())
+        .arg("--find-links").arg(second.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    project v0.1.0
+    └── a v2.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
 /// Accept the `explicit` pre-release mode in lockfiles, configuration, and CLI arguments.
 #[test]
 fn lock_explicit_prerelease_mode() -> Result<()> {
@@ -17126,7 +17225,6 @@ fn lock_find_links_local_wheel() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
-        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17240,7 +17338,6 @@ fn lock_find_links_ignore_explicit_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
-        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17461,7 +17558,6 @@ fn lock_find_links_local_sdist() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
-        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17548,7 +17644,6 @@ fn lock_find_links_http_wheel() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
-        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -17633,7 +17728,6 @@ fn lock_find_links_http_sdist() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
-        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]

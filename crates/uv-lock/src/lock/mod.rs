@@ -2630,13 +2630,9 @@ impl Lock {
             minimum_libc_version: resolution.options.minimum_libc_version,
             exclude_newer: resolution.options.exclude_newer.clone(),
             // A single package index has no cross-index priority to preserve. Record the
-            // default strategy too whenever more than one candidate source can participate.
+            // default strategy too whenever more than one distinct package index can participate.
             index_strategy: (resolution.options.index_strategy != IndexStrategy::FirstIndex
-                || index_locations
-                    .indexes()
-                    .chain(index_locations.flat_indexes())
-                    .nth(1)
-                    .is_some())
+                || index_locations.fetch_indexes().nth(1).is_some())
             .then_some(resolution.options.index_strategy),
         };
         // Canonicalize the top-level fork markers to match what is persisted in
