@@ -326,13 +326,12 @@ impl PubGrubPackage {
 
     /// Returns `true` if this PubGrub package is a proxy package.
     pub(crate) fn is_proxy(&self) -> bool {
-        self.0.build
-            || matches!(
-                &**self,
-                PubGrubPackageInner::Extra { .. }
-                    | PubGrubPackageInner::Group { .. }
-                    | PubGrubPackageInner::Marker { .. }
-            )
+        matches!(
+            &**self,
+            PubGrubPackageInner::Extra { .. }
+                | PubGrubPackageInner::Group { .. }
+                | PubGrubPackageInner::Marker { .. }
+        )
     }
 
     /// This simplifies the markers on this package (if any exist) using the

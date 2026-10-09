@@ -21542,3 +21542,62 @@ fn include_build_dependencies_direct_url_root() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Unsatisfiable build constraints retain the backend dependency that conflicts with a runtime root.
+#[test]
+fn include_build_dependencies_reports_constraint_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "build-constraint-conflict-report"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.backend.versions."1.0.0"]
+        sdist = false
+        requires = ["helper>=1"]
+        [packages.helper.versions."1.0.0"]
+        sdist = false
+        [packages.helper.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [build-system]
+        requires = ["backend>=1"]
+        build-backend = "custom"
+        backend-path = ["."]
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+    "#})?;
+    context
+        .temp_dir
+        .child("project/custom.py")
+        .write_str(indoc! {r"
+        def get_requires_for_build_wheel(config_settings=None):
+            return []
+    "})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("./project\nhelper==2\n")?;
+    context
+        .temp_dir
+        .child("build-constraints.txt")
+        .write_str("helper==1\n")?;
+    uv_snapshot!(context.filters(), context.pip_compile().args([
+        "requirements.in", "--include-build-dependencies", "--preview-features", "pip-build-dependencies",
+        "--build-constraint", "build-constraints.txt", "--no-header", "--no-annotate",
+    ]).arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: No solution found when resolving dependencies
+      cause: Because all versions of backend depend on helper==1 and you require helper==2, we can conclude that your requirements and all versions of backend are incompatible.
+             And because you require backend==1.0.0, we can conclude that your requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
