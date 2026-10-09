@@ -1202,7 +1202,7 @@ impl ScriptEnvironment {
         .await?
         {
             // If we found an existing, compatible environment, use it.
-            ScriptInterpreter::Environment(environment) => Ok(Self::Existing(environment)),
+            ScriptInterpreter::Environment { environment, .. } => Ok(Self::Existing(environment)),
 
             // Otherwise, create a virtual environment with the discovered interpreter.
             ScriptInterpreter::Interpreter(requested) => {

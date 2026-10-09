@@ -164,7 +164,7 @@ pub async fn find_script(
             return Ok(ExitStatus::Failure);
         }
         Ok(ScriptInterpreter::Interpreter(selection)) => selection.into_interpreter(),
-        Ok(ScriptInterpreter::Environment(environment)) => environment.into_interpreter(),
+        Ok(ScriptInterpreter::Environment { environment, .. }) => environment.into_interpreter(),
     };
 
     if show_version {

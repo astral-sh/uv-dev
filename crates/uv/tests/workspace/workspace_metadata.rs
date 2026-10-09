@@ -876,13 +876,18 @@ async fn workspace_metadata_script_reuses_resolution_interpreter() -> Result<()>
     Ok(())
 }
 
-/// Replacing an existing script environment during resolution must not change the selected Python.
-#[cfg(all(unix, feature = "test-python"))]
+/// Replacing a script environment during resolution retains the selected Python and exact patch pin.
+#[cfg(all(unix, feature = "test-python", feature = "test-python-managed"))]
 #[tokio::test]
 async fn workspace_metadata_script_replaces_changed_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
         .with_filtered_python_names()
-        .with_filtered_virtualenv_bin();
+        .with_filtered_virtualenv_bin()
+        .with_filtered_python_keys()
+        .with_managed_python_dirs()
+        .with_empty_python_install_mirror()
+        .with_filters([(r"uv = [^\n]+".to_owned(), "uv = [UV_VERSION]".to_owned())]);
+    context.python_install().arg("3.12.13").assert().success();
     let [(_, _), (_, replacement_python)] = context.python_versions.as_slice() else {
         return Err(anyhow::anyhow!("expected Python 3.12 and 3.11"));
     };
@@ -898,7 +903,8 @@ async fn workspace_metadata_script_replaces_changed_environment() -> Result<()> 
         .arg(script.path())
         .arg("--sync")
         .arg("--python")
-        .arg("3.12")
+        .arg("3.12.13")
+        .arg("--managed-python")
         .assert()
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&initial.get_output().stdout)?;
@@ -959,13 +965,30 @@ async fn workspace_metadata_script_replaces_changed_environment() -> Result<()> 
         .arg(script.path())
         .arg("--sync")
         .arg("--python")
-        .arg("3.12")
+        .arg("3.12.13")
+        .arg("--managed-python")
         .assert()
         .success();
     assert!(replaced.get().is_some_and(Result::is_ok));
     let metadata: serde_json::Value = serde_json::from_slice(&result.get_output().stdout)?;
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(metadata["environment"]["python"]["version"], @r#""3.12.[X]""#);
+    });
+    let environment = Path::new(
+        metadata["environment"]["root"]
+            .as_str()
+            .context("expected an environment root")?,
+    );
+    let configuration = fs_err::read_to_string(environment.join("pyvenv.cfg"))?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(configuration, @r#"
+    home = [TEMP_DIR]/managed/cpython-3.12.[X]-[PLATFORM]/[BIN]
+    implementation = CPython
+    uv = [UV_VERSION]
+    version_info = 3.12.[X]
+    include-system-site-packages = false
+    prompt = script.py
+    "#);
     });
     Ok(())
 }

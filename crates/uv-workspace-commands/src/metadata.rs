@@ -134,14 +134,14 @@ pub async fn metadata(
                                     Some(RequestedInterpreter::new(interpreter.clone(), request));
                                 interpreter
                             }
-                            ScriptInterpreter::Environment(environment) => {
+                            ScriptInterpreter::Environment {
+                                environment,
+                                request,
+                            } => {
                                 let interpreter = environment.into_interpreter();
                                 if sync.is_some() {
                                     let base_interpreter =
                                         CachedEnvironment::base_interpreter(&interpreter, cache)?;
-                                    let request = PythonRequest::File(
-                                        base_interpreter.sys_executable().to_path_buf(),
-                                    );
                                     script_interpreter_request =
                                         Some(RequestedInterpreter::new(base_interpreter, request));
                                 }
