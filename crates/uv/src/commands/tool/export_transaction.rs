@@ -1148,6 +1148,34 @@ mod tests {
     };
     use crate::printer::Printer;
 
+    #[test]
+    fn reads_existing_flat_export_journals() -> anyhow::Result<()> {
+        let directory = std::env::current_dir()?;
+        let legacy = serde_json::json!({
+            "version": 1,
+            "phase": "publishing",
+            "tool": "example",
+            "directory": directory,
+            "staging": ".uv-tool-exports-example",
+            "staging_identity": { "platform": "unix", "device": 1, "inode": 2 },
+            "receipt_before": null,
+            "receipt": vec![0u8; 32],
+            "lock": null,
+            "exports": [{
+                "filename": "example",
+                "original": null,
+                "replacement": {
+                    "identity": { "platform": "unix", "device": 1, "inode": 3 },
+                    "contents": { "kind": "symbolic-link", "target": directory.join("tool/bin/example") }
+                }
+            }]
+        });
+        let journal: super::ExportJournal = serde_json::from_value(legacy.clone())?;
+        journal.validate(&"example".parse()?)?;
+        assert_eq!(serde_json::to_value(journal)?, legacy);
+        Ok(())
+    }
+
     fn isolated_root(test: &str) -> anyhow::Result<Option<PathBuf>> {
         const ROOT: &str = "UV_TEST_TOOL_EXPORT_ROOT";
         if let Some(root) = std::env::var_os(ROOT) {

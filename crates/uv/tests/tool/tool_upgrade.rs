@@ -2206,3 +2206,109 @@ fn tool_upgrade_lock_uses_requested_python() -> Result<()> {
 
     Ok(())
 }
+
+/// A shared build uses the staged interpreter while the old exported command stays runnable.
+#[test]
+fn tool_upgrade_python_source_build_failure_keeps_old_tool() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_tool_dirs();
+    let project = context.temp_dir.child("source");
+    project.create_dir_all()?;
+    let manifest = |version: &str| {
+        format!(
+            "[project]\nname = 'source-tool'\nversion = '{version}'\n[build-system]\nrequires = []\nbuild-backend = 'backend'\nbackend-path = ['.']\n"
+        )
+    };
+    project
+        .child("pyproject.toml")
+        .write_str(&manifest("1.0.0"))?;
+    project.child("backend.py").write_str(indoc! {r#"
+        import json, os, pathlib, stat, subprocess, sys, tomllib, zipfile
+
+        def details():
+            version = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']
+            directory = f'source_tool-{version}.dist-info'
+            metadata = f'Metadata-Version: 2.3\nName: source-tool\nVersion: {version}\n'
+            return version, directory, metadata
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            _, directory, metadata = details()
+            destination = pathlib.Path(metadata_directory) / directory
+            destination.mkdir()
+            (destination / 'METADATA').write_text(metadata)
+            return directory
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            version, directory, metadata = details()
+            if version == '2.0.0':
+                root = pathlib.Path(sys.prefix)
+                assert root.name == 'replacement', root
+                assert root.parent.name.startswith('.uv-tool-staging-'), root
+                if os.name == 'posix':
+                    assert stat.S_IMODE(root.parent.stat().st_mode) == 0o700
+                command = pathlib.Path('old-command.txt').read_text()
+                old = subprocess.check_output([command], text=True).strip()
+                assert old == '1.0.0:3.12', old
+                pathlib.Path('observed.txt').write_text(old)
+                if pathlib.Path('fail-build').exists():
+                    raise RuntimeError('deliberate staged build failure')
+            contents = {
+                'source_tool/__init__.py': '',
+                'source_tool/cli.py': f"import sys\ndef main():\n    print('{version}:' + '.'.join(map(str, sys.version_info[:2])))\n",
+                directory + '/METADATA': metadata,
+                directory + '/WHEEL': 'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n',
+                directory + '/entry_points.txt': '[console_scripts]\nsource-tool = source_tool.cli:main\n',
+            }
+            contents[directory + '/RECORD'] = ''.join(f'{name},,\n' for name in contents) + f'{directory}/RECORD,,\n'
+            filename = f'source_tool-{version}-py3-none-any.whl'
+            with zipfile.ZipFile(pathlib.Path(wheel_directory) / filename, 'w') as wheel:
+                for name, content in contents.items():
+                    wheel.writestr(name, content)
+            return filename
+    "#})?;
+    context
+        .tool_install()
+        .arg(project.path())
+        .args(["--python", "3.12", "--no-build-isolation"])
+        .assert()
+        .success();
+    let root = context.temp_dir.child("tools/source-tool");
+    let command = context
+        .temp_dir
+        .child(format!("bin/source-tool{EXE_SUFFIX}"));
+    project
+        .child("old-command.txt")
+        .write_str(command.path().to_str().expect("UTF-8 temporary path"))?;
+    let receipt = fs_err::read(root.join("uv-receipt.toml"))?;
+    let configuration = fs_err::read(root.join("pyvenv.cfg"))?;
+    project
+        .child("pyproject.toml")
+        .write_str(&manifest("2.0.0"))?;
+    project.child("fail-build").touch()?;
+    context
+        .tool_upgrade()
+        .args(["source-tool", "--python", "3.13", "--no-build-isolation"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("deliberate staged build failure"));
+    assert_eq!(
+        fs_err::read_to_string(project.join("observed.txt"))?,
+        "1.0.0:3.12"
+    );
+    assert_eq!(fs_err::read(root.join("uv-receipt.toml"))?, receipt);
+    assert_eq!(fs_err::read(root.join("pyvenv.cfg"))?, configuration);
+    Command::new(command.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("1.0.0:3.12\n").normalize());
+    fs_err::remove_file(project.join("fail-build"))?;
+    context
+        .tool_upgrade()
+        .args(["source-tool", "--python", "3.13", "--no-build-isolation"])
+        .assert()
+        .success();
+    Command::new(command.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("2.0.0:3.13\n").normalize());
+    Ok(())
+}

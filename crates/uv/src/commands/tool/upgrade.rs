@@ -633,6 +633,9 @@ async fn upgrade_tool(
             .collect();
 
         if let Some(staged) = staged {
+            // Completed shared build environments retain interpreter and storage ownership.
+            // Release their cache before transferring the staged directory to its journal.
+            drop(state);
             if settings.compile_bytecode {
                 staged
                     .compile_bytecode(&environment, concurrency, cache, printer)

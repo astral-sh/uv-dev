@@ -14,6 +14,7 @@ use tokio::sync::oneshot;
 use tracing::{debug, instrument};
 use walkdir::WalkDir;
 
+use uv_cache::Cache;
 use uv_configuration::Concurrency;
 use uv_fs::Simplified;
 use uv_python::PythonEnvironment;
@@ -216,16 +217,20 @@ pub async fn compile_staged_tree(
     destination: &Path,
     environment: &PythonEnvironment,
     concurrency: &Concurrency,
-    cache: &Path,
+    cache: &Cache,
 ) -> Result<usize, CompileError> {
     debug_assert!(dir.starts_with(environment.root()));
     compile_tree_inner(
         dir,
         environment.python_executable(),
         concurrency,
-        cache,
+        cache.root(),
         Some(destination),
-        Some(environment.clone()),
+        Some(
+            environment
+                .clone()
+                .with_lifetime_guard(Arc::new(cache.clone())),
+        ),
     )
     .await
 }
@@ -719,7 +724,7 @@ mod tests {
             &published,
             &staged.environment,
             &concurrency,
-            staged.cache.root(),
+            &staged.cache,
         )
         .await?;
         let output = Command::new(staged.environment.python_executable())
@@ -751,7 +756,7 @@ mod tests {
             &published,
             &staged.environment,
             &concurrency,
-            staged.cache.root(),
+            &staged.cache,
         ));
         tokio::select! {
             result = &mut compiling => bail!("compiler exited before its barrier: {result:?}"),
@@ -773,17 +778,24 @@ mod tests {
         drop(compiling);
         drop(staged.directory);
         drop(staged.environment);
-        let environment_retained = environment_path.exists();
+        let cache_path = staged.cache.root().to_owned();
+        drop(staged.cache);
+        let cache_retained = cache_path.exists();
+        let environment_retained = environment_path.join("pyvenv.cfg").is_file();
         let script_retained = scripts[0].join("pip_compileall.py").exists();
         fs_err::write(control.path().join("release"), "release")?;
         tokio::time::timeout(Duration::from_secs(10), async {
-            while environment_path.exists() || scripts[0].exists() {
+            while environment_path.exists() || scripts[0].exists() || cache_path.exists() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
         .context("worker did not release its directories")?;
         ensure!(control.path().join("finished").exists());
+        ensure!(
+            cache_retained,
+            "temporary cache disappeared while its worker was active"
+        );
         ensure!(
             environment_retained,
             "staging disappeared while its worker was active"

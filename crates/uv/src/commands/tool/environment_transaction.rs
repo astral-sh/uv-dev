@@ -156,7 +156,7 @@ impl StagedToolEnvironment {
                 &self.destination.join(relative),
                 environment,
                 concurrency,
-                cache.root(),
+                cache,
             )
             .await?;
         }
@@ -541,6 +541,12 @@ impl EnvironmentTransaction {
         }
         let journal = &self.record.journal;
         if journal.publication == Publication::Rename {
+            journal.original.check_current()?;
+            if directory_identity(&replacement)?.as_ref() != Some(&journal.replacement_identity)
+                || MetadataDigest::read(&replacement)? != journal.replacement_metadata
+            {
+                bail!("Staged tool environment changed before directory rename");
+            }
             rename_directory(&journal.original.path(), &container.join(PREVIOUS))?;
             rename_directory(&replacement, &journal.original.path())?;
         }
@@ -629,11 +635,13 @@ fn rename_file(source: &Path, target: &Path) -> io::Result<()> {
 }
 
 fn rename_directory(source: &Path, target: &Path) -> anyhow::Result<()> {
-    if fs_err::symlink_metadata(target).is_ok() {
-        bail!(
+    match fs_err::symlink_metadata(target) {
+        Ok(_) => bail!(
             "Tool recovery destination `{}` already exists",
             target.user_display()
-        );
+        ),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     rename_file(source, target)?;
     Ok(())
