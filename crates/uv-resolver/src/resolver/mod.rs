@@ -324,9 +324,10 @@ impl<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider>
         let resolve_fut = async move { rx.await.map_err(|_| ResolveError::ChannelClosed) };
 
         // Wait for both to complete.
-        let ((), resolution) = tokio::try_join!(requests_fut, resolve_fut)?;
+        let resolution =
+            tokio::try_join!(requests_fut, resolve_fut).and_then(|((), resolution)| resolution);
 
-        state.on_complete();
+        state.on_complete(resolution.is_ok());
         resolution
     }
 }
@@ -2531,9 +2532,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         }
     }
 
-    fn on_complete(&self) {
+    fn on_complete(&self, success: bool) {
         if let Some(reporter) = self.reporter.as_ref() {
-            reporter.on_complete();
+            reporter.on_complete(success);
         }
     }
 }
