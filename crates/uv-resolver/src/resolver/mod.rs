@@ -4263,6 +4263,18 @@ struct ConflictTracker {
     deprioritize: Vec<Id<PubGrubPackage>>,
 }
 
+/// Retain all Python bounds and exclusions when checking an artifact's environment coverage.
+fn requires_python_marker(requires_python: &VersionSpecifiers) -> MarkerTree {
+    requires_python
+        .iter()
+        .fold(MarkerTree::TRUE, |marker, specifier| {
+            marker.and(MarkerTree::expression(MarkerExpression::Version {
+                key: MarkerValueVersion::PythonFullVersion,
+                specifier: specifier.clone(),
+            }))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4311,16 +4323,4 @@ mod tests {
         // An empty list would otherwise widen to the full range.
         assert_eq!(widen_to_gap(&version, Some(&[])), Range::singleton(version));
     }
-}
-
-/// Retain all Python bounds and exclusions when checking an artifact's environment coverage.
-fn requires_python_marker(requires_python: &VersionSpecifiers) -> MarkerTree {
-    requires_python
-        .iter()
-        .fold(MarkerTree::TRUE, |marker, specifier| {
-            marker.and(MarkerTree::expression(MarkerExpression::Version {
-                key: MarkerValueVersion::PythonFullVersion,
-                specifier: specifier.clone(),
-            }))
-        })
 }
