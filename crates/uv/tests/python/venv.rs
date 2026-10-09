@@ -121,8 +121,7 @@ fn create_venv_caches_interpreter() -> Result<()> {
     Ok(())
 }
 
-/// A symlink inside a Python installation is retained when deriving cached venv metadata,
-/// but resolved by CPython when querying the venv.
+/// A symlink inside a Python installation resolves identically in cached and queried venv metadata.
 #[test]
 #[cfg(all(target_os = "linux", feature = "test-python-managed"))]
 fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
@@ -160,15 +159,16 @@ fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
         .context("Fresh interpreter cache is locked")?;
     let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
 
-    // The base executable should not depend on whether the cache is warm: astral-sh/uv#22383.
+    // The base executable should not depend on whether the cache is warm.
     let cached_base = cached.interpreter().to_base_python()?;
     let queried_base = queried.interpreter().to_base_python()?;
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_BIN]/python3");
+        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_BIN]/python3.12");
         insta::assert_snapshot!(queried_base.display(), @"[PYTHON_BIN]/python3.12");
     });
+    assert_eq!(cached, queried);
 
-    // Consume the created environment with each cache to expose the different executable targets.
+    // Consume the created environment with each cache to verify the executable targets agree.
     uv_snapshot!(context.filters(), context.venv()
         .arg("cached")
         .arg("--python")
@@ -194,7 +194,7 @@ fn create_venv_caches_symlinked_base_interpreter() -> Result<()> {
     let cached_target = fs_err::read_link(context.temp_dir.child("cached/bin/python"))?;
     let queried_target = fs_err::read_link(context.temp_dir.child("queried/bin/python"))?;
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_snapshot!(cached_target.display(), @"[PYTHON_BIN]/python3");
+        insta::assert_snapshot!(cached_target.display(), @"[PYTHON_BIN]/python3.12");
         insta::assert_snapshot!(queried_target.display(), @"[PYTHON_BIN]/python3.12");
     });
 
