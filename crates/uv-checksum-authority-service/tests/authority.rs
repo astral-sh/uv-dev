@@ -353,7 +353,7 @@ async fn reauthorize_build_receipt() -> Result<()> {
         .respond_with(ResponseTemplate::new(404))
         .mount(&server)
         .await;
-    insta::assert_snapshot!(authority.verify_receipt(&receipt).await.expect_err("withdrawn input"), @"Checksum authority has no trusted record for `example-1.0-py3-none-any.whl`");
+    insta::assert_snapshot!(authority.verify_receipt(&receipt).await.expect_err("withdrawn input"), @"Checksum authority has no trusted record for `example-1.0-py3-none-any.whl` from `https://pypi.org/simple`");
     Ok(())
 }
 
@@ -386,12 +386,12 @@ async fn rejects_conflicting_authority_records() -> Result<()> {
         )
         .mount(&server)
         .await;
-    insta::assert_snapshot!(authority.lookup(record.artifact()).await.expect_err("conflicting admission"), @"Conflicting checksum authority records for `example-1.0-py3-none-any.whl`");
+    insta::assert_snapshot!(authority.lookup(record.artifact()).await.expect_err("conflicting admission"), @"Conflicting checksum authority records for `example-1.0-py3-none-any.whl` from `https://pypi.org/simple`");
     assert_eq!(
         serde_json::to_value(authority.receipt().await?)?,
         serde_json::to_value(receipt)?
     );
-    insta::assert_snapshot!(VerificationReceipt::try_from(vec![record, changed]).expect_err("conflicting receipt"), @"Conflicting checksum authority records for `example-1.0-py3-none-any.whl`");
+    insta::assert_snapshot!(VerificationReceipt::try_from(vec![record, changed]).expect_err("conflicting receipt"), @"Conflicting checksum authority records for `example-1.0-py3-none-any.whl` from `https://pypi.org/simple`");
     Ok(())
 }
 
@@ -439,7 +439,7 @@ async fn reauthorize_changed_build_receipt() -> Result<()> {
         Url::parse(&server.uri())?,
         AuthorityPublicKey::from_signing_key(&signing_key),
     )?;
-    insta::assert_snapshot!(authority.verify_receipt(&receipt).await.expect_err("changed size"), @"Checksum authority size mismatch for `example-1.0-py3-none-any.whl`: expected 16 bytes");
+    insta::assert_snapshot!(authority.verify_receipt(&receipt).await.expect_err("changed size"), @"Checksum authority size mismatch for `example-1.0-py3-none-any.whl` from `https://pypi.org/simple`: expected 16 bytes");
     Ok(())
 }
 
@@ -487,7 +487,7 @@ async fn archive_short_response() -> Result<()> {
         .verify_response(response.into(), record.artifact(), temporary.path())
         .await
         .expect_err("wrong size");
-    insta::assert_snapshot!(error, @"Checksum authority size mismatch for `example-1.0-py3-none-any.whl`: expected 15 bytes");
+    insta::assert_snapshot!(error, @"Checksum authority size mismatch for `example-1.0-py3-none-any.whl` from `https://pypi.org/simple`: expected 15 bytes");
     shutdown
         .send(())
         .map_err(|()| anyhow!("server exited early"))?;
@@ -516,7 +516,7 @@ async fn archive_oversized_response() -> Result<()> {
         .verify_response(response.into(), record.artifact(), temporary.path())
         .await
         .expect_err("wrong size");
-    insta::assert_snapshot!(error, @"Checksum authority size mismatch for `example-1.0-py3-none-any.whl`: expected 15 bytes");
+    insta::assert_snapshot!(error, @"Checksum authority size mismatch for `example-1.0-py3-none-any.whl` from `https://pypi.org/simple`: expected 15 bytes");
     shutdown
         .send(())
         .map_err(|()| anyhow!("server exited early"))?;
