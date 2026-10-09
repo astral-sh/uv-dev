@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -563,31 +563,8 @@ pub async fn pip_compile(
         None
     };
 
-    let options = OptionsBuilder::new()
-        .resolution_mode(resolution_mode)
-        .prerelease(prerelease)
-        .fork_strategy(fork_strategy)
-        .dependency_mode(dependency_mode)
-        .exclude_newer(exclude_newer.clone())
-        .index_strategy(index_strategy)
-        .torch_backend(torch_backend)
-        .build_options(build_options.clone())
-        .artifact_environments(artifact_environments)
-        .minimum_libc_version(if universal {
-            minimum_libc_version
-        } else {
-            None
-        })
-        .required_environments(if universal {
-            required_environments.clone()
-        } else {
-            SupportedEnvironments::default()
-        })
-        .required_environments_mode(required_environments_mode)
-        .build();
-
-    // Source trees resolve within their discovered workspace, whose members are built locally.
-    let mut workspace_members = BTreeMap::new();
+    // Exempt discovered local workspace paths without changing registry source selection.
+    let mut workspace_wheel_exemptions = BTreeSet::new();
     if universal
         && required_environments_mode == Some(RequiredEnvironmentsMode::RequireWheels)
         && !build_dispatch.sources().all()
@@ -610,18 +587,41 @@ pub async fn pip_compile(
             )
             .await?
             {
-                workspace_members.extend(
+                workspace_wheel_exemptions.extend(
                     project
                         .workspace()
-                        .members_requirements()
-                        .filter(|requirement| {
-                            !build_dispatch.sources().for_package(&requirement.name)
-                        })
-                        .map(|requirement| (requirement.name, requirement.source)),
+                        .packages()
+                        .iter()
+                        .filter(|(name, _)| !build_dispatch.sources().for_package(name))
+                        .map(|(_, member)| member.root().to_owned()),
                 );
             }
         }
     }
+
+    let options = OptionsBuilder::new()
+        .resolution_mode(resolution_mode)
+        .prerelease(prerelease)
+        .fork_strategy(fork_strategy)
+        .dependency_mode(dependency_mode)
+        .exclude_newer(exclude_newer.clone())
+        .index_strategy(index_strategy)
+        .torch_backend(torch_backend)
+        .build_options(build_options.clone())
+        .artifact_environments(artifact_environments)
+        .minimum_libc_version(if universal {
+            minimum_libc_version
+        } else {
+            None
+        })
+        .required_environments(if universal {
+            required_environments.clone()
+        } else {
+            SupportedEnvironments::default()
+        })
+        .required_environments_mode(required_environments_mode)
+        .workspace_wheel_exemptions(workspace_wheel_exemptions)
+        .build();
 
     // Resolve the requirements.
     let mut resolution = match uv_resolve_operations::resolve(
@@ -632,7 +632,7 @@ pub async fn pip_compile(
         excludes,
         source_trees,
         project,
-        workspace_members,
+        BTreeMap::new(),
         &extras,
         &groups,
         preferences,

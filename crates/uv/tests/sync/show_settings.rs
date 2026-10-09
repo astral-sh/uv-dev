@@ -4022,6 +4022,7 @@ fn preview_features() {
     +            LockfileFormatCheck,
     +            LockfileNormalization,
     +            LockWithoutMetadata,
+    +            RequiredEnvironmentsMode,
     +            IndexByName,
     +            ArtifactHashFiltering,
     +            ContentAddressedCache,

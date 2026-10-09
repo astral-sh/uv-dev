@@ -1224,6 +1224,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         // Workspace projects are built locally; external sources must satisfy the wheel policy.
         if matches!(&dist, Dist::Source(_))
             && !self.workspace_members.contains(name)
+            && !matches!(&dist, Dist::Source(SourceDist::Directory(directory)) if self.options.workspace_wheel_exemptions.contains(directory.install_path.as_ref()))
             && env.marker_environment().is_none()
             && self.options.required_environments_mode
                 == Some(RequiredEnvironmentsMode::RequireWheels)
@@ -1255,9 +1256,25 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             if env.marker_environment().is_none() && !self.options.artifact_environments.is_empty()
             {
                 let wheel_marker = implied_markers(filename, self.options.minimum_libc_version);
+                let python_marker = metadata
+                    .requires_python
+                    .as_ref()
+                    .map_or(MarkerTree::TRUE, requires_python_marker);
                 // If the caller marked an environment as requiring artifact coverage, ensure it
                 // has coverage.
                 for environment_marker in self.options.artifact_environments.iter().copied() {
+                    let wheel_marker = if self.options.required_environments_mode
+                        == Some(RequiredEnvironmentsMode::RequireWheels)
+                        && self
+                            .options
+                            .required_environments
+                            .iter()
+                            .any(|required| *required == environment_marker)
+                    {
+                        wheel_marker.and(python_marker)
+                    } else {
+                        wheel_marker
+                    };
                     // If the platform is part of the current environment...
                     if env.included_by_marker(environment_marker)
                         && env.included_by_marker(
@@ -1773,16 +1790,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 .metadata
                 .requires_python
                 .as_ref()
-                .map_or(MarkerTree::TRUE, |requires_python| {
-                    requires_python
-                        .iter()
-                        .fold(MarkerTree::TRUE, |marker, specifier| {
-                            marker.and(MarkerTree::expression(MarkerExpression::Version {
-                                key: MarkerValueVersion::PythonFullVersion,
-                                specifier: specifier.clone(),
-                            }))
-                        })
-                })),
+                .map_or(MarkerTree::TRUE, requires_python_marker)),
             MetadataResponse::Unavailable(_) => Ok(MarkerTree::FALSE),
             MetadataResponse::Error(dist, err) => Err(ResolveError::Dist(
                 DistErrorKind::from_requested_dist(dist, &**err),
@@ -4163,4 +4171,16 @@ mod tests {
         // An empty list would otherwise widen to the full range.
         assert_eq!(widen_to_gap(&version, Some(&[])), Range::singleton(version));
     }
+}
+
+/// Retain all Python bounds and exclusions when checking an artifact's environment coverage.
+fn requires_python_marker(requires_python: &VersionSpecifiers) -> MarkerTree {
+    requires_python
+        .iter()
+        .fold(MarkerTree::TRUE, |marker, specifier| {
+            marker.and(MarkerTree::expression(MarkerExpression::Version {
+                key: MarkerValueVersion::PythonFullVersion,
+                specifier: specifier.clone(),
+            }))
+        })
 }

@@ -15714,7 +15714,7 @@ fn universal_required_environment_requires_matching_wheel() -> Result<()> {
     warning: The `required-environments-mode` setting is experimental and may change without warning. Pass `--preview-features required-environments-mode` to disable this warning.
     error: No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*')
       cause: Because holdout==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels and only holdout==1.0.0 is available, we can conclude that all versions of holdout cannot be used.
-             And because your project requires holdout, we can conclude that your project's requirements are unsatisfiable.
+             And because project depends on holdout, we can conclude that your requirements are unsatisfiable.
 
     hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
     ");
@@ -15747,7 +15747,7 @@ fn universal_required_environment_requires_matching_wheel() -> Result<()> {
     ----- stderr -----
     error: No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*')
       cause: Because holdout==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels and only holdout==1.0.0 is available, we can conclude that all versions of holdout cannot be used.
-             And because your project requires holdout, we can conclude that your project's requirements are unsatisfiable.
+             And because project depends on holdout, we can conclude that your requirements are unsatisfiable.
 
     hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
     ");
@@ -20135,6 +20135,64 @@ fn universal_required_environment_workspace_source() -> Result<()> {
 
     ----- stderr -----
     Resolved 1 package in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Wheel-only policy must not turn an unused workspace member into a registry source override.
+#[cfg(feature = "test-universal")]
+#[test]
+fn universal_required_environment_ignores_unused_workspace_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "unused-wheel-exemption"
+        [root]
+        requires = ["a"]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        requires = ["b>=2"]
+        sdist = false
+        [packages.b.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [tool.uv]
+        required-environments = []
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        [tool.uv.workspace]
+        members = ["b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pyproject.toml", "--universal", "--no-header", "--no-annotate"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==1.0.0
+    b==2.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
     "#);
     Ok(())
 }

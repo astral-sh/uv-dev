@@ -49086,3 +49086,48 @@ fn lock_required_environment_local_wheel_python_metadata() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Direct wheel tags do not override upper bounds in the wheel's Python metadata.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_direct_wheel_python_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&">=3.12,<3.13".parse()?),
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(&filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+        required-environments-mode = "require-wheels"
+        preview-features = ["required-environments-mode"]
+        [tool.uv.sources]
+        example = {{ path = "wheels/{filename}" }}
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because only example==1.0.0 is available and example==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels, we can conclude that all versions of example cannot be used.
+             And because your project depends on example, we can conclude that your project's requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
