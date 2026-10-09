@@ -1,5 +1,3 @@
-#![expect(clippy::disallowed_types)]
-
 #[cfg(feature = "test-git")]
 mod conditional_imports {
     pub(crate) use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
@@ -5682,7 +5680,7 @@ fn add_requirements_file() -> Result<()> {
     });
 
     // Passing stdin should succeed
-    uv_snapshot!(context.filters(), context.add().arg("-r").arg("-").stdin(std::fs::File::open(requirements_txt)?), @"
+    uv_snapshot!(context.filters(), context.add().arg("-r").arg("-").stdin(fs_err::File::open(requirements_txt.path())?.into_file()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]

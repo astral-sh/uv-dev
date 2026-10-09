@@ -54,12 +54,10 @@ jiff = { workspace = true }
 owo-colors = { workspace = true }
 rkyv = { workspace = true }
 rustc-hash = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
-version-ranges = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }

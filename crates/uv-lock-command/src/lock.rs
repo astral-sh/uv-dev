@@ -1124,7 +1124,7 @@ async fn do_lock(
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
                 .resolve(target.members_requirements())
                 .await
-                .map_err(|err| ProjectError::Operation(err.into()))?;
+                .map_err(|err| ProjectError::Operation(Box::new(err.into())))?;
             let workspace_members = member_requirements
                 .iter()
                 .map(|requirement| (requirement.name.clone(), requirement.source.clone()))
