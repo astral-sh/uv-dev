@@ -2053,6 +2053,7 @@ pub fn detect_conflicts(
     target: &InstallTarget,
     extras: &ExtrasSpecification,
     groups: &DependencyGroupsWithDefaults,
+    requires_python: &RequiresPython,
     marker_env: Option<&ResolverMarkerEnvironment>,
 ) -> Result<(), EnvironmentError> {
     // Validate that we aren't trying to install extras or groups that
@@ -2073,7 +2074,7 @@ pub fn detect_conflicts(
             .flat_map(ConflictSet::iter)
             .any(|item| matches!(item.kind(), ConflictKind::Project))
     {
-        target.selected_workspace_members(extras, groups, marker_env)?
+        target.selected_workspace_members(extras, groups, requires_python, marker_env)?
     } else {
         BTreeSet::new()
     };
