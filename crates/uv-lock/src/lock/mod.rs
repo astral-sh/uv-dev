@@ -2827,11 +2827,13 @@ impl Lock {
         Ok(lock)
     }
 
-    /// Whether immutable conflict participants record their declared extras, including empty sets.
+    /// Whether immutable conflict participants retain enough extra metadata for validation.
     pub fn has_conflict_extra_metadata(&self) -> bool {
-        self.packages
-            .iter()
-            .all(|package| package.has_conflict_extra_metadata(&self.conflicts))
+        self.packages.iter().all(|package| {
+            package
+                .validate_conflict_extra_metadata(&self.conflicts)
+                .is_ok()
+        })
     }
 
     /// Record the required platforms that were used to generate this lock.
@@ -7380,20 +7382,60 @@ impl Package {
         self.metadata != PackageMetadata::default()
     }
 
-    /// Whether the declarations needed to validate this package's conflicts are recorded.
-    fn has_conflict_extra_metadata(&self, conflicts: &Conflicts) -> bool {
-        !self.id.source.is_immutable()
-            || self.declared_extras.is_some()
-            || !conflicts
-                .iter()
-                .flat_map(ConflictSet::iter)
-                .any(|item| item.package() == self.name() && item.extra().is_some())
+    /// Return explicit declarations or the full Git metadata retained by older preview locks.
+    fn recorded_extras(&self) -> Option<&[ExtraName]> {
+        if let Some(declared) = self.declared_extras.as_deref() {
+            return Some(declared);
+        }
+        match &self.id.source {
+            Source::Git(..) => self
+                .has_metadata()
+                .then_some(self.metadata.provides_extra.as_ref()),
+            Source::Registry(..)
+            | Source::Direct(..)
+            | Source::Path(..)
+            | Source::Directory(..)
+            | Source::Editable(..)
+            | Source::Virtual(..) => None,
+        }
+    }
+
+    /// Require declarations and evidence that legacy serialization retained extra requests.
+    fn validate_conflict_extra_metadata(&self, conflicts: &Conflicts) -> Result<(), LockError> {
+        if !self.id.source.is_immutable() {
+            return Ok(());
+        }
+        let declared = self.recorded_extras();
+        for extra in conflicts
+            .iter()
+            .flat_map(ConflictSet::iter)
+            .filter(|item| item.package() == self.name())
+            .filter_map(ConflictItem::extra)
+        {
+            let Some(declared) = declared else {
+                return Err(LockErrorKind::MissingExtraMetadata {
+                    package: self.name().clone(),
+                }
+                .into());
+            };
+            // Legacy Git locks can retain declarations while erasing empty optional sections and
+            // their incoming extra labels. A missing extra cannot have lost a valid request.
+            if self.declared_extras.is_none()
+                && declared.contains(extra)
+                && !self.optional_dependencies.contains_key(extra)
+            {
+                return Err(LockErrorKind::MissingExtraRequests {
+                    package: self.name().clone(),
+                }
+                .into());
+            }
+        }
+        Ok(())
     }
 
     /// Whether recorded declarations establish that an extra does not exist.
     fn is_known_missing_extra(&self, extra: &ExtraName) -> bool {
-        self.declared_extras
-            .as_ref()
+        self.recorded_extras()
             .is_some_and(|declared| !declared.contains(extra))
     }
 
@@ -9629,7 +9671,10 @@ impl uv_errors::Hinted for LockError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if let Some(hint) = &self.hint {
             uv_errors::Hints::from(hint.to_string())
-        } else if matches!(&*self.kind, LockErrorKind::MissingExtraMetadata { .. }) {
+        } else if matches!(
+            &*self.kind,
+            LockErrorKind::MissingExtraMetadata { .. } | LockErrorKind::MissingExtraRequests { .. }
+        ) {
             uv_errors::Hints::from(
                 "Run `uv lock` to refresh the lockfile before using `--frozen`.".to_string(),
             )
@@ -10346,6 +10391,9 @@ enum LockErrorKind {
     /// An older lock cannot distinguish missing immutable extras from declared empty extras.
     #[error("The lockfile does not record the extras declared by `{package}`", package = package.cyan())]
     MissingExtraMetadata { package: PackageName },
+    /// An older lock can erase requests for declared empty Git extras.
+    #[error("The lockfile does not record whether the declared extras of `{package}` were requested", package = package.cyan())]
+    MissingExtraRequests { package: PackageName },
     /// An error that occurs when a concrete root package does not belong to the lock.
     #[error("Could not find root package `{id}` in lock", id = id.cyan())]
     RootPackageMissingFromLock {
