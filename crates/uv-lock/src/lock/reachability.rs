@@ -26,17 +26,17 @@ use crate::{
 };
 
 /// A request graph retains conflict guards until package and extra activation is known.
-pub(super) struct ConflictRequests<'lock> {
+struct ConflictRequests<'lock> {
     lock: &'lock Lock,
     marker_env: Option<ResolverMarkerEnvironment>,
     graph: Graph<Node<'lock>, Edge<'lock>>,
     nodes: FxHashMap<(PackageIndex, Option<ExtraName>), NodeIndex>,
-    pub(super) root: NodeIndex,
-    pub(super) queue: VecDeque<(PackageIndex, Option<ExtraName>, NodeIndex)>,
+    root: NodeIndex,
+    queue: VecDeque<(PackageIndex, Option<ExtraName>, NodeIndex)>,
 }
 
 impl<'lock> ConflictRequests<'lock> {
-    pub(super) fn new(lock: &'lock Lock, marker_env: Option<&ResolverMarkerEnvironment>) -> Self {
+    fn new(lock: &'lock Lock, marker_env: Option<&ResolverMarkerEnvironment>) -> Self {
         let mut graph = Graph::new();
         let root = graph.add_node(Node::Root);
         Self {
@@ -87,7 +87,7 @@ impl<'lock> ConflictRequests<'lock> {
         node
     }
 
-    pub(super) fn push(
+    fn push(
         &mut self,
         parent: NodeIndex,
         index: PackageIndex,
@@ -221,7 +221,7 @@ impl<'lock> ConflictRequests<'lock> {
     }
 
     /// Require legacy declaration evidence only after resolving request reachability.
-    pub(super) fn finish(
+    fn finish(
         self,
         known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
     ) -> impl Iterator<Item = Result<(PackageIndex, Option<ExtraName>, MarkerTree), LockError>>
