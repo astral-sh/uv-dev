@@ -1549,6 +1549,25 @@ impl<'lock> PackageMarkers<'lock> {
         self.markers.get(&(package, Some(extra))).copied()
     }
 
+    /// Restore the environment in which this dependency section is reachable.
+    fn context_marker(&self, package: &Package, context: DependencyContext<'_>) -> MarkerTree {
+        let marker = match context {
+            DependencyContext::Production | DependencyContext::Group(_) => self.get(&package.id),
+            DependencyContext::Extra(extra) => self.get_extra(&package.id, extra),
+        }
+        .unwrap_or(MarkerTree::FALSE);
+        if let DependencyContext::Group(group) = context
+            && let Some(requires_python) = package
+                .group_requires_python
+                .get(group)
+                .and_then(|metadata| metadata.requires_python.as_ref())
+        {
+            marker.and(RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree())
+        } else {
+            marker
+        }
+    }
+
     /// Merge a reachable environment, returning the combined marker only when it grows.
     fn merge(
         &mut self,
@@ -4036,6 +4055,8 @@ impl Lock {
             &effective_requirements,
             package,
             DependencyContext::Production,
+            &source_requirements.package_markers,
+            &self.conflicts,
             root,
         )? {
             return Ok(SatisfiesResult::MismatchedPackageDependencySource(
@@ -4050,6 +4071,8 @@ impl Lock {
                 &effective_requirements,
                 package,
                 DependencyContext::Extra(extra),
+                &source_requirements.package_markers,
+                &self.conflicts,
                 root,
             )? {
                 return Ok(SatisfiesResult::MismatchedPackageDependencySource(
@@ -4072,6 +4095,8 @@ impl Lock {
                 &requirements,
                 package,
                 DependencyContext::Group(group),
+                &source_requirements.package_markers,
+                &self.conflicts,
                 root,
             )? {
                 return Ok(SatisfiesResult::MismatchedPackageDependencySource(
@@ -4576,6 +4601,9 @@ impl Lock {
                     .chain(dependency_groups.values().flatten()),
             )
             .collect::<Vec<_>>();
+        if let Some(requirement) = self.mismatched_root_source(&root_requirements, root)? {
+            return Ok(SatisfiesResult::MismatchedRequirementSource(requirement));
+        }
         let dependency_sources = if allow_missing_package_metadata {
             Box::pin(self.collect_dependency_sources(
                 normalized_constraints,
@@ -4593,7 +4621,10 @@ impl Lock {
             ))
             .await?
         } else {
-            DependencySources::default()
+            DependencySources {
+                package_markers: self.locked_package_markers(&root_requirements, root)?,
+                ..DependencySources::default()
+            }
         };
 
         // Collect the set of available indexes (both `--index-url` and `--find-links` entries).
@@ -5089,6 +5120,115 @@ impl Lock {
             }
         }
         Ok(false)
+    }
+
+    /// Validate archive declarations attached directly to a workspace or script manifest.
+    fn mismatched_root_source(
+        &self,
+        requirements: &[Cow<'_, Requirement>],
+        root: &Path,
+    ) -> Result<Option<PackageName>, LockError> {
+        let environment = self.fork_markers_union();
+        for requirement in requirements {
+            match requirement.source {
+                RequirementSource::Path { .. } | RequirementSource::Url { .. } => {}
+                RequirementSource::Registry { .. }
+                | RequirementSource::GitDirectory { .. }
+                | RequirementSource::GitPath { .. }
+                | RequirementSource::Directory { .. } => continue,
+            }
+            let required = environment.and(requirement.marker);
+            let mut covered = MarkerTree::FALSE;
+            for package in self.packages_for_name(&requirement.name) {
+                if package
+                    .id
+                    .source
+                    .satisfies_requirement_source(&requirement.source, root)?
+                    && let Some(marker) = self.root_requirement_marker(requirement, package)
+                {
+                    covered = covered.or(marker);
+                }
+            }
+            if !required.and(covered.negate()).is_false() {
+                return Ok(Some(requirement.name.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Recover absolute package and extra domains from parent-relative locked dependency edges.
+    fn locked_package_markers(
+        &self,
+        root_requirements: &[Cow<'_, Requirement>],
+        root: &Path,
+    ) -> Result<PackageMarkers<'_>, LockError> {
+        let root_marker = self.fork_markers_union();
+        let mut queue = VecDeque::new();
+        for package in self.workspace_packages() {
+            queue.push_back((package, None, root_marker));
+            for extra in package.optional_dependencies.keys() {
+                queue.push_back((package, Some(extra), root_marker));
+            }
+        }
+        for requirement in root_requirements {
+            for package in self.packages_for_name(&requirement.name) {
+                if !Self::package_satisfies_requirement(package, requirement, root)? {
+                    continue;
+                }
+                let Some(marker) = self.root_requirement_marker(requirement, package) else {
+                    continue;
+                };
+                let marker = root_marker.and(marker);
+                queue.push_back((package, None, marker));
+                for extra in &requirement.extras {
+                    if let Some((extra, _)) = package.optional_dependencies.get_key_value(extra) {
+                        queue.push_back((package, Some(extra), marker));
+                    }
+                }
+            }
+        }
+        let mut markers = PackageMarkers::default();
+        while let Some((package, extra, mut marker)) = queue.pop_front() {
+            if !package.fork_markers.is_empty() {
+                let forks = package
+                    .fork_markers
+                    .iter()
+                    .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.combined()));
+                marker = marker.and(forks);
+            }
+            let context = extra.map_or(DependencyContext::Production, DependencyContext::Extra);
+            if markers.merge(&package.id, extra, marker).is_none() {
+                continue;
+            }
+            for context in iter::once(context).chain(
+                package
+                    .dependency_groups
+                    .keys()
+                    .filter(|_| extra.is_none())
+                    .map(DependencyContext::Group),
+            ) {
+                let parent = markers
+                    .context_marker(package, context)
+                    .and(context.conflict_marker(&package.id.name, &self.conflicts));
+                for dependency in context.dependencies(package) {
+                    let marker = parent.and(dependency.complexified_marker.combined());
+                    if marker.is_false() {
+                        continue;
+                    }
+                    let dependency_package = self.package(dependency.index);
+                    queue.push_back((dependency_package, None, marker));
+                    for extra in &dependency.extra {
+                        if let Some((extra, _)) = dependency_package
+                            .optional_dependencies
+                            .get_key_value(extra)
+                        {
+                            queue.push_back((dependency_package, Some(extra), marker));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(markers)
     }
 
     /// Return whether an exact locked source is reachable where its declaration applies.
@@ -6096,9 +6236,14 @@ fn mismatched_dependency_source(
     requirements: &[Requirement],
     package: &Package,
     context: DependencyContext<'_>,
+    package_markers: &PackageMarkers<'_>,
+    conflicts: &Conflicts,
     root: &Path,
 ) -> Result<Option<PackageName>, LockError> {
     let dependencies = context.dependencies(package);
+    let parent_marker = package_markers
+        .context_marker(package, context)
+        .and(context.conflict_marker(&package.id.name, conflicts));
     for requirement in requirements {
         match &requirement.source {
             RequirementSource::Path { .. } | RequirementSource::Url { .. } => {}
@@ -6108,14 +6253,17 @@ fn mismatched_dependency_source(
             | RequirementSource::Directory { .. } => continue,
         }
 
-        let marker = context.requirement_marker(requirement.marker);
+        let marker = parent_marker.and(context.requirement_marker(requirement.marker));
         if marker.is_false() {
             continue;
         }
 
         for dependency in dependencies {
             if dependency.package_id.name != requirement.name
-                || dependency.complexified_marker.pep508().is_disjoint(marker)
+                || dependency
+                    .complexified_marker
+                    .combined()
+                    .is_disjoint(marker)
             {
                 continue;
             }
@@ -6239,6 +6387,8 @@ pub enum SatisfiesResult<'lock> {
     MismatchedVersion(&'lock PackageName, Version, Option<Version>),
     /// The lockfile uses a different set of requirements.
     MismatchedRequirements(BTreeSet<Requirement>, BTreeSet<Requirement>),
+    /// A manifest requirement resolves to a different direct archive source.
+    MismatchedRequirementSource(PackageName),
     /// The lockfile uses a different set of constraints.
     MismatchedConstraints(BTreeSet<Requirement>, BTreeSet<Requirement>),
     /// The lockfile uses a different set of overrides.

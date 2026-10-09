@@ -464,6 +464,12 @@ impl ValidatedLock {
                 }
                 Ok(Self::Preferable(lock))
             }
+            SatisfiesResult::MismatchedRequirementSource(name) => {
+                debug!(
+                    "Resolving despite existing lockfile due to mismatched source for root requirement `{name}`"
+                );
+                Ok(Self::Preferable(lock))
+            }
             SatisfiesResult::MismatchedPackageDependencySource(name, version, dependency) => {
                 if let Some(version) = version {
                     debug!(

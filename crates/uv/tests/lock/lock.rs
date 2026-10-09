@@ -1998,6 +1998,271 @@ fn lock_wheel_url() -> Result<()> {
     Ok(())
 }
 
+/// A contextual locked edge retains the Python domain inherited from its local parent.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_wheel_url_parent_marker_reuses_without_cache() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/selected/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/inactive/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    let index = server.uri();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["provider ; python_version >= '3.13'"]
+
+        [tool.uv.sources]
+        provider = { path = "provider" }
+    "#})?;
+    context.temp_dir.child("provider/pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "provider"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "basic-package @ {index}/selected/basic_package-0.1.0-py3-none-any.whl ; python_version >= '3.13'",
+            "basic-package @ {index}/inactive/basic_package-0.1.0-py3-none-any.whl ; python_version < '3.13'",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    let redirected = locked.replace(
+        &format!(r#"source = {{ url = "{index}/selected/basic_package-0.1.0-py3-none-any.whl" }}"#),
+        &format!(r#"source = {{ url = "{index}/inactive/basic_package-0.1.0-py3-none-any.whl" }}"#),
+    );
+    assert_ne!(locked, redirected);
+    context.temp_dir.child("uv.lock").write_str(&redirected)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
+/// An extra's source checks use its incoming activation domain, separately from the base package.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_wheel_url_extra_parent_marker_reuses_without_cache() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/selected/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/inactive/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    let index = server.uri();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["provider", "provider[feature] ; python_version >= '3.13'"]
+
+        [tool.uv.sources]
+        provider = { path = "provider" }
+    "#})?;
+    context.temp_dir.child("provider/pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "provider"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = [
+            "basic-package @ {index}/selected/basic_package-0.1.0-py3-none-any.whl ; python_version >= '3.13'",
+            "basic-package @ {index}/inactive/basic_package-0.1.0-py3-none-any.whl ; python_version < '3.13'",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Projectless groups must reject a changed archive source even when their declaration is intact.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_non_project_wheel_path_rejects_mismatched_source() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    context.temp_dir.child("safe").create_dir_all()?;
+    context.temp_dir.child("replacement").create_dir_all()?;
+    let fixture = context
+        .workspace_root
+        .join("test/links/basic_package-0.1.0-py3-none-any.whl");
+    fs_err::copy(
+        &fixture,
+        context
+            .temp_dir
+            .join("safe/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    fs_err::copy(
+        &fixture,
+        context
+            .temp_dir
+            .join("replacement/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["basic-package"]
+
+        [tool.uv.workspace]
+        members = []
+
+        [tool.uv.sources]
+        basic-package = { path = "safe/basic_package-0.1.0-py3-none-any.whl" }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.13`.
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.13`.
+    Resolved 1 package in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    let redirected = locked.replace(
+        r#"source = { path = "safe/basic_package-0.1.0-py3-none-any.whl" }"#,
+        r#"source = { path = "replacement/basic_package-0.1.0-py3-none-any.whl" }"#,
+    );
+    assert_ne!(locked, redirected);
+    context.temp_dir.child("uv.lock").write_str(&redirected)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.13`.
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
+/// PEP 723 root requirements retain their direct source identity during lock validation.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_script_wheel_url_rejects_mismatched_source() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/selected/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/redirected/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    let index = server.uri();
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.13"
+        # dependencies = ["basic-package @ {index}/selected/basic_package-0.1.0-py3-none-any.whl"]
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    let locked = context.read("script.py.lock");
+    let redirected = locked.replace(
+        &format!(r#"source = {{ url = "{index}/selected/basic_package-0.1.0-py3-none-any.whl" }}"#),
+        &format!(
+            r#"source = {{ url = "{index}/redirected/basic_package-0.1.0-py3-none-any.whl" }}"#
+        ),
+    );
+    assert_ne!(locked, redirected);
+    context
+        .temp_dir
+        .child("script.py.lock")
+        .write_str(&redirected)?;
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--locked", "--no-index"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
 /// Conflicting extras can select different archives without invalidating an unchanged lock.
 #[cfg(feature = "test-universal")]
 #[tokio::test]
