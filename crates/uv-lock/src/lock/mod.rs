@@ -3969,6 +3969,17 @@ impl Lock {
             None
         };
 
+        let effective_requirements = normalizer
+            .requirements(Self::preprocess_requirements(
+                &package.id.name,
+                package_version,
+                &requires_dist,
+                DependencyContext::Production,
+                modifiers,
+            ))?
+            .into_iter()
+            .collect::<Vec<_>>();
+
         let expected_requirements = normalizer.requirements(requires_dist)?;
         let actual_requirements =
             normalizer.requirements(package.metadata.requires_dist.iter().cloned())?;
@@ -4018,20 +4029,12 @@ impl Lock {
             ));
         }
 
-        let effective_requirements = Self::preprocess_requirements(
-            &package.id.name,
-            package_version,
-            &expected_requirements,
-            DependencyContext::Production,
-            modifiers,
-        );
-
         // Validate that direct requirements still resolve to the archive they requested. Keep
         // production, optional, and group edges separate so same-name sources cannot be matched
         // against an unrelated edge set.
         if let Some(dependency) = mismatched_dependency_source(
             &effective_requirements,
-            &package.dependencies,
+            package,
             DependencyContext::Production,
             root,
         )? {
@@ -4043,13 +4046,9 @@ impl Lock {
         }
 
         for extra in provides_extra {
-            let dependencies = package
-                .optional_dependencies
-                .get(extra)
-                .map_or(&[][..], Vec::as_slice);
             if let Some(dependency) = mismatched_dependency_source(
                 &effective_requirements,
-                dependencies,
+                package,
                 DependencyContext::Extra(extra),
                 root,
             )? {
@@ -4069,13 +4068,9 @@ impl Lock {
                 DependencyContext::Group(group),
                 modifiers,
             );
-            let dependencies = package
-                .dependency_groups
-                .get(group)
-                .map_or(&[][..], Vec::as_slice);
             if let Some(dependency) = mismatched_dependency_source(
                 &requirements,
-                dependencies,
+                package,
                 DependencyContext::Group(group),
                 root,
             )? {
@@ -6099,10 +6094,11 @@ impl Lock {
 /// Return the first direct requirement that resolves to a different archive in an edge set.
 fn mismatched_dependency_source(
     requirements: &[Requirement],
-    dependencies: &[Dependency],
+    package: &Package,
     context: DependencyContext<'_>,
     root: &Path,
 ) -> Result<Option<PackageName>, LockError> {
+    let dependencies = context.dependencies(package);
     for requirement in requirements {
         match &requirement.source {
             RequirementSource::Path { .. } | RequirementSource::Url { .. } => {}

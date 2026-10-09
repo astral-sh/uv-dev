@@ -2098,6 +2098,72 @@ async fn lock_wheel_url_override_reuses_without_cache() -> Result<()> {
     Ok(())
 }
 
+/// Overrides preserve an extra's identity even when its original Python marker is inactive.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_wheel_url_override_preserves_extra_source_checks() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let server = MockServer::start().await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
+    )?;
+    Mock::given(method("GET"))
+        .and(path("/replacement/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel.clone()))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/redirected/basic_package-0.1.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    let index = server.uri();
+    context.temp_dir.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+
+        [project.optional-dependencies]
+        feature = ["basic-package @ {index}/original/basic_package-0.1.0-py3-none-any.whl ; python_version < '3.13'"]
+
+        [tool.uv]
+        override-dependencies = ["basic-package @ {index}/replacement/basic_package-0.1.0-py3-none-any.whl"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let locked = context.read("uv.lock");
+    let redirected = locked.replace(
+        &format!(
+            r#"source = {{ url = "{index}/replacement/basic_package-0.1.0-py3-none-any.whl" }}"#
+        ),
+        &format!(
+            r#"source = {{ url = "{index}/redirected/basic_package-0.1.0-py3-none-any.whl" }}"#
+        ),
+    );
+    assert_ne!(locked, redirected);
+    context.temp_dir.child("uv.lock").write_str(&redirected)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--no-index"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
 /// Reject a lockfile that redirects a direct path dependency to a different archive.
 #[cfg(feature = "test-universal")]
 #[test]
