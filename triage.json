@@ -3,19 +3,27 @@
     "items": [
       {
         "kind": "issue",
-        "number": 15357,
-        "title": "Stabilize conflicting modules warning",
-        "url": "https://github.com/astral-sh/uv/issues/15357",
-        "state": "open",
-        "reason": "Canonical tracker for detecting distributions that write the same module files; it explicitly covers broken installations and uninstallations and references astral-sh/uv#15238."
-      },
-      {
-        "kind": "issue",
         "number": 15238,
         "title": "`uv sync` removes necessary dependencies when two packages include the same module",
         "url": "https://github.com/astral-sh/uv/issues/15238",
         "state": "open",
-        "reason": "Tracks the same RECORD-based failure: uninstalling one overlapping distribution deletes files still required by another whose dist-info remains installed."
+        "reason": "Canonical removal bug: a maintainer confirmed that uninstalling an overlapping distribution deletes files listed in its RECORD while the surviving distribution's dist-info remains. The discussion explicitly requests preserving shared files or detecting incomplete installations and recommends targeted reinstallation."
+      },
+      {
+        "kind": "issue",
+        "number": 19412,
+        "title": "`uv sync` does not properly recover from an environment with faulty packages (opencv-contrib-python package problem)",
+        "url": "https://github.com/astral-sh/uv/issues/19412",
+        "state": "open",
+        "reason": "Nearly identical command sequence: install two differently named distributions providing cv2, remove one with uv remove, then get an AttributeError for the missing __version__ despite uv sync. The package names and platform differ, but the removal failure matches."
+      },
+      {
+        "kind": "issue",
+        "number": 15357,
+        "title": "Stabilize conflicting modules warning",
+        "url": "https://github.com/astral-sh/uv/issues/15357",
+        "state": "open",
+        "reason": "Canonical tracker for diagnosing overlapping modules and their broken installations/uninstallations. It links astral-sh/uv#15238 and explains why warnings remain in preview; maintainers redirected the proposed shared-file preservation fix here."
       },
       {
         "kind": "issue",
@@ -23,39 +31,7 @@
         "title": "report an error when installing a package that overrides another",
         "url": "https://github.com/astral-sh/uv/issues/16546",
         "state": "open",
-        "reason": "Tracks making module collisions an error and documents that preview detection may miss a conflict when one distribution was already installed."
-      },
-      {
-        "kind": "issue",
-        "number": 20907,
-        "title": "File collisions between two distributions are resolved silently, survive uninstall of both, and uv sync neither detects nor restores the missing files",
-        "url": "https://github.com/astral-sh/uv/issues/20907",
-        "state": "closed",
-        "reason": "Nearly identical compound report; maintainers closed it as a duplicate and redirected the collision and uninstall concerns to astral-sh/uv#15357 and astral-sh/uv#15238."
-      },
-      {
-        "kind": "pull_request",
-        "number": 13437,
-        "title": "Warn when two packages write to the same module",
-        "url": "https://github.com/astral-sh/uv/pull/13437",
-        "state": "merged",
-        "reason": "Implemented the initial collision warning, limited to packages installed in the same operation."
-      },
-      {
-        "kind": "pull_request",
-        "number": 15253,
-        "title": "Move warnings for conflicting modules into preview",
-        "url": "https://github.com/astral-sh/uv/pull/15253",
-        "state": "merged",
-        "reason": "Moved collision warnings behind preview because the initial detector produced too many false positives."
-      },
-      {
-        "kind": "pull_request",
-        "number": 17623,
-        "title": "Better detection for conflicting packages",
-        "url": "https://github.com/astral-sh/uv/pull/17623",
-        "state": "merged",
-        "reason": "Refined preview collision detection to distinguish namespace-style overlap from conflicting files."
+        "reason": "Matches the requested conflict error and sequential uv add trigger. Discussion confirms that the preview warning only detects packages installed together, misses a newly added package overlapping an already-installed one, and currently warns rather than rejects installation."
       },
       {
         "kind": "pull_request",
@@ -63,13 +39,37 @@
         "title": "Preserve files claimed by another package's RECORD on uninstall",
         "url": "https://github.com/astral-sh/uv/pull/19430",
         "state": "closed",
-        "reason": "Attempted the exact uninstall protection but was closed because retaining a shared path can preserve bytes from the removed distribution and silently leave the survivor incorrect."
+        "reason": "Proposed protecting files claimed by other installed distributions, directly addressing astral-sh/uv#15238 and astral-sh/uv#19412. Closed without merging on 2026-05-17 in favor of astral-sh/uv#15357: maintainers noted that retained files could contain the wrong distribution's bytes. This was not a released fix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13437,
+        "title": "Warn when two packages write to the same module",
+        "url": "https://github.com/astral-sh/uv/pull/13437",
+        "state": "merged",
+        "reason": "Introduced collision warnings, merged 2025-08-08. Its description explicitly limits detection to packages installed in a single operation, explaining why separate uv add calls are not covered; it did not fix shared-file removal."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15253,
+        "title": "Move warnings for conflicting modules into preview",
+        "url": "https://github.com/astral-sh/uv/pull/15253",
+        "state": "merged",
+        "reason": "Moved collision warnings behind preview on 2025-08-13 because of false positives. This explains the absence of a default warning and is not an uninstall fix that regressed in uv 0.12.23."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17623,
+        "title": "Better detection for conflicting packages",
+        "url": "https://github.com/astral-sh/uv/pull/17623",
+        "state": "merged",
+        "reason": "Refined preview detection on 2026-01-21 to inspect overlapping paths and reduce namespace-package false positives. Current source still checks only the installation batch and uses file sizes as a heuristic; this does not prevent the reported removal damage."
       }
     ],
-    "search_scope": "Searched open and closed issues and open, closed, and merged pull requests using literal terms including `xgboost-cpu`, `xgboost`, the reported AttributeError, and `RECORD`; conceptual terms including same module, top-level import, overlapping/shared files, package override, file ownership, namespace package, uninstall, and incomplete installation; and fix-oriented terms covering collision warnings, preview conflict detection, RECORD-aware uninstall, and environment repair. Inspected candidate comments and their referenced canonical discussions and implementation history. astral-sh/uv#16468 was ruled out because it concerns remove/re-add with a missing RECORD rather than two distributions sharing paths. astral-sh/uv#21968 concerns unexplained missing NCCL files after a possibly full filesystem, without an overlapping-distribution uninstall. astral-sh/uv#17645 is another instance of the same overlap pattern, but the selected trackers are more canonical."
+    "search_scope": "Separated collision detection/rejection during uv add from shared-file deletion and failed repair after uv remove. Searched astral-sh/uv open and closed issues with literal xgboost-cpu, the exact xgboost AttributeError, and generalized AttributeError/__version__/remove terms; conceptual searches covered same module, overlapping files, shared files, file collisions, and RECORD/uninstall. Searched open, closed, and merged PRs for conflicting modules, uninstall/shared, collision, module, overlap, and conflict, and followed issue/comment references to inspect PRs and their review discussions. REST searches became rate-limited; continued with authenticated gh issue/pr list searches. PR search queries returned no hits, so the relevant PRs were verified through direct gh pr view calls. Reviewed warning introduction, preview rollback, detection refinement, and the unmerged preservation proposal for release/regression context. Inspected astral-sh/uv#10564, astral-sh/uv#7389, astral-sh/uv#17645, and the duplicate-routing comments in astral-sh/uv#20907. Ruled out the reporter's astral-sh/uv#16468 as the canonical match: it concerns remove/re-add of one distribution with a missing RECORD and no confirmed overlap. astral-sh/uv#21968 shares incomplete-environment acceptance, but its file-loss cause is unknown, unlike this explicit overlapping-distribution removal."
   },
   "type": "duplicate",
-  "type_reason": "The two substantive behaviors are already tracked: astral-sh/uv#15357 covers detecting conflicting module providers, while astral-sh/uv#15238 covers deletion of shared files during uninstall. The xgboost/xgboost-cpu example is a new reproduction of those existing problems, not a regression of a completed fix; collision warnings remain intentionally preview-only, and the proposed uninstall fix in astral-sh/uv#19430 was not merged.",
-  "summary": "astral-sh/uv#15357 is the canonical collision-detection tracker, and astral-sh/uv#15238 tracks the same shared-file uninstall corruption. Historical pull requests explain why warnings remain preview-only and why the direct RECORD-preservation fix was rejected.",
-  "draft_response": "Thanks for the concrete reproduction. This is the same overlapping-distribution problem tracked in astral-sh/uv#15357, with the uninstall failure specifically tracked in astral-sh/uv#15238.\n\n`xgboost` and `xgboost-cpu` are distinct distribution names to the resolver, and their metadata does not declare that they conflict or substitute for one another. Their wheels nevertheless write overlapping paths in the `xgboost` import package. Removing `xgboost` deletes paths listed in its `RECORD`, including paths still needed by `xgboost-cpu`, leaving the latter's dist-info present but its module incomplete.\n\n`uv sync --reinstall-package xgboost-cpu` should restore the affected environment. Conflict detection currently remains a preview feature because some packages intentionally overlap, and it is most reliable when both distributions are installed in the same operation. We should centralize further work in astral-sh/uv#15357 and astral-sh/uv#15238, so this can be closed as a duplicate."
+  "type_reason": "The incorrect removal behavior is already tracked by open astral-sh/uv#15238 and the nearly identical uv remove reproduction in astral-sh/uv#19412. The collision-detection request and sequential-add limitation are covered by astral-sh/uv#15357 and astral-sh/uv#16546. Duplicate takes precedence over bug because both claims can be centralized there. This is not an established regression: astral-sh/uv#19430 never merged, and the merged warning changes did not protect shared files during uninstall.",
+  "summary": "astral-sh/uv#15238 and astral-sh/uv#19412 track the removal failure; astral-sh/uv#15357 and astral-sh/uv#16546 cover collision detection. The proposed uninstall fix was closed unmerged, and collision warnings remain limited and opt-in.",
+  "draft_response": "This matches the shared-file removal problem tracked in astral-sh/uv#15238; astral-sh/uv#19412 shows the same uv remove/missing __version__ sequence with OpenCV. Uninstalling one distribution deletes its recorded files even when another distribution also supplies them, while the remaining metadata makes that package appear installed.\n\nDifferent distribution names can resolve successfully despite overlapping module files. Collision detection is tracked in astral-sh/uv#15357 and astral-sh/uv#16546. The preview warning only compares packages installed in the same operation, so it does not cover your two separate uv add calls or prevent removal damage.\n\nAfter removing xgboost, run `uv sync --reinstall-package xgboost-cpu` to restore the remaining package, and keep only one variant installed. Let's continue the removal discussion in astral-sh/uv#15238 and the collision-detection discussion in astral-sh/uv#15357."
 }
