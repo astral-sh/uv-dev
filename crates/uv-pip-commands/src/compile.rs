@@ -687,8 +687,6 @@ pub async fn pip_compile(
         loop {
             let mut active_requirements = Vec::new();
             let mut active_seen = FxHashSet::default();
-            let mut active_constraints = Vec::new();
-            let mut constraints_seen = FxHashSet::default();
             for distribution in resolution.distributions() {
                 let ResolvedDist::Installable { dist, .. } = distribution else {
                     continue;
@@ -713,21 +711,36 @@ pub async fn pip_compile(
                 if let Some(build_requirements) = requirements_by_source.get(&id) {
                     active_requirements.extend(
                         build_requirements
-                            .requirements
                             .iter()
                             .filter(|requirement| active_seen.insert((*requirement).clone()))
                             .cloned()
                             .map(UnresolvedRequirementSpecification::from),
                     );
-                    active_constraints.extend(
-                        build_requirements
-                            .constraints
-                            .iter()
-                            .filter(|constraint| constraints_seen.insert((*constraint).clone()))
-                            .cloned(),
-                    );
                 }
             }
+            let active_build_requirements = active_seen
+                .iter()
+                .filter(|requirement| {
+                    requirement.evaluate_markers(Some(interpreter.markers()), &[])
+                })
+                .collect::<Vec<_>>();
+            let mut build_packages =
+                resolution.dependency_closure(active_build_requirements.iter().copied());
+            // Newly discovered roots may not be present in the current resolution yet.
+            build_packages.extend(
+                active_build_requirements
+                    .iter()
+                    .map(|requirement| requirement.name.clone()),
+            );
+            let active_constraints = build_constraints
+                .specifications()
+                .filter(|constraint| build_packages.contains(&constraint.requirement.name))
+                .cloned()
+                .collect::<Vec<_>>();
+            let constraints_seen = active_constraints
+                .iter()
+                .map(|constraint| constraint.requirement.clone())
+                .collect::<FxHashSet<_>>();
             let active_state = (active_seen, constraints_seen);
 
             // Requirements belong to selected sources; replaced source releases cannot retain
@@ -752,11 +765,7 @@ pub async fn pip_compile(
                 constraints
                     .iter()
                     .cloned()
-                    .chain(
-                        active_constraints
-                            .into_iter()
-                            .map(NameRequirementSpecification::from),
-                    )
+                    .chain(active_constraints)
                     .collect(),
                 overrides.clone(),
                 override_dependencies.clone(),
