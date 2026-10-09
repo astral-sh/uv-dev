@@ -48971,3 +48971,59 @@ async fn lock_exclude_newer_no_index_keeps_find_links() -> Result<()> {
     assert_eq!(context.read("uv.lock"), lock);
     Ok(())
 }
+
+/// An inactive legacy Simple default cannot invalidate the active flat default.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_exclude_newer_active_flat_default() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "active-flat-default"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let flat_index = MockServer::start().await;
+    Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{}">a-1.0.0-py3-none-any.whl</a>"#,
+                server.file_url("a-1.0.0-py3-none-any.whl")
+            ),
+            "text/html",
+        ))
+        .mount(&flat_index)
+        .await;
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-26T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [tool.uv]
+        index-url = "{index}/links"
+        [[tool.uv.index]]
+        name = "flat"
+        url = "{index}/links"
+        format = "flat"
+        default = true
+    "#, index = flat_index.uri()})?;
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}

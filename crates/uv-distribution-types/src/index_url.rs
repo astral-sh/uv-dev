@@ -397,10 +397,8 @@ impl<'a> IndexLocations {
     pub fn is_flat_index(&self, url: &IndexUrl, source_indexes: &[Index]) -> bool {
         let mut flat = false;
         for index in self
-            .flat_index
-            .iter()
-            .chain(self.simple_indexes())
-            .chain(self.default_index())
+            .allowed_indexes()
+            .into_iter()
             .chain(source_indexes.iter().filter(|_| !self.no_index))
         {
             if is_same_index(index.url(), url) {
@@ -732,6 +730,19 @@ mod tests {
         assert!(locations.is_flat_index(&url, &[simple]));
         let locations = IndexLocations::new(vec![], vec![], true);
         assert!(!locations.is_flat_index(&url, &[flat]));
+        Ok(())
+    }
+
+    #[test]
+    fn superseded_simple_default_does_not_shadow_active_flat_index() -> Result<(), Box<dyn Error>> {
+        let mut flat = Index::from_str("flat=https://example.com/packages")?;
+        flat.format = IndexFormat::Flat;
+        flat.default = true;
+        let url = flat.url().clone();
+        let mut legacy = Index::from_str("https://example.com/packages")?;
+        legacy.default = true;
+        let locations = IndexLocations::new(vec![flat.clone(), legacy], vec![], false);
+        assert!(locations.is_flat_index(&url, &[flat]));
         Ok(())
     }
 
