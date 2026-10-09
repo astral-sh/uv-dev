@@ -42794,6 +42794,89 @@ fn lock_exclude_newer_index_locked() -> Result<()> {
     Ok(())
 }
 
+/// Removing an index exemption restores the effective global cutoff for locked artifacts.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_removed_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2022-01-01T00:00:00Z");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let contents = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna==3.6"]
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        default = true
+        exclude-newer = false
+    "#};
+    pyproject.write_str(contents)?;
+    context
+        .lock()
+        .arg("--preview-features")
+        .arg("index-exclude-newer")
+        .assert()
+        .success();
+    pyproject.write_str(&contents.replace("exclude-newer = false\n", ""))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because idna>3.3 was published after the exclude newer time and your project depends on idna==3.6, we can conclude that your project's requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
+
+/// A newly configured package exemption takes precedence over a tightened index cutoff.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_current_package_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna==3.6"]
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        default = true
+        exclude-newer = false
+    "#})?;
+    context
+        .lock()
+        .arg("--preview-features")
+        .arg("index-exclude-newer")
+        .assert()
+        .success();
+    let lock = context.read("uv.lock");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna==3.6"]
+        [tool.uv]
+        exclude-newer-package = { idna = false }
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        default = true
+        exclude-newer = "2022-01-01T00:00:00Z"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache").arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
 /// An index cutoff also applies to transitive artifacts, and excludes an artifact uploaded at
 /// exactly the cutoff.
 #[cfg(feature = "test-universal")]

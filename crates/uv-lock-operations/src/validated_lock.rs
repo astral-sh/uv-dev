@@ -287,6 +287,7 @@ impl ValidatedLock {
                 workspace_default_groups,
                 dependency_metadata,
                 indexes,
+                &exclude_newer,
                 interpreter.tags()?,
                 interpreter.markers(),
                 &options.build_options,

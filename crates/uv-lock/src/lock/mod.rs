@@ -38,11 +38,11 @@ use uv_distribution_types::{
     ArchiveHashPolicy, BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist,
     DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
     FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
-    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString, VersionId,
+    HashValidation, Identifier, IndexFormat, IndexLocations, IndexMetadata, IndexUrl,
+    MetadataHashPolicy, MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
+    SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString, VersionId,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -4214,6 +4214,7 @@ impl Lock {
         workspace_default_groups: Option<&DefaultGroups>,
         dependency_metadata: &DependencyMetadata,
         indexes: Option<&IndexLocations>,
+        exclude_newer: &ExcludeNewer,
         tags: &Tags,
         markers: &MarkerEnvironment,
         build_options: &BuildOptions,
@@ -4657,11 +4658,10 @@ impl Lock {
         for package in &self.packages {
             if let Some(indexes) = indexes
                 && let Some(index) = package.index(root)?
-                && let Some(index_exclude_newer) = indexes.exclude_newer_for(&index)
-                && let Some(exclude_newer) = self
-                    .options
-                    .exclude_newer
-                    .exclude_newer_package_for_index(&package.id.name, Some(index_exclude_newer))
+                && let Some(index) = indexes.index_for_url(&index)
+                && index.format == IndexFormat::Simple
+                && let Some(exclude_newer) = exclude_newer
+                    .exclude_newer_package_for_index(&package.id.name, index.exclude_newer.as_ref())
                 && package
                     .sdist
                     .iter()

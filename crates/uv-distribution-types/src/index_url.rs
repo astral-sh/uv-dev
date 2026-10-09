@@ -475,7 +475,7 @@ impl<'a> IndexLocations {
     }
 
     /// Return the configured index matching the given URL.
-    fn index_for_url(&self, url: &IndexUrl) -> Option<&Index> {
+    pub fn index_for_url(&self, url: &IndexUrl) -> Option<&Index> {
         self.indexes
             .iter()
             .find(|index| is_same_index(index.url(), url))
