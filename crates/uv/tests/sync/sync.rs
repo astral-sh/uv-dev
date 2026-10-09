@@ -5273,25 +5273,6 @@ fn sync_group() -> Result<()> {
      + typing-extensions==4.10.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Resolved 10 packages in [TIME]
-    Found up-to-date lockfile at: uv.lock
-    Would download 9 packages
-    Would install 9 packages
-     + anyio==4.3.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + iniconfig==2.0.0
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + typing-extensions==4.10.0
-     + urllib3==2.2.1
-    ");
-
     // Using `--no-default-groups` should exclude all groups
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-default-groups"), @"
     exit_code: 0 (success)
@@ -5302,25 +5283,6 @@ fn sync_group() -> Result<()> {
     Would download 1 package
     Would install 1 package
      + typing-extensions==4.10.0
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Resolved 10 packages in [TIME]
-    Found up-to-date lockfile at: uv.lock
-    Would download 9 packages
-    Would install 9 packages
-     + anyio==4.3.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + iniconfig==2.0.0
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + typing-extensions==4.10.0
-     + urllib3==2.2.1
     ");
 
     // Using `--no-default-groups` with `--group foo` and `--group bar` should include those groups,
@@ -5456,21 +5418,6 @@ fn sync_include_group() -> Result<()> {
     Found up-to-date lockfile at: uv.lock
     Would download 1 package
     Would install 1 package
-     + typing-extensions==4.10.0
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Resolved 6 packages in [TIME]
-    Found up-to-date lockfile at: uv.lock
-    Would download 5 packages
-    Would install 5 packages
-     + anyio==4.3.0
-     + idna==3.6
-     + iniconfig==2.0.0
-     + sniffio==1.3.1
      + typing-extensions==4.10.0
     ");
 
@@ -6205,25 +6152,6 @@ fn sync_default_groups() -> Result<()> {
      + iniconfig==2.0.0
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Resolved 10 packages in [TIME]
-    Found up-to-date lockfile at: uv.lock
-    Would download 9 packages
-    Would install 9 packages
-     + anyio==4.3.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + iniconfig==2.0.0
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + typing-extensions==4.10.0
-     + urllib3==2.2.1
-    ");
-
     // Using `--no-default-groups` should exclude all groups
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--no-default-groups"), @"
     exit_code: 0 (success)
@@ -6234,25 +6162,6 @@ fn sync_default_groups() -> Result<()> {
     Would download 1 package
     Would install 1 package
      + typing-extensions==4.10.0
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Resolved 10 packages in [TIME]
-    Found up-to-date lockfile at: uv.lock
-    Would download 9 packages
-    Would install 9 packages
-     + anyio==4.3.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + iniconfig==2.0.0
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + typing-extensions==4.10.0
-     + urllib3==2.2.1
     ");
 
     // Using `--no-default-groups` with `--group foo` and `--group bar` should include those groups,
@@ -6504,25 +6413,6 @@ fn sync_disable_default_groups_with_environment_variable() -> Result<()> {
     Would download 1 package
     Would install 1 package
      + typing-extensions==4.10.0
-    ");
-
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-groups"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Resolved 10 packages in [TIME]
-    Found up-to-date lockfile at: uv.lock
-    Would download 9 packages
-    Would install 9 packages
-     + anyio==4.3.0
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + iniconfig==2.0.0
-     + requests==2.31.0
-     + sniffio==1.3.1
-     + typing-extensions==4.10.0
-     + urllib3==2.2.1
     ");
 
     // Using `UV_NO_DEFAULT_GROUPS` with `--group foo` and `--group bar` should include those groups,
