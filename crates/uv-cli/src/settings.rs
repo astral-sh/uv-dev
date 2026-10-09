@@ -36,7 +36,7 @@ use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, RequirementOrigin};
-use uv_preview::{Preview, PreviewFeature};
+use uv_preview::Preview;
 use uv_pypi_types::SupportedEnvironments;
 use uv_python_types::{
     Prefix, PythonArchitecture, PythonDownloads, PythonPreference, PythonVersion, Target,
@@ -47,7 +47,7 @@ use uv_settings::{
     IndexOptions, LockCheck, LockedFlag, LockedSource, MalwareCheckSettings, Options, PipOptions,
     PreviewFeaturesOption, PreviewOption, PublishOptions, PythonInstallMirrors, PythonListKinds,
     ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
-    ResolverSettings, resolve_build_hash_checking, resolve_prerelease,
+    ResolverSettings, resolve_build_hash_checking, resolve_prerelease, warn_build_policy_preview,
 };
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
@@ -4459,15 +4459,6 @@ fn resolve_pip_build_hash_checking(
             .or(environment.require_build_hashes)
             .or(configured),
     )
-}
-
-fn warn_build_policy_preview(options: &BuildOptions) {
-    if options.has_build_policy() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
-        warn_user_once!(
-            "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
-            PreviewFeature::BuildPolicy
-        );
-    }
 }
 
 /// Return the indexes from the effective filesystem configuration.

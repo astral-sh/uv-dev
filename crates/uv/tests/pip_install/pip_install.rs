@@ -18816,3 +18816,32 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
 
     Ok(())
 }
+
+/// Inline script no-build restrictions also apply to unnamed legacy editables.
+#[test]
+fn script_no_build_blocks_unnamed_editable() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("script.py").write_str(indoc! {r"
+        # /// script
+        # dependencies = []
+        # [tool.uv]
+        # no-build = true
+        # ///
+    "})?;
+    context
+        .temp_dir
+        .child("legacy/setup.py")
+        .write_str(indoc! {r#"
+        raise RuntimeError("the backend must not run")
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("script.py")
+        .arg("--editable").arg("legacy")
+        .arg("--offline"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Building source distributions is disabled
+    "#);
+    Ok(())
+}

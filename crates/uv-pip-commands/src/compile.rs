@@ -227,6 +227,7 @@ pub async fn pip_compile(
         find_links,
         no_binary,
         no_build,
+        no_build_unnamed_editable,
     } = RequirementsSpecification::from_sources(
         requirements,
         constraints,
@@ -487,7 +488,7 @@ pub async fn pip_compile(
     }
 
     // Combine the `--no-binary` and `--no-build` flags from the requirements files.
-    let build_options = build_options.combine(no_binary, no_build);
+    let build_options = build_options.combine(no_binary, no_build, no_build_unnamed_editable);
 
     // Resolve the flat indexes from `--find-links`.
     let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;

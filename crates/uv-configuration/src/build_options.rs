@@ -56,11 +56,20 @@ impl BuildOptions {
     }
 
     #[must_use]
-    pub fn combine(self, no_binary: NoBinary, no_build: NoBuild) -> Self {
+    pub fn combine(
+        self,
+        no_binary: NoBinary,
+        no_build: NoBuild,
+        no_build_unnamed_editable: bool,
+    ) -> Self {
+        let no_build_unnamed_editable = self
+            .no_build_unnamed_editable
+            .unwrap_or(matches!(self.no_build, NoBuild::All))
+            || no_build_unnamed_editable;
         Self {
             no_binary: self.no_binary.combine(no_binary),
             no_build: self.no_build.combine(no_build),
-            no_build_unnamed_editable: self.no_build_unnamed_editable,
+            no_build_unnamed_editable: Some(no_build_unnamed_editable),
             build_policy: self.build_policy,
             build_policy_package: self.build_policy_package,
         }
@@ -472,7 +481,11 @@ mod tests {
         assert!(options.no_build_requirement(None, false));
 
         // Explicit legacy restrictions take precedence over the new policy.
-        let options = options.combine(NoBinary::Packages(vec![other.clone()]), NoBuild::None);
+        let options = options.combine(
+            NoBinary::Packages(vec![other.clone()]),
+            NoBuild::None,
+            false,
+        );
         assert!(options.no_binary_package(&other));
         assert!(!options.no_build_package(&other));
         let options = BuildOptions::new(NoBinary::None, NoBuild::All)
@@ -499,7 +512,11 @@ mod tests {
         assert!(!options.no_build_requirement(Some(&package), false));
         assert!(options.no_build_requirement(Some(&other), false));
 
-        let options = options.combine(NoBinary::Packages(vec![package.clone()]), NoBuild::None);
+        let options = options.combine(
+            NoBinary::Packages(vec![package.clone()]),
+            NoBuild::None,
+            false,
+        );
         assert!(options.no_build_requirement(None, false));
         assert!(options.no_build_requirement(None, true));
         assert!(!options.no_build_requirement(Some(&package), false));
