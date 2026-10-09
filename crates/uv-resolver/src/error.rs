@@ -120,9 +120,7 @@ pub enum ResolveError {
     #[error("Hash-checking is required, but no trusted hash was provided for: `{0}`")]
     UnhashedPackage(PackageName),
 
-    #[error(
-        "In `--require-hashes` mode, all requirements must be pinned upfront with `==`, but found: `{0}`"
-    )]
+    #[error("Hash-checking is required, but no trusted hash was provided for: `{0}`")]
     UnhashedPackageVersion(PackageName, Version, DerivationChain),
 
     #[error("found conflicting distribution in resolution: {0}")]
