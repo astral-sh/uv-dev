@@ -21,6 +21,8 @@ while IFS=$'\t' read -r candidate attempt; do
 done <<< "$candidates"
 # Workflow concurrency admits one active consumer, but does not schedule it
 # in ID order. Queued and canceled unclaimed notifications cannot own work.
+# A consumer at another revision declines testing and directs CI to its own definitions.
 # An empty selection lets the CI waiter retry before a consumer has started.
 jq -r '([.[] | select(.status == "in_progress")] | min_by(.id).id) //
+  ([.[] | select(.status == "completed" and .conclusion != "cancelled" and .head_sha != env.SOURCE_HEAD_SHA)] | min_by(.id).id) //
   ([.[] | select(.conclusion == "failure" or .conclusion == "timed_out")] | min_by(.id).id) // empty' <<< "$consumers"

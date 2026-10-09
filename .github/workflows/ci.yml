@@ -159,14 +159,16 @@ jobs:
     with:
       sha: ${{ github.sha }}
 
-  test-integration-main:
-    name: integration tests
+  test-integration-main-wait:
+    name: integration dispatch
     needs:
       - plan
       - build-dev-binaries
     if: ${{ github.event_name == 'push' && needs.plan.outputs.test-integration == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    outputs:
+      fallback: ${{ steps.wait.outputs.fallback }}
     permissions:
       actions: read
       contents: read
@@ -179,9 +181,11 @@ jobs:
           sparse-checkout: .github/scripts
 
       - name: Wait for integration tests
+        id: wait
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_HEAD_SHA: ${{ github.sha }}
           INTEGRATION_RUN_NAME: Integration tests for CI ${{ github.run_id }}, attempt ${{ github.run_attempt }}
         run: |
           # The consumer waits for this job to start before downloading binaries.
@@ -204,6 +208,11 @@ jobs:
             fi
 
             run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id")
+            if [[ $(jq -r .head_sha <<< "$run") != "$SOURCE_HEAD_SHA" ]]; then
+              echo 'The consumer has different workflow definitions; using the producing CI revision.'
+              echo 'fallback=true' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             if [[ $(jq -r .status <<< "$run") != completed ]]; then
               sleep 30
               continue
@@ -223,6 +232,43 @@ jobs:
           done
           echo '::error::Timed out waiting for the integration workflow. Check that the integration dispatch route is enabled on the default branch.'
           exit 1
+
+  test-integration-main-fallback:
+    needs: test-integration-main-wait
+    if: ${{ needs.test-integration-main-wait.outputs.fallback == 'true' }}
+    uses: $/.github/workflows/test-integration.yml
+    secrets: inherit
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    with:
+      sha: ${{ github.sha }}
+
+  test-integration-main:
+    name: integration tests
+    needs:
+      - plan
+      - test-integration-main-wait
+      - test-integration-main-fallback
+    if: ${{ always() && github.event_name == 'push' && needs.plan.outputs.test-integration == 'true' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Check integration results
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          if ! jq -e '
+            .["test-integration-main-wait"].result == "success" and
+            (if .["test-integration-main-wait"].outputs.fallback == "true"
+             then .["test-integration-main-fallback"].result == "success"
+             else .["test-integration-main-fallback"].result == "skipped"
+             end)
+          ' <<< "$NEEDS_JSON" > /dev/null; then
+            echo '::error::Integration tests did not pass.'
+            exit 1
+          fi
 
   test-system:
     needs:
@@ -404,6 +450,7 @@ jobs:
       - check-generated-files
       - test
       - test-system
+      - test-integration-main
       - build-dev-binaries
       - build-docker
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}

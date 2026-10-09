@@ -63,6 +63,10 @@ jobs:
             echo 'The producing CI run has advanced to another attempt.'
             exit 0
           fi
+          if [[ "$GITHUB_SHA" != "$SOURCE_HEAD_SHA" ]]; then
+            echo 'The consumer revision differs from CI; CI will run its own integration definitions.'
+            exit 0
+          fi
           echo 'current=true' >> "$GITHUB_OUTPUT"
           echo "run-id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "sha=$SOURCE_HEAD_SHA" >> "$GITHUB_OUTPUT"
@@ -112,7 +116,7 @@ jobs:
               exit 0
             fi
             jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/attempts/$SOURCE_RUN_ATTEMPT/jobs?per_page=100" --paginate --slurp)
-            job=$(jq -ce '[.[].jobs[] | select(.name == "integration tests")] | if length == 1 then .[0] elif length == 0 then {} else error("Multiple CI meta jobs matched") end' <<< "$jobs")
+            job=$(jq -ce '[.[].jobs[] | select(.name == "integration dispatch")] | if length == 1 then .[0] elif length == 0 then {} else error("Multiple CI meta jobs matched") end' <<< "$jobs")
             status=$(jq -r '.status // empty' <<< "$job")
             conclusion=$(jq -r '.conclusion // empty' <<< "$job")
             if [[ "$status" == completed && ( "$conclusion" == success || "$conclusion" == skipped ) ]]; then
