@@ -23,7 +23,7 @@ use uv_distribution_types::{
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
-use uv_lock::{Installable, Lock};
+use uv_lock::{Installable, Lock, implicit_constraints_marker};
 use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
@@ -2040,7 +2040,7 @@ pub fn detect_root_conflicts(
         .roots()
         .map(|name| (name, MarkerTree::TRUE))
         .collect();
-    detect_conflicts_with_members(target, extras, groups, &roots)
+    detect_conflicts_with_members(target, extras, groups, &roots, None)
 }
 
 /// Validate selected options and reachable production members against declared conflicts.
@@ -2073,7 +2073,16 @@ pub fn detect_conflicts(
     } else {
         BTreeMap::new()
     };
-    detect_conflicts_with_members(target, extras, groups, &packages)
+    let root_markers = marker_env.is_none().then(|| {
+        let domain = implicit_constraints_marker(
+            requires_python.to_exact_marker_tree(),
+            lock.supported_environments(),
+        );
+        lock.workspace_packages()
+            .map(|package| (package.name(), package.environment_marker().and(domain)))
+            .collect::<BTreeMap<_, _>>()
+    });
+    detect_conflicts_with_members(target, extras, groups, &packages, root_markers.as_ref())
 }
 
 fn detect_conflicts_with_members(
@@ -2081,8 +2090,15 @@ fn detect_conflicts_with_members(
     extras: &ExtrasSpecification,
     groups: &DependencyGroupsWithDefaults,
     packages: &BTreeMap<&PackageName, MarkerTree>,
+    root_markers: Option<&BTreeMap<&PackageName, MarkerTree>>,
 ) -> Result<(), EnvironmentError> {
     let conflicts = target.lock().conflicts();
+    let root_marker = |name: &PackageName| {
+        root_markers
+            .and_then(|markers| markers.get(name))
+            .copied()
+            .unwrap_or(MarkerTree::TRUE)
+    };
     // CLI extras and groups apply to selected roots, independently of transitive production members.
     let roots = target.roots().collect::<BTreeSet<_>>();
     let group_root = target.group_root(groups);
@@ -2102,7 +2118,7 @@ fn detect_conflicts_with_members(
                 }
                 ConflictKind::Extra(extra) => {
                     if groups.prod() && roots.contains(item.package()) && extras.contains(extra) {
-                        MarkerTree::TRUE
+                        root_marker(item.package())
                     } else {
                         MarkerTree::FALSE
                     }
@@ -2111,7 +2127,7 @@ fn detect_conflicts_with_members(
                     if (roots.contains(item.package()) || group_root == Some(item.package()))
                         && target.includes_group(Some(item.package()), group, groups)
                     {
-                        MarkerTree::TRUE
+                        root_marker(item.package())
                     } else {
                         MarkerTree::FALSE
                     }
