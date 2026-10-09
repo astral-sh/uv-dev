@@ -11,7 +11,7 @@ use indoc::indoc;
 use predicates::prelude::*;
 use uv_cache::Cache;
 use uv_cache_key::cache_digest;
-use uv_fs::{LockedFile, LockedFileMode};
+use uv_fs::{LockedFile, LockedFileMode, Simplified};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 use uv_python_interpreter::PythonEnvironment;
 use uv_static::EnvVars;
@@ -86,7 +86,7 @@ fn create_venv_caches_interpreter() -> Result<()> {
         .first()
         .context("No Python installation")?
         .1
-        .canonicalize()?;
+        .simple_canonicalize()?;
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
         .init_no_wait()?
         .context("Interpreter cache is locked")?;
@@ -425,6 +425,21 @@ fn create_venv_caches_interpreter_at_symlink_limit() -> Result<()> {
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     ");
+
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let cached = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(context.venv.path(), &fresh_cache)?;
+    let cached_base = cached.interpreter().to_base_python()?;
+    let queried_base = queried.interpreter().to_base_python()?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(cached_base.display(), @"[PYTHON_BIN]/chain-0");
+        insta::assert_snapshot!(queried_base.display(), @"[PYTHON_BIN]/python");
+    });
 
     uv_snapshot!(context.filters(), context.external_command(context.venv.child("bin/python").path())
         .arg("-I")
