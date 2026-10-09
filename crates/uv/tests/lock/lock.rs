@@ -49046,3 +49046,167 @@ fn lock_local_python_script_override_dependency_change() -> Result<()> {
     ");
     Ok(())
 }
+/// Script dependencies at the script directory are not unconditional workspace roots.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_script_editable_root_requires_python_reachability() -> Result<()> {
+    let scenario = toml::from_str(indoc! {r#"
+        name = "script-editable-root-reachability"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.13");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["child; python_version >= '3.13'", "example"]
+        # [tool.uv.sources]
+        # child = { path = ".", editable = true }
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--script").arg("script.py")
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--script").arg("script.py")
+        .arg("--index-url").arg(server.index_url())
+        .args(["--check", "--offline", "--no-cache"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Impossible conflict combinations cannot widen a local package's Python reachability.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_path_requires_python_excludes_conflict_combinations() -> Result<()> {
+    let scenario = toml::from_str(indoc! {r#"
+        name = "local-python-conflict-reachability"
+        [root]
+        requires = ["example"]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.13").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child; python_version >= '3.13'", "example"]
+        [project.optional-dependencies]
+        a = []
+        b = []
+        [tool.uv]
+        conflicts = [[{ extra = "a" }, { extra = "b" }]]
+        [tool.uv.sources]
+        child = { path = "child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+    resolution-markers = [
+        "python_full_version >= '3.13'",
+        "python_full_version < '3.13'",
+    ]
+    conflicts = [[
+        { package = "project", extra = "a" },
+        { package = "project", extra = "b" },
+    ]]
+
+    [[package]]
+    name = "child"
+    version = "0.1.0"
+    source = { directory = "child" }
+
+    [[package]]
+    name = "example"
+    version = "1.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/example-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:example-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    dependencies = [
+        { name = "child", marker = "python_full_version >= '3.13' or (extra == 'extra-7-project-a' and extra == 'extra-7-project-b')" },
+        { name = "example" },
+    ]
+
+    [package.metadata]
+    requires-dist = [
+        { name = "child", marker = "python_full_version >= '3.13'", directory = "child" },
+        { name = "example" },
+    ]
+    provides-extras = ["a", "b"]
+    "#);
+    });
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--check", "--offline", "--no-cache"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+    Ok(())
+}
