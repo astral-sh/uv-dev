@@ -60,6 +60,7 @@ impl<'lock> ExportableRequirements<'lock> {
         annotate: bool,
         install_options: &'lock InstallOptions,
     ) -> Result<Self, LockError> {
+        target.validate_workspace_resolution(extras, groups, None)?;
         let dependency_marker = |dependency: &Dependency| {
             let marker = dependency.simplified_marker.as_simplified_marker_tree();
             match format {

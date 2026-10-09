@@ -23,6 +23,7 @@ use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, ResolverMarkerEnvir
 
 use uv_resolver_types::universal_marker::{ActivatedConflictItems, resolve_activated_extras};
 use uv_resolver_types::{ConflictMarker, UniversalMarker};
+use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources};
 
 use crate::lock::{
     Dependency, DependencyContext, DependencySelectionContext, HashedDist, LockErrorKind, Package,
@@ -199,6 +200,217 @@ pub trait Installable<'lock> {
         groups: &DependencyGroupsWithDefaults,
     ) -> bool {
         groups.contains(group)
+    }
+
+    /// Collect the locked Python requirements for the selected members and dependency groups.
+    fn workspace_python_requirements(
+        &self,
+        groups: &DependencyGroupsWithDefaults,
+    ) -> Result<RequiresPythonSources, LockError> {
+        let lock = self.lock();
+        let mut group_requirements = RequiresPythonSources::new();
+        for package in lock
+            .non_root_workspace_packages()
+            .filter(|package| groups.prod() && self.roots().any(|root| root == package.name()))
+        {
+            let requires_python = package.workspace_requires_python().ok_or_else(|| {
+                LockErrorKind::MissingWorkspaceMemberPython(package.name().clone())
+            })?;
+            group_requirements.insert(
+                RequiresPythonDeclaration::Member(package.name().clone(), None),
+                requires_python.clone(),
+            );
+        }
+
+        for name in self.roots() {
+            let Ok(Some(package)) = lock.find_by_name(name) else {
+                // Lockfile selection reports missing or ambiguous roots.
+                continue;
+            };
+            if package.fork_markers().is_empty() {
+                continue;
+            }
+            let marker = package.environment_marker();
+            let Some(requirement) = RequiresPython::from_marker_tree(marker) else {
+                if !marker.is_false() {
+                    return Err(
+                        LockErrorKind::UnrepresentableLockedRequiresPython(name.clone()).into(),
+                    );
+                }
+                return Err(LockErrorKind::DisjointWorkspaceRequiresPython.into());
+            };
+            group_requirements
+                .entry(RequiresPythonDeclaration::Member(name.clone(), None))
+                .and_modify(|specifiers| {
+                    *specifiers = specifiers
+                        .iter()
+                        .chain(requirement.specifiers().iter())
+                        .cloned()
+                        .collect();
+                })
+                .or_insert_with(|| requirement.specifiers().clone());
+        }
+
+        if let Some(members) = lock.member_group_metadata() {
+            let group_root = self.group_root(groups);
+
+            for (member, member_groups) in members {
+                // The group root can contribute groups without being an install root.
+                let is_install_root = self.roots().any(|root| root == member);
+                if !is_install_root && group_root != Some(member) {
+                    continue;
+                }
+
+                for (group, metadata) in member_groups {
+                    if self.includes_group(Some(member), group, groups)
+                        && let Some(requires_python) = &metadata.requires_python
+                    {
+                        group_requirements.insert(
+                            RequiresPythonDeclaration::Member(member.clone(), Some(group.clone())),
+                            requires_python.clone(),
+                        );
+                    }
+                }
+            }
+        }
+
+        for (group, metadata) in lock.workspace_group_metadata() {
+            if self.includes_group(None, group, groups)
+                && let Some(requires_python) = &metadata.requires_python
+            {
+                group_requirements.insert(
+                    RequiresPythonDeclaration::Workspace(group.clone()),
+                    requires_python.clone(),
+                );
+            }
+        }
+
+        Ok(group_requirements)
+    }
+
+    /// Validate that selected non-root dependencies were resolved for the requested environment.
+    fn validate_workspace_resolution(
+        &self,
+        extras: &ExtrasSpecification,
+        groups: &DependencyGroupsWithDefaults,
+        marker_environment: Option<&ResolverMarkerEnvironment>,
+    ) -> Result<(), LockError> {
+        let lock = self.lock();
+        let roots = self
+            .roots()
+            .chain(self.group_root(groups))
+            .collect::<FxHashSet<_>>();
+        for package in lock
+            .non_root_workspace_packages()
+            .filter(|package| roots.contains(package.name()))
+        {
+            for group in package
+                .dependency_groups()
+                .keys()
+                .chain(package.resolved_dependency_groups().keys())
+            {
+                if self.includes_group(Some(package.name()), group, groups) {
+                    return Err(LockErrorKind::UnresolvedWorkspaceGroup {
+                        package: package.name().clone(),
+                        group: group.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+
+        if !groups.prod() {
+            return Ok(());
+        }
+        let roots = self.roots().collect::<FxHashSet<_>>();
+        let selected = lock
+            .non_root_workspace_packages()
+            .filter(|package| roots.contains(package.name()))
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Ok(());
+        }
+        let mut activated = roots
+            .iter()
+            .map(|name| ConflictItem::from((*name).clone()))
+            .collect::<Vec<_>>();
+        let group_root = self.group_root(groups);
+        for package in lock.workspace_packages() {
+            if roots.contains(package.name()) {
+                for extra in extras.extra_names(
+                    package
+                        .provides_extras()
+                        .iter()
+                        .chain(package.optional_dependencies().keys()),
+                ) {
+                    activated.push(ConflictItem::from((package.name().clone(), extra.clone())));
+                }
+            }
+            if roots.contains(package.name()) || group_root == Some(package.name()) {
+                for group in package
+                    .dependency_groups()
+                    .keys()
+                    .chain(package.resolved_dependency_groups().keys())
+                {
+                    if self.includes_group(Some(package.name()), group, groups) {
+                        activated.push(ConflictItem::from((package.name().clone(), group.clone())));
+                    }
+                }
+            }
+        }
+        let resolved = lock.resolved_workspace_reachability(self.install_path(), &activated)?;
+        let domain = if marker_environment.is_none() {
+            let requirements = self.workspace_python_requirements(groups)?;
+            let requires_python = RequiresPython::intersection(
+                std::iter::once(lock.requires_python().specifiers()).chain(requirements.values()),
+            )
+            .ok_or(LockErrorKind::DisjointWorkspaceRequiresPython)?;
+            implicit_constraints_marker(
+                requires_python.to_exact_marker_tree(),
+                lock.supported_environments(),
+            )
+        } else {
+            MarkerTree::TRUE
+        };
+        let available = |marker: MarkerTree| {
+            if let Some(environment) = marker_environment {
+                marker.evaluate(environment.markers(), &[])
+            } else {
+                domain.and(marker.negate()).is_false()
+            }
+        };
+        for package in selected {
+            if groups.prod() {
+                let marker = resolved
+                    .get(&(package.name(), None))
+                    .copied()
+                    .unwrap_or(MarkerTree::FALSE);
+                if !available(marker) {
+                    return Err(
+                        LockErrorKind::UnresolvedWorkspacePackage(package.name().clone()).into(),
+                    );
+                }
+            }
+            for extra in extras.extra_names(
+                package
+                    .provides_extras()
+                    .iter()
+                    .chain(package.optional_dependencies().keys()),
+            ) {
+                let marker = resolved
+                    .get(&(package.name(), Some(extra)))
+                    .copied()
+                    .unwrap_or(MarkerTree::FALSE);
+                if !available(marker) {
+                    return Err(LockErrorKind::UnresolvedWorkspaceExtra {
+                        package: package.name().clone(),
+                        extra: extra.clone(),
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Return workspace members reachable through the selected roots, extras, and groups.
@@ -480,6 +692,7 @@ pub trait Installable<'lock> {
         build_options: &BuildOptions,
         install_options: &InstallOptions,
     ) -> Result<Resolution, LockError> {
+        self.validate_workspace_resolution(extras, groups, Some(marker_env))?;
         let resolve_root = |root_name: &PackageName| {
             self.lock()
                 .find_by_name(root_name)
@@ -1243,6 +1456,7 @@ struct LockedPackages<'lock> {
     lock: &'lock Lock,
     install_path: &'lock Path,
     project_name: Option<&'lock PackageName>,
+    roots: Vec<&'lock Package>,
 }
 
 impl<'lock> Installable<'lock> for LockedPackages<'lock> {
@@ -1255,7 +1469,7 @@ impl<'lock> Installable<'lock> for LockedPackages<'lock> {
     }
 
     fn roots(&self) -> impl Iterator<Item = &PackageName> {
-        std::iter::empty()
+        self.roots.iter().map(|package| package.name())
     }
 
     fn project_name(&self) -> Option<&PackageName> {
@@ -1300,6 +1514,7 @@ impl Lock {
             lock: self,
             install_path,
             project_name,
+            roots: vec![package],
         }
         .to_resolution_from_packages(
             &[package],
@@ -1361,13 +1576,15 @@ impl Lock {
             }
         }
 
-        LockedPackages {
+        let target = LockedPackages {
             lock: self,
             install_path,
             project_name,
-        }
-        .to_resolution_from_packages(
-            &concrete_roots,
+            roots: concrete_roots,
+        };
+        target.validate_workspace_resolution(extras, groups, Some(marker_env))?;
+        target.to_resolution_from_packages(
+            &target.roots,
             None,
             false,
             DependencySelectionContext::None,
@@ -1811,6 +2028,119 @@ source = { registry = "https://example.com/simple" }
         }
     }
 
+    fn workspace_lock_with_unresolved_extra() -> Lock {
+        Lock::from_toml(
+            r#"
+version = 1
+revision = 3
+requires-python = ">=3.11"
+
+[manifest]
+members = ["app"]
+workspace-members = ["app", "shared"]
+
+[[package]]
+name = "app"
+version = "1.0.0"
+source = { virtual = "." }
+dependencies = [{ name = "shared" }]
+
+[[package]]
+name = "shared"
+version = "1.0.0"
+source = { virtual = "shared" }
+
+[package.metadata]
+requires-python = ">=3.11"
+provides-extras = ["feature"]
+"#,
+        )
+        .expect("valid explicit-root lock")
+    }
+
+    #[test]
+    fn concrete_workspace_conversion_rejects_unresolved_extra() {
+        let lock = workspace_lock_with_unresolved_extra();
+        let shared = package(&lock, "shared", "1.0.0");
+        let install_path = std::env::current_dir().expect("absolute installation path");
+        let extras = ExtrasSpecification::from_all_extras().with_defaults(DefaultExtras::default());
+        let error = lock
+            .to_resolution(
+                &install_path,
+                [shared],
+                None,
+                &LINUX_MARKERS,
+                &TAGS,
+                &extras,
+                &DependencyGroupsWithDefaults::none(),
+                &BuildOptions::default(),
+                &InstallOptions::default(),
+            )
+            .expect_err("the requested non-root extra was not resolved");
+        insta::assert_snapshot!(error, @"Extra `feature` for workspace member `shared` was not resolved for this selection");
+    }
+
+    #[test]
+    fn installable_workspace_conversion_rejects_unresolved_extra() {
+        let lock = workspace_lock_with_unresolved_extra();
+        let target = OverridingInstallable {
+            lock: &lock,
+            root_name: package(&lock, "shared", "1.0.0").name(),
+            package_to_node_calls: Cell::new(0),
+        };
+        let extras = ExtrasSpecification::from_all_extras().with_defaults(DefaultExtras::default());
+        let error = target
+            .to_resolution(
+                &LINUX_MARKERS,
+                &TAGS,
+                &extras,
+                &DependencyGroupsWithDefaults::none(),
+                &BuildOptions::default(),
+                &InstallOptions::default(),
+            )
+            .expect_err("the requested non-root extra was not resolved");
+        insta::assert_snapshot!(error, @"Extra `feature` for workspace member `shared` was not resolved for this selection");
+        assert_eq!(target.package_to_node_calls.get(), 0);
+    }
+
+    #[test]
+    fn export_workspace_conversion_rejects_unresolved_extra() {
+        let lock = workspace_lock_with_unresolved_extra();
+        let target = OverridingInstallable {
+            lock: &lock,
+            root_name: package(&lock, "shared", "1.0.0").name(),
+            package_to_node_calls: Cell::new(0),
+        };
+        let extras = ExtrasSpecification::from_all_extras().with_defaults(DefaultExtras::default());
+        let groups = DependencyGroupsWithDefaults::none();
+        let install_options = InstallOptions::default();
+        let error = crate::RequirementsTxtExport::from_lock(
+            &target,
+            &[],
+            &extras,
+            &groups,
+            false,
+            None,
+            false,
+            &install_options,
+        )
+        .expect_err("the requested non-root extra was not resolved");
+        insta::assert_snapshot!(error, @"Extra `feature` for workspace member `shared` was not resolved for this selection");
+        let error = crate::PylockToml::from_lock(
+            &target,
+            Path::new("."),
+            lock.requires_python().clone(),
+            &[],
+            &extras,
+            &groups,
+            false,
+            None,
+            &install_options,
+        )
+        .expect_err("the requested non-root extra was not resolved");
+        insta::assert_snapshot!(error, @"Extra `feature` for workspace member `shared` was not resolved for this selection");
+    }
+
     fn graph_snapshot(resolution: &Resolution) -> (Vec<String>, Vec<String>) {
         let graph = resolution.graph();
         let labels = graph
@@ -1900,6 +2230,7 @@ source = { registry = "https://example.com/simple" }
             lock: &lock,
             install_path: Path::new("."),
             project_name: Some(project.name()),
+            roots: vec![project],
         }
         .to_resolution_from_packages(
             &[project],

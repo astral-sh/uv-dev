@@ -25,7 +25,7 @@ use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter, detect_conflicts,
 };
 use uv_fs::CWD;
-use uv_lock::{Lock, PylockToml, RequirementsTxtExport, cyclonedx_json};
+use uv_lock::{Installable, Lock, PylockToml, RequirementsTxtExport, cyclonedx_json};
 use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_preview::{Preview, PreviewFeature};

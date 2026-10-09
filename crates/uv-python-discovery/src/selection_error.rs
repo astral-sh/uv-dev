@@ -50,6 +50,12 @@ pub enum PythonSelectionError {
     )]
     DisjointRequiresPython(RequiresPythonSources),
 
+    #[error(
+        "The union of the resolution roots' Python requirements cannot be represented by `requires-python`:\n{}",
+        format_requires_python_sources(_0)
+    )]
+    UnrepresentableRequiresPythonUnion(RequiresPythonSources),
+
     #[error(transparent)]
     Python(#[from] crate::Error),
 
@@ -71,6 +77,7 @@ impl uv_errors::Hinted for PythonSelectionError {
             | Self::DotPythonVersionScriptIncompatibility(..)
             | Self::RequiresPythonScriptIncompatibility(..)
             | Self::DisjointRequiresPython(..)
+            | Self::UnrepresentableRequiresPythonUnion(..)
             | Self::DependencyGroup(..)
             | Self::Io(..) => uv_errors::Hints::none(),
         }

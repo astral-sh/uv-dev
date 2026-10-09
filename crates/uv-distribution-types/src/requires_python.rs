@@ -138,14 +138,18 @@ impl RequiresPython {
     }
 
     /// Project a marker onto the Python versions for which it can be satisfied.
+    ///
+    /// Returns `None` if the domain is empty or cannot be represented exactly by PEP 440 specifiers.
     pub fn from_marker_tree(marker: MarkerTree) -> Option<Self> {
         let range = python_version_ranges(marker).unwrap_or_else(Ranges::full);
         if range.is_empty() {
             return None;
         }
-        Some(Self::from_specifiers(
-            VersionSpecifiers::from_release_only_bounds(range.iter()),
-        ))
+        let specifiers = VersionSpecifiers::from_release_only_bounds(range.iter());
+        if release_specifiers_to_ranges(specifiers.clone()) != range {
+            return None;
+        }
+        Some(Self::from_specifiers(specifiers))
     }
 
     /// Returns a [`RequiresPython`] to express the intersection of the given version specifiers.
@@ -173,7 +177,9 @@ impl RequiresPython {
         Some(Self { specifiers, range })
     }
 
-    /// Returns a [`RequiresPython`] covering the union of the given version specifiers.
+    /// Returns a [`RequiresPython`] expressing the union of the given version specifiers.
+    ///
+    /// Returns `None` for an empty union or one that cannot be represented exactly by PEP 440 specifiers.
     pub fn union<'a>(specifiers: impl Iterator<Item = &'a VersionSpecifiers>) -> Option<Self> {
         let range = specifiers
             .map(|specifiers| release_specifiers_to_ranges(specifiers.clone()))
@@ -181,8 +187,12 @@ impl RequiresPython {
         if range.is_empty() {
             return None;
         }
+        let specifiers = VersionSpecifiers::from_release_only_bounds(range.iter());
+        if release_specifiers_to_ranges(specifiers.clone()) != range {
+            return None;
+        }
         Some(Self {
-            specifiers: VersionSpecifiers::from_release_only_bounds(range.iter()),
+            specifiers,
             range: RequiresPythonRange::from_range(&range),
         })
     }
@@ -760,6 +770,29 @@ mod tests {
             requirement.to_exact_marker_tree(),
             "python_full_version == '3.12.*' or python_full_version == '3.14.*'".parse()?,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn requires_python_union_preserves_patch_gaps() -> Result<(), Box<dyn std::error::Error>> {
+        let ranges = [">=3.12,<3.12.3".parse()?, ">=3.12.4,<3.13".parse()?];
+        let requirement = RequiresPython::union(ranges.iter()).expect("representable union");
+        assert!(requirement.contains(&"3.12.2".parse()?));
+        assert!(!requirement.contains(&"3.12.3".parse()?));
+        assert!(requirement.contains(&"3.12.4".parse()?));
+        let marker = "(python_full_version >= '3.12' and python_full_version < '3.12.3') or (python_full_version >= '3.12.4' and python_full_version < '3.13')".parse()?;
+        assert_eq!(requirement.to_exact_marker_tree(), marker);
+        assert_eq!(RequiresPython::from_marker_tree(marker), Some(requirement));
+        Ok(())
+    }
+
+    #[test]
+    fn requires_python_union_rejects_unrepresentable_gaps() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let ranges = [">=3.12,<3.12.3".parse()?, ">=3.13,<3.14".parse()?];
+        assert!(RequiresPython::union(ranges.iter()).is_none());
+        let marker = "(python_full_version >= '3.12' and python_full_version < '3.12.3') or (python_full_version >= '3.13' and python_full_version < '3.14')".parse()?;
+        assert!(RequiresPython::from_marker_tree(marker).is_none());
         Ok(())
     }
 
