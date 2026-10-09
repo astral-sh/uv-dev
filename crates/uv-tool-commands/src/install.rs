@@ -18,7 +18,7 @@ use uv_configuration::{
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
-    RequirementSource, RequiresPython, UnresolvedRequirementSpecification,
+    RequirementSource, UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -124,12 +124,26 @@ pub async fn install(
         _ => None,
     };
 
+    // Read the `--with` requirements.
+    let spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        excludes,
+        None,
+        &client_builder,
+    )
+    .await?;
+
+    let requires_python = spec.requires_python.clone();
+
     let tool_python = ToolPython::from_request(
         python.as_deref().map(PythonRequest::parse),
         unresolved_target_requirements
             .as_ref()
             .and_then(|requirements| requirements.first())
             .map(|requirement| &requirement.requirement),
+        requires_python.as_ref(),
         config_discovery,
         lfs,
         state.git(),
@@ -372,21 +386,6 @@ pub async fn install(
         settings
     };
 
-    // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        excludes,
-        None,
-        &client_builder,
-    )
-    .await?;
-
-    let requires_python = spec
-        .requires_python
-        .clone()
-        .map(RequiresPython::from_specifiers);
     if let Some(requires_python) = requires_python.as_ref()
         && !requires_python.contains(interpreter.python_version())
     {

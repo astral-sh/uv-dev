@@ -17,7 +17,7 @@ use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, Name, Origin,
-    PackageConfigSettings, RequiresPython, Resolution,
+    PackageConfigSettings, Resolution,
 };
 use uv_fs::Simplified;
 use uv_install_wheel::LinkMode;
@@ -266,7 +266,7 @@ pub async fn pip_sync(
         .as_ref()
         .map_or(interpreter.python_version(), PythonVersion::version);
     if let Some(requires_python) = requires_python.as_ref()
-        && !RequiresPython::from_specifiers(requires_python.clone()).contains(target_version)
+        && !requires_python.contains(target_version)
     {
         return Err(anyhow::anyhow!(
             "Python {target_version} is incompatible with the PEP 723 `requires-python` value: `{requires_python}`"

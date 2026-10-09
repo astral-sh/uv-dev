@@ -41,14 +41,13 @@ use uv_configuration::{
     DependencyGroups, ExcludeDependency, NoBinary, NoBuild, Override, PackageOverride,
     RequirementsInput,
 };
-use uv_distribution_types::{Index, Requirement};
+use uv_distribution_types::{Index, Requirement, RequiresPython};
 use uv_distribution_types::{
     IndexUrl, NameRequirementSpecification, UnresolvedRequirement,
     UnresolvedRequirementSpecification,
 };
 use uv_fs::{CWD, Simplified};
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
-use uv_pep508::uv_pep440::VersionSpecifiers;
 use uv_pypi_types::PyProjectToml;
 use uv_requirements_txt::{RequirementsTxt, RequirementsTxtRequirement, SourceCache};
 use uv_scripts::{OverrideDependency, Pep723Metadata};
@@ -61,7 +60,7 @@ pub struct RequirementsSpecification {
     /// The name of the project specifying requirements.
     pub project: Option<PackageName>,
     /// The Python requirement from PEP 723 script metadata, if any.
-    pub requires_python: Option<VersionSpecifiers>,
+    pub requires_python: Option<RequiresPython>,
     /// The requirements for the project.
     pub requirements: Vec<UnresolvedRequirementSpecification>,
     /// The constraints for the project.
@@ -164,7 +163,10 @@ impl RequirementsSpecification {
 
             Self {
                 requirements,
-                requires_python: metadata.requires_python.clone(),
+                requires_python: metadata
+                    .requires_python
+                    .clone()
+                    .map(RequiresPython::from_specifiers),
                 constraints,
                 override_dependencies,
                 excludes: tool_uv.exclude_dependencies.clone().unwrap_or_default(),
@@ -209,7 +211,10 @@ impl RequirementsSpecification {
         } else {
             Self {
                 requirements,
-                requires_python: metadata.requires_python.clone(),
+                requires_python: metadata
+                    .requires_python
+                    .clone()
+                    .map(RequiresPython::from_specifiers),
                 ..Self::default()
             }
         }
@@ -564,13 +569,14 @@ impl RequirementsSpecification {
         // a requirements file can also add constraints.
         for source in requirement_sources {
             if let Some(requires_python) = source.requires_python {
-                spec.requires_python = Some(
+                spec.requires_python = Some(RequiresPython::from_specifiers(
                     spec.requires_python
+                        .as_ref()
                         .into_iter()
-                        .flatten()
-                        .chain(requires_python)
+                        .chain(Some(&requires_python))
+                        .flat_map(|requires_python| requires_python.specifiers().iter().cloned())
                         .collect(),
-                );
+                ));
             }
             spec.requirements.extend(source.requirements);
             spec.constraints.extend(source.constraints);

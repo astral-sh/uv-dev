@@ -3671,7 +3671,7 @@ fn write_python_version_tool(wheels: &ChildPath, requires_python: Option<&str>) 
 
 #[test]
 fn tool_pep723_requirements_reject_incompatible_environment() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin = context.temp_dir.child("bin");
@@ -3747,19 +3747,47 @@ fn tool_pep723_requirements_bound_interpreter_refinement() -> Result<()> {
         # dependencies = []
         # ///
     "#})?;
-    uv_snapshot!(context.filters(), context.tool_run().args(["--with-requirements", "requirements.py", "--no-index", "--find-links", "wheels", "bound-tool"]), @"
+    uv_snapshot!(context.filters(), context.tool_run().args(["--with-requirements", "requirements.py", "--python", ">=3.11", "--no-index", "--from", "wheels/bound_tool-1.0.0-py3-none-any.whl", "bound-tool"]), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving tool dependencies
-      cause: Because bound-tool==1.0.0 requires Python >=3.12 and only bound-tool==1.0.0 is available, we can conclude that all versions of bound-tool cannot be used.
-             And because you require bound-tool, we can conclude that your requirements are unsatisfiable.
-    ");
-    uv_snapshot!(context.filters(), context.tool_install().args(["--with-requirements", "requirements.py", "--no-index", "--find-links", "wheels", "bound-tool"]), @"
+      cause: Because the current Python version (3.11.[X]) does not satisfy Python>=3.12 and bound-tool==1.0.0 depends on Python>=3.12, we can conclude that bound-tool==1.0.0 cannot be used.
+             And because only bound-tool==1.0.0 is available and you require bound-tool, we can conclude that your requirements are unsatisfiable.
+    "#);
+    uv_snapshot!(context.filters(), context.tool_install().args(["--with-requirements", "requirements.py", "--python", ">=3.11", "--no-index", "--from", "wheels/bound_tool-1.0.0-py3-none-any.whl", "bound-tool"]), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because bound-tool==1.0.0 requires Python >=3.12 and only bound-tool==1.0.0 is available, we can conclude that all versions of bound-tool cannot be used.
-             And because you require bound-tool, we can conclude that your requirements are unsatisfiable.
-    ");
+      cause: Because the current Python version (3.11.[X]) does not satisfy Python>=3.12 and bound-tool==1.0.0 depends on Python>=3.12, we can conclude that bound-tool==1.0.0 cannot be used.
+             And because only bound-tool==1.0.0 is available and you require bound-tool, we can conclude that your requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
+
+#[test]
+fn tool_pep723_requirements_reject_explicit_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_tool_dirs();
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    write_python_version_tool(&wheels, None)?;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(indoc! {r#"
+        # /// script
+        # requires-python = "<3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_run().args(["--python", "3.12", "--with-requirements", "requirements.py", "--no-index", "--find-links", "wheels", "bound-tool"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Python 3.12.[X] is incompatible with the PEP 723 `requires-python` value from `--with-requirements`: `<3.12`
+    "#);
+    uv_snapshot!(context.filters(), context.tool_install().args(["--python", "3.12", "--with-requirements", "requirements.py", "--no-index", "--find-links", "wheels", "bound-tool"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Python 3.12.[X] is incompatible with the PEP 723 `requires-python` value from `--with-requirements`: `<3.12`
+    "#);
     Ok(())
 }

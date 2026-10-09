@@ -28,7 +28,7 @@ use uv_configuration::{
 };
 use uv_dispatch::UniversalState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{NameRequirementSpecification, RequiresPython};
+use uv_distribution_types::NameRequirementSpecification;
 use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
@@ -861,11 +861,8 @@ pub async fn run(
                 // (2) A compatible request from `.python-version`, falling back to the Python
                 // requirement from PEP 723 `--with-requirements` metadata.
                 } else {
-                    let requires_python = spec
-                        .as_ref()
-                        .and_then(|spec| spec.requires_python.as_ref())
-                        .cloned()
-                        .map(RequiresPython::from_specifiers);
+                    let requires_python =
+                        spec.as_ref().and_then(|spec| spec.requires_python.as_ref());
                     PythonVersionFile::discover(
                         &project_dir,
                         &VersionFileDiscoveryOptions::default()
@@ -884,7 +881,7 @@ pub async fn run(
                             .and_then(|spec| spec.requires_python.as_ref())
                             .map(|requires_python| {
                                 PythonRequest::Version(VersionRequest::from_specifiers(
-                                    requires_python.clone(),
+                                    requires_python.specifiers().clone(),
                                     PythonVariant::default(),
                                 ))
                             })
@@ -940,8 +937,7 @@ pub async fn run(
     );
 
     if let Some(requires_python) = spec.as_ref().and_then(|spec| spec.requires_python.as_ref())
-        && !RequiresPython::from_specifiers(requires_python.clone())
-            .contains(base_interpreter.python_version())
+        && !requires_python.contains(base_interpreter.python_version())
     {
         bail!(
             "Python {} is incompatible with the `requires-python` value from `--with-requirements`: `{requires_python}`",

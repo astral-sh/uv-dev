@@ -315,7 +315,7 @@ pub async fn pip_compile(
             PythonRequest::Version(VersionRequest::from(version))
         } else if let Some(requires_python) = requires_python.as_ref() {
             PythonRequest::Version(VersionRequest::from_specifiers(
-                requires_python.clone(),
+                requires_python.specifiers().clone(),
                 PythonVariant::default(),
             ))
         } else {
@@ -347,7 +347,7 @@ pub async fn pip_compile(
         .as_ref()
         .map_or(interpreter.python_version(), PythonVersion::version);
     if let Some(requires_python) = requires_python.as_ref()
-        && !RequiresPython::from_specifiers(requires_python.clone()).contains(target_version)
+        && !requires_python.contains(target_version)
     {
         return Err(anyhow!(
             "Python {target_version} is incompatible with the PEP 723 `requires-python` value: `{requires_python}`"
@@ -391,7 +391,7 @@ pub async fn pip_compile(
         let requires_python = if let Some(python_version) = python_version.as_ref() {
             RequiresPython::greater_than_equal_version(&python_version.version)
         } else if let Some(requires_python) = requires_python.as_ref() {
-            RequiresPython::from_specifiers(requires_python.clone())
+            requires_python.clone()
         } else {
             let version = interpreter.python_minor_version();
             RequiresPython::greater_than_equal_version(&version)

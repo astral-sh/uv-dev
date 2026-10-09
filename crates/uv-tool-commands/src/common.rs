@@ -182,6 +182,7 @@ impl ToolPython {
     pub(super) async fn from_request(
         python_request: Option<PythonRequest>,
         requirement: Option<&UnresolvedRequirement>,
+        requires_python_bound: Option<&RequiresPython>,
         config_discovery: ConfigDiscovery,
         lfs: GitLfsSetting,
         git_resolver: &GitResolver,
@@ -204,6 +205,19 @@ impl ToolPython {
             }
         } else {
             None
+        };
+
+        let requires_python = match (requires_python, requires_python_bound) {
+            (Some(requires_python), Some(bound)) => Some(RequiresPython::from_specifiers(
+                requires_python
+                    .specifiers()
+                    .iter()
+                    .chain(bound.specifiers().iter())
+                    .cloned()
+                    .collect(),
+            )),
+            (None, Some(bound)) => Some(bound.clone()),
+            (requires_python, None) => requires_python,
         };
 
         let (source, python_request) = if let Some(request) = python_request {

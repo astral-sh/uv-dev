@@ -25,7 +25,7 @@ use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
     IndexCapabilities, IndexUrl, Name, NameRequirementSpecification, Requirement,
-    RequirementSource, RequiresPython, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_errors::HintOrdering;
 use uv_installer::{BuildSettings, InstallationStrategy, SatisfiesResult, SitePackages};
@@ -806,11 +806,24 @@ async fn get_or_create_environment(
         // e.g., `uvx python3.12`
         (None, Some(tool_request)) => Some(tool_request),
     };
+    // Read the `--with` requirements.
+    let spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        &[],
+        None,
+        client_builder,
+    )
+    .await?;
+    let requires_python = spec.requires_python.clone();
+
     let python_request = ToolPython::from_request(
         python_request,
         unresolved_target_requirement
             .as_ref()
             .map(|requirement| &requirement.requirement),
+        requires_python.as_ref(),
         ConfigDiscovery::Enabled,
         lfs,
         state.git(),
@@ -1020,20 +1033,6 @@ async fn get_or_create_environment(
         None
     };
 
-    // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        &[],
-        None,
-        client_builder,
-    )
-    .await?;
-    let requires_python = spec
-        .requires_python
-        .clone()
-        .map(RequiresPython::from_specifiers);
     if let Some(requires_python) = requires_python.as_ref()
         && !requires_python.contains(interpreter.python_version())
     {
