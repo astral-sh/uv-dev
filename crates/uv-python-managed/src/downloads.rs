@@ -695,14 +695,8 @@ async fn fetch_bytes_from_url(
 async fn fetch_ndjson_cached(
     client: &BaseClient,
     url: &DisplaySafeUrl,
-    cache: Option<&Cache>,
+    cache: &Cache,
 ) -> Result<Vec<u8>, Error> {
-    let Some(cache) = cache else {
-        return fetch_bytes_from_url(client, url)
-            .await
-            .map(|(content, _)| content);
-    };
-
     let shard = versions_cache_shard(cache, url);
     let _lock = shard
         .lock()
@@ -968,7 +962,7 @@ impl ManagedPythonDownloadList {
                     client_builder.retry_policy(),
                     "Python download metadata",
                     async |url| {
-                        let bytes = fetch_ndjson_cached(&client, &url, Some(cache)).await?;
+                        let bytes = fetch_ndjson_cached(&client, &url, cache).await?;
                         parse_ndjson_bytes(&url.to_string(), &bytes)
                     },
                 )
@@ -1020,7 +1014,7 @@ impl ManagedPythonDownloadList {
                     "Python download metadata",
                     async |url| {
                         if client.connectivity().is_offline() {
-                            let bytes = fetch_ndjson_cached(&client, &url, Some(cache)).await?;
+                            let bytes = fetch_ndjson_cached(&client, &url, cache).await?;
                             parse_ndjson_bytes_filtered(&url.to_string(), &bytes, predicate)
                         } else {
                             fetch_ndjson_collect_streaming_cached(&client, &url, cache, predicate)
@@ -1282,7 +1276,7 @@ async fn find_matching_download(
                 "Python download metadata",
                 async |url| {
                     if client.connectivity().is_offline() {
-                        let bytes = fetch_ndjson_cached(&client, &url, Some(cache)).await?;
+                        let bytes = fetch_ndjson_cached(&client, &url, cache).await?;
                         parse_ndjson_bytes_find(&url.to_string(), &bytes, request)
                     } else {
                         fetch_ndjson_find_cached(&client, &url, cache, request).await
@@ -2949,9 +2943,7 @@ mod tests {
                     .unwrap();
             } else {
                 assert_eq!(
-                    fetch_ndjson_cached(&client, &url, Some(&cache))
-                        .await
-                        .unwrap(),
+                    fetch_ndjson_cached(&client, &url, &cache).await.unwrap(),
                     content
                 );
             }
@@ -3164,9 +3156,7 @@ mod tests {
         .unwrap();
 
         let client = BaseClientBuilder::default().build().unwrap();
-        let contents = fetch_ndjson_cached(&client, &url, Some(&cache))
-            .await
-            .unwrap();
+        let contents = fetch_ndjson_cached(&client, &url, &cache).await.unwrap();
 
         assert_eq!(contents, refreshed);
         assert_eq!(get_requests.load(Ordering::SeqCst), 1);

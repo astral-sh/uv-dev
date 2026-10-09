@@ -629,7 +629,10 @@ fn help_subsubcommand() {
               Distributions can be read from a local directory by using the `file://` URL scheme.
 
           --python-downloads-json-url <PYTHON_DOWNLOADS_JSON_URL>
-              URL pointing to JSON or NDJSON describing custom Python installations
+              URL pointing to JSON or NDJSON describing custom Python installations.
+
+              The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+              parsed as JSON.
 
       -r, --reinstall
               Reinstall the requested Python version, if it's already installed.
