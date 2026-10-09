@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
+use itertools::Itertools;
 use owo_colors::OwoColorize;
 
 use uv_distribution_types::{DerivationChain, Name};
 use uv_fs::Simplified;
 use uv_macros::DebugNoInline;
+use uv_normalize::{ExtraName, GroupName};
 use uv_resolver::{NoSolutionError, NoSolutionHeader, ResolveError};
 
 use crate::installation::Changelog;
@@ -67,6 +69,16 @@ pub enum Error {
     )]
     ExtrasWithoutSource { has_editable: bool },
 
+    #[error(
+        "Requested extra{} not found: {}",
+        if .0.len() == 1 { "" } else { "s" },
+        .0.iter().join(", ")
+    )]
+    MissingExtras(Vec<ExtraName>),
+
+    #[error("The dependency group '{name}' was not found in the project: {}", path.user_display())]
+    MissingGroup { name: GroupName, path: PathBuf },
+
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 
@@ -94,6 +106,8 @@ impl Error {
             | Self::Requirements(_)
             | Self::RequirementsWithContext { .. }
             | Self::ExtrasWithoutSource { .. }
+            | Self::MissingExtras(_)
+            | Self::MissingGroup { .. }
             | Self::Anyhow(_)
             | Self::OutdatedEnvironment(_) => None,
         }
@@ -117,6 +131,8 @@ impl Error {
             | Self::Requirements(_)
             | Self::RequirementsWithContext { .. }
             | Self::ExtrasWithoutSource { .. }
+            | Self::MissingExtras(_)
+            | Self::MissingGroup { .. }
             | Self::Anyhow(_) => None,
         }
     }
@@ -145,6 +161,8 @@ impl Error {
             | Self::Requirements(_)
             | Self::RequirementsWithContext { .. }
             | Self::ExtrasWithoutSource { .. }
+            | Self::MissingExtras(_)
+            | Self::MissingGroup { .. }
             | Self::Anyhow(_)
             | Self::OutdatedEnvironment(_)) => error,
         }
@@ -172,6 +190,8 @@ impl Error {
             | Self::Io(_)
             | Self::Fmt(_)
             | Self::ExtrasWithoutSource { .. }
+            | Self::MissingExtras(_)
+            | Self::MissingGroup { .. }
             | Self::Anyhow(_)
             | Self::OutdatedEnvironment(_)) => error,
         }
@@ -195,6 +215,8 @@ impl Error {
             | Self::Io(_)
             | Self::Fmt(_)
             | Self::ExtrasWithoutSource { .. }
+            | Self::MissingExtras(_)
+            | Self::MissingGroup { .. }
             | Self::Anyhow(_) => false,
         }
     }
@@ -205,24 +227,24 @@ impl uv_errors::Hinted for Error {
         match self {
             Self::NoSolution { source, .. } => source.hints(),
             Self::Resolve(uv_resolver::ResolveError::Dist(_, dist, chain, error)) => {
-                crate::diagnostics::dist_hints(dist.name(), dist.version(), chain, error.hints())
+                uv_distribution::dist_hints(dist.name(), dist.version(), chain, error.hints())
             }
             Self::Resolve(uv_resolver::ResolveError::Dependencies(error, name, version, chain)) => {
-                crate::diagnostics::dist_hints(name, Some(version), chain, error.hints())
+                uv_distribution::dist_hints(name, Some(version), chain, error.hints())
             }
             Self::Resolve(error) => error.hints(),
             Self::Requirements(uv_requirements::Error::Dist(_, dist, error))
             | Self::RequirementsWithContext {
                 source: uv_requirements::Error::Dist(_, dist, error),
                 ..
-            } => crate::diagnostics::dist_hints(
+            } => uv_distribution::dist_hints(
                 dist.name(),
                 dist.version(),
                 &DerivationChain::default(),
                 error.hints(),
             ),
             Self::Prepare(uv_installer::PrepareError::Dist(_, dist, chain, error)) => {
-                crate::diagnostics::dist_hints(dist.name(), dist.version(), chain, error.hints())
+                uv_distribution::dist_hints(dist.name(), dist.version(), chain, error.hints())
             }
             Self::ExtrasWithoutSource { has_editable } => {
                 uv_errors::Hints::from(if *has_editable {
@@ -243,6 +265,8 @@ impl uv_errors::Hinted for Error {
             | Self::Fmt(_)
             | Self::Requirements(_)
             | Self::RequirementsWithContext { .. }
+            | Self::MissingExtras(_)
+            | Self::MissingGroup { .. }
             | Self::OutdatedEnvironment(_) => uv_errors::Hints::none(),
         }
     }
