@@ -14357,6 +14357,101 @@ fn requirements_txt_undefined_registry_extra_conflict() -> Result<()> {
     Ok(())
 }
 
+/// Manifest-owned groups apply global overrides before activating conflicting extras.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_manifest_group_override_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["child[feature]"]
+
+        [tool.uv]
+        override-dependencies = ["child"]
+        conflicts = [[
+            { package = "child", extra = "feature" },
+            { package = "child", group = "dev" },
+        ]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = []
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--group", "dev", "--no-header", "--no-hashes", "--offline", "--no-index",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "dev", "--no-header", "--no-hashes", "--offline",
+    ]), @"exit_code: 0 (success)");
+    context
+        .lock()
+        .args([
+            "--upgrade",
+            "--offline",
+            "--no-index",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "dev", "--no-header", "--no-hashes", "--offline",
+    ]), @"exit_code: 0 (success)");
+
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(r#"dev = ["child[feature]"]"#, r#"dev = ["child"]"#)
+            .replace(
+                r#"override-dependencies = ["child"]"#,
+                r#"override-dependencies = ["child[feature]"]"#,
+            ),
+    )?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--group", "dev", "--no-header", "--no-hashes", "--offline", "--no-index",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Found conflicting selections `child[feature]` and `child:dev` enabled simultaneously
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--group", "dev", "--no-header", "--no-hashes", "--offline",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting selections `child[feature]` and `child:dev` enabled simultaneously
+    ");
+    Ok(())
+}
+
 /// Retained Git declarations distinguish missing extras from declared empty extras in frozen locks.
 #[cfg(feature = "test-universal")]
 #[test]

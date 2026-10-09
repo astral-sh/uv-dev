@@ -8,7 +8,8 @@ use petgraph::{Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use uv_configuration::{
-    DependencyGroupsWithDefaults, ExportFormat, ExtrasSpecificationWithDefaults, InstallOptions,
+    DependencyGroupsWithDefaults, DependencyModifierScope, ExportFormat,
+    ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::MarkerTree;
@@ -23,7 +24,9 @@ pub(crate) use crate::lock::export::metadata::{
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
 use crate::lock::reachability::{ConflictRequests, Edge, Node, conflict_marker_reachability};
-use crate::lock::{Dependency, DependencyContext, LockErrorKind, PackageIndex};
+use crate::lock::{
+    Dependency, DependencyContext, LockErrorKind, PackageIndex, normalize_requirement,
+};
 use crate::{Installable, InstallableRootKind, LockError, Package, implicit_constraints_marker};
 
 pub mod cyclonedx_json;
@@ -474,17 +477,29 @@ fn validate_requested_conflicts<'lock>(
             }
         }
     }
-    for requirement in lock.requirements().iter().chain(
+    let requirements = lock.requirements().iter().filter(|_| groups.prod()).chain(
         lock.dependency_groups()
             .iter()
             .filter(|(group, _)| target.includes_group(None, group, groups))
             .flat_map(|(_, requirements)| requirements),
-    ) {
+    );
+    for requirement in modifiers.apply(DependencyModifierScope::Global, requirements) {
+        let requirement = normalize_requirement(
+            requirement.into_owned(),
+            target.install_path(),
+            lock.requires_python(),
+        )?;
         if prune.contains(&requirement.name) {
             continue;
         }
         for package in lock.packages_for_name(&requirement.name) {
-            let Some(marker) = lock.root_requirement_marker(requirement, package) else {
+            if !package
+                .id
+                .satisfies_requirement(&requirement, target.install_path())?
+            {
+                continue;
+            }
+            let Some(marker) = lock.root_requirement_marker(&requirement, package) else {
                 continue;
             };
             let index = lock.by_id[&package.id];
