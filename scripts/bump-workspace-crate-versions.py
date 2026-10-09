@@ -119,6 +119,5 @@ def main() -> None:
         manifest.write_text(contents)
 
 
-
 if __name__ == "__main__":
     main()
