@@ -46,6 +46,7 @@ use uv_static::{
     EnvVars, TarBackend, astral_mirror_base_url, astral_mirror_url_from_env,
     custom_astral_mirror_url,
 };
+use uv_warnings::warn_user;
 
 use uv_python_types::{
     ImplementationName, LenientImplementationName, PythonDownloadMirrors, PythonInstallationKey,
@@ -597,13 +598,18 @@ impl ManagedPythonDownload {
                 )
                 .await;
 
-            if let Err(Error::HashMismatch { .. }) = &result {
-                Self::remove_rejected_archive(
+            if let Err(Error::HashMismatch { .. }) = &result
+                && let Err(err) = Self::remove_rejected_archive(
                     &target_cache_file,
                     &cache_lock_file,
                     reader.into_inner(),
                 )
-                .await?;
+                .await
+            {
+                warn_user!(
+                    "Failed to remove rejected Python archive `{}`: {err}",
+                    target_cache_file.user_display()
+                );
             }
             result?
         } else {
@@ -741,19 +747,28 @@ impl ManagedPythonDownload {
         }
         // Archive extraction is lock-free. Publishers and corrupt-entry removal use the same
         // lock, so a rejected reader cannot remove a cooperating publisher's replacement.
-        let _lock = LockedFile::acquire(
+        let lock = LockedFile::acquire(
             cache_lock_file,
             LockedFileMode::Exclusive,
             target_cache_file.user_display(),
         )
         .await?;
 
-        // Move the completed file into place, invalidating the `File` instance.
-        match rename_with_retry(&temp_file, target_cache_file).await {
-            Ok(()) => {}
-            Err(_) if target_cache_file.is_file() => {}
-            Err(err) => return Err(err.into()),
-        }
+        let target_cache_file = target_cache_file.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            // Cancellation must not release the publication lock before the filesystem worker.
+            let _lock = lock;
+            let _temp_dir = temp_dir;
+            match uv_fs::with_retry_sync(&temp_file, &target_cache_file, "rename", || {
+                fs_err::rename(&temp_file, &target_cache_file)
+            }) {
+                Ok(()) => Ok(()),
+                Err(_) if target_cache_file.is_file() => Ok(()),
+                Err(err) => Err(err),
+            }
+        })
+        .await
+        .map_err(io::Error::other)??;
         Ok(())
     }
 
@@ -764,28 +779,34 @@ impl ManagedPythonDownload {
         rejected_file: fs_err::tokio::File,
     ) -> Result<(), Error> {
         let rejected = same_file::Handle::from_file(rejected_file.into_std().await.into_file())?;
-        let _lock = LockedFile::acquire(
+        let lock = LockedFile::acquire(
             cache_lock_file,
             LockedFileMode::Exclusive,
             target_cache_file.user_display(),
         )
         .await?;
-        let is_rejected_file = match fs_err::tokio::File::open(target_cache_file).await {
-            Ok(file) => {
-                same_file::Handle::from_file(file.into_std().await.into_file())? == rejected
+        let target_cache_file = target_cache_file.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            // Keep the identity check and unlink under the same lock even if the caller is cancelled.
+            let _lock = lock;
+            let is_rejected_file = match fs_err::File::open(&target_cache_file) {
+                Ok(file) => same_file::Handle::from_file(file.into_file())? == rejected,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+                Err(err) => return Err(err),
+            };
+            // Close our handles before deletion on filesystems that restrict removing open files.
+            drop(rejected);
+            if is_rejected_file {
+                match fs_err::remove_file(&target_cache_file) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err),
+                }
             }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-            Err(err) => return Err(err.into()),
-        };
-        // Close our handles before deletion for filesystems that restrict removing open files.
-        drop(rejected);
-        if is_rejected_file {
-            match fs_err::tokio::remove_file(target_cache_file).await {
-                Ok(()) => {}
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err.into()),
-            }
-        }
+            Ok::<(), io::Error>(())
+        })
+        .await
+        .map_err(io::Error::other)??;
         Ok(())
     }
 
