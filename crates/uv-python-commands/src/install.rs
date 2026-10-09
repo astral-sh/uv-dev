@@ -520,10 +520,12 @@ async fn perform_install(
                 // requested download is the highest patch for that minor version. We need to
                 // install it unless an exact match is found (including build version). Compare the
                 // canonical keys so Emscripten's `cpython` download matches its `pyodide` install.
-                if let Some(installation) = existing_installations
-                    .iter()
-                    .find(|inst| request.download.key().to_string() == inst.key().to_string())
-                {
+                if let Some(installation) = existing_installations.iter().find(|inst| {
+                    request
+                        .download
+                        .key()
+                        .matches_implementation_alias(inst.key())
+                }) {
                     if matches_build(request.download.build(), installation.build()) {
                         debug!("Found `{}` for request `{}`", installation.key(), request);
                         satisfied.push(installation);

@@ -74,6 +74,20 @@ impl PythonInstallationKey {
         }
     }
 
+    /// Compare installation keys after normalizing implementation aliases.
+    ///
+    /// Emscripten downloads use CPython keys while installed environments use Pyodide keys.
+    /// Structural equality remains distinct for cache and download identity.
+    pub fn matches_implementation_alias(&self, other: &Self) -> bool {
+        self.implementation() == other.implementation()
+            && self.major == other.major
+            && self.minor == other.minor
+            && self.patch == other.patch
+            && self.prerelease == other.prerelease
+            && self.platform == other.platform
+            && self.variant == other.variant
+    }
+
     pub fn version(&self) -> PythonVersion {
         PythonVersion::from_str(&format!(
             "{}.{}.{}{}",
