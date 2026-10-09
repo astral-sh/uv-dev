@@ -5892,6 +5892,28 @@ impl Lock {
         })
     }
 
+    /// Classify only workspace members accepted by the metadata database as first-party sources.
+    fn package_first_party<Context: BuildContext>(
+        package: &Package,
+        root: &Path,
+        database: &DistributionDatabase<'_, Context>,
+    ) -> FirstParty {
+        match &package.id.source {
+            Source::Editable(path) | Source::Directory(path)
+                if database.is_first_party(&package.id.name, &root.join(path)) =>
+            {
+                FirstParty::Yes
+            }
+            Source::Editable(_)
+            | Source::Directory(_)
+            | Source::Virtual(_)
+            | Source::Path(_)
+            | Source::Direct(..)
+            | Source::Git(..)
+            | Source::Registry(_) => FirstParty::No,
+        }
+    }
+
     /// Retrieve metadata from a locked package, reusing the resolver's in-memory cache.
     ///
     /// The locked artifact hashes are enforced when building source distributions. Wheel metadata
@@ -5911,7 +5933,7 @@ impl Lock {
             TagPolicy::Preferred(tags),
             build_options,
             markers,
-            FirstParty::No,
+            Self::package_first_party(package, root, database),
         )?;
         let validation = if hashes.is_empty() {
             HashValidation::None
@@ -5974,20 +5996,7 @@ impl Lock {
         index: &DistributionMetadataIndex,
         database: &DistributionDatabase<'_, Context>,
     ) -> Result<DistributionMetadata, LockError> {
-        let first_party = match &package.id.source {
-            Source::Editable(path) | Source::Directory(path)
-                if database.is_first_party(&package.id.name, &root.join(path)) =>
-            {
-                FirstParty::Yes
-            }
-            Source::Editable(_)
-            | Source::Directory(_)
-            | Source::Virtual(_)
-            | Source::Path(_)
-            | Source::Direct(..)
-            | Source::Git(..)
-            | Source::Registry(_) => FirstParty::No,
-        };
+        let first_party = Self::package_first_party(package, root, database);
         let HashedDist { dist, hashes } = package.to_dist(
             root,
             TagPolicy::Preferred(tags),

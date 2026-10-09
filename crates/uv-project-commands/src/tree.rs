@@ -1,9 +1,11 @@
+use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::path::Path;
 
 use anstream::print;
 use anyhow::{Context, Error, Result, bail};
 use futures::StreamExt;
+use rustc_hash::FxHashSet;
 
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
@@ -13,13 +15,16 @@ use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, TargetTriple, TreeFormat,
 };
 use uv_dispatch::{BuildDispatch, UniversalState};
-use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, Metadata};
+use uv_distribution::{
+    DistributionDatabase, FirstPartyPackages, LoweredExtraBuildDependencies, Metadata,
+};
 use uv_distribution_types::IndexCapabilities;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::{
     EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
+    store_credentials_from_target,
 };
-use uv_lock::{Lock, Package, PackageMap, TreeDisplay, TreeJsonTarget};
+use uv_lock::{Installable, Lock, Package, PackageMap, TreeDisplay, TreeJsonTarget};
 use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultGroups, PackageName};
 use uv_pep508::MarkerEnvironment;
@@ -396,7 +401,7 @@ pub async fn tree(
     );
 
     let metadata = if show_version_specifiers {
-        let packages = tree.metadata_packages();
+        let packages = tree.metadata_packages()?;
         if packages.is_empty() {
             PackageMap::default()
         } else {
@@ -474,16 +479,21 @@ async fn fetch_metadata(
 ) -> Result<PackageMap<Metadata>> {
     let tags = resolution_tags(python_version, python_platform, interpreter)?;
     let client_builder = client_builder.clone().keyring(settings.keyring_provider);
-    if let TreeSource::Manifest(target) = source {
-        for index in target.indexes() {
-            if let Some(credentials) = index.credentials()? {
-                if let Some(root_url) = index.root_url() {
-                    client_builder.store_credentials(&root_url, credentials.clone());
-                }
-                client_builder.store_credentials(index.raw_url(), credentials);
-            }
-        }
-    }
+    let target = match source {
+        TreeSource::Manifest(LockTarget::Workspace(workspace)) => InstallTarget::Workspace {
+            workspace,
+            project_name: lock.root().map(Package::name),
+            lock,
+        },
+        TreeSource::Manifest(LockTarget::Script(script)) => InstallTarget::Script { script, lock },
+        TreeSource::Lockfile(workspace) => InstallTarget::Lockfile {
+            root: workspace.root(),
+            project_name: lock.root().map(Package::name),
+            selection: PackageSelection::Workspace,
+            lock,
+        },
+    };
+    store_credentials_from_target(target, &client_builder)?;
 
     let client = RegistryClientBuilder::new(client_builder, cache.clone())
         .index_locations(settings.index_locations.clone())
@@ -505,7 +515,6 @@ async fn fetch_metadata(
         }
     };
 
-    let build_hasher = HashStrategy::default();
     let flat_index = FlatIndex::load(&client, cache, &settings.index_locations).await?;
 
     let extra_build_requires = match source {
@@ -538,11 +547,16 @@ async fn fetch_metadata(
     }
     .into_inner();
 
-    let install_path = match source {
-        TreeSource::Manifest(target) => target.install_path(),
-        TreeSource::Lockfile(workspace) => workspace.root(),
-    };
+    let install_path = target.install_path();
     let build_constraints = lock.build_constraints(install_path);
+    let build_hasher = HashStrategy::from_constraints(
+        &build_constraints,
+        Some(&interpreter.to_resolver_marker_environment()),
+        uv_configuration::HashCheckingMode::Verify,
+    )?;
+    let build_hasher = lock
+        .hash_strategy(install_path, &FxHashSet::default())?
+        .with_constraint_hashes(&build_hasher)?;
     let dependency_metadata = lock.dependency_metadata();
     let build_dispatch = BuildDispatch::new(
         &client,
@@ -569,11 +583,20 @@ async fn fetch_metadata(
         concurrency.clone(),
         preview,
     );
+    let first_party = match source {
+        TreeSource::Manifest(LockTarget::Workspace(workspace)) => {
+            FirstPartyPackages::from_workspace(workspace, &BTreeSet::new())
+        }
+        TreeSource::Manifest(LockTarget::Script(_)) | TreeSource::Lockfile(_) => {
+            FirstPartyPackages::default()
+        }
+    };
     let database = DistributionDatabase::new(
         &client,
         &build_dispatch,
         concurrency.downloads_semaphore.clone(),
-    );
+    )
+    .with_first_party_packages(&first_party);
 
     let mut fetches = futures::stream::iter(packages)
         .map(async |package| {
