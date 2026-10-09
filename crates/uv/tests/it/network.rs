@@ -1450,9 +1450,9 @@ fn direct_url_content_length_mismatch() -> Result<()> {
     Ok(())
 }
 
-/// Missing extracted files force a refetch without invalidating the retained HTTP pointer.
+/// A new required digest forces a refetch without invalidating the retained HTTP pointer.
 #[test]
-fn direct_url_missing_archive_range_resume() -> Result<()> {
+fn direct_url_cached_archive_range_resume() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheel = Bytes::from(
         context.read_bytes(
@@ -1462,6 +1462,7 @@ fn direct_url_missing_archive_range_resume() -> Result<()> {
         ),
     );
     let hash = hex::encode(Sha256::digest(&wheel));
+    let sha512 = hex::encode(sha2::Sha512::digest(&wheel));
     let interrupt = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let server_interrupt = interrupt.clone();
     let requests = Arc::new(DownloadRequests::default());
@@ -1483,10 +1484,24 @@ fn direct_url_missing_archive_range_resume() -> Result<()> {
     Installed 1 package in [TIME]
      + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
     ");
-    fs_err::remove_dir_all(context.cache_dir.join("archive-v0"))?;
+    uv_snapshot!(context.filters(), context.pip_uninstall().arg("build-tag"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    // A new hash algorithm bypasses the planner's prepared-wheel cache while retaining the
+    // fresh HTTP entry. Its cached Archive lacks this digest and must take the forced refetch.
+    context
+        .temp_dir
+        .child("pylock.toml")
+        .write_str(&context.read("pylock.toml").replace(
+            &format!("sha256 = \"{hash}\""),
+            &format!("sha512 = \"{sha512}\""),
+        ))?;
     interrupt.store(true, Ordering::Relaxed);
     uv_snapshot!(context.filters(), context.pip_sync()
-        .args(["--preview", "pylock.toml", "--reinstall"])
+        .args(["--preview", "pylock.toml"])
         .env(EnvVars::UV_HTTP_RETRIES, "1")
         .env(EnvVars::UV_HTTP_TIMEOUT, "1")
         .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
@@ -1495,9 +1510,8 @@ fn direct_url_missing_archive_range_resume() -> Result<()> {
     ----- stderr -----
     WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
     Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     ~ build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
     ");
     assert_eq!(requests.full.load(Ordering::Relaxed), 2);
     assert_eq!(requests.resumed.load(Ordering::Relaxed), 1);
