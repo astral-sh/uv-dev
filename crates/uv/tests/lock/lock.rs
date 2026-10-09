@@ -1379,6 +1379,8 @@ fn lock_sdist_git_subdirectory() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "dbbe44739d005493"
+        config-settings-packages = ["example-pkg-a"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -1785,6 +1787,8 @@ fn lock_sdist_git_archive() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "0965f2a258462618"
+        config-settings-packages = ["iniconfig"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -3120,6 +3124,8 @@ async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "a155aee2796151e5"
+        config-settings-packages = ["demo-pkg"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -3251,6 +3257,8 @@ async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "a155aee2796151e5"
+        config-settings-packages = ["demo-pkg"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -3960,6 +3968,8 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "8f5896a7a4372370"
+        config-settings-packages = ["root"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -4083,6 +4093,8 @@ fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "8f5896a7a4372370"
+        config-settings-packages = ["root"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -8053,6 +8065,8 @@ fn lock_partial_git() -> Result<()> {
         ]
 
         [options]
+        config-settings-digest = "049ba5f385c4d505"
+        config-settings-packages = ["anyio"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -11188,7 +11202,7 @@ fn lock_relative_transitive_poetry_paths() -> Result<()> {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -19,6 +19,16 @@
+        @@ -21,6 +21,16 @@
          name = "parent"
          version = "0.1.0"
          source = { editable = "../parent" }
@@ -11243,7 +11257,7 @@ fn lock_relative_transitive_poetry_paths() -> Result<()> {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -8,12 +8,12 @@
+        @@ -10,12 +10,12 @@
          [[package]]
          name = "absolute-child"
          version = "0.1.0"
@@ -11258,7 +11272,7 @@ fn lock_relative_transitive_poetry_paths() -> Result<()> {
 
          [[package]]
          name = "parent"
-        @@ -35,14 +35,8 @@
+        @@ -37,14 +37,8 @@
          version = "0.1.0"
          source = { virtual = "." }
          dependencies = [
@@ -19345,6 +19359,8 @@ fn lock_no_sources_package() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "0965f2a258462618"
+        config-settings-packages = ["iniconfig"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -19449,6 +19465,8 @@ fn lock_no_sources_package_multiple() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "0965f2a258462618"
+        config-settings-packages = ["iniconfig"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -31881,6 +31899,8 @@ fn lock_multiple_sources() -> Result<()> {
         ]
 
         [options]
+        config-settings-digest = "0965f2a258462618"
+        config-settings-packages = ["iniconfig"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -34625,6 +34645,8 @@ fn lock_dynamic_version() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "3e86bc62d7d129ea"
+        config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -34661,6 +34683,8 @@ fn lock_dynamic_version() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "3e86bc62d7d129ea"
+        config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -34730,6 +34754,8 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "3e86bc62d7d129ea"
+        config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -34766,6 +34792,8 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "3e86bc62d7d129ea"
+        config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -34953,6 +34981,8 @@ fn lock_dynamic_version_workspace_member() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "f09c6106c1d0709b"
+        config-settings-packages = ["dynamic"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [manifest]
@@ -35020,6 +35050,8 @@ fn lock_dynamic_version_workspace_member() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "f09c6106c1d0709b"
+        config-settings-packages = ["dynamic"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [manifest]
@@ -35136,6 +35168,8 @@ fn lock_dynamic_version_path_dependency() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "f09c6106c1d0709b"
+        config-settings-packages = ["dynamic"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -35197,6 +35231,8 @@ fn lock_dynamic_version_path_dependency() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "f09c6106c1d0709b"
+        config-settings-packages = ["dynamic"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -35295,6 +35331,8 @@ fn lock_dynamic_version_self_extra_hatchling() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "3e86bc62d7d129ea"
+        config-settings-packages = ["project"]
         exclude-newer = "2025-01-01T00:00:00Z"
 
         [[package]]
@@ -35463,6 +35501,8 @@ fn lock_dynamic_version_self_extra_setuptools() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "3e86bc62d7d129ea"
+        config-settings-packages = ["project"]
         exclude-newer = "2025-01-01T00:00:00Z"
 
         [[package]]
@@ -35623,6 +35663,8 @@ fn lock_dynamic_built_cache() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "3e86bc62d7d129ea"
+        config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -35664,6 +35706,8 @@ fn lock_dynamic_built_cache() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "3e86bc62d7d129ea"
+        config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -35741,6 +35785,8 @@ fn lock_shared_build_dependency() -> Result<()> {
         ]
 
         [options]
+        config-settings-digest = "3e86bc62d7d129ea"
+        config-settings-packages = ["project"]
         exclude-newer = "2025-01-28T00:00:00Z"
 
         [[package]]
@@ -36011,6 +36057,8 @@ fn lock_dynamic_to_static() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "3e86bc62d7d129ea"
+        config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -36189,6 +36237,8 @@ fn lock_static_to_dynamic() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "3e86bc62d7d129ea"
+        config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -46988,6 +47038,8 @@ fn lock_resolution_inputs_dynamic_constraints() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "e5104e8d07e21e8c"
+        config-settings-packages = ["provider"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [manifest]
@@ -47578,6 +47630,8 @@ fn lock_resolution_inputs_ignores_build_dependency_metadata() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-digest = "082c90fefe9bc323"
+        config-settings-packages = ["child"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
