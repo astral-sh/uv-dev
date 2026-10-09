@@ -1782,41 +1782,64 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&query_log)?, "queried\nqueried\n");
 
-        for (index, (gil_disabled, debug_enabled, variant)) in [
-            (false, false, PythonVariant::Default),
-            (true, true, PythonVariant::FreethreadedDebug),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let mocked_interpreter = mock_dir.path().join(format!("python-{index}"));
-            let json = json
-                .replace(
-                    "\"gil_disabled\": false",
-                    &format!("\"gil_disabled\": {gil_disabled}"),
-                )
-                .replace(
-                    "\"debug_enabled\": true",
-                    &format!("\"debug_enabled\": {debug_enabled}"),
-                );
-            fs::write(
-                &mocked_interpreter,
-                formatdoc! {r"
-            #!/bin/sh
-            echo '{json}'
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_default_variant() -> Result<()> {
+        let mock_dir = tempdir()?;
+        let mocked_interpreter = mock_dir.path().join("python");
+        let mut response = serde_json::from_str::<Value>(mocked_interpreter_response())?;
+        response["sys_executable"] = serde_json::to_value(&mocked_interpreter)?;
+        response["gil_disabled"] = false.into();
+        response["debug_enabled"] = false.into();
+        let json = serde_json::to_string(&response)?;
+        fs::write(
+            &mocked_interpreter,
+            formatdoc! {r"
+                #!/bin/sh
+                echo '{json}'
             "},
-            )?;
-            fs::set_permissions(
-                &mocked_interpreter,
-                std::os::unix::fs::PermissionsExt::from_mode(0o770),
-            )?;
+        )?;
+        fs::set_permissions(
+            &mocked_interpreter,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
 
-            let interpreter = Interpreter::query(&mocked_interpreter, &cache)?;
-            assert_eq!(interpreter.variant(), variant);
-            assert_eq!(interpreter.gil_disabled(), gil_disabled);
-            assert_eq!(interpreter.debug_enabled(), debug_enabled);
-        }
+        let cache = Cache::temp()?.init().await?;
+        let interpreter = Interpreter::query(&mocked_interpreter, &cache)?;
+        assert_eq!(interpreter.variant(), PythonVariant::Default);
+        assert!(!interpreter.gil_disabled());
+        assert!(!interpreter.debug_enabled());
+        Ok(())
+    }
 
+    #[tokio::test]
+    async fn test_freethreaded_debug_variant() -> Result<()> {
+        let mock_dir = tempdir()?;
+        let mocked_interpreter = mock_dir.path().join("python");
+        let mut response = serde_json::from_str::<Value>(mocked_interpreter_response())?;
+        response["sys_executable"] = serde_json::to_value(&mocked_interpreter)?;
+        response["gil_disabled"] = true.into();
+        response["debug_enabled"] = true.into();
+        let json = serde_json::to_string(&response)?;
+        fs::write(
+            &mocked_interpreter,
+            formatdoc! {r"
+                #!/bin/sh
+                echo '{json}'
+            "},
+        )?;
+        fs::set_permissions(
+            &mocked_interpreter,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+
+        let cache = Cache::temp()?.init().await?;
+        let interpreter = Interpreter::query(&mocked_interpreter, &cache)?;
+        assert_eq!(interpreter.variant(), PythonVariant::FreethreadedDebug);
+        assert!(interpreter.gil_disabled());
+        assert!(interpreter.debug_enabled());
         Ok(())
     }
 
