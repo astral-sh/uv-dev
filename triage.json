@@ -7,7 +7,7 @@
         "title": "Allow dependency groups to define a separate `requires-python`",
         "url": "https://github.com/astral-sh/uv/issues/11606",
         "state": "closed",
-        "reason": "Tracks Python compatibility ranges for entire groups. Maintainers distinguish dependency markers, which silently skip packages, from mandatory group requirements. It does not cover conditional inclusion or different behavior for direct versus nested selection."
+        "reason": "Tracks group-level Python requirements and explicitly discusses failing when an incompatible group is selected. It was implemented by astral-sh/uv#13735. Unlike this request, it does not provide conditions on individual include-group entries or skip incompatible nested groups."
       },
       {
         "kind": "pull_request",
@@ -15,7 +15,7 @@
         "title": "Add `[tool.uv.dependency-groups].mygroup.requires-python`",
         "url": "https://github.com/astral-sh/uv/pull/13735",
         "state": "merged",
-        "reason": "Implemented astral-sh/uv#11606 and merged June 13, 2025. Maintainers explicitly required compatible interpreter selection and validation. Included groups' Python bounds propagate to their parent, preventing this feature from silently omitting an incompatible inclusion."
+        "reason": "Implemented astral-sh/uv#11606, merged June 13, 2025, and released in uv 0.7.14. Its review discussion explicitly explains that included groups' Python constraints are intersected for interpreter validation, preventing partial installation of a parent group. This establishes why existing group metadata does not satisfy conditional inclusion."
       },
       {
         "kind": "issue",
@@ -23,21 +23,13 @@
         "title": "Group `requires-python` silently drops groups with `uv pip compile --group`",
         "url": "https://github.com/astral-sh/uv/issues/15889",
         "state": "open",
-        "reason": "Addresses silently skipping an explicitly selected incompatible group; a maintainer requests an error consistent with project commands. It concerns uv pip compile diagnostics, rather than conditions on nested group inclusion."
-      },
-      {
-        "kind": "pull_request",
-        "number": 22101,
-        "title": "Honor group Python requirements in non-project workspaces",
-        "url": "https://github.com/astral-sh/uv/pull/22101",
-        "state": "merged",
-        "reason": "Merged September 30, 2026, extending group Python validation to roots without a project table. Its description explicitly includes inherited include-group bounds and rejects incompatible interpreters instead of silently skipping dependencies. It enforces existing requirements rather than implementing conditional inclusion."
+        "reason": "Concerns silently omitting an explicitly selected, Python-incompatible group; a maintainer says this should error as project commands do. It supports the reporter's distinction between explicit selection and conditional inclusion, but concerns uv pip compile diagnostics rather than markers on nested groups."
       }
     ],
-    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs in astral-sh/uv. Searched conditional inclusion separately from explicit-selection versus skipping semantics, using include-group, marker/markers, conditional/conditionally, platform-specific, requires-python, silently, PEP 735, and libtorrent, including broader searches without package/version restrictions. Inspected candidate bodies, comments, and timelines; followed astral-sh/uv#11606 to astral-sh/uv#13735. PR keyword searches omitted that known implementation, so supplemented them with timeline retrieval and filtering the latest 1,000 PRs across all states. Checked source, existing integration tests, and PEP 735. Ruled out astral-sh/uv#15520 (source-selection markers), astral-sh/uv#8698 (CLI creation of nested groups), astral-sh/uv#11104 (excluding groups from universal resolution), and astral-sh/uv#11232 (propagating declared conflicts). No matching conditional-inclusion duplicate was found."
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs. Literal searches covered include-group with marker, conditional, python_version, and requires-python; platform_system; and libtorrent. Conceptual searches covered dependency-group environment markers, platform-specific groups, conditional groups, and skipping Python-incompatible groups, without package/version restrictions. Historical searches followed group requires-python discussions to astral-sh/uv#11606 and its implementing PR astral-sh/uv#13735; inspected comments, review threads, current source, and the 0.7.14 changelog. PR keyword searches returned no candidates even for the known implementation, so that PR was found through the issue timeline and inspected directly. Ruled out astral-sh/uv#11232 (propagating declared group conflicts), astral-sh/uv#15619 and astral-sh/uv#15520 (PEP 751 marker variables in unsupported contexts), and astral-sh/uv#9806 and astral-sh/uv#11474 (group inheritance into project dependencies). No matching conditional-inclusion discussion was found."
   },
   "type": "enhancement",
-  "type_reason": "The report requests new conditional include-group syntax and selection semantics. PEP 735 defines includes as a single group-name field, which uv implements. Existing group requires-python support intentionally propagates mandatory bounds to parent groups; it does not provide skip-on-inclusion behavior. Source and existing integration tests confirm this distinction. The related implementations do not establish a duplicate or regression.",
-  "summary": "The closest precedent is astral-sh/uv#11606 and its implementation, astral-sh/uv#13735, for mandatory group Python requirements. astral-sh/uv#15889 and astral-sh/uv#22101 clarify incompatible-group handling. None implements conditional inclusion. The handoff README could not be updated: both write attempts were blocked by the read-only filesystem and sandbox.",
-  "draft_response": "Your requested distinction between selecting `libtorrent` directly and conditionally including it through `all` would need new functionality. PEP 735 defines `include-group` as a group name, and neither proposed marker syntax is currently supported.\n\nGroup-level `requires-python`, implemented in astral-sh/uv#13735 following astral-sh/uv#11606, enforces a compatible interpreter. That restriction is inherited by `all`, so it does not provide conditional skipping. Adding markers to individual dependencies would skip them even when `libtorrent` is selected directly, which also differs from your requirement.\n\nBecause the proposed syntax extends the dependency-group standard, please raise the conditional-inclusion proposal on Python Packaging Discourse: https://discuss.python.org/c/packaging/14. Include the direct-versus-nested selection example; that distinction needs to be addressed in the design."
+  "type_reason": "The request adds environment-dependent include-group behavior, including different outcomes for direct and indirect group selection. Current parsing supports only a group name, and existing group requires-python constraints propagate to parent groups. The maintainer confirms that the proposed standardized syntax requires the Python standards process, while uv-specific metadata is a possible design direction. The historical group-constraint feature does not implement this capability; no duplicate or regression was established.",
+  "summary": "The closest precedents are astral-sh/uv#11606 and merged astral-sh/uv#13735 for mandatory group-level Python constraints. astral-sh/uv#15889 concerns explicit-selection errors in uv pip compile. None tracks conditional include-group entries.",
+  "draft_response": "Your distinction between explicitly selecting a group and conditionally including it isn't supported by group-level `requires-python` from astral-sh/uv#11606 and astral-sh/uv#13735: those constraints also apply to groups that include it. Adding markers to individual requirements would skip them even when the group is selected directly, so that doesn't preserve your requested behavior.\n\nBecause `include-group` is standardized by PEP 735, either proposed syntax would need to go through the Python standards process. A uv-specific metadata design is a possible alternative. The next step is to discuss that design here, including direct-selection versus inclusion semantics, before an implementation."
 }
