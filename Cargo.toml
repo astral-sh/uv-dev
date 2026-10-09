@@ -28,7 +28,7 @@ uv-cache = { version = "0.0.92", path = "crates/uv-cache" }
 uv-cache-info = { version = "0.0.92", path = "crates/uv-cache-info" }
 uv-cache-key = { version = "0.0.92", path = "crates/uv-cache-key" }
 uv-checksum-authority = { version = "0.0.92", path = "crates/uv-checksum-authority" }
-uv-checksum-authority-service = { version = "0.0.92", path = "crates/uv-checksum-authority-service" }
+uv-checksum-authority-service = { path = "crates/uv-checksum-authority-service" }
 uv-cli = { version = "0.0.92", path = "crates/uv-cli" }
 uv-client = { version = "0.0.92", path = "crates/uv-client" }
 uv-command-support = { version = "0.0.92", path = "crates/uv-command-support" }
