@@ -312,22 +312,8 @@ async fn artifactory_metadata_rejects_cross_origin_wheel() -> Result<()> {
         .respond_with(
             simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
         )
+        .expect(1)
         .mount(&origin)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/redirect/ok/"))
-        .respond_with(
-            ResponseTemplate::new(302)
-                .insert_header("Location", format!("{}/simple/ok/", other.uri())),
-        )
-        .mount(&origin)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/simple/ok/"))
-        .respond_with(
-            simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
-        )
-        .mount(&other)
         .await;
     let client = client(Cache::temp()?.init().await?, &IndexUrl::from_str(&index)?)?;
     let BuiltDist::Registry(dist) = distribution(&client).await? else {
@@ -347,18 +333,12 @@ async fn artifactory_metadata_rejects_cross_origin_index_redirect() -> Result<()
     let index = format!("{}/redirect", origin.uri());
     let target = format!("{}/{WHEEL}", origin.uri());
     Mock::given(method("GET"))
-        .and(path("/simple/ok/"))
-        .respond_with(
-            simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
-        )
-        .mount(&origin)
-        .await;
-    Mock::given(method("GET"))
         .and(path("/redirect/ok/"))
         .respond_with(
             ResponseTemplate::new(302)
                 .insert_header("Location", format!("{}/simple/ok/", other.uri())),
         )
+        .expect(1)
         .mount(&origin)
         .await;
     Mock::given(method("GET"))
@@ -366,6 +346,7 @@ async fn artifactory_metadata_rejects_cross_origin_index_redirect() -> Result<()
         .respond_with(
             simple(&target, None, true).insert_header("X-JFrog-Version", "Artifactory/7.0.0"),
         )
+        .expect(1)
         .mount(&other)
         .await;
     let client = client(Cache::temp()?.init().await?, &IndexUrl::from_str(&index)?)?;
