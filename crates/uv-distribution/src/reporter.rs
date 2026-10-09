@@ -26,6 +26,45 @@ pub trait Reporter: Send + Sync {
 
     /// Callback to invoke when a download is complete.
     fn on_download_complete(&self, name: &PackageName, id: usize);
+
+    /// Callback to invoke when a download attempt is abandoned or fails.
+    fn on_download_failed(&self, _name: &PackageName, _id: usize) {}
+}
+
+/// A started download attempt that reports failure if it does not complete.
+pub(crate) struct DownloadGuard<'a> {
+    pub(crate) reporter: &'a dyn Reporter,
+    pub(crate) id: usize,
+    name: &'a PackageName,
+    completed: bool,
+}
+
+impl<'a> DownloadGuard<'a> {
+    pub(crate) fn new(
+        reporter: &'a dyn Reporter,
+        name: &'a PackageName,
+        size: Option<u64>,
+    ) -> Self {
+        Self {
+            reporter,
+            id: reporter.on_download_start(name, size),
+            name,
+            completed: false,
+        }
+    }
+
+    pub(crate) fn complete(mut self) {
+        self.reporter.on_download_complete(self.name, self.id);
+        self.completed = true;
+    }
+}
+
+impl Drop for DownloadGuard<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.reporter.on_download_failed(self.name, self.id);
+        }
+    }
 }
 
 impl dyn Reporter {

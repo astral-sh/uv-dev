@@ -21,13 +21,14 @@ static HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS: LazyLock<bool> =
 static JSONL_PROGRESS_LOCK: Mutex<()> = Mutex::new(());
 static NEXT_PROGRESS_ID: AtomicUsize = AtomicUsize::new(1);
 
-/// The lifecycle of an operation: started, optionally updated, then completed.
+/// The lifecycle of an operation: started, optionally updated, then completed or failed.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProgressStatus {
     Started,
     Updated,
     Completed,
+    Failed,
 }
 
 /// A progress update emitted before a command's final JSONL result.
@@ -226,7 +227,7 @@ impl ProgressReporter {
     }
 
     /// Start reporting a build using the caller's source display.
-    pub fn on_build_start(&self, source: &dyn fmt::Display) -> usize {
+    pub fn on_build_start(&self, source: &dyn fmt::Display, styled: &dyn fmt::Display) -> usize {
         let ProgressMode::Multi {
             multi_progress,
             state,
@@ -244,7 +245,7 @@ impl ProgressReporter {
         );
 
         progress.set_style(ProgressStyle::with_template("{wide_msg}").unwrap());
-        let message = format!("   {} {}", "Building".bold().cyan(), source);
+        let message = format!("   {} {}", "Building".bold().cyan(), styled);
         if multi_progress.is_hidden() && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS {
             let _ = writeln!(self.printer.stderr(), "{message}");
         }
@@ -262,7 +263,12 @@ impl ProgressReporter {
     }
 
     /// Finish reporting a build using the caller's source display.
-    pub fn on_build_complete(&self, source: &dyn fmt::Display, id: usize) {
+    pub fn on_build_complete(
+        &self,
+        source: &dyn fmt::Display,
+        styled: &dyn fmt::Display,
+        id: usize,
+    ) {
         let ProgressMode::Multi {
             state,
             multi_progress,
@@ -277,7 +283,7 @@ impl ProgressReporter {
             state.bars.remove(&id).unwrap()
         };
 
-        let message = format!("      {} {}", "Built".bold().green(), source);
+        let message = format!("      {} {}", "Built".bold().green(), styled);
         if multi_progress.is_hidden() && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS {
             let _ = writeln!(self.printer.stderr(), "{message}");
         }
@@ -414,6 +420,10 @@ impl ProgressReporter {
     }
 
     pub fn on_request_complete(&self, direction: Direction, id: usize) {
+        self.finish_request(direction, id, ProgressStatus::Completed);
+    }
+
+    fn finish_request(&self, direction: Direction, id: usize, status: ProgressStatus) {
         let ProgressMode::Multi {
             state,
             multi_progress,
@@ -424,7 +434,8 @@ impl ProgressReporter {
 
         let mut state = state.lock().unwrap();
         if let ProgressBarKind::Numeric { progress, size, .. } = state.bars.remove(&id).unwrap() {
-            if multi_progress.is_hidden()
+            if matches!(status, ProgressStatus::Completed)
+                && multi_progress.is_hidden()
                 && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS
                 && size.is_none_or(|size| size > 1024 * 1024)
             {
@@ -443,8 +454,7 @@ impl ProgressReporter {
                 );
             }
             if self.printer.emits_jsonl_progress() {
-                let mut event =
-                    JsonlProgressEvent::new(direction.phase(), ProgressStatus::Completed);
+                let mut event = JsonlProgressEvent::new(direction.phase(), status);
                 event.id = Some(id);
                 event.name = Some(progress.message());
                 event.completed = Some(progress.position());
@@ -463,6 +473,10 @@ impl ProgressReporter {
 
     pub fn on_download_complete(&self, id: usize) {
         self.on_request_complete(Direction::Download, id);
+    }
+
+    pub fn on_download_failed(&self, id: usize) {
+        self.finish_request(Direction::Download, id, ProgressStatus::Failed);
     }
 
     pub fn on_download_start(&self, name: String, size: Option<u64>) -> usize {

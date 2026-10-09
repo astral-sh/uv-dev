@@ -48,6 +48,7 @@ use crate::error::PythonVersion;
 use crate::extracted_wheel::{ExtractedWheel, HashedWheel, WheelExtractor};
 use crate::hash::http_hash_algorithms;
 use crate::metadata::{ArchiveMetadata, Metadata};
+use crate::reporter::DownloadGuard;
 use crate::source::SourceDistributionBuilder;
 use crate::{Error, FirstPartyPackages, LocalWheel, Reporter, RequiresDist};
 
@@ -799,12 +800,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
 
                 let progress_size_hint = progress_size_hint.or_else(|| content_length(&response));
 
-                let progress = self.reporter.as_ref().map(|reporter| {
-                    (
-                        reporter,
-                        reporter.on_download_start(dist.name(), progress_size_hint),
-                    )
-                });
+                let progress = self
+                    .reporter
+                    .as_deref()
+                    .map(|reporter| DownloadGuard::new(reporter, dist.name(), progress_size_hint));
 
                 let reader = response
                     .bytes_stream()
@@ -823,9 +822,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                 )
                 .map_err(Error::CacheWrite)?;
 
-                let mut extracted = match progress {
-                    Some((reporter, progress)) => {
-                        let mut reader = ProgressReader::new(&mut hasher, progress, &**reporter);
+                let mut extracted = match progress.as_ref() {
+                    Some(progress) => {
+                        let mut reader =
+                            ProgressReader::new(&mut hasher, progress.id, progress.reporter);
                         extractor
                             .extract_streaming(&mut reader)
                             .await
@@ -860,8 +860,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
                     .persist_extracted_wheel(extracted, wheel_entry.path())
                     .await?;
 
-                if let Some((reporter, progress)) = progress {
-                    reporter.on_download_complete(dist.name(), progress);
+                if let Some(progress) = progress {
+                    progress.complete();
                 }
 
                 Ok(Archive::new(
@@ -1110,12 +1110,10 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         let progress_size_hint = progress_size_hint.or_else(|| content_length(&response));
         let mut download_size = content_length(&response).or(expected_size);
 
-        let progress = self.reporter.as_ref().map(|reporter| {
-            (
-                reporter,
-                reporter.on_download_start(dist.name(), progress_size_hint),
-            )
-        });
+        let progress = self
+            .reporter
+            .as_deref()
+            .map(|reporter| DownloadGuard::new(reporter, dist.name(), progress_size_hint));
 
         let algorithms = http_hash_algorithms(hashes);
 
@@ -1195,11 +1193,12 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             // Drain the response. This could be a partial response or a full one.
             // Note that the partial response here can take several forms: it can be an interrupted
             // request *or* it can be a `206 Partial Content`.
-            let copy_result = match progress {
-                Some((reporter, progress)) => {
+            let copy_result = match progress.as_ref() {
+                Some(progress) => {
                     // Wrap the reader in a progress reporter. This will report 100%
                     // progress once the download is complete, before the wheel is unzipped.
-                    let mut reader = ProgressReader::new(&mut hasher, progress, &**reporter);
+                    let mut reader =
+                        ProgressReader::new(&mut hasher, progress.id, progress.reporter);
 
                     tokio::io::copy(&mut reader, &mut writer)
                         .await
@@ -1369,8 +1368,8 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             .persist_extracted_wheel(extracted, wheel_entry.path())
             .await?;
 
-        if let Some((reporter, progress)) = progress {
-            reporter.on_download_complete(dist.name(), progress);
+        if let Some(progress) = progress {
+            progress.complete();
         }
 
         Ok(Archive::new(

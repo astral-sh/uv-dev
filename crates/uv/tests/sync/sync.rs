@@ -2001,7 +2001,12 @@ fn sync_jsonl() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync()
+    let mut filters = context.filters();
+    filters.push((
+        r#"(?m)^\{"type":"progress","phase":"download","status":"updated",[^\n]*\}\n"#,
+        "",
+    ));
+    let output = uv_snapshot!(filters, context.sync()
         .arg("--output-format").arg("jsonl")
         .arg("--preview-features").arg("jsonl"), @r#"
     exit_code: 0 (success)
@@ -2012,7 +2017,6 @@ fn sync_jsonl() -> Result<()> {
     {"type":"progress","phase":"resolve","status":"completed"}
     {"type":"progress","phase":"prepare","status":"started","total":1}
     {"type":"progress","phase":"download","status":"started","id":1,"name":"iniconfig","total":5892}
-    {"type":"progress","phase":"download","status":"updated","id":1,"completed":5892,"total":5892}
     {"type":"progress","phase":"download","status":"completed","id":1,"name":"iniconfig","completed":5892,"total":5892}
     {"type":"progress","phase":"prepare","status":"updated","name":"iniconfig==2.0.0","completed":1,"total":1}
     {"type":"progress","phase":"prepare","status":"completed","completed":1,"total":1}
@@ -2028,6 +2032,28 @@ fn sync_jsonl() -> Result<()> {
      + iniconfig==2.0.0
     "#
     );
+
+    let events = String::from_utf8(output.stdout)?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let total = events
+        .iter()
+        .find(|event| event["phase"] == "download" && event["status"] == "started")
+        .unwrap()["total"]
+        .as_u64()
+        .unwrap();
+    let mut previous = 0;
+    for event in events
+        .iter()
+        .filter(|event| event["phase"] == "download" && event["status"] == "updated")
+    {
+        let completed = event["completed"].as_u64().unwrap();
+        assert!(completed > previous && completed <= total);
+        assert_eq!(event["total"].as_u64(), Some(total));
+        previous = completed;
+    }
+    assert!(previous > 0);
 
     uv_snapshot!(context.filters(), context.sync()
         .arg("--frozen")
@@ -2067,6 +2093,201 @@ fn sync_jsonl() -> Result<()> {
     "#
     );
 
+    Ok(())
+}
+
+#[test]
+fn sync_jsonl_verbose_no_progress() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/dependency-groups.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+    "#})?;
+    let output = context
+        .sync()
+        .args([
+            "-v",
+            "--output-format",
+            "jsonl",
+            "--preview-features",
+            "jsonl",
+        ])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--no-progress")
+        .output()?;
+    assert!(output.status.success());
+    let events = String::from_utf8(output.stdout)?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["type"], "result");
+    assert_eq!(
+        events[0]["sync"]["changes"].as_array().map(Vec::len),
+        Some(1)
+    );
+    Ok(())
+}
+
+#[test]
+fn sync_jsonl_verbose_no_progress_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/dependency-groups.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+    "#})?;
+    let output = context
+        .sync()
+        .args([
+            "-v",
+            "--output-format",
+            "jsonl",
+            "--preview-features",
+            "jsonl",
+        ])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env(EnvVars::UV_NO_PROGRESS, "1")
+        .output()?;
+    assert!(output.status.success());
+    let events = String::from_utf8(output.stdout)?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["type"], "result");
+    assert_eq!(
+        events[0]["sync"]["changes"].as_array().map(Vec::len),
+        Some(1)
+    );
+    Ok(())
+}
+
+/// Streaming fallback closes the abandoned attempt before reporting a successful replacement.
+#[tokio::test]
+async fn sync_jsonl_streaming_fallback_completes_every_download() -> Result<()> {
+    use async_zip::base::write::ZipFileWriter;
+    use async_zip::{Compression, ZipEntryBuilder};
+    use futures::io::AsyncWriteExt;
+
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let filename = "jsonl_fallback-1.0.0-py3-none-any.whl";
+    let mut writer = ZipFileWriter::new(Vec::new());
+    for (name, contents) in [
+        ("jsonl_fallback/__init__.py", ""),
+        (
+            "jsonl_fallback-1.0.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: jsonl-fallback\nVersion: 1.0.0\n",
+        ),
+        (
+            "jsonl_fallback-1.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        ),
+        (
+            "jsonl_fallback-1.0.0.dist-info/RECORD",
+            "jsonl_fallback/__init__.py,,\njsonl_fallback-1.0.0.dist-info/METADATA,,\njsonl_fallback-1.0.0.dist-info/WHEEL,,\njsonl_fallback-1.0.0.dist-info/RECORD,,\n",
+        ),
+    ] {
+        // Stored entries with data descriptors require the seekable extraction fallback.
+        let mut entry = writer
+            .write_entry_stream(ZipEntryBuilder::new(name.into(), Compression::Stored))
+            .await?;
+        entry.write_all(contents.as_bytes()).await?;
+        entry.close().await?;
+    }
+    let wheel = writer.close().await?;
+    let hash = hex::encode(Sha256::digest(&wheel));
+    let size = wheel.len();
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(2)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["jsonl-fallback"]
+    "#})?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&formatdoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "jsonl-fallback"
+        version = "1.0.0"
+        source = {{ registry = "{url}/simple" }}
+        wheels = [{{ url = "{url}/{filename}", hash = "sha256:{hash}", size = {size} }}]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = {{ virtual = "." }}
+        dependencies = [{{ name = "jsonl-fallback" }}]
+
+        [package.metadata]
+        requires-dist = [{{ name = "jsonl-fallback" }}]
+    "#, url=server.uri()})?;
+    let output = context
+        .sync()
+        .args([
+            "--frozen",
+            "--output-format",
+            "jsonl",
+            "--preview-features",
+            "jsonl",
+        ])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let events = String::from_utf8(output.stdout)?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let downloads = events
+        .iter()
+        .filter(|event| event["phase"] == "download" && event["status"] != "updated")
+        .collect::<Vec<_>>();
+    insta::assert_json_snapshot!(downloads.iter().map(|event| &event["status"]).collect::<Vec<_>>(), @r#"
+    [
+      "started",
+      "failed",
+      "started",
+      "completed"
+    ]
+    "#);
+    assert_eq!(downloads[0]["id"], downloads[1]["id"]);
+    assert_eq!(downloads[2]["id"], downloads[3]["id"]);
+    assert_ne!(downloads[0]["id"], downloads[2]["id"]);
+    assert_eq!(events.last().unwrap()["type"], "result");
     Ok(())
 }
 
@@ -2168,6 +2389,14 @@ fn sync_jsonl_concurrent_download_and_install_events() -> Result<()> {
     ]
     "#);
 
+    let completed = progress
+        .iter()
+        .filter(|event| event["phase"] == "install" && event["status"] == "updated")
+        .map(|event| event["completed"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert!(completed.windows(2).all(|counts| counts[0] < counts[1]));
+    assert_eq!(completed.last(), Some(&2));
+
     let mut installed = progress
         .iter()
         .filter(|event| event["phase"] == "install" && event["status"] == "updated")
@@ -2252,6 +2481,7 @@ fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
 
     let output = context
         .sync()
+        .args(["--color", "always"])
         .arg("--output-format")
         .arg("jsonl")
         .arg("--preview-features")
@@ -2264,6 +2494,11 @@ fn sync_jsonl_git_checkout_and_build_events() -> Result<()> {
         .lines()
         .map(serde_json::from_str::<serde_json::Value>)
         .collect::<Result<Vec<_>, _>>()?;
+    assert!(events.iter().all(|event| {
+        event["name"]
+            .as_str()
+            .is_none_or(|name| !name.contains('\u{1b}'))
+    }));
     let mut operations = events
         .iter()
         .filter(|event| event["phase"] == "checkout" || event["phase"] == "build")

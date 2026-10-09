@@ -221,6 +221,7 @@ fn workspace_metadata_jsonl() {
 
 /// Internal workspace synchronization must stream its otherwise-silenced progress.
 #[test]
+#[cfg(feature = "test-pypi")]
 fn workspace_metadata_jsonl_sync_progress() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context.temp_dir.child("pyproject.toml").write_str(
@@ -252,8 +253,27 @@ fn workspace_metadata_jsonl_sync_progress() -> Result<()> {
         anyhow::bail!("expected JSONL progress and a final metadata report");
     };
 
+    let total = progress
+        .iter()
+        .find(|event| event["phase"] == "download" && event["status"] == "started")
+        .unwrap()["total"]
+        .as_u64()
+        .unwrap();
+    let mut previous = 0;
+    for event in progress
+        .iter()
+        .filter(|event| event["phase"] == "download" && event["status"] == "updated")
+    {
+        let completed = event["completed"].as_u64().unwrap();
+        assert!(completed > previous && completed <= total);
+        assert_eq!(event["total"].as_u64(), Some(total));
+        previous = completed;
+    }
+    assert!(previous > 0);
+
     let progress = progress
         .iter()
+        .filter(|event| !(event["phase"] == "download" && event["status"] == "updated"))
         .map(|event| {
             let phase = event["phase"]
                 .as_str()
@@ -272,7 +292,6 @@ fn workspace_metadata_jsonl_sync_progress() -> Result<()> {
       "resolve:completed",
       "prepare:started",
       "download:started",
-      "download:updated",
       "download:completed",
       "prepare:updated",
       "prepare:completed",
