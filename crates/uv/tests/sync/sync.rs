@@ -9968,8 +9968,8 @@ fn no_build_error() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--no-build-package").arg("a"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × No solution found when resolving dependencies:
-      ╰─▶ Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
 
     hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
     ");
@@ -9977,8 +9977,8 @@ fn no_build_error() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--no-build"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × No solution found when resolving dependencies:
-      ╰─▶ Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
 
     hint: Wheels are required for `a` because building from source is disabled for all packages (i.e., with `--no-build`)
     ");
@@ -9986,8 +9986,8 @@ fn no_build_error() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--reinstall").env(EnvVars::UV_NO_BUILD, "1"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × No solution found when resolving dependencies:
-      ╰─▶ Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
 
     hint: Wheels are required for `a` because building from source is disabled for all packages (i.e., with `--no-build`)
     ");
@@ -9995,8 +9995,8 @@ fn no_build_error() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--reinstall").env(EnvVars::UV_NO_BUILD_PACKAGE, "a"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × No solution found when resolving dependencies:
-      ╰─▶ Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
 
     hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
     ");
