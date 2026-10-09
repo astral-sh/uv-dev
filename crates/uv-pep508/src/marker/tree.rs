@@ -1904,6 +1904,59 @@ mod test {
     }
 
     #[test]
+    fn parse_large_boolean_chains() {
+        let mut clauses = Vec::new();
+        let mut at_most_one = MarkerTree::TRUE;
+        for left in 0..12 {
+            for right in left + 1..12 {
+                let left = format!("extra == 'item-{left:02}'");
+                let right = format!("extra == 'item-{right:02}'");
+                clauses.push(format!("({left} and {right})"));
+                at_most_one = at_most_one.and(m(&left).negate().or(m(&right).negate()));
+            }
+        }
+        assert_eq!(m(&clauses.join(" or ")), at_most_one.negate());
+        clauses.reverse();
+        assert_eq!(m(&clauses.join(" or ")), at_most_one.negate());
+
+        let conjunction = (0..37)
+            .map(|index| format!("(extra == 'item-{index:02}' or sys_platform == 'linux')"))
+            .collect::<Vec<_>>();
+        let expected = conjunction
+            .iter()
+            .fold(MarkerTree::TRUE, |marker, term| marker.and(m(term)));
+        assert_eq!(m(&conjunction.join(" and ")), expected);
+
+        for (operator, prefix, expected) in [
+            ("or", "extra == 'a' or extra != 'a'", MarkerTree::TRUE),
+            ("and", "extra == 'a' and extra != 'a'", MarkerTree::FALSE),
+        ] {
+            let input = format!("({prefix}) {operator} ({})", clauses.join(" or "));
+            assert_eq!(m(&input), expected);
+        }
+    }
+
+    #[test]
+    fn parse_constant_boolean_chain_trailing_error() {
+        assert_snapshot!(
+            parse_err("(extra == 'a' or extra != 'a') or (python_version < invalid)"),
+            @"
+        Expected a quoted string or a valid marker name, found `invalid`
+        (extra == 'a' or extra != 'a') or (python_version < invalid)
+                                                            ^^^^^^^
+        "
+        );
+        assert_snapshot!(
+            parse_err("(extra == 'a' and extra != 'a') and (python_version < invalid)"),
+            @"
+        Expected a quoted string or a valid marker name, found `invalid`
+        (extra == 'a' and extra != 'a') and (python_version < invalid)
+                                                              ^^^^^^^
+        "
+        );
+    }
+
+    #[test]
     fn darwin_platform_release() {
         let baseline = m("sys_platform == 'darwin' and platform_release == '24.0.0'");
         assert!(!baseline.is_disjoint(m("platform_release >= '9.0.0'")));
