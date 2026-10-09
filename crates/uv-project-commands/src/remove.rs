@@ -118,8 +118,7 @@ pub async fn remove(
             .await?
         };
 
-        let (project, lock, _) =
-            MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
+        let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
         _metadata_lock = lock;
         EditTarget::Project(project)
     };

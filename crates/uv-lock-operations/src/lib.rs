@@ -13,5 +13,5 @@ pub use error::{LockError, LockValidationError, MissingLockfileSource};
 pub use lock::{LockMode, LockOperation, LockResult};
 pub use lock_target::LockTarget;
 pub use lockfile::FrozenWorkspace;
-pub use metadata::MetadataLock;
+pub use metadata::{MetadataDiscovery, MetadataLock};
 pub use validated_lock::ValidatedLock;

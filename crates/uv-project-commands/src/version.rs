@@ -114,16 +114,13 @@ pub async fn project_version(
     .await?;
 
     let _metadata_lock;
-    let metadata_workspace_cache;
-    let (project, workspace_cache) = if !dry_run && (value.is_some() || !bump.is_empty()) {
-        let (project, lock, fresh_cache) =
-            MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
+    let project = if !dry_run && (value.is_some() || !bump.is_empty()) {
+        let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
         _metadata_lock = Some(lock);
-        metadata_workspace_cache = fresh_cache;
-        (project, &metadata_workspace_cache)
+        project
     } else {
         _metadata_lock = None;
-        (project, workspace_cache)
+        project
     };
 
     let pyproject_path = project.root().join("pyproject.toml");

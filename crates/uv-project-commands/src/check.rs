@@ -92,8 +92,6 @@ pub async fn check(
 
     let writable = !isolated && frozen.is_none() && matches!(lock_check, LockCheck::Disabled);
     let mut metadata_lock = None;
-    let metadata_workspace_cache;
-    let mut workspace_cache = workspace_cache;
     let script = if writable {
         if let Some(script) = script {
             let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
@@ -161,11 +159,8 @@ pub async fn check(
 
     let project = if writable {
         if let Some(project) = project {
-            let (project, lock, fresh_cache) =
-                MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
+            let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
             metadata_lock = Some(lock);
-            metadata_workspace_cache = fresh_cache;
-            workspace_cache = &metadata_workspace_cache;
             Some(project)
         } else {
             None

@@ -80,8 +80,6 @@ pub async fn audit(
 
     let writable = frozen.is_none() && matches!(lock_check, LockCheck::Disabled);
     let mut metadata_lock = None;
-    let metadata_workspace_cache;
-    let mut workspace_cache = workspace_cache;
     let script = if writable {
         if let Some(script) = script {
             let (script, lock) = MetadataLock::read_script(admission.take(), &script.path).await?;
@@ -106,11 +104,8 @@ pub async fn audit(
         )
         .await?;
         workspace = if writable {
-            let (workspace, lock, fresh_cache) =
-                MetadataLock::admitted_workspace(admission.take(), workspace_cache, discovered)?;
+            let (workspace, lock) = MetadataLock::admitted_workspace(admission.take(), discovered)?;
             metadata_lock = Some(lock);
-            metadata_workspace_cache = fresh_cache;
-            workspace_cache = &metadata_workspace_cache;
             workspace
         } else {
             discovered

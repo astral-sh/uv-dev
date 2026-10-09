@@ -401,8 +401,7 @@ async fn init_project(
 
     let _metadata_lock;
     let workspace = if let Some(workspace) = workspace {
-        let (workspace, lock, _) =
-            MetadataLock::admitted_workspace(admission, &workspace_cache, workspace)?;
+        let (workspace, lock) = MetadataLock::admitted_workspace(admission, workspace)?;
         _metadata_lock = Some(lock);
         Some(workspace)
     } else {

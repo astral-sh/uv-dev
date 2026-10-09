@@ -43,7 +43,7 @@ use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
-use uv_lock_operations::MetadataLock;
+use uv_lock_operations::{MetadataDiscovery, MetadataLock};
 #[cfg(feature = "self-update")]
 use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
@@ -2300,8 +2300,25 @@ async fn claim_metadata(
     workspace_cache: &mut WorkspaceCache,
 ) -> Result<Option<MetadataLock>> {
     match target {
+        Some(settings::MetadataTarget::Project) => {
+            MetadataLock::discover(
+                project_dir,
+                cache,
+                workspace_cache,
+                MemberDiscovery::All,
+                MetadataDiscovery::Project,
+            )
+            .await
+        }
         Some(settings::MetadataTarget::Workspace) => {
-            MetadataLock::discover(project_dir, cache, workspace_cache, MemberDiscovery::All).await
+            MetadataLock::discover(
+                project_dir,
+                cache,
+                workspace_cache,
+                MemberDiscovery::All,
+                MetadataDiscovery::Workspace,
+            )
+            .await
         }
         Some(settings::MetadataTarget::Script(path)) => Ok(Some(MetadataLock::script(path).await?)),
         Some(settings::MetadataTarget::ParentWorkspace(path)) => {
@@ -2311,6 +2328,7 @@ async fn claim_metadata(
                 cache,
                 workspace_cache,
                 MemberDiscovery::None,
+                MetadataDiscovery::Workspace,
             )
             .await
         }

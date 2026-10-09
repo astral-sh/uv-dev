@@ -295,8 +295,7 @@ pub async fn add(
             .await?
         };
 
-        let (project, lock, _) =
-            MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
+        let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
         _metadata_lock = lock;
 
         // For non-project workspace roots, allow dev dependencies, but nothing else.

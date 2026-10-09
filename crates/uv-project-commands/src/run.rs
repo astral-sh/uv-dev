@@ -624,26 +624,23 @@ pub async fn run(
         };
 
         let metadata_lock;
-        let metadata_workspace_cache;
-        let (project, workspace_cache) = if !no_sync
+        let project = if !no_sync
             && !no_project
             && !isolated
             && frozen.is_none()
             && matches!(lock_check, LockCheck::Disabled)
         {
             if let Some(project) = project {
-                let (project, lock, fresh_cache) =
-                    MetadataLock::admitted_project(admission.take(), workspace_cache, project)?;
+                let (project, lock) = MetadataLock::admitted_project(admission.take(), project)?;
                 metadata_lock = Some(lock);
-                metadata_workspace_cache = fresh_cache;
-                (Some(project), &metadata_workspace_cache)
+                Some(project)
             } else {
                 metadata_lock = None;
-                (None, workspace_cache)
+                None
             }
         } else {
             metadata_lock = None;
-            (project, workspace_cache)
+            project
         };
 
         if no_project {

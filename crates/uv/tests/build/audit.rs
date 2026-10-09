@@ -2836,3 +2836,23 @@ async fn audit_sarif_project_artifact_uri() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn audit_rejects_dependency_groups_without_workspace() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r"
+        [dependency-groups]
+        dev = []
+    "})?;
+    uv_snapshot!(context.filters(), context.audit()
+        .args(["--preview-features", "audit-command"]), @r"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No `project` table found in: [TEMP_DIR]/pyproject.toml
+    ");
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    Ok(())
+}

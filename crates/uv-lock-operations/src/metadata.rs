@@ -6,9 +6,37 @@ use anyhow::{Context, Result, ensure};
 
 use uv_cache::Cache;
 use uv_cache_key::cache_digest;
-use uv_fs::{LockedFile, LockedFileMode, Simplified};
+use uv_fs::{LockedFile, LockedFileMode, Simplified, normalize_path};
 use uv_scripts::Pep723Script;
-use uv_workspace::{DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache};
+use uv_workspace::{
+    DiscoveryOptions, MemberDiscovery, VirtualProject, Workspace, WorkspaceCache, WorkspaceError,
+};
+
+/// The caller's accepted project roots, including whether dependency-group-only roots are valid.
+#[derive(Clone, Copy)]
+pub enum MetadataDiscovery {
+    Project,
+    Workspace,
+}
+
+impl MetadataDiscovery {
+    async fn root(
+        self,
+        directory: &Path,
+        options: &DiscoveryOptions,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+    ) -> Result<PathBuf, WorkspaceError> {
+        match self {
+            Self::Project => VirtualProject::discover(directory, options, cache, workspace_cache)
+                .await
+                .map(|project| project.workspace().install_path().clone()),
+            Self::Workspace => Workspace::discover(directory, options, cache, workspace_cache)
+                .await
+                .map(|workspace| workspace.install_path().clone()),
+        }
+    }
+}
 
 /// Own the metadata resource independently of the interpreter or environment used to resolve it.
 #[must_use]
@@ -26,32 +54,37 @@ impl MetadataLock {
         cache: &Cache,
         workspace_cache: &mut WorkspaceCache,
         members: MemberDiscovery,
+        discovery: MetadataDiscovery,
     ) -> Result<Option<Self>> {
+        let directory = std::path::absolute(directory)?;
+        let directory = normalize_path(&directory);
         let options = DiscoveryOptions {
             members: MemberDiscovery::None,
             ..DiscoveryOptions::default()
         };
         loop {
-            let Ok(workspace) =
-                Workspace::discover(directory, &options, cache, &WorkspaceCache::default()).await
+            let Ok(root) = discovery
+                .root(&directory, &options, cache, &WorkspaceCache::default())
+                .await
             else {
                 return Ok(None);
             };
-            let root = fs_err::canonicalize(workspace.install_path())?;
+            let root = fs_err::canonicalize(root)?;
             let lock = Self::workspace(&root).await?;
             let fresh_cache = WorkspaceCache::default();
-            let discovered = Workspace::discover(
-                directory,
-                &DiscoveryOptions {
-                    members: members.clone(),
-                    ..DiscoveryOptions::default()
-                },
-                cache,
-                &fresh_cache,
-            )
-            .await;
+            let discovered = discovery
+                .root(
+                    &directory,
+                    &DiscoveryOptions {
+                        members: members.clone(),
+                        ..DiscoveryOptions::default()
+                    },
+                    cache,
+                    &fresh_cache,
+                )
+                .await;
             match discovered {
-                Ok(workspace) if fs_err::canonicalize(workspace.install_path())? != root => {
+                Ok(current) if fs_err::canonicalize(&current)? != root => {
                     // Drop this guard before retrying admission for the new workspace root.
                 }
                 Ok(_) | Err(_) => {
@@ -112,25 +145,23 @@ impl MetadataLock {
     /// Reuse the project discovered while holding its metadata resource.
     pub fn admitted_project(
         admission: Option<Self>,
-        workspace_cache: &WorkspaceCache,
         project: VirtualProject,
-    ) -> Result<(VirtualProject, Self, WorkspaceCache)> {
+    ) -> Result<(VirtualProject, Self)> {
         let lock = admission
             .context("Workspace changed before metadata admission; run the command again")?;
         lock.check_resource(project.workspace().install_path(), "workspace")?;
-        Ok((project, lock, workspace_cache.clone()))
+        Ok((project, lock))
     }
 
     /// Reuse the workspace discovered while holding its metadata resource.
     pub fn admitted_workspace(
         admission: Option<Self>,
-        workspace_cache: &WorkspaceCache,
         workspace: Arc<Workspace>,
-    ) -> Result<(Arc<Workspace>, Self, WorkspaceCache)> {
+    ) -> Result<(Arc<Workspace>, Self)> {
         let lock = admission
             .context("Workspace changed before metadata admission; run the command again")?;
         lock.check_resource(workspace.install_path(), "workspace")?;
-        Ok((workspace, lock, workspace_cache.clone()))
+        Ok((workspace, lock))
     }
 
     /// Read a script's current metadata after claiming the script, including an absent metadata tag.

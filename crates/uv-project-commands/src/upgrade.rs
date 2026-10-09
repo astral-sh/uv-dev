@@ -202,15 +202,11 @@ pub async fn upgrade(
         }
         Err(err) => return Err(err.into()),
     };
-    let (project, _metadata_lock, metadata_workspace_cache) = MetadataLock::admitted_project(
-        admission.take(),
-        workspace_cache,
-        VirtualProject::Project(project),
-    )?;
+    let (project, _metadata_lock) =
+        MetadataLock::admitted_project(admission.take(), VirtualProject::Project(project))?;
     let VirtualProject::Project(project) = project else {
         bail!("`uv upgrade` requires a project with a `[project]` table");
     };
-    let workspace_cache = &metadata_workspace_cache;
     // Locking defaults a missing `requires-python` to the discovered interpreter's minor version.
     // Use that same bound when deciding whether selected declarations and sources can apply.
     let fallback_interpreter = if requires_fallback_interpreter(&project, &packages, &exclude)? {

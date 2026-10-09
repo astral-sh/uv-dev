@@ -78,6 +78,7 @@ use crate::{
 /// The metadata resource a command can publish, before filesystem settings are resolved.
 #[derive(Clone, Copy)]
 pub enum MetadataTarget<'a> {
+    Project,
     Workspace,
     Script(&'a Path),
     ParentWorkspace(Option<&'a Path>),
@@ -98,9 +99,7 @@ pub fn metadata_target<'a>(
         ) && resolve_frozen(frozen, no_frozen, FrozenFlag::Frozen, environment.frozen).is_none()
     };
     let target = |script: Option<&'a PathBuf>| {
-        script.map_or(MetadataTarget::Workspace, |path| {
-            MetadataTarget::Script(path)
-        })
+        script.map_or(MetadataTarget::Project, |path| MetadataTarget::Script(path))
     };
     match command {
         Commands::Project(command) => match &**command {
@@ -115,10 +114,10 @@ pub fn metadata_target<'a>(
             }
             ProjectCommand::Add(args) => Some(target(args.script.as_ref())),
             ProjectCommand::Remove(args) => Some(target(args.script.as_ref())),
-            ProjectCommand::Upgrade(_) => Some(MetadataTarget::Workspace),
+            ProjectCommand::Upgrade(_) => Some(MetadataTarget::Project),
             ProjectCommand::Version(args) => (!args.dry_run
                 && (args.value.is_some() || !args.bump.is_empty()))
-            .then_some(MetadataTarget::Workspace),
+            .then_some(MetadataTarget::Project),
             ProjectCommand::Run(args) => {
                 if !writable(args.locked, args.no_locked, args.frozen, args.no_frozen) {
                     None
@@ -131,7 +130,7 @@ pub fn metadata_target<'a>(
                 {
                     None
                 } else {
-                    Some(MetadataTarget::Workspace)
+                    Some(MetadataTarget::Project)
                 }
             }
             ProjectCommand::Lock(args) => (!args.dry_run
@@ -142,10 +141,9 @@ pub fn metadata_target<'a>(
                     args.no_frozen,
                 ))
             .then(|| target(args.script.as_ref())),
-            ProjectCommand::Sync(args) => {
-                writable(args.locked, args.no_locked, args.frozen, args.no_frozen)
-                    .then(|| target(args.script.as_ref()))
-            }
+            ProjectCommand::Sync(args) => (!args.dry_run
+                && writable(args.locked, args.no_locked, args.frozen, args.no_frozen))
+            .then(|| target(args.script.as_ref())),
             ProjectCommand::Tree(args) => {
                 writable(args.locked, args.no_locked, args.frozen, args.no_frozen)
                     .then(|| target(args.script.as_ref()))
@@ -155,8 +153,13 @@ pub fn metadata_target<'a>(
                     .then(|| target(args.script.as_ref()))
             }
             ProjectCommand::Audit(args) => {
-                writable(args.locked, args.no_locked, args.frozen, args.no_frozen)
-                    .then(|| target(args.script.as_ref()))
+                writable(args.locked, args.no_locked, args.frozen, args.no_frozen).then(|| {
+                    args.script
+                        .as_ref()
+                        .map_or(MetadataTarget::Workspace, |path| {
+                            MetadataTarget::Script(path)
+                        })
+                })
             }
             ProjectCommand::Check(args) => (!args.isolated
                 && environment.isolated.value != Some(true)
