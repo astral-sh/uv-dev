@@ -31,10 +31,11 @@ impl LockedWorkspaceGroup {
 
 impl From<ResolvedWorkspaceGroup> for LockedWorkspaceGroup {
     fn from(group: ResolvedWorkspaceGroup) -> Self {
+        let (definition, effective_requires_python, environment) = group.into_parts();
         Self {
-            definition: group.definition,
-            effective_requires_python: group.requires_python,
-            environment: Some(group.environments),
+            definition,
+            effective_requires_python,
+            environment: Some(environment),
         }
     }
 }
@@ -141,7 +142,7 @@ impl Lock {
         resolutions: Vec<(Vec<GroupName>, Self)>,
     ) -> Result<Option<Self>, LockError> {
         let Some(requires_python) =
-            RequiresPython::union(groups.iter().map(|group| &group.requires_python))
+            RequiresPython::union(groups.iter().map(ResolvedWorkspaceGroup::requires_python))
         else {
             return Ok(None);
         };
@@ -152,7 +153,7 @@ impl Lock {
         let mut manifest = first.manifest.clone();
         manifest.members = groups
             .iter()
-            .flat_map(|group| group.definition.members.iter().cloned())
+            .flat_map(|group| group.definition().members.iter().cloned())
             .collect();
         let mut options = first.options.clone();
         let conflicts = first.conflicts.clone();
@@ -177,9 +178,9 @@ impl Lock {
             }
             let mut scope = UniversalMarker::from_combined(MarkerTree::FALSE);
             for group in &groups {
-                if names.contains(&group.definition.name) {
-                    let mut marker = UniversalMarker::workspace_group(&group.definition.name);
-                    marker.and(UniversalMarker::from_combined(group.environments));
+                if names.contains(&group.definition().name) {
+                    let mut marker = UniversalMarker::workspace_group(&group.definition().name);
+                    marker.and(UniversalMarker::from_combined(group.environments()));
                     scope.or(marker);
                 }
             }
@@ -321,7 +322,7 @@ impl Lock {
     }
 
     /// Retain an ordinary project target within an already selected workspace context.
-    pub fn select_workspace_members(
+    fn select_workspace_members(
         &self,
         members: &BTreeSet<PackageName>,
     ) -> Result<Option<Self>, LockError> {
@@ -347,7 +348,7 @@ impl Lock {
     }
 
     /// Merge ordinary-target views when their package choices agree in overlapping environments.
-    pub fn merge_workspace_resolutions(resolutions: Vec<Self>) -> Result<Option<Self>, LockError> {
+    fn merge_workspace_resolutions(resolutions: Vec<Self>) -> Result<Option<Self>, LockError> {
         Self::merge_workspace_contexts(resolutions, true)
     }
 
@@ -502,14 +503,14 @@ fn canonical_workspace_markers(
         let selected = markers
             .iter()
             .map(|marker| {
-                let mut marker = marker.select_workspace_group(&group.definition.name);
-                marker.and(UniversalMarker::from_combined(group.environments));
+                let mut marker = marker.select_workspace_group(&group.definition().name);
+                marker.and(UniversalMarker::from_combined(group.environments()));
                 marker
             })
             .filter(|marker| !marker.is_false())
             .collect::<BTreeSet<_>>();
         for mut marker in remove_redundant_markers(&selected) {
-            marker.and(UniversalMarker::workspace_group(&group.definition.name));
+            marker.and(UniversalMarker::workspace_group(&group.definition().name));
             canonical.insert(marker);
         }
     }
@@ -551,8 +552,8 @@ fn normalize_workspace_graph(
             let mut pending = packages
                 .values()
                 .filter_map(|package| {
-                    root_marker(package, &group.definition.members, manifest)
-                        .map(|marker| (package.id.clone(), marker.and(group.environments)))
+                    root_marker(package, &group.definition().members, manifest)
+                        .map(|marker| (package.id.clone(), marker.and(group.environments())))
                 })
                 .collect::<Vec<_>>();
             let mut reached = BTreeMap::<PackageId, MarkerTree>::new();
@@ -562,7 +563,7 @@ fn normalize_workspace_graph(
                 };
                 let available =
                     UniversalMarker::from_combined(package_environment(package, requires_python))
-                        .select_workspace_group(&group.definition.name)
+                        .select_workspace_group(&group.definition().name)
                         .combined();
                 let active = active.and(available);
                 let previous = reached.entry(id).or_insert(MarkerTree::FALSE);
@@ -575,7 +576,7 @@ fn normalize_workspace_graph(
                     let marker = active.and(
                         dependency
                             .complexified_marker
-                            .select_workspace_group(&group.definition.name)
+                            .select_workspace_group(&group.definition().name)
                             .combined(),
                     );
                     if !marker.is_false() {
@@ -594,9 +595,9 @@ fn normalize_workspace_graph(
                     .get(&package.id)
                     .filter(|marker| !marker.is_false())
                     .map(|marker| {
-                        let mut scope = UniversalMarker::workspace_group(&group.definition.name);
+                        let mut scope = UniversalMarker::workspace_group(&group.definition().name);
                         scope.and(UniversalMarker::from_combined(*marker));
-                        (&group.definition.name, scope)
+                        (&group.definition().name, scope)
                     })
             })
             .collect::<Vec<_>>();

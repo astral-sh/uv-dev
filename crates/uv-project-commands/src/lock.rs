@@ -122,11 +122,12 @@ pub(crate) struct CommandWorkspaceSelection {
 
 impl From<ResolvedWorkspaceGroup> for CommandWorkspaceSelection {
     fn from(group: ResolvedWorkspaceGroup) -> Self {
+        let (definition, requires_python, environments) = group.into_parts();
         Self {
-            name: Some(group.definition.name),
-            members: group.definition.members,
-            requires_python: group.requires_python,
-            environments: group.environments,
+            name: Some(definition.name),
+            members: definition.members,
+            requires_python,
+            environments,
         }
     }
 }
@@ -223,7 +224,7 @@ pub(crate) async fn command_workspace_group(
     if let Some(name) = name {
         return groups
             .into_iter()
-            .find(|group| group.definition.name == *name)
+            .find(|group| group.definition().name == *name)
             .map(|group| Some(CommandWorkspaceSelection::from(group)))
             .ok_or_else(|| {
                 uv_workspace::WorkspaceError::from(
@@ -232,7 +233,7 @@ pub(crate) async fn command_workspace_group(
                 .into()
             });
     }
-    if let Some(group) = groups.iter().find(|group| group.definition.default) {
+    if let Some(group) = groups.iter().find(|group| group.definition().default) {
         return Ok(Some(group.clone().into()));
     }
     if groups.is_empty() {
@@ -243,7 +244,7 @@ pub(crate) async fn command_workspace_group(
         for member in members {
             let supported = groups
                 .iter()
-                .filter_map(|group| group.member_environments.get(member))
+                .filter_map(|group| group.member_environments().get(member))
                 .fold(MarkerTree::FALSE, |supported, marker| supported.or(*marker));
             if supported.is_false() {
                 return Err(WorkspaceGroupSelectionError::Uncovered.into());
@@ -254,7 +255,7 @@ pub(crate) async fn command_workspace_group(
     } else {
         // Batch exports select their roots independently and can use any supported context.
         groups.iter().fold(MarkerTree::FALSE, |environment, group| {
-            environment.or(group.environments)
+            environment.or(group.environments())
         })
     };
     let requires_python = RequiresPython::from_marker_tree(environments)

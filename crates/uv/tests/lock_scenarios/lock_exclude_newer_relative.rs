@@ -96,7 +96,6 @@ fn lock_exclude_newer_relative() -> Result<()> {
         .arg("--upgrade"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P3W` to `P2W`
     Resolved 2 packages in [TIME]
     Updated idna v3.6 -> v3.7
     ");
@@ -203,6 +202,7 @@ fn lock_exclude_newer_relative() -> Result<()> {
 /// Uses idna which has releases at:
 /// - 3.6: 2023-11-25
 /// - 3.7: 2024-04-11
+
 #[test]
 fn lock_exclude_newer_older_vs_newer() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -391,7 +391,6 @@ fn lock_exclude_newer_package_relative() -> Result<()> {
         .arg("--upgrade"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P3W` to `P2W` for package `idna`
     Resolved 2 packages in [TIME]
     Updated idna v3.6 -> v3.7
     ");
@@ -484,6 +483,7 @@ fn lock_exclude_newer_package_relative() -> Result<()> {
 /// Uses idna which has releases at:
 /// - 3.6: 2023-11-25
 /// - 3.7: 2024-04-11
+
 #[test]
 fn lock_exclude_newer_relative_pyproject() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -737,7 +737,6 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
         .arg("--upgrade"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P3W` to `P2W`
     Resolved 3 packages in [TIME]
     Updated idna v3.6 -> v3.7
     ");
@@ -890,6 +889,7 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
 }
 
 /// Lock with various relative exclude newer value formats.
+
 #[test]
 fn lock_exclude_newer_relative_values() -> Result<()> {
     let context = uv_test::test_context!("3.12");

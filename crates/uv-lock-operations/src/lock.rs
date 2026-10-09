@@ -303,22 +303,14 @@ async fn do_lock_workspace_groups(
 ) -> Result<LockResult, LockError> {
     let start = std::time::Instant::now();
     for group in &mut groups {
-        if group.requires_python.specifiers().is_empty() {
+        if group.requires_python().specifiers().is_empty() {
             let default =
                 RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
             warn_user_once!(
                 "No `requires-python` value found in workspace group `{}`. Defaulting to `{default}`.",
-                group.definition.name
+                group.definition().name
             );
-            group.environments = group.environments.and(default.to_exact_marker_tree());
-            group.requires_python = RequiresPython::from_marker_tree(group.environments)
-                .ok_or_else(|| {
-                    uv_workspace::WorkspaceError::from(
-                        uv_workspace::WorkspaceErrorKind::DisjointWorkspaceGroupPython(
-                            group.definition.name.clone(),
-                        ),
-                    )
-                })?;
+            group.narrow_environment(default.to_exact_marker_tree())?;
         }
     }
     let mut pending = vec![groups.clone()];
@@ -332,7 +324,7 @@ async fn do_lock_workspace_groups(
             } else {
                 let contexts = batch
                     .iter()
-                    .map(|group| existing.select_workspace_group(&group.definition.name))
+                    .map(|group| existing.select_workspace_group(&group.definition().name))
                     .collect::<Result<Vec<_>, _>>()?
                     .into_iter()
                     .flatten()
@@ -371,7 +363,7 @@ async fn do_lock_workspace_groups(
                 resolutions.push((
                     batch
                         .into_iter()
-                        .map(|group| group.definition.name)
+                        .map(|group| group.definition().name.clone())
                         .collect(),
                     lock,
                 ));
@@ -385,7 +377,7 @@ async fn do_lock_workspace_groups(
             Err(error) => {
                 if let [group] = batch.as_slice() {
                     return Err(LockError::WorkspaceGroupResolution(
-                        group.definition.name.clone(),
+                        group.definition().name.clone(),
                         Box::new(error),
                     ));
                 }

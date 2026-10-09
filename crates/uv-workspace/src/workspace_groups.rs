@@ -6,7 +6,7 @@ use uv_configuration::{
     PackageOverride,
 };
 use uv_distribution_types::{Requirement, RequirementSource, RequiresPython};
-use uv_normalize::{GroupName, PackageName};
+use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::{MarkerTree, Requirement as Pep508Requirement};
 use uv_pypi_types::{LenientRequirement, SupportedEnvironments, VerbatimParsedUrl};
@@ -35,12 +35,51 @@ pub struct WorkspaceGroup {
 /// A validated workspace group and its effective Python requirement.
 #[derive(Debug, Clone)]
 pub struct ResolvedWorkspaceGroup {
-    pub definition: WorkspaceGroup,
-    pub requires_python: RequiresPython,
+    definition: WorkspaceGroup,
+    requires_python: RequiresPython,
     /// The supported environments, including conditional local-member Python bounds.
-    pub environments: MarkerTree,
+    environments: MarkerTree,
     /// The environments in which each local member is reachable from these roots.
-    pub member_environments: BTreeMap<PackageName, MarkerTree>,
+    member_environments: BTreeMap<PackageName, MarkerTree>,
+}
+
+impl ResolvedWorkspaceGroup {
+    pub fn definition(&self) -> &WorkspaceGroup {
+        &self.definition
+    }
+
+    pub fn requires_python(&self) -> &RequiresPython {
+        &self.requires_python
+    }
+
+    pub fn environments(&self) -> MarkerTree {
+        self.environments
+    }
+
+    pub fn member_environments(&self) -> &BTreeMap<PackageName, MarkerTree> {
+        &self.member_environments
+    }
+
+    /// Consume the validated group for storage or command selection.
+    pub fn into_parts(self) -> (WorkspaceGroup, RequiresPython, MarkerTree) {
+        (self.definition, self.requires_python, self.environments)
+    }
+
+    /// Restrict every representation of the group's effective domain together.
+    pub fn narrow_environment(&mut self, marker: MarkerTree) -> Result<(), WorkspaceError> {
+        let environments = self.environments.and(marker);
+        let requires_python = RequiresPython::from_marker_tree(environments).ok_or_else(|| {
+            WorkspaceError::from(WorkspaceErrorKind::DisjointWorkspaceGroupPython(
+                self.definition.name.clone(),
+            ))
+        })?;
+        self.environments = environments;
+        self.requires_python = requires_python;
+        for active in self.member_environments.values_mut() {
+            *active = active.and(environments);
+        }
+        Ok(())
+    }
 }
 
 /// The roots and Python domain of one shared resolution attempt.
@@ -182,20 +221,27 @@ impl Workspace {
         no_sources: &NoSources,
         modifiers: &DependencyModifiers,
     ) -> Result<BTreeMap<PackageName, MarkerTree>, WorkspaceError> {
-        let mut reached = BTreeMap::new();
+        let mut reached = BTreeMap::<PackageName, MarkerTree>::new();
+        let mut processed = BTreeMap::new();
         let mut pending = group
             .members
             .iter()
             .cloned()
-            .map(|name| (name, MarkerTree::TRUE))
+            .map(|name| (name, None::<ExtraName>, MarkerTree::TRUE))
             .collect::<Vec<_>>();
-        while let Some((name, marker)) = pending.pop() {
-            let previous = reached.entry(name.clone()).or_insert(MarkerTree::FALSE);
+        while let Some((name, extra, marker)) = pending.pop() {
+            let previous = processed
+                .entry((name.clone(), extra.clone()))
+                .or_insert(MarkerTree::FALSE);
             let active = previous.or(marker);
             if active == *previous {
                 continue;
             }
             *previous = active;
+            reached
+                .entry(name.clone())
+                .and_modify(|reached| *reached = reached.or(active))
+                .or_insert(active);
             let Some(member) = self.packages().get(&name) else {
                 continue;
             };
@@ -205,10 +251,17 @@ impl Workspace {
                 .as_ref()
                 .and_then(|tool| tool.uv.as_ref())
                 .and_then(|uv| uv.sources.as_ref());
-            let requirements = member
-                .project()
-                .dependencies
-                .iter()
+            let dependencies = if let Some(extra) = &extra {
+                member
+                    .project()
+                    .optional_dependencies
+                    .as_ref()
+                    .and_then(|dependencies| dependencies.get(extra))
+            } else {
+                member.project().dependencies.as_ref()
+            };
+            let requirements = dependencies
+                .into_iter()
                 .flatten()
                 .map(|dependency| {
                     LenientRequirement::<VerbatimParsedUrl>::from_str(dependency)
@@ -249,13 +302,18 @@ impl Workspace {
                         })
                 };
                 let mut remaining = active.and(requirement.marker);
+                let mut local = MarkerTree::FALSE;
                 if let Some((sources, base)) = sources {
                     for source in sources.iter() {
-                        if source.extra().is_some() || source.group().is_some() {
+                        if source.group().is_some()
+                            || source
+                                .extra()
+                                .is_some_and(|name| extra.as_ref() != Some(name))
+                        {
                             continue;
                         }
                         remaining = remaining.and(source.marker().negate());
-                        let local = match source {
+                        let is_local = match source {
                             Source::Workspace {
                                 workspace: WorkspaceReference::Bool(true),
                                 ..
@@ -265,11 +323,8 @@ impl Workspace {
                             }
                             _ => false,
                         };
-                        if local {
-                            let marker = active.and(requirement.marker).and(source.marker());
-                            if !marker.is_false() {
-                                pending.push((requirement.name.clone(), marker));
-                            }
+                        if is_local {
+                            local = local.or(active.and(requirement.marker).and(source.marker()));
                         }
                     }
                 }
@@ -279,7 +334,17 @@ impl Workspace {
                     && let RequirementSource::Directory { install_path, .. } = &requirement.source
                     && uv_fs::normalize_path(install_path.as_ref()) == *target.root()
                 {
-                    pending.push((requirement.name.clone(), remaining));
+                    local = local.or(remaining);
+                }
+                if !local.is_false() {
+                    pending.push((requirement.name.clone(), None, local));
+                    pending.extend(
+                        requirement
+                            .extras
+                            .iter()
+                            .cloned()
+                            .map(|extra| (requirement.name.clone(), Some(extra), local)),
+                    );
                 }
             }
         }
@@ -328,5 +393,44 @@ impl Workspace {
         Ok(RequiresPython::union(
             groups.iter().map(|group| &group.requires_python),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ResolvedWorkspaceGroup, WorkspaceGroup};
+    use std::collections::{BTreeMap, BTreeSet};
+    use uv_distribution_types::RequiresPython;
+    use uv_normalize::PackageName;
+    use uv_pep508::MarkerTree;
+
+    #[test]
+    fn narrowing_keeps_all_group_domains_consistent() -> Result<(), Box<dyn std::error::Error>> {
+        let member: PackageName = "app".parse()?;
+        let original: MarkerTree = "python_full_version >= '3.12'".parse()?;
+        let active: MarkerTree =
+            "python_full_version >= '3.12' and sys_platform == 'linux'".parse()?;
+        let mut group = ResolvedWorkspaceGroup {
+            definition: WorkspaceGroup {
+                name: "main".parse()?,
+                members: BTreeSet::from([member.clone()]),
+                requires_python: None,
+                default: false,
+            },
+            requires_python: RequiresPython::from_specifiers(">=3.12".parse()?),
+            environments: original,
+            member_environments: BTreeMap::from([(member.clone(), active)]),
+        };
+        let narrowed: MarkerTree = "python_full_version >= '3.13'".parse()?;
+        group.narrow_environment(narrowed)?;
+        assert_eq!(group.environments(), narrowed);
+        assert_eq!(group.requires_python().to_exact_marker_tree(), narrowed);
+        assert_eq!(group.member_environments()[&member], active.and(narrowed));
+
+        assert!(group.narrow_environment(MarkerTree::FALSE).is_err());
+        assert_eq!(group.environments(), narrowed);
+        assert_eq!(group.requires_python().to_exact_marker_tree(), narrowed);
+        assert_eq!(group.member_environments()[&member], active.and(narrowed));
+        Ok(())
     }
 }

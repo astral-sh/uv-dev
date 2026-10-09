@@ -11016,7 +11016,8 @@ fn export_batch_missing_package() -> Result<()> {
         .arg("--preview-features").arg("batch-export"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Package `missing` not found in workspace
+    error: Failed to export `[TEMP_DIR]/requirements.txt`
+      cause: Could not find root package `missing`
     ");
 
     // Multiple selections must also validate every package name.
@@ -11032,7 +11033,8 @@ fn export_batch_missing_package() -> Result<()> {
         .arg("--preview-features").arg("batch-export"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Package `missing` not found in workspace
+    error: Failed to export `[TEMP_DIR]/requirements.txt`
+      cause: Could not find root package `missing`
     ");
 
     Ok(())
