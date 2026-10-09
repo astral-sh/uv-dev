@@ -17,7 +17,7 @@ use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, AddBoundsKind, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
     DevMode, DryRun, EditableMode, ExtrasSpecification, ExtrasSpecificationWithDefaults,
-    GitLfsSetting, InstallOptions, InstallSelection, Modifications, NoSources,
+    GitLfsSetting, InstallOptions, Modifications, NoSources,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, UniversalState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
@@ -99,11 +99,7 @@ pub async fn add(
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
     no_sync: bool,
-    install_project: InstallSelection,
-    install_workspace: InstallSelection,
-    install_local: InstallSelection,
-    no_install_package: Vec<PackageName>,
-    only_install_package: Vec<PackageName>,
+    install_options: InstallOptions,
     requirements: Vec<RequirementsSource>,
     constraints: Vec<RequirementsSource>,
     marker: Option<MarkerTree>,
@@ -792,11 +788,7 @@ pub async fn add(
         lock_state,
         sync_state,
         lock_check,
-        install_project,
-        install_workspace,
-        install_local,
-        no_install_package.clone(),
-        only_install_package.clone(),
+        install_options,
         &defaulted_extras,
         &defaulted_groups,
         raw,
@@ -1075,11 +1067,7 @@ async fn lock_and_sync(
     mut lock_state: UniversalState,
     sync_state: PlatformState,
     lock_check: LockCheck,
-    install_project: InstallSelection,
-    install_workspace: InstallSelection,
-    install_local: InstallSelection,
-    no_install_package: Vec<PackageName>,
-    only_install_package: Vec<PackageName>,
+    install_options: InstallOptions,
     extras: &ExtrasSpecificationWithDefaults,
     groups: &DependencyGroupsWithDefaults,
     raw: bool,
@@ -1095,13 +1083,6 @@ async fn lock_and_sync(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
 ) -> Result<(), ProjectError> {
-    let install_options = InstallOptions::new(
-        install_project,
-        install_workspace,
-        install_local,
-        no_install_package,
-        only_install_package,
-    );
     let first_party_exclusions = match &target {
         EditTarget::Project(project) => {
             PackageSelection::from_args(false, &[], project.project_name()).first_party_exclusions(
