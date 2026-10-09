@@ -21,6 +21,12 @@ download manifest. This observation records the installer mutation; the prototyp
 that current `uv` already preserves the signatures. The direct runtime experiments model the
 proposed linking contract independently of that installer change.
 
+The stub case additionally restores the exact signed `libpython` bytes after the observed installer
+mutation, modeling an installer which skips that rewrite. It generates a stub in the installed tree,
+creates a managed environment with `uv`, and lets PyO3 discover that environment through
+`PYO3_PYTHON`, without a `PYO3_CONFIG_FILE` override. This checks the proposed linkage against uv's
+actual installation metadata while continuing to require unchanged native runtime bytes.
+
 The `.tbd` is a proof of concept generated from the library's exported symbol list. It is not a
 production stub generator or a guarantee of compatibility with all linkers, ABI variants, or
 embedding tools. C uses `-L`/`-l` and PyO3 receives its library directory through

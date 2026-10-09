@@ -340,7 +340,9 @@ class Experiment:
             ]
         )
 
-    def embed(self, runtime: Path, phase: str):
+    def embed(
+        self, runtime: Path, phase: str, *, discovered_python: Path | None = None
+    ):
         destination = self.work / phase
         destination.mkdir()
         library_directory = runtime / "lib"
@@ -376,7 +378,12 @@ class Experiment:
             f"executable={runtime / 'bin/python3.14'}\npointer_width=64\n"
             "build_flags=\nsuppress_build_script_link_lines=false\n"
         )
-        environment = dict(os.environ, PYO3_CONFIG_FILE=str(configuration))
+        environment = dict(os.environ)
+        if discovered_python is None:
+            environment["PYO3_CONFIG_FILE"] = str(configuration)
+        else:
+            environment.pop("PYO3_CONFIG_FILE", None)
+            environment["PYO3_PYTHON"] = str(discovered_python)
         environment.pop("RUSTFLAGS", None)
         if self.design == "rpath":
             environment["RUSTFLAGS"] = f"-C link-arg=-Wl,-rpath,{library_directory}"
@@ -445,6 +452,43 @@ class Experiment:
             ),
             "A modified library unexpectedly retained its valid original signature",
         )
+        return runtime
+
+    def discover_installed_stub(
+        self, runtime: Path, signed_library: Path, expected: dict
+    ):
+        # Restoring the exact signed bytes models an installer which omits the
+        # install-name rewrite. uv still supplies its real installation metadata.
+        replacement = runtime / "lib" / f"{LIBRARY}.replacement"
+        shutil.copy2(signed_library, replacement)
+        replacement.replace(runtime / "lib" / LIBRARY)
+        self.create_stub(runtime)
+        environment = self.work / "managed-venv"
+        self.run(
+            ["uv", "venv", "--no-config", "--python", VERSION, environment],
+            env=dict(os.environ, UV_PYTHON_INSTALL_DIR=str(runtime.parent)),
+        )
+        python = environment / "bin/python"
+        self.run(
+            [
+                python,
+                "-I",
+                "-c",
+                "import sys, sysconfig; print(sys.executable, sys.base_prefix, sysconfig.get_config_var('LIBDIR'))",
+            ]
+        )
+        self.embed(runtime, "embedding-uv-discovery", discovered_python=python)
+        require(
+            self.manifest(runtime) == expected,
+            "Discovered embedding changed native runtime bytes",
+        )
+        signature = self.signature(runtime / "lib" / LIBRARY, "uv-stub-library")
+        require(
+            signature["valid"]
+            and signature["certificate_sha256"] == self.certificate_sha256,
+            "The stub experiment lost the original installed library signature",
+        )
+        self.report["observations"]["pyo3_automatic_discovery"] = True
 
     def execute(self):
         self.run(["sw_vers"])
@@ -452,6 +496,8 @@ class Experiment:
         self.run(["uv", "--version"])
         runtime = self.download()
         library = runtime / "lib" / LIBRARY
+        self.run(["otool", "-L", runtime / "bin/python3.14"])
+        self.run(["otool", "-L", library])
         if self.design == "rpath":
             self.run(["install_name_tool", "-id", f"@rpath/{LIBRARY}", library])
         self.create_identity()
@@ -467,7 +513,9 @@ class Experiment:
         archive = self.work / "signed-python.tar.gz"
         with tarfile.open(archive, "w:gz") as destination:
             destination.add(runtime, arcname="python")
-        self.observe_uv_install(archive, expected)
+        installed = self.observe_uv_install(archive, expected)
+        if self.design == "stub":
+            self.discover_installed_stub(installed, library, expected)
 
         if self.design == "rewrite":
             self.run(["install_name_tool", "-id", library, library])
