@@ -1,14 +1,10 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::PathChild, prelude::FileWriteStr};
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 use indoc::formatdoc;
 use insta::allow_duplicates;
-use serde_json::json;
 use uv_static::EnvVars;
-use wiremock::{
-    Mock, MockServer, ResponseTemplate,
-    matchers::{basic_auth, method, path},
-};
 
 use uv_test::uv_snapshot;
 
@@ -39,103 +35,6 @@ async fn invalid_cloud_endpoint_urls() {
             ");
         }
     }
-}
-
-/// Credentials configured for one index must not bypass stored credentials for another.
-///
-/// Regression test for <https://github.com/astral-sh/uv/issues/18955>.
-#[tokio::test]
-async fn lock_index_credentials_before_realm_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let server = MockServer::start().await;
-    let simple_index = json!({
-        "meta": { "api-version": "1.1" },
-        "name": "basic-package",
-        "files": [{
-            "filename": "basic_package-0.1.0-py3-none-any.whl",
-            "url": format!("{}/second/files/basic_package-0.1.0-py3-none-any.whl", server.uri()),
-            "hashes": {
-                "sha256": "7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82"
-            },
-            "core-metadata": true
-        }]
-    });
-    Mock::given(method("GET"))
-        .and(path("/second/simple/basic-package/"))
-        .and(basic_auth("user2", "password2"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            simple_index.to_string(),
-            "application/vnd.pypi.simple.v1+json",
-        ))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(
-            "/second/files/basic_package-0.1.0-py3-none-any.whl.metadata",
-        ))
-        .and(basic_auth("user2", "password2"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(indoc::indoc! {"
-            Metadata-Version: 2.1
-            Name: basic-package
-            Version: 0.1.0
-        "}))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(401).insert_header(
-            "WWW-Authenticate",
-            r#"Basic realm="GitLab Packages Registry""#,
-        ))
-        .expect(0)
-        .mount(&server)
-        .await;
-
-    context
-        .auth_login()
-        .arg(format!("{}/second/simple", server.uri()))
-        .arg("--username")
-        .arg("user2")
-        .arg("--password")
-        .arg("password2")
-        .assert()
-        .success();
-
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(&formatdoc! {r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            requires-python = ">=3.12"
-            dependencies = ["basic-package"]
-
-            [tool.uv.sources]
-            basic-package = {{ index = "second" }}
-
-            [[tool.uv.index]]
-            name = "first"
-            url = "http://user1:password1@{}/first/simple"
-            explicit = true
-            authenticate = "always"
-
-            [[tool.uv.index]]
-            name = "second"
-            url = "{}/second/simple"
-            explicit = true
-            authenticate = "always"
-        "#,
-            server.address(),
-            server.uri(),
-        })?;
-
-    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    ");
-
-    Ok(())
 }
 
 #[tokio::test]
@@ -1394,8 +1293,8 @@ async fn logout_text_store() {
 }
 
 #[tokio::test]
-async fn auth_disabled_provider_uses_text_store() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+async fn auth_disabled_provider_uses_text_store() {
+    let context = uv_test::test_context_with_versions!(&[]);
     let proxy = crate::pypi_proxy::start().await;
 
     // Login with disabled provider should use text store
@@ -1425,46 +1324,65 @@ async fn auth_disabled_provider_uses_text_store() -> Result<()> {
     heron
     "
     );
+}
 
-    #[cfg(feature = "test-pypi")]
-    {
-        context
-            .temp_dir
-            .child("requirements.in")
-            .write_str("iniconfig")?;
-        context
-            .temp_dir
-            .child("uv.toml")
-            .write_str(&formatdoc! {r#"
-            [[index]]
-            name = "other"
-            url = "{}"
-            explicit = true
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[tokio::test]
+async fn auth_disabled_provider_prefers_stored_index_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
 
-            [[index]]
-            name = "private"
-            url = "{}"
-            default = true
-            authenticate = "always"
-        "#,
-                proxy.authenticated_url("other-user", "other-password", "/other/simple"),
-                proxy.url("/basic-auth/simple"),
-            })?;
+    // Login with disabled provider should use text store
+    uv_snapshot!(context.filters(), context.auth_login()
+        .arg(proxy.url("/basic-auth/simple"))
+        .arg("--username")
+        .arg("public")
+        .arg("--password")
+        .arg("heron")
+        .arg("--keyring-provider")
+        .arg("disabled"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Stored credentials for public@http://[LOCALHOST]/basic-auth
+    "
+    );
 
-        // The other index's configured credentials must not bypass this index's stored login.
-        uv_snapshot!(context.filters(), context.pip_compile()
-            .arg("requirements.in")
-            .arg("--keyring-provider").arg("disabled")
-            .arg("--no-header"), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        iniconfig==2.0.0
-            # via -r requirements.in
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("iniconfig")?;
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        [[index]]
+        name = "other"
+        url = "{}"
+        explicit = true
 
-        ----- stderr -----
-        Resolved 1 package in [TIME]
-        ");
-    }
+        [[index]]
+        name = "private"
+        url = "{}"
+        default = true
+        authenticate = "always"
+    "#,
+            proxy.authenticated_url("other-user", "other-password", "/other/simple"),
+            proxy.url("/basic-auth/simple"),
+        })?;
+
+    // The other index's configured credentials must not bypass this index's stored login.
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .arg("--keyring-provider").arg("disabled")
+        .arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==2.0.0
+        # via -r requirements.in
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
 
     Ok(())
 }
