@@ -3092,8 +3092,7 @@ fn tool_install_no_binary_package_env_var() {
     Installed 2 executables: py.test, pytest
     ");
 
-    let receipt: toml::Value =
-        toml::from_str(&context.read("tools/pytest/uv-receipt.toml")).unwrap();
+    let receipt: toml::Value = context.read_toml("tools/pytest/uv-receipt.toml");
     assert_snapshot!(
         receipt["tool"]["options"]["no-binary-package"].to_string(),
         @r#"["iniconfig"]"#

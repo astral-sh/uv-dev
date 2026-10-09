@@ -33,6 +33,7 @@ use indoc::{formatdoc, indoc};
 use itertools::Itertools;
 use predicates::prelude::predicate;
 use regex::{Regex, regex};
+use serde::de::DeserializeOwned;
 use tokio::io::AsyncWriteExt;
 use walkdir::WalkDir;
 
@@ -2066,6 +2067,19 @@ impl TestContext {
         diff_snapshot(&old_lock, &new_lock, 10)
     }
 
+    /// Read a TOML file, resolving relative paths against the temporary directory.
+    #[track_caller]
+    pub fn read_toml<T: DeserializeOwned>(&self, file: impl AsRef<Path>) -> T {
+        let contents = self.read(&file);
+        match toml::from_str(&contents) {
+            Ok(value) => value,
+            Err(error) => panic!(
+                "Failed to parse TOML file `{}`: {error}",
+                file.user_display()
+            ),
+        }
+    }
+
     /// Read a file in the temporary directory
     pub fn read(&self, file: impl AsRef<Path>) -> String {
         fs_err::read_to_string(self.temp_dir.join(&file))
@@ -2724,6 +2738,53 @@ mod process_status_tests {
             run_and_format_silent(command, filters, "preserves_exit_code", None, None);
 
         insta::assert_snapshot!(snapshot, @"exit_code: 7 (failure)");
+    }
+}
+
+#[cfg(test)]
+mod toml_read_tests {
+    use std::path::PathBuf;
+
+    use assert_fs::prelude::*;
+    use serde::Deserialize;
+
+    use super::TestContext;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Config {
+        value: String,
+    }
+
+    #[test]
+    fn reads_typed_toml_fixture() -> anyhow::Result<()> {
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
+        context
+            .temp_dir
+            .child("config.toml")
+            .write_str("value = 'contents'\n")?;
+
+        let config: Config = context.read_toml("config.toml");
+        assert_eq!(
+            config,
+            Config {
+                value: "contents".to_owned()
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "Failed to parse TOML file `invalid.toml`")]
+    fn reports_invalid_toml_with_path() {
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
+        context
+            .temp_dir
+            .child("invalid.toml")
+            .write_str("value = [")
+            .expect("write invalid TOML fixture");
+
+        let _: toml::Value = context.read_toml("invalid.toml");
     }
 }
 
