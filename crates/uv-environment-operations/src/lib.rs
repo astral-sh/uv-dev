@@ -1400,6 +1400,7 @@ pub async fn resolve_environment(
         override_dependencies,
         excludes,
         source_trees,
+        requires_python,
         ..
     } = spec.requirements;
 
@@ -1422,7 +1423,9 @@ pub async fn resolve_environment(
         EnvironmentResolution::Specific => PythonRequirement::from_interpreter(interpreter),
         EnvironmentResolution::Universal => PythonRequirement::from_requires_python(
             interpreter,
-            RequiresPython::greater_than_equal_version(&interpreter.python_minor_version()),
+            requires_python.unwrap_or_else(|| {
+                RequiresPython::greater_than_equal_version(&interpreter.python_minor_version())
+            }),
         ),
     };
 

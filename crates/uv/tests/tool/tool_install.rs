@@ -6682,3 +6682,71 @@ fn tool_install_pep723_requirements_reject_explicit_python() -> Result<()> {
     marker.assert(predicate::path::missing());
     Ok(())
 }
+
+#[test]
+#[cfg(feature = "test-universal")]
+fn tool_install_pep723_universal_python_bound() -> Result<()> {
+    let context = uv_test::test_context!("3.11")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let bin = context.temp_dir.child("bin");
+    let input = context.temp_dir.child("requirements.py");
+    input.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.11,<3.12"
+        # dependencies = [
+        #     "unreachable==1; python_version >= '3.12'",
+        #     "unreachable==2; python_version >= '3.12'",
+        # ]
+        # ///
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"bound-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["bound-tool".to_owned()],
+    );
+    let launcher = context.temp_dir.child(filename);
+    launcher.write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(launcher.path())
+        .args(["--with-requirements", "requirements.py", "--no-index", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + bound-tool==1.0.0 (from file://[TEMP_DIR]/bound_tool-1.0.0-py3-none-any.whl)
+    Installed 1 executable: bound-tool
+    "#);
+    let lock = context.read("tools/bound-tool/uv.lock");
+    let lock_data: toml::Value = toml::from_str(&lock)?;
+    assert_eq!(lock_data["requires-python"].as_str(), Some(">=3.11, <3.12"));
+    uv_snapshot!(context.filters(), context.tool_install().arg(launcher.path())
+        .args(["--with-requirements", "requirements.py", "--no-index", "--offline", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    `bound-tool @ file://[TEMP_DIR]/bound_tool-1.0.0-py3-none-any.whl` is already installed
+    "#);
+    assert_eq!(context.read("tools/bound-tool/uv.lock"), lock);
+    let receipt: toml::Value = toml::from_str(&context.read("tools/bound-tool/uv-receipt.toml"))?;
+    assert_eq!(
+        receipt["tool"]["requires-python"].as_str(),
+        Some(">=3.11, <3.12")
+    );
+    fs_err::remove_file(&input)?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("bound-tool")
+        .args(["--no-index", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
+    ");
+    let updated_lock = context.read("tools/bound-tool/uv.lock");
+    let updated: toml::Value = toml::from_str(&updated_lock)?;
+    assert_eq!(updated["requires-python"], lock_data["requires-python"]);
+    Ok(())
+}

@@ -20012,6 +20012,7 @@ fn compile_pep723_empty_python_bound() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-universal")]
 fn compile_pep723_universal_target_python() -> Result<()> {
     let context = uv_test::test_context!("3.11");
     context

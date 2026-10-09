@@ -444,6 +444,7 @@ impl ToolLock {
         build_constraints: &Constraints,
         refresh: &Refresh,
         interpreter: &Interpreter,
+        requires_python: Option<&RequiresPython>,
         settings: &ResolverSettings,
         client_builder: &BaseClientBuilder<'_>,
         state: &PlatformState,
@@ -551,8 +552,9 @@ impl ToolLock {
             concurrency.downloads_semaphore.clone(),
         );
 
-        let requires_python =
-            RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
+        let requires_python = requires_python.cloned().unwrap_or_else(|| {
+            RequiresPython::greater_than_equal_version(&interpreter.python_minor_version())
+        });
         let overrides = overrides
             .iter()
             .cloned()
@@ -795,6 +797,7 @@ pub(super) fn finalize_tool_install(
     options: &ToolOptions,
     force: bool,
     python: Option<PythonRequest>,
+    requires_python: Option<&RequiresPython>,
     requirements: Vec<Requirement>,
     constraints: Vec<Requirement>,
     overrides: Vec<Requirement>,
@@ -995,6 +998,7 @@ pub(super) fn finalize_tool_install(
         excludes,
         build_constraints,
         python,
+        requires_python.cloned(),
         installed_entrypoints,
         options.clone(),
     );
