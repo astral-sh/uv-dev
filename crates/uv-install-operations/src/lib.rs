@@ -21,7 +21,7 @@ use uv_distribution_types::{
     InstalledMetadata, InstalledVersion, LocalDist, Name, PackageConfigSettings, Resolution,
     VersionOrUrlRef,
 };
-use uv_fs::{CWD, Simplified, normalize_path_under};
+use uv_fs::{CWD, Simplified, is_same_file_allow_missing, normalize_path_under};
 use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
 use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
 use uv_normalize::PackageName;
@@ -791,7 +791,10 @@ async fn execute_plan(
                 installed_dist_info_path(&layout, replacement.path()).with_context(|| {
                     format!("Failed to locate replacement distribution: {replacement}")
                 })?;
-            Ok(destination != dist_info.install_path())
+            Ok(
+                !is_same_file_allow_missing(&destination, dist_info.install_path())
+                    .unwrap_or(false),
+            )
         })?;
 
         let start = std::time::Instant::now();
