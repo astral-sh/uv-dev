@@ -342,6 +342,7 @@ fn symlinked_entrypoint_matches(
     tool_directory: &Path,
     entrypoint: &ToolEntrypoint,
 ) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
     let target = match fs_err::read_link(&entrypoint.install_path) {
         Ok(target) => target,
         Err(error)
@@ -364,7 +365,19 @@ fn symlinked_entrypoint_matches(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error),
     }
-    // Compare the environment entry itself, so two cached copies cannot claim the same launcher.
+    // Hardlinked scripts can share a cached inode while belonging to different environments.
+    let Some(target_parent) = target.parent() else {
+        return Ok(false);
+    };
+    let target_parent = match fs_err::metadata(target_parent) {
+        Ok(parent) => parent,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let source_parent = fs_err::metadata(tool_directory.join("bin"))?;
+    if target_parent.dev() != source_parent.dev() || target_parent.ino() != source_parent.ino() {
+        return Ok(false);
+    }
     Ok(executable_destination(&target)? == executable_destination(&source)?)
 }
 

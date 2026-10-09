@@ -7,6 +7,8 @@ use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
+#[cfg(unix)]
+use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{FileWriteBin, PathChild, PathCreateDir};
 use url::Url;
 
@@ -588,27 +590,7 @@ fn tool_uninstall_preserves_cache_backed_script_replacement() -> Result<()> {
     );
     let second = context.temp_dir.child(filename);
     second.write_binary(&wheel)?;
-    // Executable wheel members remain symlinks to the cache in symlink mode.
-    context
-        .python_command()
-        .arg("-c")
-        .arg(indoc::indoc! {r#"
-        import sys
-        import zipfile
-        for filename in sys.argv[1:]:
-            with zipfile.ZipFile(filename) as source:
-                entries = [(info, source.read(info)) for info in source.infolist()]
-            with zipfile.ZipFile(filename, "w") as target:
-                for info, contents in entries:
-                    if ".data/scripts/" in info.filename:
-                        info.create_system = 3
-                        info.external_attr = 0o100755 << 16
-                    target.writestr(info, contents)
-    "#})
-        .arg(first.path())
-        .arg(second.path())
-        .assert()
-        .success();
+    make_wheel_scripts_executable(&context, &[first.path(), second.path()]);
     context
         .tool_install()
         .arg(first.path())
@@ -643,5 +625,103 @@ fn tool_uninstall_preserves_cache_backed_script_replacement() -> Result<()> {
     ----- stderr -----
     Uninstalled 1 executable: shared-tool
     ");
+    Ok(())
+}
+
+/// Set executable permissions on generated data-script wheel members.
+#[cfg(unix)]
+fn make_wheel_scripts_executable(context: &uv_test::TestContext, paths: &[&std::path::Path]) {
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc::indoc! {r#"
+        import sys
+        import zipfile
+        for filename in sys.argv[1:]:
+            with zipfile.ZipFile(filename) as source:
+                entries = [(info, source.read(info)) for info in source.infolist()]
+            with zipfile.ZipFile(filename, "w") as target:
+                for info, contents in entries:
+                    if ".data/scripts/" in info.filename:
+                        info.create_system = 3
+                        info.external_attr = 0o100755 << 16
+                    target.writestr(info, contents)
+    "#})
+        .args(paths)
+        .assert()
+        .success();
+}
+
+#[test]
+#[cfg(unix)]
+fn tool_uninstall_removes_hardlinked_script_replacement_before_stale_owner() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"first".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "first-1.0.0.data/scripts/shared-tool",
+            "#!/bin/sh\nprintf 'shared\\n'\n",
+        )],
+    );
+    let first = context.temp_dir.child(filename);
+    first.write_binary(&wheel)?;
+    make_wheel_scripts_executable(&context, &[first.path()]);
+    let (filename, wheel) = generate_wheel(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["second".to_owned()],
+    );
+    let second = context.temp_dir.child(filename);
+    second.write_binary(&wheel)?;
+    context
+        .tool_install()
+        .arg(first.path())
+        .args(["--link-mode", "hardlink"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    context
+        .tool_install()
+        .arg(second.path())
+        .args([
+            "--link-mode",
+            "hardlink",
+            "--force",
+            "--with-executables-from",
+        ])
+        .arg(format!(
+            "first @ {}",
+            Url::from_file_path(first.path()).expect("wheel URL")
+        ))
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let first_script = fs_err::metadata(context.temp_dir.child("tools/first/bin/shared-tool"))?;
+    let second_script = fs_err::metadata(context.temp_dir.child("tools/second/bin/shared-tool"))?;
+    assert_eq!(
+        (first_script.dev(), first_script.ino()),
+        (second_script.dev(), second_script.ino())
+    );
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("second"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 2 executables: second, shared-tool
+    ");
+    bin.child("shared-tool").assert(predicates::path::missing());
+    context
+        .temp_dir
+        .child("tools/first")
+        .assert(predicates::path::is_dir());
     Ok(())
 }
