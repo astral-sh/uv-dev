@@ -206,6 +206,16 @@ impl ValidatedLock {
             return Ok(Self::Versions(lock));
         }
 
+        let workspace_members_match = if root_markers.is_some() {
+            lock.workspace_members().iter().eq(packages.keys())
+        } else {
+            lock.workspace_members().iter().eq(members)
+        };
+        if !workspace_members_match {
+            debug!("Resolving despite existing lockfile due to change in workspace membership");
+            return Ok(Self::Versions(lock));
+        }
+
         // If the Requires-Python bound has changed, we have to perform a clean resolution, since
         // the set of `resolution-markers` may no longer cover the entire supported Python range.
         if lock.requires_python().range() != requires_python.range() {
@@ -222,10 +232,6 @@ impl ValidatedLock {
         }
 
         if let Some(root_markers) = root_markers {
-            if lock.workspace_members().iter().ne(packages.keys()) {
-                debug!("Resolving despite existing lockfile due to change in workspace membership");
-                return Ok(Self::Versions(lock));
-            }
             for (name, expected) in root_markers {
                 let Some(package) = lock.find_by_name(name).ok().flatten() else {
                     return Ok(Self::Versions(lock));
