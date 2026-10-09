@@ -1190,22 +1190,12 @@ impl PyProjectTomlMut {
             .map(|sources| sources.as_table_mut().ok_or(Error::MalformedSources))
             .transpose()?
         {
-            let mut removed_names = FxHashSet::default();
-            let keys = sources
-                .iter()
-                .filter_map(|(key, _)| {
-                    PackageName::from_str(key)
-                        .ok()
-                        .filter(|name| unused.contains(name))
-                        .filter(|name| removed_names.insert(name.clone()))
-                        .map(|_| key.to_string())
-                })
-                .collect::<Vec<_>>();
-
-            let removed_source = !keys.is_empty();
-            for key in keys {
-                sources.remove(&key);
-            }
+            let mut removed_source = false;
+            sources.retain(|key, _| {
+                let remove = PackageName::from_str(key).is_ok_and(|name| unused.remove(&name));
+                removed_source |= remove;
+                !remove
+            });
 
             // Remove the `tool.uv.sources` table if it is empty.
             if removed_source && sources.is_empty() {
