@@ -2885,6 +2885,46 @@ fn sync_frozen_non_workspace_package() -> Result<()> {
     Ok(())
 }
 
+/// An implicit locked root retains its ambiguity error in a frozen workspace selection.
+#[test]
+fn sync_frozen_ambiguous_implicit_root() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    // Frozen mode can retain a root from the lock even when the live workspace has no project.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = []
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+
+        [[package]]
+        name = "root-project"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [[package]]
+        name = "root-project"
+        version = "1.0.0"
+        source = { registry = "https://example.invalid/simple" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--offline", "--no-python-downloads", "--frozen", "--dry-run",
+        "--package", "root-project"
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Found multiple packages matching `root-project`
+    ");
+    Ok(())
+}
+
 /// Frozen sync uses the selected member's recorded default groups.
 #[test]
 fn sync_frozen_member_default_groups() -> Result<()> {
