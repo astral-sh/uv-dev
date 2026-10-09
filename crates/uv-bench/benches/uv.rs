@@ -30,16 +30,20 @@ use tokio::io::AsyncRead;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt};
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, Connectivity, RegistryClientBuilder};
-use uv_configuration::{BuildOptions, Constraints, DependencyModifiers, NoBinary, NoBuild};
+use uv_configuration::{
+    BuildOptions, Constraints, DependencyModifiers, NoBinary, NoBuild, Upgrade,
+};
 use uv_distribution_filename::{SourceDistExtension, WheelFilename};
-use uv_distribution_types::Requirement;
+use uv_distribution_types::{IndexLocations, Requirement};
 use uv_extract::dirhash::UnhashedFile;
 use uv_extract::hash::{HashReader, Hasher};
 use uv_install_wheel::{InstallState, Layout, LinkMode};
+use uv_lock::{Lock, ResolverManifest};
 use uv_preview::Preview;
 use uv_pypi_types::{HashAlgorithm, Scheme};
 use uv_python_interpreter::PythonEnvironment;
-use uv_resolver::{Exclusions, Manifest, Preference, Preferences, ResolverEnvironment};
+use uv_resolve_operations::locked_requirements::read_lock_requirements;
+use uv_resolver::{Exclusions, Manifest, Preferences, ResolverEnvironment};
 use uv_static::TarBackend;
 
 const MANY_FILES_WHEEL_FILENAME: &str = "manyfiles-0.0.0-py3-none-any.whl";
@@ -571,41 +575,26 @@ fn setup(
             .collect::<BTreeSet<_>>()
     });
     let manifest = if let Some(resolution) = previous_resolution.as_ref() {
-        // Seed the same forks as the real lockfile update path. Preferences alone can otherwise
-        // cause a repeated resolution to skip a fork point.
+        let install_path = Path::new("../..");
+        let lock = Lock::from_resolution(
+            resolution,
+            ResolverManifest::default(),
+            install_path,
+            Vec::new(),
+            &IndexLocations::default(),
+            false,
+        )
+        .expect("failed to construct the prior lockfile");
+        // The lockfile owns fork attribution and canonicalization for incremental resolution.
         policy.environment = ResolverEnvironment::universal(
-            resolution
-                .fork_markers
+            lock.fork_markers()
                 .iter()
                 .map(|marker| marker.combined())
                 .collect(),
         );
-        let preferences = resolution
-            .base_dists()
-            .map(|(_, distribution)| {
-                let fork_markers = if resolution
-                    .base_dists()
-                    .filter(|(_, candidate)| candidate.name == distribution.name)
-                    .nth(1)
-                    .is_some()
-                {
-                    resolution
-                        .fork_markers
-                        .iter()
-                        .filter(|marker| !marker.is_disjoint(distribution.marker))
-                        .copied()
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                Preference::from_locked(
-                    distribution.name.clone(),
-                    distribution.version.clone(),
-                    distribution.index().cloned(),
-                    fork_markers,
-                )
-            })
-            .collect::<Vec<_>>();
+        let preferences = read_lock_requirements(&lock, install_path, &Upgrade::default())
+            .expect("failed to read prior lockfile preferences")
+            .preferences;
         assert!(!preferences.is_empty(), "the prior lockfile must have pins");
         Manifest::new(
             requirements,
