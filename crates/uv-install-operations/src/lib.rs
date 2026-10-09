@@ -464,12 +464,9 @@ impl InstallationPlan {
             Ok(replacement_versions
                 .get(dist_info.name())
                 .is_some_and(|(version, is_source)| {
-                    let public_version = version.clone().without_local();
                     (*is_source || check_wheel_filenames)
-                        && version != dist_info.version()
-                        && public_version != *dist_info.version()
-                        && (!is_source
-                            || public_version != dist_info.version().clone().without_local())
+                        && version.clone().without_local()
+                            != dist_info.version().clone().without_local()
                 }))
         })?;
 
