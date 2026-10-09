@@ -78,7 +78,7 @@ impl EnvironmentOperation {
         &self.environment
     }
 
-    /// Release this operation's admission before using the environment without modifying it.
+    /// Release admission after this operation finishes modifying the environment.
     ///
     /// Publishing workers that are still running retain their own admission until they finish.
     pub fn into_unlocked(self) -> PythonEnvironment {
