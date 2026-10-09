@@ -892,7 +892,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             );
         }
         resolutions.finish(
-            self.requirements.clone(),
+            self.requirements
+                .iter()
+                .chain(&self.build_dependencies.requirements)
+                .cloned()
+                .collect(),
             self.constraints.clone(),
             self.build_dependencies.clone(),
             self.modifiers.clone(),
@@ -3457,9 +3461,7 @@ impl<'index> ForkState<'index> {
                 }
 
                 let dependency_package = &self.pubgrub.package_store[dependency.dependency];
-                if self.pubgrub.package_store[*package].is_build()
-                    || dependency_package.is_build()
-                {
+                if self.pubgrub.package_store[*package].is_build() {
                     continue;
                 }
 

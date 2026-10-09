@@ -202,7 +202,7 @@ impl Manifest {
                     })
                     .chain(
                         self.modifiers
-                            .apply(DependencyModifierScope::Global, &self.requirements)
+                            .apply(DependencyModifierScope::Global, self.direct_requirements())
                             .filter(move |requirement| {
                                 requirement.evaluate_markers(env.marker_environment(), &[])
                             }),
@@ -221,7 +221,7 @@ impl Manifest {
             // Include direct requirements, with constraints and overrides applied.
             DependencyMode::Direct => Either::Right(
                 self.modifiers
-                    .apply(DependencyModifierScope::Global, &self.requirements)
+                    .apply(DependencyModifierScope::Global, self.direct_requirements())
                     .chain(
                         self.constraints
                             .requirements()
@@ -285,7 +285,7 @@ impl Manifest {
                     })
                     .chain(
                         self.modifiers
-                            .apply(DependencyModifierScope::Global, &self.requirements)
+                            .apply(DependencyModifierScope::Global, self.direct_requirements())
                             .filter(move |requirement| {
                                 requirement.evaluate_markers(env.marker_environment(), &[])
                             }),
@@ -295,7 +295,7 @@ impl Manifest {
             // Restrict to the direct requirements.
             DependencyMode::Direct => Either::Right(
                 self.modifiers
-                    .apply(DependencyModifierScope::Global, self.requirements.iter())
+                    .apply(DependencyModifierScope::Global, self.direct_requirements())
                     .filter(move |requirement| {
                         requirement.evaluate_markers(env.marker_environment(), &[])
                     }),
@@ -303,8 +303,15 @@ impl Manifest {
         }
     }
 
+    /// Runtime and build roots both contribute candidate and source policy.
+    fn direct_requirements(&self) -> impl Iterator<Item = &Requirement> {
+        self.requirements
+            .iter()
+            .chain(&self.build_dependencies.requirements)
+    }
+
     /// Returns the number of input requirements.
     pub fn num_requirements(&self) -> usize {
-        self.requirements.len()
+        self.requirements.len() + self.build_dependencies.requirements.len()
     }
 }
