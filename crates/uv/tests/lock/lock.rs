@@ -966,6 +966,158 @@ async fn lock_config_settings_registry_sdist() -> Result<()> {
     Ok(())
 }
 
+/// Reusing a source revision must not attribute metadata from old settings to new settings.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_config_settings_change_cached_metadata_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let name = "config-demo".parse()?;
+    let source = PackageServer::new(&name).await;
+    let dependencies = PackseServer::new("simple/single-package.toml");
+    let mut archive = Vec::new();
+    write_tar_gz(
+        &mut archive,
+        &[
+            (
+                "config_demo-1.0.0/pyproject.toml",
+                indoc! {r#"
+            [project]
+            name = "config-demo"
+            version = "1.0.0"
+            requires-python = ">=3.12"
+            dynamic = ["dependencies"]
+            [build-system]
+            requires = []
+            build-backend = "backend"
+            backend-path = ["."]
+        "#},
+            ),
+            (
+                "config_demo-1.0.0/backend.py",
+                indoc! {r#"
+            from pathlib import Path
+
+            def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+                dependency = (config_settings or {}).get("dependency", "1.0.0")
+                if isinstance(dependency, list):
+                    dependency = dependency[0]
+                directory = Path(metadata_directory) / "config_demo-1.0.0.dist-info"
+                directory.mkdir()
+                (directory / "METADATA").write_text(
+                    "Metadata-Version: 2.3\nName: config-demo\nVersion: 1.0.0\n"
+                    "Requires-Python: >=3.12\n"
+                    f"Requires-Dist: a=={dependency}\n"
+                )
+                return directory.name
+        "#},
+            ),
+        ],
+    )?;
+    source
+        .serve("config_demo-1.0.0.tar.gz", &archive, None)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/config_demo-1.0.0.tar.gz"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("Cache-Control", "public, max-age=31536000")
+                .set_body_bytes(archive),
+        )
+        .with_priority(1)
+        .mount(source.mock_server())
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["config-demo==1.0.0"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index").arg(source.index_url())
+        .arg("--default-index").arg(dependencies.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    let original = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked")
+        .arg("--index").arg(source.index_url())
+        .arg("--default-index").arg(dependencies.index_url())
+        .arg("-C").arg("dependency=2.0.0"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index").arg(source.index_url())
+        .arg("--default-index").arg(dependencies.index_url())
+        .arg("-C").arg("dependency=2.0.0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated a v1.0.0 -> v2.0.0
+    ");
+    let with_settings = context.read("uv.lock");
+
+    // CI pruning retains the settings that produced cached source metadata.
+    let provenance = WalkDir::new(context.cache_dir.path())
+        .into_iter()
+        .filter_map(Result::ok)
+        .find(|entry| entry.file_name() == uv_cache::METADATA_CONFIG_SETTINGS)
+        .expect("source metadata settings are cached")
+        .into_path();
+    let cached_settings = fs_err::read(&provenance)?;
+    context.prune().arg("--ci").assert().success();
+    assert_eq!(fs_err::read(&provenance)?, cached_settings);
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index").arg(source.index_url())
+        .arg("--default-index").arg(dependencies.index_url())
+        .arg("-C").arg("dependency=2.0.0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), with_settings);
+
+    // Package values precede global values when the backend receives a merged list.
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index").arg(source.index_url())
+        .arg("--default-index").arg(dependencies.index_url())
+        .arg("-C").arg("dependency=2.0.0")
+        .arg("--config-settings-package").arg("config-demo:dependency=1.0.0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated a v2.0.0 -> v1.0.0
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index").arg(source.index_url())
+        .arg("--default-index").arg(dependencies.index_url())
+        .arg("--config-settings-package").arg("config-demo:dependency=1.0.0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index").arg(source.index_url())
+        .arg("--default-index").arg(dependencies.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), original);
+    Ok(())
+}
+
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_config_settings_wheel_only() -> Result<()> {
@@ -981,33 +1133,47 @@ fn lock_config_settings_wheel_only() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = ["a==1.0.0"]
     "#})?;
-    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER).arg("--index-url").arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
     let original = context.read("uv.lock");
-    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--index-url").arg(server.index_url()).arg("--config-settings-package").arg("unused:key=value"), @"
+    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER).arg("--locked").arg("--index-url").arg(server.index_url()).arg("--config-settings-package").arg("unused:key=value"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
-    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("-C").arg("feature=enabled"), @"
+    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER).arg("--index-url").arg(server.index_url()).arg("-C").arg("feature=enabled"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
-    assert_eq!(context.read("uv.lock"), original);
-    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--index-url").arg(server.index_url()).arg("-C").arg("feature=changed"), @"
+    let audited = context.read("uv.lock");
+    assert_eq!(
+        audited.replace("\n[options]\nconfig-settings-provenance = 1\n", ""),
+        original,
+        "normal locking adds only the provenance generation",
+    );
+    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--locked").arg("--offline").arg("--no-cache")
+        .arg("--index-url").arg(server.index_url())
+        .arg("-C").arg("feature=enabled"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
-    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--index-url").arg(server.index_url()), @"
+    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER).arg("--locked").arg("--offline").arg("--no-cache").arg("--index-url").arg(server.index_url()).arg("-C").arg("feature=changed"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER).arg("--locked").arg("--offline").arg("--no-cache").arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), audited);
     Ok(())
 }
 
@@ -1379,6 +1545,7 @@ fn lock_sdist_git_subdirectory() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "dbbe44739d005493"
         config-settings-packages = ["example-pkg-a"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -1787,6 +1954,7 @@ fn lock_sdist_git_archive() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "0965f2a258462618"
         config-settings-packages = ["iniconfig"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -3124,6 +3292,7 @@ async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "a155aee2796151e5"
         config-settings-packages = ["demo-pkg"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -3257,6 +3426,7 @@ async fn lock_sdist_url_locked_hash_mismatch() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "a155aee2796151e5"
         config-settings-packages = ["demo-pkg"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -3966,6 +4136,7 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "8f5896a7a4372370"
         config-settings-packages = ["root"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -4091,6 +4262,7 @@ fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "8f5896a7a4372370"
         config-settings-packages = ["root"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -8063,6 +8235,7 @@ fn lock_partial_git() -> Result<()> {
         ]
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "049ba5f385c4d505"
         config-settings-packages = ["anyio"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -19381,6 +19554,7 @@ fn lock_no_sources_package() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "0965f2a258462618"
         config-settings-packages = ["iniconfig"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -19487,6 +19661,7 @@ fn lock_no_sources_package_multiple() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "0965f2a258462618"
         config-settings-packages = ["iniconfig"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -31925,6 +32100,7 @@ fn lock_multiple_sources() -> Result<()> {
         ]
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "0965f2a258462618"
         config-settings-packages = ["iniconfig"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -34671,6 +34847,7 @@ fn lock_dynamic_version() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "3e86bc62d7d129ea"
         config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -34709,6 +34886,7 @@ fn lock_dynamic_version() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "3e86bc62d7d129ea"
         config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -34780,6 +34958,7 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "3e86bc62d7d129ea"
         config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -34818,6 +34997,7 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "3e86bc62d7d129ea"
         config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -35007,6 +35187,7 @@ fn lock_dynamic_version_workspace_member() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "f09c6106c1d0709b"
         config-settings-packages = ["dynamic"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -35076,6 +35257,7 @@ fn lock_dynamic_version_workspace_member() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "f09c6106c1d0709b"
         config-settings-packages = ["dynamic"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -35194,6 +35376,7 @@ fn lock_dynamic_version_path_dependency() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "f09c6106c1d0709b"
         config-settings-packages = ["dynamic"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -35257,6 +35440,7 @@ fn lock_dynamic_version_path_dependency() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "f09c6106c1d0709b"
         config-settings-packages = ["dynamic"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -35357,6 +35541,7 @@ fn lock_dynamic_version_self_extra_hatchling() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "3e86bc62d7d129ea"
         config-settings-packages = ["project"]
         exclude-newer = "2025-01-01T00:00:00Z"
@@ -35527,6 +35712,7 @@ fn lock_dynamic_version_self_extra_setuptools() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "3e86bc62d7d129ea"
         config-settings-packages = ["project"]
         exclude-newer = "2025-01-01T00:00:00Z"
@@ -35689,6 +35875,7 @@ fn lock_dynamic_built_cache() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "3e86bc62d7d129ea"
         config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -35732,6 +35919,7 @@ fn lock_dynamic_built_cache() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "3e86bc62d7d129ea"
         config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -35811,6 +35999,7 @@ fn lock_shared_build_dependency() -> Result<()> {
         ]
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "3e86bc62d7d129ea"
         config-settings-packages = ["project"]
         exclude-newer = "2025-01-28T00:00:00Z"
@@ -36083,6 +36272,7 @@ fn lock_dynamic_to_static() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "3e86bc62d7d129ea"
         config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -36263,6 +36453,7 @@ fn lock_static_to_dynamic() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "3e86bc62d7d129ea"
         config-settings-packages = ["project"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -47064,6 +47255,7 @@ fn lock_resolution_inputs_dynamic_constraints() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "e5104e8d07e21e8c"
         config-settings-packages = ["provider"]
         exclude-newer = "2024-03-25T00:00:00Z"
@@ -47656,6 +47848,7 @@ fn lock_resolution_inputs_ignores_build_dependency_metadata() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         config-settings-digest = "082c90fefe9bc323"
         config-settings-packages = ["child"]
         exclude-newer = "2024-03-25T00:00:00Z"

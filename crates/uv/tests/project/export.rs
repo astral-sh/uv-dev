@@ -934,6 +934,7 @@ fn requirements_txt_dependency_conflicting_markers() -> Result<()> {
             ]
 
             [options]
+            config-settings-provenance = 1
             config-settings-digest = "af85422aef42cb94"
             config-settings-packages = ["trio"]
             exclude-newer = "2024-03-25T00:00:00Z"

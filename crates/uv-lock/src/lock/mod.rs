@@ -97,6 +97,8 @@ mod windows_emulation_tests;
 /// The current version of the lockfile format.
 const VERSION: u32 = 1;
 
+const CONFIG_SETTINGS_PROVENANCE_VERSION: u32 = 1;
+
 /// Return a stable digest for non-empty PEP 517 build config settings.
 fn config_settings_digest(
     config_setting: &ConfigSettings,
@@ -2503,6 +2505,8 @@ impl Lock {
         root: &Path,
         supported_environments: Vec<MarkerTree>,
         index_locations: &IndexLocations,
+        config_setting: &ConfigSettings,
+        config_settings_package: &PackageConfigSettings,
         metadata_free: bool,
     ) -> Result<Self, LockError> {
         let mut packages = BTreeMap::new();
@@ -2661,6 +2665,10 @@ impl Lock {
             fork_strategy: resolution.options.fork_strategy,
             minimum_libc_version: resolution.options.minimum_libc_version,
             exclude_newer: resolution.options.exclude_newer.clone(),
+            config_settings_provenance: (!config_settings.is_empty()
+                || config_setting != &ConfigSettings::default()
+                || config_settings_package != &PackageConfigSettings::default())
+                .then_some(CONFIG_SETTINGS_PROVENANCE_VERSION),
             config_settings_digest: source_config_settings_digest(&config_settings),
             config_settings_packages: config_settings.into_keys().collect(),
         };
@@ -3180,9 +3188,16 @@ impl Lock {
         config_setting: &ConfigSettings,
         config_settings_package: &PackageConfigSettings,
     ) -> bool {
-        let digest = if self.options.config_settings_packages.is_empty() {
-            // Locks without source provenance use the conservative global comparison. A fresh
-            // resolution can establish that no backend consumed settings and retain the same lock.
+        if self
+            .options
+            .config_settings_provenance
+            .is_some_and(|version| version != CONFIG_SETTINGS_PROVENANCE_VERSION)
+        {
+            return false;
+        }
+        let digest = if self.options.config_settings_provenance.is_none() {
+            // Locks without provenance retain the conservative global comparison until
+            // a normal settings-bearing resolution records the current audit generation.
             config_settings_digest(config_setting, config_settings_package)
         } else {
             let settings = self
@@ -3190,16 +3205,41 @@ impl Lock {
                 .config_settings_packages
                 .iter()
                 .map(|name| {
-                    let settings = config_settings_package.get(name).map_or_else(
-                        || config_setting.clone(),
-                        |settings| settings.clone().merge(config_setting.clone()),
-                    );
-                    (name.clone(), settings)
+                    (
+                        name.clone(),
+                        config_settings_package
+                            .effective(Some(name), config_setting)
+                            .into_owned(),
+                    )
                 })
                 .collect();
             source_config_settings_digest(&settings)
         };
         self.options.config_settings_digest == digest
+    }
+
+    /// Compare resolved lock contents while permitting an audit-generation-only migration.
+    ///
+    /// Read-only locking can establish provenance without requiring a file rewrite when
+    /// the selected packages, metadata, and effective settings are otherwise unchanged.
+    pub fn eq_ignoring_config_settings_provenance(&self, other: &Self) -> bool {
+        if self.options.config_settings_provenance == other.options.config_settings_provenance {
+            return self == other;
+        }
+        if self
+            .options
+            .config_settings_provenance
+            .is_some_and(|version| version != CONFIG_SETTINGS_PROVENANCE_VERSION)
+            || other
+                .options
+                .config_settings_provenance
+                .is_some_and(|version| version != CONFIG_SETTINGS_PROVENANCE_VERSION)
+        {
+            return false;
+        }
+        let mut comparable = self.clone();
+        comparable.options.config_settings_provenance = other.options.config_settings_provenance;
+        comparable == *other
     }
 
     /// Returns the conflicting groups that were used to generate this lock.
@@ -6271,6 +6311,8 @@ struct ResolverOptions {
     minimum_libc_version: Option<MinimumLibcVersion>,
     /// The [`ExcludeNewer`] setting used to generate this lock.
     exclude_newer: ExcludeNewer,
+    /// The generation of settings-consumption auditing recorded by this lock.
+    config_settings_provenance: Option<u32>,
     /// The digest of the build config settings used to generate this lock.
     config_settings_digest: Option<String>,
     /// Packages whose selected metadata consumed build settings.
@@ -6295,6 +6337,9 @@ struct ResolverOptionsWire {
     /// The [`ExcludeNewer`] setting used to generate this lock.
     #[serde(flatten)]
     exclude_newer: ExcludeNewerWire,
+    /// The generation of settings-consumption auditing recorded by this lock.
+    #[serde(default)]
+    config_settings_provenance: Option<u32>,
     /// The digest of the build config settings used to generate this lock.
     #[serde(default)]
     config_settings_digest: Option<String>,
@@ -6650,6 +6695,7 @@ impl TryFrom<LockWire> for Lock {
             fork_strategy: options_wire.fork_strategy,
             minimum_libc_version: options_wire.minimum_libc_version,
             exclude_newer: options_wire.exclude_newer.into(),
+            config_settings_provenance: options_wire.config_settings_provenance,
             config_settings_digest: options_wire.config_settings_digest,
             config_settings_packages: options_wire.config_settings_packages,
         };

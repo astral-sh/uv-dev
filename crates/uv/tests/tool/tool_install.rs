@@ -5991,6 +5991,7 @@ fn tool_install_lock_ignores_unconsumed_config_settings() {
         requires-python = ">=3.12"
 
         [options]
+        config-settings-provenance = 1
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [manifest]

@@ -1000,6 +1000,8 @@ async fn do_lock(
                 target.install_path(),
                 lock_supported_environments.clone().into_markers(),
                 index_locations,
+                config_setting,
+                config_settings_package,
                 preview.is_enabled(PreviewFeature::LockWithoutMetadata),
             )?
             .with_conflicts(conflicts)
@@ -1031,7 +1033,12 @@ async fn do_lock(
             let unchanged = if let Some(check_lockfile_contents) = check_lockfile_contents {
                 previous.is_some() && check_lockfile_contents == lock.to_toml()?.as_str()
             } else {
-                previous.as_ref().is_some_and(|previous| *previous == lock)
+                previous.as_ref().is_some_and(|previous| match mode {
+                    LockMode::Locked(..) => lock.eq_ignoring_config_settings_provenance(previous),
+                    LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Frozen(_) => {
+                        *previous == lock
+                    }
+                })
             };
 
             if unchanged {

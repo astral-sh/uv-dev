@@ -48,6 +48,7 @@ Ok(
                     {},
                 ),
             },
+            config_settings_provenance: None,
             config_settings_digest: None,
             config_settings_packages: [],
         },

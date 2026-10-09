@@ -22,8 +22,9 @@ use uv_distribution::{
     DistributionDatabase, LoweredExtraBuildDependencies, StaticMetadataDatabase,
 };
 use uv_distribution_types::{
-    DependencyMetadata, HashCollection, IndexLocations, InstalledDist, Name,
-    NameRequirementSpecification, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
+    ConfigSettings, DependencyMetadata, HashCollection, IndexLocations, InstalledDist, Name,
+    NameRequirementSpecification, PackageConfigSettings, Requirement, RequiresPython, Resolution,
+    UnresolvedRequirement,
 };
 use uv_errors::{ErrorWithHints, Hinted, Hints};
 #[cfg(unix)]
@@ -336,6 +337,8 @@ impl ToolLock {
         resolution: &ResolverOutput,
         manifest: &ResolverManifest,
         index_locations: &IndexLocations,
+        config_setting: &ConfigSettings,
+        config_settings_package: &PackageConfigSettings,
     ) -> anyhow::Result<Self> {
         let manifest = manifest.clone().relative_to(root)?;
         let lock = Lock::from_resolution(
@@ -344,6 +347,8 @@ impl ToolLock {
             root,
             Vec::new(),
             index_locations,
+            config_setting,
+            config_settings_package,
             false,
         )?;
         Ok(Self {
