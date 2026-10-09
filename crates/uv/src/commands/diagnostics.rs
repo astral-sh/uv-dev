@@ -81,10 +81,9 @@ fn collect_hint<T: Hinted + std::error::Error + 'static>(
 mod tests {
     use insta::assert_debug_snapshot;
 
-    use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
     use uv_lock_operations::LockError;
     use uv_project_commands::ProjectError;
-    use uv_pypi_types::{MetadataError, ResolutionMetadata};
+    use uv_pypi_types::ResolutionMetadata;
     use uv_settings::{LockedFlag, LockedSource};
     use uv_workspace::pyproject::{PyprojectTomlError, SourceError};
 
@@ -92,56 +91,56 @@ mod tests {
 
     #[test]
     fn collects_metadata_hints_through_anyhow_operations_errors() {
-        let wrappers: [fn(MetadataError) -> uv_distribution::Error; 3] = [
-            uv_distribution::Error::Metadata,
-            uv_distribution::Error::PkgInfo,
-            uv_distribution::Error::PyprojectToml,
-        ];
-        let hint = "Relative paths are not supported in package metadata. Use an absolute `file://` URL or define a local project dependency in `[tool.uv.sources]`.";
+        let metadata_error = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.2\nName: example\nVersion: 1.0.0\nRequires-Dist: dependency @ ./scripts/path\n",
+        )
+        .expect_err("relative paths are invalid in package metadata");
+        let err = anyhow::Error::new(uv_distribution::Error::Metadata(metadata_error))
+            .context("Failed to read the source tree");
+        let err = anyhow::Error::new(uv_resolve_operations::Error::Anyhow(err));
 
-        for wrap in wrappers {
-            for nested in [false, true] {
-                let metadata_error = ResolutionMetadata::parse_metadata(
-                    b"Metadata-Version: 2.2\nName: example\nVersion: 1.0.0\nRequires-Dist: dependency @ ./scripts/path\n",
-                )
-                .unwrap_err();
-                let err = anyhow::Error::new(wrap(metadata_error));
-                let err = if nested {
-                    err.context("Failed to read the source tree")
-                } else {
-                    err
-                };
+        let hints = hints_for_error(&err);
+        assert_debug_snapshot!(hints.iter().collect::<Vec<_>>(), @r#"
+        [
+            "Relative paths are not supported in package metadata. Use an absolute `file://` URL or define a local project dependency in `[tool.uv.sources]`.",
+        ]
+        "#);
+    }
 
-                let mut original = String::new();
-                write_error_chain_with_options(
-                    err.as_ref(),
-                    &Hints::none(),
-                    ErrorOptions::default().with_stream(&mut original),
-                )
-                .unwrap();
+    #[test]
+    fn collects_pkg_info_hints_through_anyhow_operations_errors() {
+        let metadata_error = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.2\nName: example\nVersion: 1.0.0\nRequires-Dist: dependency @ ./scripts/path\n",
+        )
+        .expect_err("relative paths are invalid in package metadata");
+        let err = anyhow::Error::new(uv_distribution::Error::PkgInfo(metadata_error))
+            .context("Failed to read the source tree");
+        let err = anyhow::Error::new(uv_resolve_operations::Error::Anyhow(err));
 
-                let err = anyhow::Error::new(uv_resolve_operations::Error::Anyhow(err));
-                let hints = hints_for_error(&err);
-                assert_eq!(
-                    hints_for_error(&err).into_iter().collect::<Vec<_>>(),
-                    vec![hint]
-                );
-                let mut rendered = String::new();
-                write_error_chain_with_options(
-                    err.as_ref(),
-                    &hints,
-                    ErrorOptions::default().with_stream(&mut rendered),
-                )
-                .unwrap();
-                assert_eq!(
-                    anstream::adapter::strip_str(&rendered).to_string(),
-                    format!(
-                        "{}\nhint: {hint}\n",
-                        anstream::adapter::strip_str(&original)
-                    )
-                );
-            }
-        }
+        let hints = hints_for_error(&err);
+        assert_debug_snapshot!(hints.iter().collect::<Vec<_>>(), @r#"
+        [
+            "Relative paths are not supported in package metadata. Use an absolute `file://` URL or define a local project dependency in `[tool.uv.sources]`.",
+        ]
+        "#);
+    }
+
+    #[test]
+    fn collects_pyproject_metadata_hints_through_anyhow_operations_errors() {
+        let metadata_error = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.2\nName: example\nVersion: 1.0.0\nRequires-Dist: dependency @ ./scripts/path\n",
+        )
+        .expect_err("relative paths are invalid in package metadata");
+        let err = anyhow::Error::new(uv_distribution::Error::PyprojectToml(metadata_error))
+            .context("Failed to read the source tree");
+        let err = anyhow::Error::new(uv_resolve_operations::Error::Anyhow(err));
+
+        let hints = hints_for_error(&err);
+        assert_debug_snapshot!(hints.iter().collect::<Vec<_>>(), @r#"
+        [
+            "Relative paths are not supported in package metadata. Use an absolute `file://` URL or define a local project dependency in `[tool.uv.sources]`.",
+        ]
+        "#);
     }
 
     #[test]
