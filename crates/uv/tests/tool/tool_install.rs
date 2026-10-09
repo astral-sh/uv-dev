@@ -4832,6 +4832,85 @@ fn tool_install_at_latest() {
     });
 }
 
+/// A flat index can opt its latest-version lookup out of the global upload cutoff.
+#[tokio::test]
+async fn tool_install_at_latest_flat_index_exemption() -> Result<()> {
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
+
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let server = MockServer::start().await;
+    let (old_filename, old_wheel) = generate_wheel_with_files(
+        &"latest-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("latest_tool.py", "def main():\n    print('old')\n"),
+            (
+                "latest_tool-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nlatest-tool = latest_tool:main\n",
+            ),
+        ],
+    );
+    let (new_filename, new_wheel) = generate_wheel_with_files(
+        &"latest-tool".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("latest_tool.py", "def main():\n    print('new')\n"),
+            (
+                "latest_tool-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\nlatest-tool = latest_tool:main\n",
+            ),
+        ],
+    );
+    Mock::given(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(format!(
+            r#"<a href="/{old_filename}" data-upload-time="2020-01-01T00:00:00Z">{old_filename}</a>
+<a href="/{new_filename}" data-upload-time="2025-01-01T00:00:00Z">{new_filename}</a>"#,
+        ), "text/html"))
+        .mount(&server).await;
+    Mock::given(path(format!("/{old_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(old_wheel))
+        .mount(&server)
+        .await;
+    Mock::given(path(format!("/{new_filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(new_wheel))
+        .mount(&server)
+        .await;
+    context.temp_dir.child("uv.toml").write_str(&format!(
+        r#"
+        [[index]]
+        name = "flat"
+        url = "{url}/"
+        format = "flat"
+        default = true
+        exclude-newer = false
+    "#,
+        url = server.uri()
+    ))?;
+    uv_snapshot!(context.filters(), context.tool_install().arg("latest-tool@latest")
+        .args(["--preview-features", "index-exclude-newer"])
+        .arg("--config-file").arg(context.temp_dir.child("uv.toml").path())
+        .env(EnvVars::PATH, context.temp_dir.child("bin").path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + latest-tool==2.0.0
+    Installed 1 executable: latest-tool
+    "#);
+    Ok(())
+}
+
 /// Test installing a tool with `uv tool install {package} --from {package}@latest`.
 #[test]
 fn tool_install_from_at_latest() {

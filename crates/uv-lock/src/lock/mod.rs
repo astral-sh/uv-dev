@@ -38,11 +38,11 @@ use uv_distribution_types::{
     ArchiveHashPolicy, BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist,
     DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
     FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
-    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString, VersionId,
+    HashValidation, Identifier, IndexFormat, IndexLocations, IndexMetadata, IndexUrl,
+    MetadataHashPolicy, MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
+    SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString, VersionId,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -130,6 +130,9 @@ pub enum LockParseError {
 /// - 4: Support omitting package declaration metadata and record empty extras and groups.
 /// - 5: Record default groups and dependency group metadata for workspace members and roots.
 const REVISION: u32 = 5;
+
+/// The first lockfile revision that records distribution upload times.
+const UPLOAD_TIME_REVISION: u32 = 2;
 
 /// The first lockfile revision that records default groups for workspace members and roots.
 const DEFAULT_GROUPS_REVISION: u32 = 5;
@@ -4214,6 +4217,7 @@ impl Lock {
         workspace_default_groups: Option<&DefaultGroups>,
         dependency_metadata: &DependencyMetadata,
         indexes: Option<&IndexLocations>,
+        exclude_newer: &ExcludeNewer,
         tags: &Tags,
         markers: &MarkerEnvironment,
         build_options: &BuildOptions,
@@ -4649,6 +4653,63 @@ impl Lock {
                     }
                 }
             }
+        }
+
+        // Per-index cutoffs are not stored in the lockfile. Validate registry artifacts even
+        // for transitive packages behind immutable dependencies.
+        for package in &self.packages {
+            let Some(indexes) = indexes else {
+                continue;
+            };
+            let Some(index_url) = package.index(root)? else {
+                continue;
+            };
+            let Some(index) = indexes.index_for_url(&index_url) else {
+                continue;
+            };
+            // The resolver exempts flat metadata from cutoffs, including timestamped HTML entries.
+            if index.format != IndexFormat::Simple {
+                continue;
+            }
+            let Some(cutoff) = exclude_newer
+                .exclude_newer_package_for_index(&package.id.name, index.exclude_newer.as_ref())
+            else {
+                continue;
+            };
+
+            // Legacy locks lack upload times. Their saved cutoff still guarantees compatibility
+            // when the current fallback is unchanged or relaxed; unsaved index cutoffs do not.
+            if self.revision < UPLOAD_TIME_REVISION
+                && index.exclude_newer.is_none()
+                && self
+                    .options
+                    .exclude_newer
+                    .exclude_newer_package(&package.id.name)
+                    .is_some_and(|saved| saved <= cutoff)
+            {
+                continue;
+            }
+            if package
+                .sdist
+                .iter()
+                .map(SourceDist::upload_time)
+                .chain(package.wheels.iter().map(|wheel| wheel.upload_time))
+                .any(|upload_time| {
+                    upload_time.is_some_and(|upload_time| {
+                        upload_time.as_millisecond() < cutoff.as_millisecond()
+                    })
+                })
+            {
+                continue;
+            }
+            let Some(version) = package.id.version.as_ref() else {
+                return Ok(SatisfiesResult::MissingVersion(&package.id.name));
+            };
+            return Ok(SatisfiesResult::ExcludedNewerArtifact(
+                &package.id.name,
+                version,
+                cutoff,
+            ));
         }
 
         while let Some(package_index) = queue.pop_front() {
@@ -6164,6 +6225,8 @@ pub enum SatisfiesResult<'lock> {
     MissingRemoteIndex(&'lock PackageName, &'lock Version, &'lock UrlString),
     /// The lockfile referenced a local index that was not provided
     MissingLocalIndex(&'lock PackageName, &'lock Version, &'lock Path),
+    /// The lockfile contains an artifact excluded by the effective `exclude-newer` cutoff.
+    ExcludedNewerArtifact(&'lock PackageName, &'lock Version, Timestamp),
     /// A package in the lockfile contains different `requires-dist` metadata than expected.
     MismatchedPackageRequirements(
         &'lock PackageName,

@@ -475,7 +475,7 @@ impl<'a> IndexLocations {
     }
 
     /// Return the configured index matching the given URL.
-    fn index_for_url(&self, url: &IndexUrl) -> Option<&Index> {
+    pub fn index_for_url(&self, url: &IndexUrl) -> Option<&Index> {
         self.indexes
             .iter()
             .find(|index| is_same_index(index.url(), url))
@@ -513,7 +513,7 @@ impl<'a> IndexLocations {
             .and_then(|index| index.hash_algorithm.map(HashAlgorithm::from))
     }
 
-    /// Return the `exclude-newer` setting for a given index, if the index is configured.
+    /// Return the `exclude-newer` setting for a configured index.
     pub fn exclude_newer_for(&self, url: &IndexUrl) -> Option<&ExcludeNewerOverride> {
         self.index_for_url(url).and_then(Index::exclude_newer)
     }
