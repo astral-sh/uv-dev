@@ -761,7 +761,9 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
 
 #[test]
 fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
     let script = context.temp_dir.child("script.py");
     script.write_str(
         r#"# /// script
@@ -793,7 +795,7 @@ fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
       "environment": {
         "root": "[CACHE_DIR]/environments-v2/script-[HASH]",
         "python": {
-          "path": "[CACHE_DIR]/environments-v2/script-[HASH]/bin/python",
+          "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
         }
@@ -835,7 +837,7 @@ fn workspace_metadata_script_reuses_environment_discovery() -> Result<()> {
       "environment": {
         "root": "[CACHE_DIR]/environments-v2/script-[HASH]",
         "python": {
-          "path": "[CACHE_DIR]/environments-v2/script-[HASH]/bin/python",
+          "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
         }
@@ -1722,7 +1724,9 @@ fn workspace_metadata_lockfile_workspace_group_module_owners() -> Result<()> {
 
 #[test]
 fn workspace_metadata_project_reuses_environment_discovery() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
     context.temp_dir.child("pyproject.toml").write_str(
         r#"[project]
 name = "project"
@@ -1746,7 +1750,7 @@ dependencies = []
       "environment": {
         "root": "[VENV]/",
         "python": {
-          "path": "[VENV]/bin/python",
+          "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
         }
@@ -1803,7 +1807,7 @@ dependencies = []
       "environment": {
         "root": "[VENV]/",
         "python": {
-          "path": "[VENV]/bin/python",
+          "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
         }
@@ -3466,7 +3470,9 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
 /// Synchronizing a reused environment honors the workspace root pin from a subdirectory.
 #[test]
 fn workspace_metadata_sync_uses_workspace_python_pin() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -3503,7 +3509,7 @@ fn workspace_metadata_sync_uses_workspace_python_pin() -> Result<()> {
       "environment": {
         "root": "[VENV]/",
         "python": {
-          "path": "[VENV]/bin/python",
+          "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.11.[X]",
           "implementation": "cpython"
         }
@@ -3559,7 +3565,7 @@ fn workspace_metadata_sync_uses_workspace_python_pin() -> Result<()> {
       "environment": {
         "root": "[VENV]/",
         "python": {
-          "path": "[VENV]/bin/python",
+          "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
         }
@@ -3620,7 +3626,7 @@ fn workspace_metadata_sync_uses_workspace_python_pin() -> Result<()> {
       "environment": {
         "root": "[VENV]/",
         "python": {
-          "path": "[VENV]/bin/python",
+          "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
         }
@@ -3665,5 +3671,155 @@ fn workspace_metadata_sync_uses_workspace_python_pin() -> Result<()> {
     Creating virtual environment at: [VENV]/
     "#);
 
+    Ok(())
+}
+
+/// Read-only centralized metadata describes the linked environment, even with another Python request.
+#[test]
+fn workspace_metadata_centralized_read_only_uses_linked_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin()
+        .with_filtered_centralized_environment_hashes();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        dependencies = []
+    "#})?;
+    context
+        .sync()
+        .args([
+            "--python",
+            "3.12",
+            "--preview-features",
+            "centralized-project-envs",
+        ])
+        .assert()
+        .success();
+    context
+        .sync()
+        .args([
+            "--python",
+            "3.11",
+            "--preview-features",
+            "centralized-project-envs",
+        ])
+        .assert()
+        .success();
+    let linked = fs_err::read_link(context.venv.path())?;
+
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .args(["--python", "3.12", "--preview-features", "workspace-metadata,centralized-project-envs"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[CACHE_DIR]/environments-v2/project-cp3.11.[X]-[HASH]",
+        "python": {
+          "path": "[CACHE_DIR]/environments-v2/project-cp3.11.[X]-[HASH]/[BIN]/[PYTHON]",
+          "version": "3.11.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.11",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "project",
+          "path": "[TEMP_DIR]/",
+          "id": "project==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "project==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "project",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
+    assert_eq!(fs_err::read_link(context.venv.path())?, linked);
+
+    uv_snapshot!(context.filters(), context.workspace_metadata()
+        .args(["--sync", "--python", "3.12", "--preview-features", "workspace-metadata,centralized-project-envs"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]",
+        "python": {
+          "path": "[CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.11",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "project",
+          "path": "[TEMP_DIR]/",
+          "id": "project==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "project==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "project",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": []
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    "#);
     Ok(())
 }
