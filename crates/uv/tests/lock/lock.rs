@@ -48872,7 +48872,7 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     Ok(())
 }
 
-/// Updating a locked preference respects the package activation and complete wheel coverage.
+/// A package active only on Linux keeps its pin when the required environment is macOS.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_respects_package_activation() -> Result<()> {
@@ -48986,7 +48986,8 @@ fn lock_required_environment_respects_package_activation() -> Result<()> {
     Ok(())
 }
 
-/// Updating a locked preference respects the package activation and complete wheel coverage.
+/// A Linux wheel for Python 3.12 and a Windows wheel for Python 3.13 do not cover Linux
+/// within the Python 3.13 fork, so the existing pin must yield to the matching Linux wheel.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_wheels_match_current_fork() -> Result<()> {
@@ -49110,7 +49111,8 @@ fn lock_required_environment_wheels_match_current_fork() -> Result<()> {
     Ok(())
 }
 
-/// Updating a locked preference respects the package activation and complete wheel coverage.
+/// A generic Python wheel cannot satisfy a required environment excluded by its
+/// `requires-python` metadata, so the existing pin must yield to a compatible version.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_wheel_excludes_python() -> Result<()> {
@@ -49235,7 +49237,8 @@ fn lock_required_environment_wheel_excludes_python() -> Result<()> {
     Ok(())
 }
 
-/// Updating a locked preference respects the package activation and complete wheel coverage.
+/// Separate manylinux and musllinux wheels jointly cover the requested Linux libc variants,
+/// allowing their version to replace an existing source-only pin.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_combines_libc_wheels() -> Result<()> {
