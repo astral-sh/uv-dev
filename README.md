@@ -19,3 +19,5 @@ Explain why the selected classification fits, distinguishing confirmed findings 
 ## Related
 
 List related issues or pull requests, explain their relationship, or state that none were found.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/2548

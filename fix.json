@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Venv cache warming retained executable symlinks, causing cached and freshly queried base paths to differ. Match CPython’s executable-symlink resolution while preserving parent-directory links, and strengthen the regression to require matching metadata and downstream venv targets.",
+  "validation": [
+    "Three focused venv interpreter-cache integration tests passed in the debug profile.",
+    "System-Python warm/fresh cache round trip passed.",
+    "cargo fmt --all and formatting check passed.",
+    "Focused uv-python-interpreter clippy check passed with warnings denied.",
+    "git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2548"
+}
