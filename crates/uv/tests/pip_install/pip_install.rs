@@ -11224,6 +11224,28 @@ fn incompatible_build_constraint() -> Result<()> {
     Ok(())
 }
 
+/// Pylock build constraints use the same version constraints as text inputs.
+#[test]
+fn incompatible_pylock_build_constraint() -> Result<()> {
+    let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "setuptools"
+        version = "1"
+    "#})?;
+    uv_snapshot!(context.pip_install().arg("requests==1.2").args(["--build-constraint", "pylock.toml"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `requests==1.2.0`
+      cause: Failed to resolve requirements from `setup.py` build
+      cause: No solution found when resolving: `setuptools>=40.8.0`
+      cause: Because you require setuptools>=40.8.0 and setuptools==1, we can conclude that your requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
+
 /// Include a `build_constraints.txt` file with an incompatible constraint from stdin.
 #[test]
 #[expect(clippy::disallowed_types)]
