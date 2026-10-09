@@ -14,6 +14,7 @@ use uv_environment_operations::install_target::{InstallTarget, PackageSelection}
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
     ProjectInterpreter, ScriptEnvironment, centralized_environments_enabled,
+    is_centralized_environment_reference,
 };
 use uv_lock::{Lock, Metadata, Package};
 use uv_lock_operations::{
@@ -237,10 +238,12 @@ pub async fn metadata(
     // Centralized discovery selects an environment for resolution. Sync refreshes `.venv`, while
     // read-only metadata describes the environment currently linked by `.venv`.
     if let MetadataSource::Manifest(LockTarget::Workspace(workspace)) = &source
-        && centralized_environments_enabled(
+        && (centralized_environments_enabled(
             &ProjectEnvironmentSelection::from_install_path(workspace.install_path(), active),
             cache,
-        )
+        ) || environment.as_ref().is_some_and(|environment| {
+            is_centralized_environment_reference(environment.root(), cache)
+        }))
     {
         environment = None;
     }
