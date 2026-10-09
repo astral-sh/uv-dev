@@ -697,70 +697,10 @@ impl PyProjectTomlMut {
         };
 
         let dependencies = match dependency_type {
-            DependencyType::Production => self
-                .project()?
-                .entry("dependencies")
-                .or_insert(Item::Value(Value::Array(Array::new())))
-                .as_array_mut()
-                .ok_or(Error::MalformedDependencies)?,
-            DependencyType::Dev => self
-                .doc
-                .entry("tool")
-                .or_insert(implicit())
-                .as_table_mut()
-                .ok_or(Error::MalformedSources)?
-                .entry("uv")
-                .or_insert(Item::Table(Table::new()))
-                .as_table_mut()
-                .ok_or(Error::MalformedSources)?
-                .entry("dev-dependencies")
-                .or_insert(Item::Value(Value::Array(Array::new())))
-                .as_array_mut()
-                .ok_or(Error::MalformedDependencies)?,
-            DependencyType::Optional(extra) => {
-                let optional_dependencies = self
-                    .project()?
-                    .entry("optional-dependencies")
-                    .or_insert(Item::Table(Table::new()))
-                    .as_table_like_mut()
-                    .ok_or(Error::MalformedDependencies)?;
-
-                let key = optional_dependencies
-                    .iter()
-                    .find(|(key, _)| {
-                        ExtraName::from_str(key).is_ok_and(|existing| existing == *extra)
-                    })
-                    .map(|(key, _)| key.to_string())
-                    .unwrap_or_else(|| extra.to_string());
-
-                optional_dependencies
-                    .entry(&key)
-                    .or_insert(Item::Value(Value::Array(Array::new())))
-                    .as_array_mut()
-                    .ok_or(Error::MalformedDependencies)?
-            }
-            DependencyType::Group(group) => {
-                let dependency_groups = self
-                    .doc
-                    .entry("dependency-groups")
-                    .or_insert(Item::Table(Table::new()))
-                    .as_table_like_mut()
-                    .ok_or(Error::MalformedDependencies)?;
-
-                let key = dependency_groups
-                    .iter()
-                    .find(|(key, _)| {
-                        GroupName::from_str(key).is_ok_and(|existing| existing == *group)
-                    })
-                    .map(|(key, _)| key.to_string())
-                    .unwrap_or_else(|| group.to_string());
-
-                dependency_groups
-                    .entry(&key)
-                    .or_insert(Item::Value(Value::Array(Array::new())))
-                    .as_array_mut()
-                    .ok_or(Error::MalformedDependencies)?
-            }
+            DependencyType::Production => self.dependencies_array()?,
+            DependencyType::Dev => self.dev_dependencies_array()?,
+            DependencyType::Optional(extra) => self.optional_dependencies_array(extra)?,
+            DependencyType::Group(group) => self.dependency_groups_array(group)?,
         };
 
         let edits = add_dependencies(requirements, dependencies, raw)?;
@@ -1464,84 +1404,18 @@ fn add_dependency(
 
     match to_replace.as_slice() {
         [] => {
-            #[derive(Debug, Copy, Clone)]
-            enum Sort {
-                /// The list is sorted in a case-insensitive manner.
-                CaseInsensitive,
-                /// The list is sorted naively in a case-insensitive manner.
-                CaseInsensitiveNaive,
-                /// The list is sorted in a case-sensitive manner.
-                CaseSensitive,
-                /// The list is sorted naively in a case-sensitive manner.
-                CaseSensitiveNaive,
-                /// The list is unsorted.
-                Unsorted,
-            }
-
-            fn is_sorted<T, I>(items: I) -> bool
-            where
-                I: IntoIterator<Item = T>,
-                T: PartialOrd + Copy,
-            {
-                items.into_iter().tuple_windows().all(|(a, b)| a <= b)
-            }
-
-            // `deps` are either requirements (strings) or include groups (inline tables).
-            // Here we pull out just the requirements for determining the sort.
-            let reqs: Vec<_> = deps.iter().filter_map(Value::as_str).collect();
-            let reqs_lowercase: Vec<_> = reqs.iter().copied().map(str::to_lowercase).collect();
-
-            // Determine if the dependency list is sorted prior to
-            // adding the new dependency; the new dependency list
-            // will be sorted only when the original list is sorted
-            // so that user's custom dependency ordering is preserved.
-            //
-            // Any items which aren't strings are ignored, e.g.
-            // `{ include-group = "..." }` in dependency-groups.
-            //
-            // We account for both case-sensitive and case-insensitive sorting.
-            let sort = if is_sorted(
-                reqs_lowercase
-                    .iter()
-                    .map(String::as_str)
-                    .map(split_specifiers),
-            ) {
-                Sort::CaseInsensitive
-            } else if is_sorted(reqs.iter().copied().map(split_specifiers)) {
-                Sort::CaseSensitive
-            } else if is_sorted(reqs_lowercase.iter().map(String::as_str)) {
-                Sort::CaseInsensitiveNaive
-            } else if is_sorted(reqs) {
-                Sort::CaseSensitiveNaive
-            } else {
-                Sort::Unsorted
-            };
+            // Detect the ordering before each insertion to retain custom ordering in mixed batches.
+            let sort = dependency_sort(deps);
 
             let req_string = if raw {
                 req.displayable_with_credentials().to_string()
             } else {
                 req.to_string()
             };
-            let index = match sort {
-                Sort::CaseInsensitive => deps.iter().position(|dep| {
-                    dep.as_str().is_some_and(|dep| {
-                        split_specifiers(&dep.to_lowercase())
-                            > split_specifiers(&req_string.to_lowercase())
-                    })
-                }),
-                Sort::CaseInsensitiveNaive => deps.iter().position(|dep| {
-                    dep.as_str()
-                        .is_some_and(|dep| dep.to_lowercase() > req_string.to_lowercase())
-                }),
-                Sort::CaseSensitive => deps.iter().position(|dep| {
-                    dep.as_str()
-                        .is_some_and(|dep| split_specifiers(dep) > split_specifiers(&req_string))
-                }),
-                Sort::CaseSensitiveNaive => deps
-                    .iter()
-                    .position(|dep| dep.as_str().is_some_and(|dep| *dep > *req_string)),
-                Sort::Unsorted => None,
-            };
+            let index = deps.iter().position(|dep| {
+                dep.as_str()
+                    .is_some_and(|dep| compare_dependencies(sort, dep, &req_string).is_gt())
+            });
             let index = index.unwrap_or_else(|| {
                 // The dependency should be added to the end, ignoring any
                 // `include-group` items. This preserves the order for users who
