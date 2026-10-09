@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced with installed uv 0.12.13 on Linux x86_64 and Python 3.12.3. Created independent Git projects: a parent declaring [[tool.uv.dependency-metadata]] and a dependency-free child without [tool.uv]. The child's `uv --offline lock --check --python /usr/bin/python3` passed as a sibling, then exited 1 after `mv child parent/child`, reporting that uv.lock needs updating. Verbose output confirmed parent configuration discovery and mismatched static metadata. Adding an empty child [tool.uv] or passing --no-config restored success without changing the lockfile. This matches documented ancestor discovery; reproduction alone does not establish incorrect behavior. Updated $RUNNER_TEMP/issue-context/README.md with fixtures, commands, evidence, and test coverage. Other versions remain unverified."
+}
