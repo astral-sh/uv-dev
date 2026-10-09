@@ -100,28 +100,28 @@ impl VersionSpecifiers {
                 (Bound::Excluded(prev), Bound::Included(lower)) => {
                     let prev = prev.only_release_trimmed();
                     let lower = lower.only_release_trimmed();
-                    match (&*prev.release(), &*lower.release()) {
-                        ([major], [lower_major, lower_minor]) if major == lower_major => (0
-                            ..*lower_minor)
-                            .map(|minor| {
-                                VersionSpecifier::not_equals_star_version(Version::new([
-                                    *major, minor,
-                                ]))
-                            })
-                            .collect(),
-                        ([major, minor], [lower_major, lower_minor])
-                            if major == lower_major && minor < lower_minor =>
+                    let previous = prev.release();
+                    let following = lower.release();
+                    let interval = match (previous.split_last(), following.split_last()) {
+                        (Some((start, prefix)), Some((end, following_prefix)))
+                            if prefix == following_prefix && start < end =>
                         {
-                            (*minor..*lower_minor)
-                                .map(|minor| {
-                                    VersionSpecifier::not_equals_star_version(Version::new([
-                                        *major, minor,
-                                    ]))
-                                })
-                                .collect()
+                            Some((prefix, *start, *end))
                         }
-                        _ => Vec::new(),
-                    }
+                        (_, Some((end, prefix))) if previous.as_ref() == prefix => {
+                            Some((prefix, 0, *end))
+                        }
+                        _ => None,
+                    };
+                    interval.map_or_else(Vec::new, |(prefix, start, end)| {
+                        (start..end)
+                            .map(|release| {
+                                VersionSpecifier::not_equals_star_version(Version::new(
+                                    prefix.iter().copied().chain(std::iter::once(release)),
+                                ))
+                            })
+                            .collect()
+                    })
                 }
                 _ => Vec::new(),
             };

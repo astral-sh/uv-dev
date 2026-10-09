@@ -1,5 +1,6 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
+use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
 use indoc::{formatdoc, indoc};
 use uv_test::packse::PackseServer;
@@ -3474,6 +3475,87 @@ fn explicit_roots_export_preserves_python_gaps() -> Result<()> {
     Ok(())
 }
 
+/// A selected non-root only needs coverage over Python versions included in the lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_export_preserves_patch_python_gaps() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let filters = context
+        .filters()
+        .into_iter()
+        .filter(|(_, replacement)| *replacement != "$1.[X]")
+        .collect::<Vec<_>>();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["root-a", "root-b", "shared"]
+        roots = ["root-a", "root-b"]
+        [tool.uv.sources]
+        shared = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.12.3"
+        dependencies = ["shared"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.12.4,<3.13"
+        dependencies = ["shared"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/src/shared/__init__.py")
+        .touch()?;
+    uv_snapshot!(filters, context.lock().args(["--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    uv_snapshot!(filters, context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = "==3.12.*, !=3.12.3.*"
+
+    [[packages]]
+    name = "shared"
+    directory = { path = "shared", editable = true }
+    "#);
+    Ok(())
+}
+
 /// Conflicting roots can be exported together when their Python domains do not overlap.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -3737,5 +3819,55 @@ fn explicit_roots_export_groups_use_root_python_domains() -> Result<()> {
     ----- stderr -----
     error: Groups `feature` and `feature` are incompatible with the conflicts: {`root-a:feature`, `root-b:feature`}
     ");
+    Ok(())
+}
+
+/// PEP 440 conjunctions cannot express a gap that starts partway through one minor release.
+#[cfg(feature = "test-universal")]
+#[test]
+fn explicit_roots_reject_unrepresentable_python_union() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let filters = context
+        .filters()
+        .into_iter()
+        .filter(|(_, replacement)| *replacement != "$1.[X]")
+        .collect::<Vec<_>>();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["root-a", "root-b"]
+        roots = ["root-a", "root-b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("root-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-a"
+        version = "0.1.0"
+        requires-python = ">=3.12,<3.12.3"
+    "#})?;
+    context
+        .temp_dir
+        .child("root-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "root-b"
+        version = "0.1.0"
+        requires-python = ">=3.13,<3.14"
+    "#})?;
+    uv_snapshot!(filters, context.lock().args(["--offline", "--no-index"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The union of the resolution roots' Python requirements cannot be represented by `requires-python`:
+    - root-a: >=3.12, <3.12.3
+    - root-b: >=3.13, <3.14
+    ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicates::path::missing());
     Ok(())
 }

@@ -3275,7 +3275,7 @@ impl Lock {
     }
 
     /// Return dependency group metadata for a workspace root without a `[project]` table.
-    pub fn workspace_group_metadata(&self) -> &BTreeMap<GroupName, GroupMetadata> {
+    fn workspace_group_metadata(&self) -> &BTreeMap<GroupName, GroupMetadata> {
         &self.manifest.group_requires_python
     }
 
@@ -3300,7 +3300,7 @@ impl Lock {
     /// Return the environments in which locked edges resolved workspace production and extras.
     ///
     /// Retaining parent markers distinguishes resolved empty extras from metadata-free placeholders.
-    pub fn resolved_workspace_reachability(
+    fn resolved_workspace_reachability(
         &self,
         root: &Path,
         activated: &[ConflictItem],
@@ -3486,7 +3486,7 @@ impl Lock {
     }
 
     /// Return resolved workspace members that were not included as resolution roots.
-    pub fn non_root_workspace_packages(&self) -> impl Iterator<Item = &Package> {
+    fn non_root_workspace_packages(&self) -> impl Iterator<Item = &Package> {
         self.workspace_packages()
             .filter(|package| !self.is_resolution_root(package))
     }
@@ -7657,7 +7657,7 @@ impl Package {
     }
 
     /// Return the recorded Python bound of a non-root workspace member.
-    pub fn workspace_requires_python(&self) -> Option<&VersionSpecifiers> {
+    fn workspace_requires_python(&self) -> Option<&VersionSpecifiers> {
         self.metadata.requires_python.as_ref()
     }
 
@@ -9855,7 +9855,21 @@ impl uv_errors::Hinted for LockError {
         if let Some(hint) = &self.hint {
             uv_errors::Hints::from(hint.to_string())
         } else {
-            uv_errors::Hints::none()
+            match &*self.kind {
+                LockErrorKind::UnresolvedWorkspacePackage(package) => {
+                    format!("Add `{package}` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependencies.").into()
+                }
+                LockErrorKind::UnresolvedWorkspaceExtra { package, .. } => {
+                    format!("Add `{package}` to `tool.uv.workspace.roots` and run `uv lock` to resolve its optional dependencies.").into()
+                }
+                LockErrorKind::MissingWorkspaceMemberPython(_) => {
+                    "Run `uv lock` to record the selected workspace member's Python requirement.".into()
+                }
+                LockErrorKind::UnresolvedWorkspaceGroup { package, .. } => {
+                    format!("Add `{package}` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependency groups.").into()
+                }
+                _ => uv_errors::Hints::none(),
+            }
         }
     }
 }
@@ -10236,6 +10250,32 @@ impl std::fmt::Display for WheelTagHint {
 /// is with the caller somewhere in such cases.
 #[derive(Debug, thiserror::Error)]
 enum LockErrorKind {
+    #[error("Group `{group}` for workspace member `{package}` was not resolved")]
+    UnresolvedWorkspaceGroup {
+        package: PackageName,
+        group: GroupName,
+    },
+
+    #[error("Dependencies for workspace member `{0}` were not resolved for this selection")]
+    UnresolvedWorkspacePackage(PackageName),
+
+    #[error("Extra `{extra}` for workspace member `{package}` was not resolved for this selection")]
+    UnresolvedWorkspaceExtra {
+        package: PackageName,
+        extra: ExtraName,
+    },
+
+    #[error("Python requirement for workspace member `{0}` is missing from the lockfile")]
+    MissingWorkspaceMemberPython(PackageName),
+
+    #[error(
+        "The locked Python domain for workspace member `{0}` cannot be represented by `requires-python`"
+    )]
+    UnrepresentableLockedRequiresPython(PackageName),
+
+    #[error("Selected workspace members have conflicting Python requirements with the lockfile")]
+    DisjointWorkspaceRequiresPython,
+
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
     DependencyGroups(#[from] DependencyGroupError),

@@ -11,20 +11,20 @@ use uv_configuration::{
     ExtrasSpecificationWithDefaults, InstallOptions, InstallTarget as InstallOptionTarget,
 };
 use uv_distribution_types::{Index, RequiresPython, Resolution};
-use uv_lock::{Installable, Lock, LockError, Package, implicit_constraints_marker};
+use uv_lock::{Installable, Lock, LockError, Package};
 use uv_normalize::{DEV_DEPENDENCIES, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifier};
 use uv_pep508::{MarkerExpression, MarkerTree, MarkerValueVersion};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{
-    ConflictItem, DependencyGroupSpecifier, DependencyGroups, LenientRequirement,
-    ResolverMarkerEnvironment, VerbatimParsedUrl,
+    DependencyGroupSpecifier, DependencyGroups, LenientRequirement, ResolverMarkerEnvironment,
+    VerbatimParsedUrl,
 };
 use uv_python_discovery::ProjectPythonRequirement;
 use uv_python_discovery::PythonRequirementSource;
 use uv_scripts::Pep723Script;
 use uv_workspace::pyproject::{Source, Sources, ToolUvSources};
-use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources, VirtualProject, Workspace};
+use uv_workspace::{VirtualProject, Workspace};
 
 use crate::EnvironmentError;
 
@@ -303,80 +303,7 @@ impl<'lock> InstallTarget<'lock> {
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<ProjectPythonRequirement, EnvironmentError> {
         let lock = self.lock();
-        let mut group_requirements = RequiresPythonSources::new();
-        for package in lock
-            .non_root_workspace_packages()
-            .filter(|package| groups.prod() && self.roots().any(|root| root == package.name()))
-        {
-            let requires_python = package.workspace_requires_python().ok_or_else(|| {
-                EnvironmentError::MissingWorkspaceMemberPython(package.name().clone())
-            })?;
-            group_requirements.insert(
-                RequiresPythonDeclaration::Member(package.name().clone(), None),
-                requires_python.clone(),
-            );
-        }
-
-        for name in self.roots() {
-            let Ok(Some(package)) = lock.find_by_name(name) else {
-                // Lockfile selection reports missing or ambiguous roots.
-                continue;
-            };
-            if package.fork_markers().is_empty() {
-                continue;
-            }
-            let marker = package.environment_marker();
-            let Some(requirement) = RequiresPython::from_marker_tree(marker) else {
-                return Err(EnvironmentError::DisjointLockedRequiresPython {
-                    locked: lock.requires_python().clone(),
-                    groups: group_requirements,
-                });
-            };
-            group_requirements
-                .entry(RequiresPythonDeclaration::Member(name.clone(), None))
-                .and_modify(|specifiers| {
-                    *specifiers = specifiers
-                        .iter()
-                        .chain(requirement.specifiers().iter())
-                        .cloned()
-                        .collect();
-                })
-                .or_insert_with(|| requirement.specifiers().clone());
-        }
-
-        if let Some(members) = lock.member_group_metadata() {
-            let group_root = self.group_root(groups);
-
-            for (member, member_groups) in members {
-                // The group root can contribute groups without being an install root.
-                let is_install_root = self.roots().any(|root| root == member);
-                if !is_install_root && group_root != Some(member) {
-                    continue;
-                }
-
-                for (group, metadata) in member_groups {
-                    if self.includes_group(Some(member), group, groups)
-                        && let Some(requires_python) = &metadata.requires_python
-                    {
-                        group_requirements.insert(
-                            RequiresPythonDeclaration::Member(member.clone(), Some(group.clone())),
-                            requires_python.clone(),
-                        );
-                    }
-                }
-            }
-        }
-
-        for (group, metadata) in lock.workspace_group_metadata() {
-            if self.includes_group(None, group, groups)
-                && let Some(requires_python) = &metadata.requires_python
-            {
-                group_requirements.insert(
-                    RequiresPythonDeclaration::Workspace(group.clone()),
-                    requires_python.clone(),
-                );
-            }
-        }
+        let group_requirements = self.workspace_python_requirements(groups)?;
 
         let Some(requires_python) = RequiresPython::intersection(
             std::iter::once(lock.requires_python().specifiers()).chain(group_requirements.values()),
@@ -748,128 +675,11 @@ impl<'lock> InstallTarget<'lock> {
         Ok(())
     }
 
-    /// Validate that selected non-root dependencies were resolved for the requested environment.
-    pub fn validate_workspace_resolution(
-        &self,
-        extras: &ExtrasSpecification,
-        groups: &DependencyGroupsWithDefaults,
-        marker_environment: Option<&ResolverMarkerEnvironment>,
-    ) -> Result<(), EnvironmentError> {
-        if !groups.prod() {
-            return Ok(());
-        }
-        let lock = self.lock();
-        let roots = self.roots().collect::<FxHashSet<_>>();
-        let selected = lock
-            .non_root_workspace_packages()
-            .filter(|package| roots.contains(package.name()))
-            .collect::<Vec<_>>();
-        if selected.is_empty() {
-            return Ok(());
-        }
-        let mut activated = roots
-            .iter()
-            .map(|name| ConflictItem::from((*name).clone()))
-            .collect::<Vec<_>>();
-        let group_root = self.group_root(groups);
-        for package in lock.workspace_packages() {
-            if roots.contains(package.name()) {
-                for extra in extras.extra_names(
-                    package
-                        .provides_extras()
-                        .iter()
-                        .chain(package.optional_dependencies().keys()),
-                ) {
-                    activated.push(ConflictItem::from((package.name().clone(), extra.clone())));
-                }
-            }
-            if roots.contains(package.name()) || group_root == Some(package.name()) {
-                for group in package
-                    .dependency_groups()
-                    .keys()
-                    .chain(package.resolved_dependency_groups().keys())
-                {
-                    if self.includes_group(Some(package.name()), group, groups) {
-                        activated.push(ConflictItem::from((package.name().clone(), group.clone())));
-                    }
-                }
-            }
-        }
-        let resolved = lock.resolved_workspace_reachability(self.install_path(), &activated)?;
-        let domain = implicit_constraints_marker(
-            self.python_requirement(groups)?
-                .requires_python
-                .to_exact_marker_tree(),
-            lock.supported_environments(),
-        );
-        let available = |marker: MarkerTree| {
-            if let Some(environment) = marker_environment {
-                marker.evaluate(environment.markers(), &[])
-            } else {
-                domain.and(marker.negate()).is_false()
-            }
-        };
-        for package in selected {
-            if groups.prod() {
-                let marker = resolved
-                    .get(&(package.name(), None))
-                    .copied()
-                    .unwrap_or(MarkerTree::FALSE);
-                if !available(marker) {
-                    return Err(EnvironmentError::UnresolvedWorkspacePackage(
-                        package.name().clone(),
-                    ));
-                }
-            }
-            for extra in extras.extra_names(
-                package
-                    .provides_extras()
-                    .iter()
-                    .chain(package.optional_dependencies().keys()),
-            ) {
-                let marker = resolved
-                    .get(&(package.name(), Some(extra)))
-                    .copied()
-                    .unwrap_or(MarkerTree::FALSE);
-                if !available(marker) {
-                    return Err(EnvironmentError::UnresolvedWorkspaceExtra {
-                        package: package.name().clone(),
-                        extra: extra.clone(),
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Validate the dependency groups requested by the [`DependencyGroupSpecifier`].
     pub fn validate_groups(
         self,
         groups: &DependencyGroupsWithDefaults,
     ) -> Result<(), EnvironmentError> {
-        let lock = self.lock();
-        let roots = self
-            .roots()
-            .chain(self.group_root(groups))
-            .collect::<FxHashSet<_>>();
-        for package in lock
-            .non_root_workspace_packages()
-            .filter(|package| roots.contains(package.name()))
-        {
-            for group in package
-                .dependency_groups()
-                .keys()
-                .chain(package.resolved_dependency_groups().keys())
-            {
-                if self.includes_group(Some(package.name()), group, groups) {
-                    return Err(EnvironmentError::UnresolvedWorkspaceGroup {
-                        package: package.name().clone(),
-                        group: group.clone(),
-                    });
-                }
-            }
-        }
-
         // If no groups were specified, short-circuit.
         if groups.explicit_names().next().is_none() {
             return Ok(());
