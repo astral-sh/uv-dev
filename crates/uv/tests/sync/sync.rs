@@ -10467,28 +10467,62 @@ fn sync_transitive_extra_conflict_platform() -> Result<()> {
     error: Extra `feature` and group `dev` are incompatible with the declared conflicts: {`child[feature]`, `project:dev`}
     ");
 
-    // Overrides can remove the extra requested by the original dependency.
+    Ok(())
+}
+
+/// Overrides can remove a conflicting extra from an unconditional dependency.
+#[test]
+fn sync_override_removes_conflicting_dependency_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&context.read("pyproject.toml").replace(
-            "[tool.uv]",
-            "[tool.uv]\noverride-dependencies = [\"child\"]",
-        ))?;
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[feature]"]
+
+        [dependency-groups]
+        dev = ["child"]
+
+        [tool.uv]
+        override-dependencies = ["child"]
+        conflicts = [[{ group = "dev" }, { package = "child", extra = "feature" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [project.optional-dependencies]
+        feature = []
+    "#})?;
     uv_snapshot!(context.filters(), context.sync()
-        .arg("--group").arg("dev").arg("--no-install-workspace"), @"
+        .args(["--group", "dev", "--no-install-workspace"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Checked in [TIME]
     ");
     uv_snapshot!(context.filters(), context.sync()
-        .arg("--frozen").arg("--group").arg("dev").arg("--no-install-workspace"), @"
+        .args(["--frozen", "--group", "dev", "--no-install-workspace"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Checked in [TIME]
     ");
-
     Ok(())
 }
 

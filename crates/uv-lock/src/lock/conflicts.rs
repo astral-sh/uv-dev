@@ -161,7 +161,7 @@ pub fn activated_conflicts<'lock>(
     for request in requests.finish(&known_conflicts, marker_environment) {
         let (index, extra, parent_marker) = request?;
         let package = lock.package(index);
-        if groups.prod() && lock.is_workspace_package(package) {
+        if extra.is_none() && lock.is_workspace_package(package) {
             activated
                 .entry(ConflictItem::from(package.name().clone()))
                 .and_modify(|marker| *marker = marker.or(parent_marker))

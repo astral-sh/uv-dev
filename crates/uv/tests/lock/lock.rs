@@ -6681,6 +6681,99 @@ fn lock_conflicting_workspace_members_depends_transitive_extra() -> Result<()> {
     Resolved 5 packages in [TIME]
     ");
 
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--dry-run"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Would use project environment at: .venv
+    error: Package `example` and package `subexample` are incompatible with the declared conflicts: {example, subexample}
+    ");
+    uv_snapshot!(context.filters(), context.export().args(["--frozen", "--no-header", "--no-hashes"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `example` and package `subexample` are incompatible with the declared conflicts: {example, subexample}
+    ");
+
+    Ok(())
+}
+
+/// Dependency groups activate the production contexts of their workspace dependencies.
+#[test]
+fn lock_conflicting_workspace_members_from_dependency_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["left", "right"]
+
+        [tool.uv]
+        package = false
+        conflicts = [[{ package = "left" }, { package = "right" }]]
+
+        [tool.uv.workspace]
+        members = ["left", "right"]
+
+        [tool.uv.sources]
+        left = { workspace = true }
+        right = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("left/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "left"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("right/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "right"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--only-group", "dev", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `left` and package `right` are incompatible with the declared conflicts: {left, right}
+    ");
+    let lock = lock_without_package_metadata(&context.read("uv.lock"))?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.to_string())?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--only-group", "dev",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `left` and package `right` are incompatible with the declared conflicts: {left, right}
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--only-group", "dev", "--no-header", "--no-hashes",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `left` and package `right` are incompatible with the declared conflicts: {left, right}
+    ");
     Ok(())
 }
 
