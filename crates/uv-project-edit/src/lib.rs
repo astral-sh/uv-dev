@@ -296,7 +296,8 @@ impl PyProjectTomlMut {
     }
 
     /// Add an [`Index`] to `tool.uv.index`.
-    pub fn add_index(&mut self, index: &Index, root_dir: &Path) -> Result<(), Error> {
+    #[cfg(test)]
+    fn add_index(&mut self, index: &Index, root_dir: &Path) -> Result<(), Error> {
         self.add_indexes(&[index], root_dir, &BTreeSet::new())
     }
 
