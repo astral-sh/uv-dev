@@ -12,7 +12,7 @@ use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
-use insta::{allow_duplicates, assert_snapshot};
+use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use serde_json::json;
 use std::path::Path;
@@ -3740,12 +3740,9 @@ fn update_source_replace_url() -> Result<()> {
     Ok(())
 }
 
-/// Updating a scoped source must not silently discard its platform, extra, or group scope.
 #[test]
-fn update_source_preserves_scoped_sources() -> Result<()> {
+fn update_source_preserves_scoped_array() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
     let original = indoc! {r#"
         [project]
         name = "project"
@@ -3759,22 +3756,40 @@ fn update_source_preserves_scoped_sources() -> Result<()> {
             { path = "other", marker = "sys_platform != 'linux'" },
         ]
     "#};
-    pyproject_toml.write_str(original)?;
-
-    for directory in ["linux", "other", "new"] {
-        context
-            .temp_dir
-            .child(directory)
-            .child("pyproject.toml")
-            .write_str(indoc! {r#"
-            [project]
-            name = "dep"
-            version = "0.1.0"
-            requires-python = ">=3.12"
-            dependencies = []
-        "#})?;
-    }
-
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(original)?;
+    context
+        .temp_dir
+        .child("linux/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("other/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("new/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
     uv_snapshot!(context.filters(), context.add().arg("./new").arg("--no-workspace").arg("--frozen"), @"
     exit_code: 2 (failure)
     ----- stderr -----
@@ -3782,100 +3797,378 @@ fn update_source_preserves_scoped_sources() -> Result<()> {
 
     hint: Edit or remove the existing `dep` entry in `tool.uv.sources` before retrying.
     ");
-
     assert_eq!(context.read("pyproject.toml"), original);
+    Ok(())
+}
 
-    // A single scoped source must not be replaced, whether it is an array or a table.
-    allow_duplicates! {
-        for source in [
-            r#"dep = [{ path = "linux", marker = "sys_platform == 'linux'" }]"#,
-            r#"dep = { path = "linux", marker = "sys_platform == 'linux'" }"#,
-            r#"dep = { path = "linux", extra = "feature" }"#,
-            r#"dep = { path = "linux", group = "dev" }"#,
-            indoc! {r#"
-            [[tool.uv.sources.dep]]
-            path = "linux"
-            marker = "sys_platform == 'linux'"
+#[test]
+fn update_source_preserves_scoped_single_array() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep"]
 
-            [[tool.uv.sources.dep]]
-            path = "other"
-            marker = "sys_platform != 'linux'"
-            "#},
-        ] {
-            let original = formatdoc! {r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            requires-python = ">=3.12"
-            dependencies = ["dep"]
+        [tool.uv.sources]
+        dep = [{ path = "linux", marker = "sys_platform == 'linux'" }]
+    "#};
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(original)?;
+    context
+        .temp_dir
+        .child("linux/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("new/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("./new").arg("--no-workspace").arg("--frozen"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot update `dep` because it has scoped sources in `tool.uv.sources`
 
-            [project.optional-dependencies]
-            feature = ["dep"]
+    hint: Edit or remove the existing `dep` entry in `tool.uv.sources` before retrying.
+    ");
+    assert_eq!(context.read("pyproject.toml"), original);
+    Ok(())
+}
 
-            [dependency-groups]
-            dev = ["dep"]
+#[test]
+fn update_source_preserves_scoped_inline_table() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep"]
 
-            [tool.uv.sources]
-            {source}
-            "#};
-            pyproject_toml.write_str(&original)?;
+        [tool.uv.sources]
+        dep = { path = "linux", marker = "sys_platform == 'linux'" }
+    "#};
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(original)?;
+    context
+        .temp_dir
+        .child("linux/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("new/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("./new").arg("--no-workspace").arg("--frozen"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot update `dep` because it has scoped sources in `tool.uv.sources`
 
-            uv_snapshot!(context.filters(), context.add().arg("./new").arg("--no-workspace").arg("--frozen"), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: Cannot update `dep` because it has scoped sources in `tool.uv.sources`
+    hint: Edit or remove the existing `dep` entry in `tool.uv.sources` before retrying.
+    ");
+    assert_eq!(context.read("pyproject.toml"), original);
+    Ok(())
+}
 
-            hint: Edit or remove the existing `dep` entry in `tool.uv.sources` before retrying.
-            ");
+#[test]
+fn update_source_preserves_scoped_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep"]
 
-            assert_eq!(context.read("pyproject.toml"), original);
-        }
+        [project.optional-dependencies]
+        feature = ["dep"]
 
-        Ok::<(), anyhow::Error>(())
-    }?;
+        [tool.uv.sources]
+        dep = { path = "linux", extra = "feature" }
+    "#};
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(original)?;
+    context
+        .temp_dir
+        .child("linux/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("new/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("./new").arg("--no-workspace").arg("--frozen"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot update `dep` because it has scoped sources in `tool.uv.sources`
 
-    // A source array with a single unscoped or tautologically scoped entry can be replaced.
-    allow_duplicates! {
-        for source in [
-            r#"dep = [{ path = "linux" }]"#,
-            r#"dep = [{ path = "linux", marker = "sys_platform == 'linux' or sys_platform != 'linux'" }]"#,
-        ] {
-            pyproject_toml.write_str(&formatdoc! {r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            requires-python = ">=3.12"
-            dependencies = ["dep"]
+    hint: Edit or remove the existing `dep` entry in `tool.uv.sources` before retrying.
+    ");
+    assert_eq!(context.read("pyproject.toml"), original);
+    Ok(())
+}
 
-            [tool.uv.sources]
-            {source}
-            "#})?;
+#[test]
+fn update_source_preserves_scoped_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep"]
 
-            context
-                .add()
-                .arg("./new")
-                .arg("--no-workspace")
-                .arg("--frozen")
-                .assert()
-                .success();
+        [dependency-groups]
+        dev = ["dep"]
 
-            assert_snapshot!(context.read("pyproject.toml"), @r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            requires-python = ">=3.12"
-            dependencies = [
-                "dep",
-            ]
+        [tool.uv.sources]
+        dep = { path = "linux", group = "dev" }
+    "#};
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(original)?;
+    context
+        .temp_dir
+        .child("linux/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("new/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("./new").arg("--no-workspace").arg("--frozen"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot update `dep` because it has scoped sources in `tool.uv.sources`
 
-            [tool.uv.sources]
-            dep = { path = "new" }
-            "#);
-        }
+    hint: Edit or remove the existing `dep` entry in `tool.uv.sources` before retrying.
+    ");
+    assert_eq!(context.read("pyproject.toml"), original);
+    Ok(())
+}
 
-        Ok::<(), anyhow::Error>(())
-    }?;
+#[test]
+fn update_source_preserves_scoped_tables() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep"]
 
+        [[tool.uv.sources.dep]]
+        path = "linux"
+        marker = "sys_platform == 'linux'"
+
+        [[tool.uv.sources.dep]]
+        path = "other"
+        marker = "sys_platform != 'linux'"
+    "#};
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(original)?;
+    context
+        .temp_dir
+        .child("linux/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("other/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("new/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("./new").arg("--no-workspace").arg("--frozen"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot update `dep` because it has scoped sources in `tool.uv.sources`
+
+    hint: Edit or remove the existing `dep` entry in `tool.uv.sources` before retrying.
+    ");
+    assert_eq!(context.read("pyproject.toml"), original);
+    Ok(())
+}
+
+#[test]
+fn update_source_replaces_unscoped_array() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep"]
+
+        [tool.uv.sources]
+        dep = [{ path = "linux" }]
+    "#};
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(original)?;
+    context
+        .temp_dir
+        .child("linux/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("new/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("./new").arg("--no-workspace").arg("--frozen"), @"
+    exit_code: 0 (success)
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "dep",
+    ]
+
+    [tool.uv.sources]
+    dep = { path = "new" }
+    "#);
+    Ok(())
+}
+
+#[test]
+fn update_source_replaces_tautological_array() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dep"]
+
+        [tool.uv.sources]
+        dep = [{ path = "linux", marker = "sys_platform == 'linux' or sys_platform != 'linux'" }]
+    "#};
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(original)?;
+    context
+        .temp_dir
+        .child("linux/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("new/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dep"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("./new").arg("--no-workspace").arg("--frozen"), @"
+    exit_code: 0 (success)
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "dep",
+    ]
+
+    [tool.uv.sources]
+    dep = { path = "new" }
+    "#);
     Ok(())
 }
 
