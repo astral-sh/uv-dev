@@ -20,7 +20,7 @@ pub(crate) fn args() -> impl Iterator<Item = OsString> {
 /// Other process-global state is still governed by [`GlobalInitialization`]. This is not yet an
 /// API for concurrently executing commands with different process environments.
 #[doc(hidden)]
-pub(crate) async fn run_with_args(
+pub async fn run_with_args(
     cli: Cli,
     global_initialization: GlobalInitialization,
     args: Vec<OsString>,

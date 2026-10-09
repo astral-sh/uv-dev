@@ -62,7 +62,8 @@ use crate::commands::{ParsedRunCommand, RunCommand, ScriptPath};
 
 mod commands;
 mod invocation;
-use invocation::run_with_args;
+#[doc(hidden)]
+pub use invocation::run_with_args;
 #[cfg(not(feature = "self-update"))]
 mod install_source;
 mod logging;
