@@ -328,7 +328,7 @@ async fn do_lock(
     } = settings;
 
     // Collect the requirements, etc.
-    let members = target.members();
+    let resolution_roots = target.resolution_roots();
     let root_markers = target.resolution_root_markers();
     let packages = target.packages();
     let required_members = target.required_members();
@@ -780,7 +780,7 @@ async fn do_lock(
             existing_lock,
             target.install_path(),
             packages,
-            &members,
+            &resolution_roots,
             root_markers.as_ref(),
             required_members,
             &requirements,
@@ -986,7 +986,7 @@ async fn do_lock(
             uv_resolve_operations::diagnose_resolution(resolution.diagnostics(), printer)?;
 
             let manifest = ResolverManifest::new(
-                members,
+                resolution_roots,
                 requirements,
                 constraints,
                 overrides,
