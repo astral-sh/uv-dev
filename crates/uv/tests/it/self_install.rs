@@ -1,5 +1,15 @@
+#[cfg(unix)]
+use anyhow::Context;
+#[cfg(any(not(windows), feature = "windows-gui-bin"))]
 use anyhow::Result;
+#[cfg(unix)]
+use assert_cmd::assert::OutputAssertExt;
+#[cfg(any(not(windows), feature = "windows-gui-bin"))]
 use assert_fs::prelude::*;
+#[cfg(unix)]
+use uv_fs::{LockedFile, LockedFileMode};
+#[cfg(any(not(windows), feature = "windows-gui-bin"))]
+use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -14,7 +24,7 @@ fn requires_preview() {
 
 #[test]
 #[cfg(any(not(windows), feature = "windows-gui-bin"))]
-fn installs_running_distribution() -> Result<()> {
+fn installs_running_distribution_with_numeric_no_modify_path() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
     let bin = context.temp_dir.child("bin");
     let mut command = context.command();
@@ -24,10 +34,10 @@ fn installs_running_distribution() -> Result<()> {
             "install",
             "--preview-features",
             "self-management",
-            "--no-modify-path",
             "--install-dir",
         ])
-        .arg(bin.path());
+        .arg(bin.path())
+        .env(EnvVars::UV_NO_MODIFY_PATH, "1");
     let output = command.output()?;
     assert!(
         output.status.success(),
@@ -120,5 +130,84 @@ fn unmanaged_install_has_no_receipt() -> Result<()> {
     );
     bin.child(".uv-receipt.json")
         .assert(predicates::path::missing());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_receipt_falls_back_from_xdg_config_home() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filter((
+        r"Installed uv [0-9]+\.[0-9]+\.[0-9]+[^ ]*",
+        "Installed uv [VERSION]",
+    ));
+    let original = context.temp_dir.child("original");
+    context
+        .command()
+        .args([
+            "self",
+            "install",
+            "--preview-features",
+            "self-management",
+            "--no-modify-path",
+            "--install-dir",
+        ])
+        .arg(original.path())
+        .assert()
+        .success();
+    let native_receipt = original.child(".uv-receipt.json");
+    let mut receipt: serde_json::Value =
+        serde_json::from_slice(&fs_err::read(native_receipt.path())?)?;
+    receipt["source"]["owner"] = serde_json::json!("custom-owner");
+    let legacy = context.home_dir.child(".config/uv/uv-receipt.json");
+    fs_err::create_dir_all(legacy.parent().context("legacy receipt parent")?)?;
+    fs_err::write(legacy.path(), serde_json::to_vec(&receipt)?)?;
+    fs_err::remove_file(native_receipt.path())?;
+    let config = context.temp_dir.child("alternate-config");
+    config.create_dir_all()?;
+    let destination = context.temp_dir.child("destination");
+    uv_snapshot!(context.filters(), context.external_command(original.child("uv").path()).args([
+        "self", "install", "--preview-features", "self-management", "--no-modify-path", "--install-dir",
+    ]).arg(destination.path()).env(EnvVars::XDG_CONFIG_HOME, config.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed uv [VERSION] to [TEMP_DIR]/destination
+    "#);
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&fs_err::read(destination.child(".uv-receipt.json"))?)?;
+    assert_eq!(receipt["source"]["owner"], "custom-owner");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn installation_lock_precedes_receipt_validation() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let bin = context.temp_dir.child("bin");
+    bin.create_dir_all()?;
+    bin.child(".uv-receipt.json").write_str("{}")?;
+    let lock = LockedFile::acquire_no_wait(
+        bin.child(".uv-install.lock"),
+        LockedFileMode::Exclusive,
+        "fixture installation",
+    )
+    .context("failed to acquire fixture installation lock")?;
+    uv_snapshot!(context.filters(), context.command().args([
+        "self", "install", "--preview-features", "self-management", "--no-modify-path", "--install-dir",
+    ]).arg(bin.path()).env(EnvVars::UV_LOCK_TIMEOUT, "0"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Timeout ([TIME]) when waiting for lock on `uv installation` at `bin/.uv-install.lock`, is another uv process running? You can set `UV_LOCK_TIMEOUT` to increase the timeout.
+    "#);
+    drop(lock);
+    uv_snapshot!(context.filters(), context.command().args([
+        "self", "install", "--preview-features", "self-management", "--no-modify-path", "--install-dir",
+    ]).arg(bin.path()), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse install receipt at `[TEMP_DIR]/bin/.uv-receipt.json`
+      cause: missing field `install_prefix` at line 1 column 2
+    "#);
+    assert_eq!(fs_err::read(bin.child(".uv-receipt.json"))?, b"{}");
+    bin.child("uv").assert(predicates::path::missing());
     Ok(())
 }

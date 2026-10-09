@@ -678,7 +678,7 @@ pub struct SelfInstallArgs {
     pub unmanaged: Option<PathBuf>,
 
     /// Do not add the installation directory to PATH.
-    #[arg(long, env = EnvVars::UV_NO_MODIFY_PATH)]
+    #[arg(long, env = EnvVars::UV_NO_MODIFY_PATH, value_parser = clap::builder::BoolishValueParser::new())]
     pub no_modify_path: bool,
 }
 

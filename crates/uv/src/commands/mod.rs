@@ -74,6 +74,8 @@ pub(crate) mod reporters;
 #[cfg(feature = "self-update")]
 mod self_install;
 #[cfg(feature = "self-update")]
+mod self_receipt;
+#[cfg(feature = "self-update")]
 mod self_update;
 pub(crate) use uv_tool_commands as tool;
 mod venv;

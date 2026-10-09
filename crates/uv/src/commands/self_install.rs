@@ -7,7 +7,8 @@ use uv_cli::SelfInstallArgs;
 use uv_command_support::{ExitStatus, Printer, update_shell};
 use uv_fs::{LockedFile, LockedFileMode, Simplified};
 use uv_preview::PreviewFeature;
-use uv_static::EnvVars;
+
+use super::self_receipt::find_receipt_path;
 
 /// The receipt remains compatible with installations made by cargo-dist.
 #[derive(Debug, Deserialize, Serialize)]
@@ -51,27 +52,6 @@ const fn default_modify_path() -> bool {
 }
 
 const RECEIPT_NAME: &str = ".uv-receipt.json";
-
-fn legacy_receipt_path() -> Result<PathBuf> {
-    let directory = if std::env::var_os("AXOUPDATER_CONFIG_WORKING_DIR").is_some() {
-        std::env::current_dir()?
-    } else if let Some(path) = std::env::var_os("AXOUPDATER_CONFIG_PATH") {
-        PathBuf::from(path)
-    } else if let Some(path) = std::env::var_os(EnvVars::XDG_CONFIG_HOME)
-        && Path::new(&path).is_absolute()
-    {
-        PathBuf::from(path).join("uv")
-    } else {
-        #[cfg(windows)]
-        let directory = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .context("Could not determine the local application data directory")?;
-        #[cfg(not(windows))]
-        let directory = etcetera::home_dir()?.join(".config");
-        directory.join("uv")
-    };
-    Ok(directory.join("uv-receipt.json"))
-}
 
 fn executable_names() -> &'static [&'static str] {
     if cfg!(windows) {
@@ -138,7 +118,8 @@ impl InstallReceipt {
         let path = if native.try_exists()? {
             native
         } else {
-            legacy_receipt_path()?
+            find_receipt_path("uv")?
+                .context("Self-management is only available for standalone uv installations")?
         };
         let receipt = Self::read(&path)
             .context("Self-management is only available for standalone uv installations")?;
@@ -166,14 +147,7 @@ impl InstallReceipt {
 }
 
 /// Copy a complete distribution before replacing any installed executable.
-async fn install_binaries(source: &Path, destination: &Path) -> Result<()> {
-    fs_err::create_dir_all(destination)?;
-    let _lock = LockedFile::acquire(
-        destination.join(".uv-install.lock"),
-        LockedFileMode::Exclusive,
-        "uv installation",
-    )
-    .await?;
+fn install_binaries(source: &Path, destination: &Path) -> Result<()> {
     let staged = tempfile::tempdir_in(destination)?;
     for name in executable_names() {
         let source = source.join(name);
@@ -193,7 +167,11 @@ async fn install_binaries(source: &Path, destination: &Path) -> Result<()> {
             self_replace::self_replace(&source)?;
             continue;
         }
-        uv_fs::copy_atomic_sync(&source, &target)?;
+        // Keep renames synchronous under the installation lock so cancellation cannot leave a
+        // queued filesystem operation running after its guard is released.
+        uv_fs::with_retry_sync(&source, &target, "renaming", || {
+            fs_err::rename(&source, &target)
+        })?;
     }
     Ok(())
 }
@@ -212,6 +190,13 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
         .context("Could not determine the uv installation directory")?;
     let destination = std::path::absolute(destination)?;
     let executable = std::env::current_exe()?;
+    fs_err::create_dir_all(&destination)?;
+    let lock = LockedFile::acquire(
+        destination.join(".uv-install.lock"),
+        LockedFileMode::Exclusive,
+        "uv installation",
+    )
+    .await?;
     let existing_receipt = destination.join(RECEIPT_NAME);
     let existing_source = if existing_receipt.try_exists()? {
         Some(InstallReceipt::for_installation(&destination)?.source)
@@ -223,7 +208,7 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
     let source = executable
         .parent()
         .context("Executable has no parent directory")?;
-    install_binaries(source, &destination).await?;
+    install_binaries(source, &destination)?;
     let modify_path = !unmanaged
         && !args.no_modify_path
         && std::env::var_os("INSTALLER_NO_MODIFY_PATH").is_none();
@@ -234,6 +219,7 @@ pub(crate) async fn self_install(args: SelfInstallArgs, printer: Printer) -> Res
         }
         receipt.write(&destination.join(RECEIPT_NAME))?;
     }
+    drop(lock);
     writeln!(
         printer.stderr(),
         "Installed uv {} to {}",
