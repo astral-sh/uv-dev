@@ -714,7 +714,7 @@ mod tests {
     use uv_pypi_types::HashDigest;
     use uv_redacted::DisplaySafeUrl;
 
-    use super::{HashStrategy, HashVerification};
+    use super::{HashStrategy, HashStrategyError, HashVerification};
 
     fn requirement(url: &str) -> Requirement {
         Requirement {
@@ -1002,16 +1002,12 @@ mod tests {
         };
         assert!(Arc::ptr_eq(after_second, unchanged));
 
-        let Err(error) = hasher
+        let Err(HashStrategyError::ConflictingArchiveUrlHashes(..)) = hasher
             .clone()
             .augment_with_requirements(std::iter::once(&conflict))
         else {
             return Err("expected conflicting archive URL hashes".into());
         };
-        assert_eq!(
-            error.to_string(),
-            "Conflicting archive URL hashes for `anyio @ https://files.pythonhosted.org/packages/36/55/ad4de788d84a630656ece71059665e01ca793c04294c463fd84132f40fe6/anyio-4.0.0-py3-none-any.whl#sha256=f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a ; python_full_version >= '3.8'`: `sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f` conflicts with `sha256:f7ed51751b2c2add651e5747c891b47e26d2a21be5d32d9311dfe9692f3e5d7a`"
-        );
 
         let mut expected = vec![
             HashDigest::from_str(
