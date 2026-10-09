@@ -139,7 +139,11 @@ pub async fn metadata(
                             python.as_deref().map(PythonRequest::parse),
                             Some(workspace),
                             &groups,
-                            project_dir,
+                            if sync.is_some() {
+                                workspace.install_path()
+                            } else {
+                                project_dir
+                            },
                             config_discovery,
                         )
                         .await?;
