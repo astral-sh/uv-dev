@@ -16,10 +16,10 @@ use uv_configuration::{BuildOptions, Concurrency, DryRun, Modifications, Reinsta
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{
-    CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, DistributionMetadata,
-    ExtraBuildRequires, ExtraBuildVariables, IndexLocations, InstalledDist, InstalledDistKind,
-    InstalledMetadata, InstalledVersion, LocalDist, Name, PackageConfigSettings, Resolution,
-    ResolvedDist, VersionOrUrlRef,
+    BuildableSource, CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist,
+    DistributionMetadata, ExtraBuildRequires, ExtraBuildVariables, IndexLocations, InstalledDist,
+    InstalledDistKind, InstalledMetadata, InstalledVersion, LocalDist, Name, PackageConfigSettings,
+    Resolution, ResolvedDist, VersionOrUrlRef,
 };
 use uv_fs::{CWD, Simplified, is_same_file_allow_missing, normalize_path_under};
 use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
@@ -441,31 +441,32 @@ impl InstallationPlan {
             return Ok(Changelog::default());
         }
 
-        // Reject known version-changing replacements before either installation phase mutates
-        // the environment. Source versions and filename-only local versions are checked against
-        // the actual destination after wheel preparation.
+        // Reject version changes only when the artifact establishes its version. The prepared
+        // metadata directory remains authoritative for local sources and local versions.
         let check_wheel_filenames =
             !uv_flags::contains(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK);
         let replacement_versions = resolution
             .distributions()
             .filter_map(|dist| {
-                let is_source = match dist {
-                    ResolvedDist::Installable { dist, .. } => {
-                        matches!(dist.as_ref(), Dist::Source(_))
-                    }
-                    ResolvedDist::Installed { .. } => false,
+                let (version, is_source) = match dist {
+                    ResolvedDist::Installable { dist, .. } => match dist.as_ref() {
+                        Dist::Built(wheel) => (Some(wheel.version().clone()), false),
+                        Dist::Source(source) => {
+                            (BuildableSource::Dist(source).version().cloned(), true)
+                        }
+                    },
+                    ResolvedDist::Installed { dist } => (Some(dist.version().clone()), false),
                 };
-                dist.version()
-                    .map(|version| (dist.name(), (version, is_source)))
+                version.map(|version| (dist.name(), (version, is_source)))
             })
             .collect::<BTreeMap<_, _>>();
         validate_replacement_records(extraneous.iter().chain(&reinstalls), |dist_info| {
             Ok(replacement_versions
                 .get(dist_info.name())
                 .is_some_and(|(version, is_source)| {
-                    let public_version = (*version).clone().without_local();
+                    let public_version = version.clone().without_local();
                     (*is_source || check_wheel_filenames)
-                        && *version != dist_info.version()
+                        && version != dist_info.version()
                         && public_version != *dist_info.version()
                         && (!is_source
                             || public_version != dist_info.version().clone().without_local())
