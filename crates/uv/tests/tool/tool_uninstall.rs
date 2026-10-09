@@ -15,6 +15,8 @@ use uv_static::EnvVars;
 #[cfg(unix)]
 use uv_test::ReadOnlyDirectoryGuard;
 use uv_test::packse::generate_wheel;
+#[cfg(unix)]
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -361,7 +363,7 @@ fn tool_uninstall_preserves_replacement_when_ownership_is_unreadable() -> Result
         uv_snapshot!(context.filters(), context.tool_uninstall().arg("simple-launcher"), @"
         exit_code: 2 (failure)
         ----- stderr -----
-        error: failed to canonicalize path `[TEMP_DIR]/bin/simple_launcher`: Permission denied (os error 13)
+        error: failed to query metadata of file `[TEMP_DIR]/tools/basic-app/bin/simple_launcher`: Permission denied (os error 13)
         ");
         assert!(tools.child("simple-launcher").exists());
         assert!(tools.child("basic-app").exists());
@@ -551,4 +553,95 @@ fn tool_uninstall_all_missing_receipt() {
     ----- stderr -----
     Removed dangling environment for `black`
     ");
+}
+
+#[test]
+#[cfg(unix)]
+fn tool_uninstall_preserves_cache_backed_script_replacement() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin = context.temp_dir.child("bin");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"first".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "first-1.0.0.data/scripts/shared-tool",
+            "#!/bin/sh\nprintf 'first\\n'\n",
+        )],
+    );
+    let first = context.temp_dir.child(filename);
+    first.write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"second".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[(
+            "second-1.0.0.data/scripts/shared-tool",
+            "#!/bin/sh\nprintf 'second\\n'\n",
+        )],
+    );
+    let second = context.temp_dir.child(filename);
+    second.write_binary(&wheel)?;
+    // Executable wheel members remain symlinks to the cache in symlink mode.
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc::indoc! {r#"
+        import sys
+        import zipfile
+        for filename in sys.argv[1:]:
+            with zipfile.ZipFile(filename) as source:
+                entries = [(info, source.read(info)) for info in source.infolist()]
+            with zipfile.ZipFile(filename, "w") as target:
+                for info, contents in entries:
+                    if ".data/scripts/" in info.filename:
+                        info.create_system = 3
+                        info.external_attr = 0o100755 << 16
+                    target.writestr(info, contents)
+    "#})
+        .arg(first.path())
+        .arg(second.path())
+        .assert()
+        .success();
+    context
+        .tool_install()
+        .arg(first.path())
+        .args(["--link-mode", "symlink"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    context
+        .tool_install()
+        .arg(second.path())
+        .args(["--link-mode", "symlink", "--force"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    assert!(
+        fs_err::symlink_metadata(context.temp_dir.child("tools/second/bin/shared-tool"))?
+            .file_type()
+            .is_symlink()
+    );
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("first"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed environment for `first`
+    ");
+    uv_snapshot!(context.filters(), Command::new(bin.child("shared-tool").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    second
+    ");
+    uv_snapshot!(context.filters(), context.tool_uninstall().arg("second"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 executable: shared-tool
+    ");
+    Ok(())
 }

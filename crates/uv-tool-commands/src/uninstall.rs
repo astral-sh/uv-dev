@@ -222,9 +222,6 @@ async fn uninstall_tool(
         }
 
         let other_receipt = other_receipt?;
-        #[cfg(unix)]
-        let tool_directory = fs_err::canonicalize(tools.tool_dir(&tool_name))?;
-        #[cfg(windows)]
         let tool_directory = tools.tool_dir(&tool_name);
         for entrypoint in other_receipt.entrypoints() {
             let destination = executable_destination(&entrypoint.install_path)?;
@@ -232,11 +229,8 @@ async fn uninstall_tool(
                 continue;
             }
             #[cfg(unix)]
-            match fs_err::canonicalize(&entrypoint.install_path) {
-                Ok(target) if target.starts_with(&tool_directory) => {}
-                Ok(_) => continue,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error.into()),
+            if !symlinked_entrypoint_matches(&tool_directory, entrypoint)? {
+                continue;
             }
 
             #[cfg(windows)]
@@ -340,6 +334,38 @@ fn executable_destination(path: &Path) -> io::Result<ExecutableDestination> {
         }
         Err(error) => Err(error),
     }
+}
+
+/// Unix launchers link to their environment's script, which may itself link into the cache.
+#[cfg(unix)]
+fn symlinked_entrypoint_matches(
+    tool_directory: &Path,
+    entrypoint: &ToolEntrypoint,
+) -> io::Result<bool> {
+    let target = match fs_err::read_link(&entrypoint.install_path) {
+        Ok(target) => target,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::InvalidInput
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    let Some(parent) = entrypoint.install_path.parent() else {
+        return Ok(false);
+    };
+    let target = parent.join(target);
+    let source = tool_directory.join("bin").join(&entrypoint.name);
+    match fs_err::metadata(&source) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    // Compare the environment entry itself, so two cached copies cannot claim the same launcher.
+    Ok(executable_destination(&target)? == executable_destination(&source)?)
 }
 
 /// Windows entrypoints are copied from the owning environment's Scripts directory.
