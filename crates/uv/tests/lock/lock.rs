@@ -49369,3 +49369,173 @@ fn lock_required_environment_changed_path_dependency_marker() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Changing a direct parent's version invalidates its old conditional edges to descendants.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_changed_parent_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "changed-parent-version-wheel-preferences"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        requires = ["child; python_version < '3.13'"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["child"]
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.child.versions."2.0.0"]
+        wheel_tags = ["py3-none-any"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==1"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "child==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent==2"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated child v1.0.0 -> v2.0.0
+    Updated parent v1.0.0 -> v2.0.0
+    ");
+    Ok(())
+}
+
+/// Extra ordering in normalized lock metadata cannot activate a Windows-only package on Linux.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_normalized_extra_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "normalized-extra-order-wheel-preferences"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.platform-only.versions."1.0.0"]
+        extras = { a = [], b = [] }
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+        [packages.platform-only.versions."2.0.0"]
+        extras = { a = [], b = [] }
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["platform-only[b,a,b]; sys_platform == 'win32'"]
+        [tool.uv]
+        preview-features = ["lockfile-normalization"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "platform-only==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    pyproject.write_str(&format!(
+        "{}\nrequired-environments = [\"sys_platform == 'linux'\"]\n",
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Split and combined extra declarations retain identical package activation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_normalized_split_extras() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "normalized-split-extras-wheel-preferences"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.platform-only.versions."1.0.0"]
+        extras = { a = [], b = [] }
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+        [packages.platform-only.versions."2.0.0"]
+        extras = { a = [], b = [] }
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "platform-only[a]; sys_platform == 'win32'",
+            "platform-only[b]; sys_platform == 'win32'",
+        ]
+        [tool.uv]
+        preview-features = ["lockfile-normalization"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "platform-only==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["platform-only[a,b]; sys_platform == 'win32'"]
+        [tool.uv]
+        preview-features = ["lockfile-normalization"]
+        required-environments = ["sys_platform == 'linux'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
