@@ -1251,12 +1251,10 @@ impl InterpreterInfo {
         // Sanitize the path by (1) running under isolated mode (`-I`) to ignore any site packages
         // modifications, and then (2) adding the path containing our query script to the front of
         // `sys.path` so that we can import it.
-        // There are user reports that `sitecustomize.py` output breaks worker communication, but
-        // we cannot use `-S` here because interpreter discovery needs the site-initialized
-        // `sys.path`. We may want to fix this in the future if there are more reports. See:
-        // https://github.com/astral-sh/uv/issues/11508.
+        // We cannot use `-S` because interpreter discovery needs the site-initialized `sys.path`.
+        // Startup hooks can write to stdout, so mark the query response to separate it below.
         let script = format!(
-            r"import sys; sys.path = [{}] + sys.path; from python.get_interpreter_info import main; main()",
+            r#"import sys; sys.path = [{}] + sys.path; from python.get_interpreter_info import main; print("\nUV_INTERPRETER_INFO"); main()"#,
             tempdir.path().escape_for_python()
         );
         let mut command = Command::new(interpreter);
@@ -1339,8 +1337,16 @@ impl InterpreterInfo {
             }));
         }
 
+        // `sitecustomize.py` can write a prefix without a trailing newline or append output at
+        // exit. The query response is the single JSON line immediately following our marker.
+        let interpreter_response = output
+            .stdout
+            .split(|byte| *byte == b'\n')
+            .skip_while(|line| line.strip_suffix(b"\r").unwrap_or(line) != b"UV_INTERPRETER_INFO")
+            .nth(1)
+            .unwrap_or(&output.stdout);
         let result: InterpreterInfoResult =
-            serde_json::from_slice(&output.stdout).map_err(|err| {
+            serde_json::from_slice(interpreter_response).map_err(|err| {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
                 // If the Python version is too old, we may not even be able to invoke the query script
