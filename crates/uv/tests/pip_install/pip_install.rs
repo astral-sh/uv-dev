@@ -5991,7 +5991,7 @@ fn install_constraints_with_markers() -> Result<()> {
     let constraints_txt = context.temp_dir.child("constraints.txt");
     constraints_txt.write_str("pytest==8.0.0; sys_platform == 'nonexistent-platform'")?;
 
-    uv_snapshot!(context.pip_install().arg("--dry-run")
+    uv_snapshot!(context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
         .arg("--constraint")
@@ -5999,8 +5999,8 @@ fn install_constraints_with_markers() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    Would download 4 packages
-    Would install 4 packages
+    Prepared 4 packages in [TIME]
+    Installed 4 packages in [TIME]
      + iniconfig==2.0.0
      + packaging==24.0
      + pluggy==1.4.0
@@ -6008,7 +6008,7 @@ fn install_constraints_with_markers() -> Result<()> {
     "
     );
 
-    // We should only see "Audited" here; no need to resolve.
+    // The installed requirement satisfies its applicable constraints, so resolution is skipped.
     uv_snapshot!(context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg("requirements.txt")
@@ -6016,13 +6016,8 @@ fn install_constraints_with_markers() -> Result<()> {
         .arg("constraints.txt"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Would download 4 packages
-    Would install 4 packages
-     + iniconfig==2.0.0
-     + packaging==24.0
-     + pluggy==1.4.0
-     + pytest==8.1.1
+    Checked 1 package in [TIME]
+    Would make no changes
     "
     );
 
