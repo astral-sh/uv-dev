@@ -11,6 +11,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pypi_types::Scheme;
 
+pub use finalize::{RecordUpdate, finalize_scripts};
 pub use install::{install_wheel, installed_dist_info_path};
 pub use linker::{InstallState, LinkMode};
 pub use record::RecordEntry;
@@ -19,6 +20,7 @@ pub use wheel::{
     WheelFile, read_record, read_record_into_iter, reserved_script_name, validate_and_heal_record,
 };
 
+mod finalize;
 mod install;
 mod linker;
 mod record;
