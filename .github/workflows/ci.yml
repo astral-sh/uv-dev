@@ -365,5 +365,5 @@ jobs:
             {
               "build-release-artifacts": ${{ contains(github.event.pull_request.labels.*.name, 'build:release') }},
               "test-integration": ${{ contains(github.event.pull_request.labels.*.name, 'test:integration') }},
-              "test-system": ${{ contains(github.event.pull_request.labels.*.name, 'test:system') }}
+              "test-system": ${{ needs.plan.outputs.require-test-system == 'true' }}
             }
