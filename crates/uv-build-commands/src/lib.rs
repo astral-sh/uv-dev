@@ -1023,6 +1023,7 @@ impl BuildDependencyCheck<'_> {
         let markers = environment.interpreter().to_resolver_marker_environment();
         match site_packages
             .satisfies_requirements(
+                self.build_dispatch.cache(),
                 requirements,
                 self.constraints.requirements(),
                 &DependencyModifiers::default(),

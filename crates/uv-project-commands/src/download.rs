@@ -79,23 +79,27 @@ pub async fn download(
         .map(|(name, artifact)| {
             let client = &client;
             async move {
-                let entry = match artifact.kind {
-                    LockedArtifactKind::Wheel { filename, index } => {
-                        PackedArchiveEntry::wheel(cache, index.as_ref(), &artifact.url, &filename)
-                    }
+                let (entry, expected_size) = match artifact.kind {
+                    LockedArtifactKind::Wheel { filename, index } => (
+                        PackedArchiveEntry::wheel(cache, index.as_ref(), &artifact.url, &filename),
+                        artifact.size.filter(|_| index.is_none()),
+                    ),
                     LockedArtifactKind::Source {
                         extension,
                         registry,
-                    } => PackedArchiveEntry::source(
-                        cache,
-                        registry.as_ref().map(|(index, version)| (index, version)),
-                        &name,
-                        &artifact.url,
-                        extension,
+                    } => (
+                        PackedArchiveEntry::source(
+                            cache,
+                            registry.as_ref().map(|(index, version)| (index, version)),
+                            &name,
+                            &artifact.url,
+                            extension,
+                        ),
+                        artifact.size.filter(|_| registry.is_none()),
                     ),
                 };
                 entry
-                    .download(client, artifact.hash.as_ref(), artifact.size)
+                    .download(client, artifact.hash.as_ref(), expected_size)
                     .await
                     .with_context(|| format!("Failed to download `{name}` from {}", artifact.url))
             }

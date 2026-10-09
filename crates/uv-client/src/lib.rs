@@ -8,7 +8,7 @@ pub use cached_client::{CacheControl, CachedClient, CachedClientError, DataWithC
 pub use error::{Error, ErrorKind, ProblemDetails, WrappedReqwestError};
 pub use file_hash::FileHashError;
 pub use flat_index::{FlatIndexClient, FlatIndexEntries, FlatIndexEntry, FlatIndexError};
-pub use packed::PackedArchiveEntry;
+pub use packed::{PackedArchiveEntry, prune_packed_archives};
 pub use registry_client::{
     Connectivity, MetadataFormat, MetadataRangeRequest, RegistryClient, RegistryClientBuilder,
     SimpleDetailMetadata, SimpleDetailMetadatum, SimpleIndexMetadata, VersionFiles,

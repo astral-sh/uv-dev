@@ -361,6 +361,7 @@ impl<'a> Planner<'a> {
                     [installed] => {
                         let source = RequirementSource::from(dist);
                         match RequirementSatisfaction::check(
+                            cache,
                             dist.name(),
                             installed,
                             &source,

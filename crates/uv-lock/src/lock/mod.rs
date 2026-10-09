@@ -6707,7 +6707,7 @@ impl Package {
                     },
                 )),
                 uv_distribution_types::SourceDist::DirectUrl(dist) => Some((
-                    *dist.location,
+                    dist.url.to_url(),
                     LockedArtifactKind::Source {
                         extension: dist.ext,
                         registry: None,
