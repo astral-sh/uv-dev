@@ -25,7 +25,7 @@ fn project_dependency_edits(criterion: &mut Criterion<WallTime>) {
             .expect("benchmark requirements should be valid");
         let additions = additions
             .iter()
-            .map(|requirement| (requirement, None))
+            .map(|requirement| (&DependencyType::Production, requirement, None))
             .collect::<Vec<_>>();
         criterion.bench_function(
             &format!("project dependency additions/{count}"),
@@ -37,7 +37,7 @@ fn project_dependency_edits(criterion: &mut Criterion<WallTime>) {
                     )
                     .expect("benchmark pyproject should be valid");
                     pyproject
-                        .add_dependencies(&DependencyType::Production, black_box(&additions), false)
+                        .add_dependencies(black_box(&additions), false)
                         .expect("benchmark additions should be valid")
                 });
             },
@@ -57,7 +57,9 @@ fn project_dependency_edits(criterion: &mut Criterion<WallTime>) {
         };
         let sourced_additions = additions
             .iter()
-            .map(|(requirement, _)| (*requirement, Some(&source)))
+            .map(|(dependency_type, requirement, _)| {
+                (*dependency_type, *requirement, Some(&source))
+            })
             .collect::<Vec<_>>();
         criterion.bench_function(
             &format!("project dependency additions with sources/{count}"),
@@ -69,11 +71,7 @@ fn project_dependency_edits(criterion: &mut Criterion<WallTime>) {
                     )
                     .expect("benchmark pyproject should be valid");
                     pyproject
-                        .add_dependencies(
-                            &DependencyType::Production,
-                            black_box(&sourced_additions),
-                            false,
-                        )
+                        .add_dependencies(black_box(&sourced_additions), false)
                         .expect("benchmark additions should be valid")
                 });
             },
@@ -96,7 +94,7 @@ fn project_dependency_edits(criterion: &mut Criterion<WallTime>) {
             .expect("benchmark requirements should be valid");
         let marked_updates = marked_updates
             .iter()
-            .map(|requirement| (requirement, None))
+            .map(|requirement| (&DependencyType::Production, requirement, None))
             .collect::<Vec<_>>();
         criterion.bench_function(
             &format!("project dependency marker updates/{count}"),
@@ -108,11 +106,7 @@ fn project_dependency_edits(criterion: &mut Criterion<WallTime>) {
                     )
                     .expect("benchmark pyproject should be valid");
                     pyproject
-                        .add_dependencies(
-                            &DependencyType::Production,
-                            black_box(&marked_updates),
-                            false,
-                        )
+                        .add_dependencies(black_box(&marked_updates), false)
                         .expect("benchmark updates should be valid")
                 });
             },
@@ -124,7 +118,7 @@ fn project_dependency_edits(criterion: &mut Criterion<WallTime>) {
             .expect("benchmark requirements should be valid");
         let updates = updates
             .iter()
-            .map(|requirement| (requirement, None))
+            .map(|requirement| (&DependencyType::Production, requirement, None))
             .collect::<Vec<_>>();
         criterion.bench_function(
             &format!("project dependency updates/{count}"),
@@ -136,7 +130,7 @@ fn project_dependency_edits(criterion: &mut Criterion<WallTime>) {
                     )
                     .expect("benchmark pyproject should be valid");
                     pyproject
-                        .add_dependencies(&DependencyType::Production, black_box(&updates), false)
+                        .add_dependencies(black_box(&updates), false)
                         .expect("benchmark updates should be valid")
                 });
             },

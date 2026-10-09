@@ -906,7 +906,7 @@ fn edits(
         DependencyType::Production | DependencyType::Optional(_) | DependencyType::Group(_) => None,
     };
 
-    let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
+    let mut additions = Vec::with_capacity(requirements.len());
     for mut requirement in requirements {
         let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
 
@@ -1018,46 +1018,28 @@ fn edits(
             None => dependency_type.clone(),
         };
 
-        edits.push(DependencyEdit {
-            dependency_type,
-            requirement,
-            source,
-            edit: ArrayEdit::Add(0),
-        });
+        additions.push((dependency_type, requirement, source));
     }
 
-    // Edit each dependency array in a single batch. Development dependencies can be split
-    // between the legacy and standardized tables; preserve the input sequence within each.
-    let mut dependency_types = Vec::new();
-    for edit in &edits {
-        if !dependency_types.contains(&edit.dependency_type) {
-            dependency_types.push(edit.dependency_type.clone());
-        }
-    }
-    for dependency_type in dependency_types {
-        let positions = edits
-            .iter()
-            .enumerate()
-            .filter_map(|(index, edit)| (edit.dependency_type == dependency_type).then_some(index))
-            .collect::<Vec<_>>();
-        let requirements = positions
-            .iter()
-            .map(|index| (&edits[*index].requirement, edits[*index].source.as_ref()))
-            .collect::<Vec<_>>();
-        let array_edits = toml.add_dependency_array(&dependency_type, &requirements, raw)?;
-
-        for (index, array_edit) in positions.into_iter().zip(array_edits) {
-            edits[index].edit = array_edit;
-        }
-    }
-
-    let requirements = edits
+    let requests = additions
         .iter()
-        .map(|edit| (&edit.requirement, edit.source.as_ref()))
+        .map(|(dependency_type, requirement, source)| {
+            (dependency_type, requirement, source.as_ref())
+        })
         .collect::<Vec<_>>();
-    toml.add_dependency_sources(&requirements)?;
-
-    Ok(edits)
+    let array_edits = toml.add_dependencies(&requests, raw)?;
+    Ok(additions
+        .into_iter()
+        .zip(array_edits)
+        .map(
+            |((dependency_type, requirement, source), edit)| DependencyEdit {
+                dependency_type,
+                requirement,
+                source,
+                edit,
+            },
+        )
+        .collect())
 }
 
 /// Re-lock and re-sync the project after a series of edits.

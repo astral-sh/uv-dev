@@ -4464,98 +4464,124 @@ fn add_batch_dev_dependency_bounds() -> Result<()> {
     Ok(())
 }
 
-/// Route a large development batch without scanning unrelated dependency tables for each input.
+/// Development batches route to their authored arrays while retaining unrelated TOML and comments.
 #[test]
 fn add_frozen_batch_dev_dependencies() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let production = (0..128)
-        .map(|index| format!("    \"production-{index:04}>=1\","))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let optional = (0..128)
-        .map(|index| format!("extra-{index:04} = [\"optional-{index:04}>=1\"]"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let groups = (0..128)
-        .map(|index| format!("group-{index:04} = [\"group-dependency-{index:04}>=1\"]"))
-        .collect::<Vec<_>>()
-        .join("\n");
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&format!(
-            r#"[project]
-name = "project"
-version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = [
-{production}
-]
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["production>=1"] # unchanged
 
-[project.optional-dependencies]
-{optional}
+        [project.optional-dependencies]
+        feature = ["optional>=1"]
 
-[dependency-groups]
-DEV = ["shared_name>=1; python_version >= '3.12'"]
-{groups}
+        [dependency-groups]
+        DEV = ["shared_name>=1; python_version >= '3.12'"]
+        lint = ["group-dependency>=1"]
 
-[tool.uv]
-dev-dependencies = ["legacy_only>=1", "shared-name<2; sys_platform == 'linux'"]
-"#
-        ))?;
-
-    let additions = (0..128)
-        .map(|index| format!("new-{index:04}"))
-        .collect::<Vec<_>>();
-    uv_snapshot!(context.filters(), context.add().args(&additions).arg("--dev").arg("--frozen").arg("--raw").arg("--offline"), @"
+        [tool.uv]
+        dev-dependencies = ["legacy_only>=1", "shared-name<2; sys_platform == 'linux'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.add()
+        .args(["new-alpha", "new-zulu", "--dev", "--frozen", "--raw", "--offline"]), @r#"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    ");
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = ["production>=1"] # unchanged
 
-    let group_additions = (0..128)
-        .map(|index| format!("group-new-{index:04}"))
-        .collect::<Vec<_>>();
-    uv_snapshot!(context.filters(), context.add().args(&group_additions).args(["--group", "dev", "--frozen", "--raw", "--offline"]), @"
+    [project.optional-dependencies]
+    feature = ["optional>=1"]
+
+    [dependency-groups]
+    DEV = ["shared_name>=1; python_version >= '3.12'"]
+    lint = ["group-dependency>=1"]
+
+    [tool.uv]
+    dev-dependencies = [
+        "legacy_only>=1",
+        "new-alpha",
+        "new-zulu",
+        "shared-name<2; sys_platform == 'linux'",
+    ]
+    "#);
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["group-alpha", "group-zulu", "--group", "dev", "--frozen", "--raw", "--offline"]), @r#"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    ");
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = ["production>=1"] # unchanged
 
-    uv_snapshot!(context.filters(), context.add().args(["shared-name>=2; python_version >= '3.12'", "legacy-only>=2", "shared_name[two]; python_version >= '3.12'", "legacy_only[three]"]).arg("--dev").arg("--frozen").arg("--raw").arg("--offline"), @"
+    [project.optional-dependencies]
+    feature = ["optional>=1"]
+
+    [dependency-groups]
+    DEV = [
+        "group-alpha",
+        "group-zulu",
+        "shared_name>=1; python_version >= '3.12'",
+    ]
+    lint = ["group-dependency>=1"]
+
+    [tool.uv]
+    dev-dependencies = [
+        "legacy_only>=1",
+        "new-alpha",
+        "new-zulu",
+        "shared-name<2; sys_platform == 'linux'",
+    ]
+    "#);
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["shared-name>=2; python_version >= '3.12'", "legacy-only>=2", "shared_name[two]; python_version >= '3.12'", "legacy_only[three]", "--dev", "--frozen", "--raw", "--offline"]), @r#"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
-    ");
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = ["production>=1"] # unchanged
 
-    let pyproject = context
-        .read("pyproject.toml")
-        .parse::<toml_edit::DocumentMut>()?;
-    let standardized = pyproject["dependency-groups"]["DEV"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("missing standardized dev group"))?
-        .iter()
-        .filter_map(toml_edit::Value::as_str)
-        .collect::<Vec<_>>();
-    let legacy = pyproject["tool"]["uv"]["dev-dependencies"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("missing legacy dev dependencies"))?
-        .iter()
-        .filter_map(toml_edit::Value::as_str)
-        .collect::<Vec<_>>();
+    [project.optional-dependencies]
+    feature = ["optional>=1"]
 
-    assert_eq!(standardized.len(), 129);
-    assert_eq!(legacy.len(), 130);
-    assert_eq!(
-        standardized[128],
-        "shared-name[two]>=2 ; python_full_version >= '3.12'"
-    );
-    assert_eq!(legacy[0], "legacy-only[three]>=2");
-    assert_eq!(legacy[129], "shared-name<2; sys_platform == 'linux'");
-    assert_eq!(standardized[..128], group_additions);
-    assert_eq!(legacy[1..129], additions);
+    [dependency-groups]
+    DEV = [
+        "group-alpha",
+        "group-zulu",
+        "shared-name[two]>=2 ; python_full_version >= '3.12'",
+    ]
+    lint = ["group-dependency>=1"]
 
+    [tool.uv]
+    dev-dependencies = [
+        "legacy-only[three]>=2",
+        "new-alpha",
+        "new-zulu",
+        "shared-name<2; sys_platform == 'linux'",
+    ]
+    "#);
     Ok(())
 }
 
