@@ -1217,7 +1217,10 @@ mod tests {
             Err(err) if err.kind() == io::ErrorKind::InvalidInput
         );
         assert_eq!(fs_err::read_to_string(&important)?, "content");
-        assert_eq!(fs_err::read_link(&environment)?, target);
+        assert_eq!(
+            verbatim_path(&fs_err::read_link(&environment)?),
+            verbatim_path(&target)
+        );
 
         let marker = target.join("pyvenv.cfg");
         fs_err::write(&marker, "")?;

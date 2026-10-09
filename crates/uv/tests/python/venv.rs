@@ -302,7 +302,7 @@ fn check_venv_replacement_links() -> Result<()> {
         .check(directory.path())?,
         CreationAction::Replace
     );
-    assert_eq!(fs_err::read_link(directory.path())?, target.path());
+    assert_link_target(&directory, &target);
     Ok(())
 }
 
