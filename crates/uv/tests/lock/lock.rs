@@ -36864,30 +36864,47 @@ fn lock_build_policy_checks_transitive_artifacts() -> Result<()> {
         .assert()
         .success();
 
-    context
+    uv_snapshot!(context.filters(), context
         .lock()
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--locked")
-        .args(["--no-binary-package", "b"])
-        .assert()
-        .failure();
-    context
+        .args(["--no-binary-package", "b"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because b==1.0.0 has no source distribution and all versions of a depend on b==1.0.0, we can conclude that all versions of a cannot be used.
+             And because your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: A source distribution is required for `b` because using pre-built wheels is disabled for `b` (i.e., with `--no-binary-package b`)
+    ");
+    uv_snapshot!(context.filters(), context
         .lock()
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--locked")
-        .args(["--no-build-package", "c"])
-        .assert()
-        .failure();
-    context
+        .args(["--no-build-package", "c"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because c==1.0.0 has no usable wheels and all versions of a depend on c==1.0.0, we can conclude that all versions of a cannot be used.
+             And because your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Wheels are required for `c` because building from source is disabled for `c` (i.e., with `--no-build-package c`)
+    ");
+    uv_snapshot!(context.filters(), context
         .lock()
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--locked")
-        .args(["--no-binary-package", "a", "--no-build-package", "a"])
-        .assert()
-        .failure();
+        .args(["--no-binary-package", "a", "--no-build-package", "a"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
+    ");
 
     Ok(())
 }
