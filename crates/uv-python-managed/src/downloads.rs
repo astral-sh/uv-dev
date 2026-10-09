@@ -2771,6 +2771,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_ndjson_bytes_retains_arm_musl_environments() -> anyhow::Result<()> {
+        let ndjson = br#"{"version":"3.15.0","artifacts":[{"url":"https://example.com/soft.tar.gz","platform":"armv7-unknown-linux-musleabi","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"},{"url":"https://example.com/hard.tar.gz","platform":"armv7-unknown-linux-musleabihf","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only"}]}"#;
+        let downloads = parse_ndjson_bytes("test.ndjson", ndjson)?;
+        let soft = PythonDownloadRequest::from_str("cpython-3.15.0-linux-armv7-musleabi")?;
+        assert!(
+            downloads
+                .iter()
+                .any(|download| download.matches_request(&soft))
+        );
+        let hard = PythonDownloadRequest::from_str("cpython-3.15.0-linux-armv7-musleabihf")?;
+        assert!(
+            downloads
+                .iter()
+                .any(|download| download.matches_request(&hard))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn parse_ndjson_bytes_accepts_powerpc_manifest_alias() {
         let ndjson = br#"{"version":"3.13.2","artifacts":[{"url":"https://example.com/cpython-3.13.2-ppc64le-unknown-linux-gnu-install_only.tar.gz","platform":"ppc64le-unknown-linux-gnu","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"}]}
 "#;

@@ -596,6 +596,9 @@ mod tests {
             Platform::from_parts("linux", "x86_64", "gnu").unwrap(),
             Platform::from_parts("linux", "x86_64", "musl").unwrap(),
             Platform::from_parts("linux", "aarch64", "gnu").unwrap(),
+            Platform::from_parts("linux", "riscv64gc", "gnu").unwrap(),
+            Platform::from_parts("linux", "armv7", "musleabi").unwrap(),
+            Platform::from_parts("linux", "armv7", "musleabihf").unwrap(),
             Platform::from_parts("windows", "x86_64", "none").unwrap(),
         ];
 

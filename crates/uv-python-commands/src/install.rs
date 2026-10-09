@@ -388,91 +388,86 @@ async fn perform_install(
     // Python downloads are performing their own retries to catch stream errors, disable the
     // default retries to avoid the middleware from performing uncontrolled retries.
     let client = client_builder.clone().retries(0).build()?;
-    let mut download_list = None;
+    let download_list = if targets.len() != 1 || reinstall {
+        Some(
+            ManagedPythonDownloadList::new(
+                &client_builder,
+                cache,
+                install_mirrors.python_downloads_json_url.as_deref(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     // TODO(zanieb): We use this variable to special-case .python-version files, but it'd be nice to
     // have generalized request source tracking instead
     let mut is_from_python_version_file = false;
-    let requests: Vec<_> = if targets.is_empty() {
-        if matches!(
-            upgrade,
-            PythonUpgrade::Enabled(PythonUpgradeSource::Upgrade)
-        ) {
-            if download_list.is_none() {
-                download_list = Some(
-                    ManagedPythonDownloadList::new(
-                        &client_builder,
-                        cache,
-                        install_mirrors.python_downloads_json_url.as_deref(),
-                    )
-                    .await?,
-                );
-            }
-            let download_list = download_list
-                .as_ref()
-                .expect("download list should be loaded before resolving requests");
+    let requests: Vec<_> = if let Some(download_list) = download_list.as_ref() {
+        if targets.is_empty() {
+            if matches!(
+                upgrade,
+                PythonUpgrade::Enabled(PythonUpgradeSource::Upgrade)
+            ) {
+                is_unspecified_upgrade = true;
+                // On upgrade, derive requests for all of the existing installations
+                let mut minor_version_requests = IndexSet::<InstallRequest>::default();
+                for installation in &existing_installations {
+                    let mut request = PythonDownloadRequest::from(installation);
+                    // We should always have a version in the request from an existing installation
+                    let version = request.take_version().unwrap();
+                    // Drop the patch and prerelease parts from the request
+                    request = request.with_version(version.only_minor());
+                    let install_request = InstallRequest::new(
+                        PythonRequest::Key(request),
+                        python_arch,
+                        download_list,
+                    )?;
+                    minor_version_requests.insert(install_request);
+                }
+                minor_version_requests.into_iter().collect::<Vec<_>>()
+            } else {
+                let version_requests = PythonVersionFile::discover(
+                    project_dir,
+                    &VersionFileDiscoveryOptions::default()
+                        .with_config_discovery(config_discovery)
+                        .with_preference(VersionFilePreference::Versions),
+                )
+                .await?
+                .inspect(|file| {
+                    debug!(
+                        "Found Python version file at: {}",
+                        file.path().user_display()
+                    );
+                })
+                .map(PythonVersionFile::into_versions)
+                .inspect(|_| is_from_python_version_file = true)
+                .unwrap_or_else(|| {
+                    // If no version file is found and no requests were made
+                    // TODO(zanieb): We should consider differentiating between a global Python version
+                    // file here, allowing a request from there to enable `is_default_install`.
+                    is_default_install = true;
+                    vec![if reinstall {
+                        // On bare `--reinstall`, reinstall all Python versions
+                        PythonRequest::Any
+                    } else {
+                        PythonRequest::Default
+                    }]
+                });
 
-            is_unspecified_upgrade = true;
-            // On upgrade, derive requests for all of the existing installations
-            let mut minor_version_requests = IndexSet::<InstallRequest>::default();
-            for installation in &existing_installations {
-                let mut request = PythonDownloadRequest::from(installation);
-                // We should always have a version in the request from an existing installation
-                let version = request.take_version().unwrap();
-                // Drop the patch and prerelease parts from the request
-                request = request.with_version(version.only_minor());
-                let install_request =
-                    InstallRequest::new(PythonRequest::Key(request), python_arch, download_list)?;
-                minor_version_requests.insert(install_request);
+                version_requests
+                    .into_iter()
+                    .map(|request| InstallRequest::new(request, python_arch, download_list))
+                    .collect::<Result<Vec<_>>>()?
             }
-            minor_version_requests.into_iter().collect::<Vec<_>>()
         } else {
-            let version_requests = PythonVersionFile::discover(
-                project_dir,
-                &VersionFileDiscoveryOptions::default()
-                    .with_config_discovery(config_discovery)
-                    .with_preference(VersionFilePreference::Versions),
-            )
-            .await?
-            .inspect(|file| {
-                debug!(
-                    "Found Python version file at: {}",
-                    file.path().user_display()
-                );
-            })
-            .map(PythonVersionFile::into_versions)
-            .inspect(|_| is_from_python_version_file = true)
-            .unwrap_or_else(|| {
-                // If no version file is found and no requests were made
-                // TODO(zanieb): We should consider differentiating between a global Python version
-                // file here, allowing a request from there to enable `is_default_install`.
-                is_default_install = true;
-                vec![if reinstall {
-                    // On bare `--reinstall`, reinstall all Python versions
-                    PythonRequest::Any
-                } else {
-                    PythonRequest::Default
-                }]
-            });
-
-            if download_list.is_none() {
-                download_list = Some(
-                    ManagedPythonDownloadList::new(
-                        &client_builder,
-                        cache,
-                        install_mirrors.python_downloads_json_url.as_deref(),
-                    )
-                    .await?,
-                );
-            }
-            let download_list = download_list
-                .as_ref()
-                .expect("download list should be loaded before resolving requests");
-            version_requests
-                .into_iter()
+            targets
+                .iter()
+                .map(|target| PythonRequest::parse(target.as_str()))
                 .map(|request| InstallRequest::new(request, python_arch, download_list))
                 .collect::<Result<Vec<_>>>()?
         }
-    } else if targets.len() == 1 && !reinstall {
+    } else {
         vec![
             InstallRequest::new_streaming(
                 PythonRequest::parse(&targets[0]),
@@ -483,25 +478,6 @@ async fn perform_install(
             )
             .await?,
         ]
-    } else {
-        if download_list.is_none() {
-            download_list = Some(
-                ManagedPythonDownloadList::new(
-                    &client_builder,
-                    cache,
-                    install_mirrors.python_downloads_json_url.as_deref(),
-                )
-                .await?,
-            );
-        }
-        let download_list = download_list
-            .as_ref()
-            .expect("download list should be loaded before resolving requests");
-        targets
-            .iter()
-            .map(|target| PythonRequest::parse(target.as_str()))
-            .map(|request| InstallRequest::new(request, python_arch, download_list))
-            .collect::<Result<Vec<_>>>()?
     };
 
     if requests.is_empty() {
