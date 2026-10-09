@@ -946,7 +946,7 @@ fn coordinated_agreement_accumulation() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13'",
@@ -1286,7 +1286,7 @@ fn coordinated_agreement_non_improvement() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13'",
@@ -1669,7 +1669,7 @@ fn coordinated_agreement_replacement() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13'",
@@ -1962,7 +1962,7 @@ fn coordinated_mode_lowest_direct() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13'",
@@ -2169,7 +2169,7 @@ fn coordinated_mode_lowest_inverse() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13'",
@@ -2425,7 +2425,7 @@ fn coordinated_nested_platform_unsatisfiable() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13'",
@@ -2777,7 +2777,7 @@ fn coordinated_nested_platform() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13' and sys_platform == 'win32'",
@@ -3123,7 +3123,7 @@ fn coordinated_nested_python_extra() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13' and sys_platform == 'win32'",
@@ -3436,7 +3436,7 @@ fn coordinated_package_disappears() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13'",
@@ -3659,7 +3659,7 @@ fn coordinated_prerelease_eligible() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13'",
@@ -3863,7 +3863,7 @@ fn coordinated_prerelease_hard_proposal_isolation() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13'",
@@ -4079,7 +4079,7 @@ fn coordinated_prerelease_stable_isolation() -> Result<()> {
         assert_snapshot!(
             lock, @r#"
         version = 1
-        revision = 3
+        revision = 5
         requires-python = ">=3.12, <3.14"
         resolution-markers = [
             "python_full_version < '3.13'",
