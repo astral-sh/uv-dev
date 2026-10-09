@@ -10,7 +10,6 @@
 //! [`pyproject-toml`](https://github.com/PyO3/pyproject-toml-rs) crate.
 
 use std::collections::BTreeMap;
-use std::hash::{BuildHasher, Hash};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -20,6 +19,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::Requirement;
+pub use uv_toml::TableMap;
+use uv_toml::deserialize_unique_map;
 
 /// The `[build-system]` section of a `pyproject.toml`, as specified in PEP 517.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -153,32 +154,6 @@ pub struct Project {
     pub dynamic: Option<Vec<String>>,
 }
 
-/// A map implementation used by standardized `pyproject.toml` tables.
-///
-/// This trait supports both insertion-ordered maps for external tooling and sorted maps for uv's
-/// internal representations. It is an implementation detail of the generic table wrappers.
-#[doc(hidden)]
-pub trait TableMap<K, V>: Default {
-    /// Insert a value, returning the previous value for the key, if present.
-    fn insert(&mut self, key: K, value: V) -> Option<V>;
-}
-
-impl<K: Ord, V> TableMap<K, V> for BTreeMap<K, V> {
-    fn insert(&mut self, key: K, value: V) -> Option<V> {
-        Self::insert(self, key, value)
-    }
-}
-
-impl<K, V, S> TableMap<K, V> for IndexMap<K, V, S>
-where
-    K: Eq + Hash,
-    S: BuildHasher + Default,
-{
-    fn insert(&mut self, key: K, value: V) -> Option<V> {
-        Self::insert(self, key, value)
-    }
-}
-
 /// Dependencies grouped by normalized optional-feature name.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(transparent)]
@@ -240,41 +215,10 @@ where
     where
         D: Deserializer<'de>,
     {
-        struct OptionalDependenciesVisitor<Requirement, Map>(
-            std::marker::PhantomData<(Requirement, Map)>,
-        );
-
-        impl<'de, Requirement, Map> serde::de::Visitor<'de>
-            for OptionalDependenciesVisitor<Requirement, Map>
-        where
-            Requirement: Deserialize<'de>,
-            Map: TableMap<ExtraName, Vec<Requirement>>,
-        {
-            type Value = OptionalDependencies<Requirement, Map>;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a table with unique normalized extra names")
-            }
-
-            fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                let mut dependencies = Map::default();
-                while let Some((name, requirements)) =
-                    access.next_entry::<ExtraName, Vec<Requirement>>()?
-                {
-                    if dependencies.insert(name.clone(), requirements).is_some() {
-                        return Err(serde::de::Error::custom(format!(
-                            "duplicate normalized extra name `{name}`"
-                        )));
-                    }
-                }
-                Ok(OptionalDependencies(dependencies, std::marker::PhantomData))
-            }
-        }
-
-        deserializer.deserialize_map(OptionalDependenciesVisitor(std::marker::PhantomData))
+        deserialize_unique_map(deserializer, |name: &ExtraName| {
+            format!("duplicate normalized extra name `{name}`")
+        })
+        .map(|dependencies| Self(dependencies, std::marker::PhantomData))
     }
 }
 
@@ -437,42 +381,10 @@ where
     where
         D: Deserializer<'de>,
     {
-        struct DependencyGroupsVisitor<Requirement, Object, Map>(
-            std::marker::PhantomData<(Requirement, Object, Map)>,
-        );
-
-        impl<'de, Requirement, Object, Map> serde::de::Visitor<'de>
-            for DependencyGroupsVisitor<Requirement, Object, Map>
-        where
-            Requirement: Deserialize<'de>,
-            Object: Deserialize<'de>,
-            Map: TableMap<GroupName, Vec<DependencyGroupSpecifier<Requirement, Object>>>,
-        {
-            type Value = DependencyGroups<Requirement, Object, Map>;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a table with unique normalized dependency group names")
-            }
-
-            fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                let mut groups = Map::default();
-                while let Some((name, specifiers)) = access
-                    .next_entry::<GroupName, Vec<DependencyGroupSpecifier<Requirement, Object>>>()?
-                {
-                    if groups.insert(name.clone(), specifiers).is_some() {
-                        return Err(serde::de::Error::custom(format!(
-                            "duplicate dependency group: `{name}`"
-                        )));
-                    }
-                }
-                Ok(DependencyGroups(groups, std::marker::PhantomData))
-            }
-        }
-
-        deserializer.deserialize_map(DependencyGroupsVisitor(std::marker::PhantomData))
+        deserialize_unique_map(deserializer, |name: &GroupName| {
+            format!("duplicate dependency group: `{name}`")
+        })
+        .map(|groups| Self(groups, std::marker::PhantomData))
     }
 }
 

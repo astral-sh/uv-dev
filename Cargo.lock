@@ -7574,6 +7574,7 @@ dependencies = [
  "uv-normalize",
  "uv-pep440",
  "uv-pep508",
+ "uv-toml",
 ]
 
 [[package]]
@@ -8135,6 +8136,7 @@ dependencies = [
 name = "uv-toml"
 version = "0.0.92"
 dependencies = [
+ "indexmap",
  "serde",
 ]
 
