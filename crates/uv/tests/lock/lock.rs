@@ -49047,10 +49047,11 @@ fn lock_required_environment_widened_python_scope() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12,<3.13"
-        dependencies = ["example<2"]
+        dependencies = ["example"]
     "#})?;
     context
         .lock()
+        .args(["--upgrade-package", "example==1"])
         .arg("--index-url")
         .arg(server.index_url())
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
@@ -49536,6 +49537,123 @@ fn lock_required_environment_normalized_split_extras() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Source lowering must not activate an unchanged indexed Windows dependency on Linux.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_preserves_lowered_index_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "lowered-index-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.platform-only.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+        [packages.platform-only.versions."2.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["platform-only; sys_platform == 'win32'"]
+        [tool.uv]
+        required-environments = []
+        [tool.uv.sources]
+        platform-only = {{ index = "custom" }}
+        [[tool.uv.index]]
+        name = "custom"
+        url = "{}"
+        explicit = true
+    "#, server.index_url()})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "platform-only==1"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    pyproject.write_str(&context.read("pyproject.toml").replace(
+        "required-environments = []",
+        "required-environments = [\"sys_platform == 'linux'\"]",
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Unlocking a parent invalidates its conditional descendants without activating unrelated roots.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_unlocked_parent_activation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "unlocked-parent-required-environment"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.parent.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        requires = ["child; python_version < '3.13'"]
+        [packages.parent.versions."2.0.0"]
+        requires = ["child"]
+        [packages.child.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.child.versions."2.0.0"]
+        [packages.platform-only.versions."1.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+        [packages.platform-only.versions."2.0.0"]
+        wheel_tags = ["py3-none-win_amd64"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent", "platform-only; sys_platform == 'win32'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--upgrade-package", "parent==1", "--upgrade-package", "child==1", "--upgrade-package", "platform-only==1"])
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["parent", "platform-only; sys_platform == 'win32'"]
+        [tool.uv]
+        required-environments = ["python_version == '3.13' and sys_platform == 'linux'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Updated child v1.0.0 -> v2.0.0
+    Updated parent v1.0.0 -> v2.0.0
     ");
     Ok(())
 }

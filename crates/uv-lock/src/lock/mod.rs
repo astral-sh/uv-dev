@@ -58,8 +58,7 @@ use uv_platform_tags::{
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{
     ConflictItem, ConflictKindRef, ConflictSet, Conflicts, HashAlgorithm, HashDigest, HashDigests,
-    LenientRequirement, ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, PyProjectToml,
-    VerbatimParsedUrl,
+    ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, PyProjectToml,
 };
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_resolver_types::{
@@ -3923,7 +3922,7 @@ impl Lock {
     ///
     /// Changed declarations make old edge markers unreliable. Until resolution refreshes those
     /// edges, wheel preference checks must conservatively consider every required environment.
-    fn root_activation_is_current(
+    async fn root_activation_is_current<Context: BuildContext>(
         &self,
         root: &Path,
         requires_python: &RequiresPython,
@@ -3933,6 +3932,7 @@ impl Lock {
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
         overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
+        database: &DistributionDatabase<'_, Context>,
     ) -> Result<bool, LockError> {
         // Non-workspace mutable metadata is refreshed later during resolution. Its stored
         // dependency markers cannot establish inactivity before that refresh.
@@ -4000,32 +4000,20 @@ impl Lock {
             let Some(package) = self.find_by_name(name).ok().flatten() else {
                 return Ok(false);
             };
-            let Some(project) = &member.pyproject_toml().project else {
-                return Ok(false);
-            };
-            let mut current = Vec::new();
-            for requirement in project.dependencies.iter().flatten().chain(
-                project
-                    .optional_dependencies
-                    .iter()
-                    .flat_map(|extras| extras.values().flatten()),
-            ) {
-                let Ok(requirement) =
-                    LenientRequirement::<VerbatimParsedUrl>::from_str(requirement)
-                        .map(uv_pep508::Requirement::from)
-                else {
-                    return Ok(false);
-                };
-                current.push(Requirement::from(requirement));
-            }
-            let Ok(groups) =
-                FlatDependencyGroups::from_pyproject_toml(member.root(), member.pyproject_toml())
+            let Some(current) =
+                Self::source_tree_requires_dist(member.root(), root, package, database).await?
             else {
                 return Ok(false);
             };
-            for (_, group) in groups {
-                current.extend(group.requirements.into_iter().map(Requirement::from));
-            }
+            let current = current.metadata;
+            let current = current
+                .requires_dist
+                .iter()
+                .chain(current.dependency_groups.values().flatten())
+                .map(|requirement| Requirement {
+                    marker: requirement.marker.simplify_extras(&current.provides_extra),
+                    ..requirement.clone()
+                });
             let all_extras = &package.metadata.provides_extra;
             let previous = package
                 .metadata
@@ -4046,7 +4034,7 @@ impl Lock {
     /// Calculate package activation within the current resolution scope.
     ///
     /// Unverified mutable metadata or changed root inputs make package-specific activation unknown.
-    pub fn package_reachability<'lock>(
+    pub async fn package_reachability<'lock, Context: BuildContext>(
         &'lock self,
         root: &Path,
         requires_python: &RequiresPython,
@@ -4056,6 +4044,7 @@ impl Lock {
         dependency_groups: &BTreeMap<GroupName, Vec<Requirement>>,
         overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
+        database: &DistributionDatabase<'_, Context>,
     ) -> Result<Vec<(&'lock Package, MarkerTree)>, LockError> {
         let current_scope = requires_python.complexify_markers(
             supported_environments
@@ -4064,16 +4053,20 @@ impl Lock {
                 .reduce(MarkerTree::or)
                 .unwrap_or(MarkerTree::TRUE),
         );
-        if !self.root_activation_is_current(
-            root,
-            requires_python,
-            supported_environments,
-            packages,
-            requirements,
-            dependency_groups,
-            overrides,
-            excludes,
-        )? {
+        if !self
+            .root_activation_is_current(
+                root,
+                requires_python,
+                supported_environments,
+                packages,
+                requirements,
+                dependency_groups,
+                overrides,
+                excludes,
+                database,
+            )
+            .await?
+        {
             return Ok(self
                 .packages
                 .iter()
@@ -7631,7 +7624,7 @@ impl Package {
     }
 
     /// Returns all production, optional, and development dependencies of the [`Package`].
-    fn all_dependencies(&self) -> impl Iterator<Item = &Dependency> {
+    pub fn all_dependencies(&self) -> impl Iterator<Item = &Dependency> {
         self.dependencies
             .iter()
             .chain(self.optional_dependencies.values().flatten())
