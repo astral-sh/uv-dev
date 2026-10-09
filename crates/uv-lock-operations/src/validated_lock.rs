@@ -472,6 +472,13 @@ impl ValidatedLock {
                 }
                 Ok(Self::Preferable(lock))
             }
+            SatisfiesResult::MismatchedPackageRequiresPython(name, expected, actual) => {
+                debug!(
+                    "Resolving despite existing lockfile due to mismatched Python requirements for: `{name}`\n  Requested: {:?}\n  Existing: {:?}",
+                    expected, actual
+                );
+                Ok(Self::Versions(lock))
+            }
             SatisfiesResult::MismatchedPackageDependencies(name, version, expected, actual) => {
                 if let Some(version) = version {
                     debug!(

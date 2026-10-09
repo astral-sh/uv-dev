@@ -2537,6 +2537,17 @@ impl Lock {
             {
                 package.metadata = PackageMetadata::from_distribution(metadata, root)?;
             }
+            // Non-root workspace members do not contribute to the lock's global Python range.
+            // Record their declarations so edits invalidate the affected resolved packages.
+            if !metadata_free
+                && manifest.workspace_members().contains(dist.name())
+                && !manifest.members.contains(dist.name())
+            {
+                package.metadata.requires_python = dist
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.requires_python.clone());
+            }
             let mut wheel_marker = dist.marker;
             if let Some(supported_environments_marker) = supported_environments_marker {
                 wheel_marker.and(supported_environments_marker);
@@ -2866,7 +2877,11 @@ impl Lock {
         mut self,
         packages: &BTreeMap<PackageName, WorkspaceMember>,
     ) -> Result<Self, LockError> {
-        let mut metadata = collect_member_group_metadata(packages)?;
+        let mut metadata = collect_member_group_metadata(
+            packages
+                .iter()
+                .filter(|(name, _)| self.workspace_members.contains_key(*name)),
+        )?;
         for (name, index) in &self.workspace_members {
             self.packages[index.0].group_requires_python =
                 metadata.remove(name).unwrap_or_default();
@@ -3940,6 +3955,17 @@ impl Lock {
         root: &Path,
         allow_missing_package_metadata: bool,
     ) -> Result<SatisfiesResult<'lock>, LockError> {
+        if !allow_missing_package_metadata
+            && self.workspace_members.contains_key(&package.id.name)
+            && !self.manifest.members.contains(&package.id.name)
+            && package.metadata.requires_python.as_ref() != package_requires_python
+        {
+            return Ok(SatisfiesResult::MismatchedPackageRequiresPython(
+                &package.id.name,
+                package_requires_python.cloned(),
+                package.metadata.requires_python.as_ref(),
+            ));
+        }
         let missing_metadata = allow_missing_package_metadata && !package.has_metadata();
         let indexes = requires_dist
             .iter()
@@ -4248,6 +4274,7 @@ impl Lock {
             let expected = nonstandard_member_default_groups(
                 packages
                     .iter()
+                    .filter(|(name, _)| self.workspace_members.contains_key(*name))
                     .filter_map(|(name, member)| {
                         member
                             .pyproject_toml()
@@ -4281,7 +4308,11 @@ impl Lock {
         }
 
         if let Some(actual) = self.member_group_metadata() {
-            let expected = collect_member_group_metadata(packages)?;
+            let expected = collect_member_group_metadata(
+                packages
+                    .iter()
+                    .filter(|(name, _)| self.workspace_members.contains_key(*name)),
+            )?;
             let actual = actual
                 .map(|(name, groups)| (name.clone(), groups.clone()))
                 .collect();
@@ -6187,6 +6218,12 @@ pub enum SatisfiesResult<'lock> {
         BTreeSet<Requirement>,
         BTreeSet<Requirement>,
     ),
+    /// A non-root workspace member declares a different Python requirement.
+    MismatchedPackageRequiresPython(
+        &'lock PackageName,
+        Option<VersionSpecifiers>,
+        Option<&'lock VersionSpecifiers>,
+    ),
     /// Refreshed declarations regenerate different resolved dependency edges.
     MismatchedPackageDependencies(
         &'lock PackageName,
@@ -6377,8 +6414,8 @@ pub struct GroupMetadata {
 }
 
 /// Collect metadata for each member's dependency groups.
-fn collect_member_group_metadata(
-    packages: &BTreeMap<PackageName, WorkspaceMember>,
+fn collect_member_group_metadata<'a>(
+    packages: impl IntoIterator<Item = (&'a PackageName, &'a WorkspaceMember)>,
 ) -> Result<BTreeMap<PackageName, BTreeMap<GroupName, GroupMetadata>>, DependencyGroupError> {
     let mut members = BTreeMap::new();
     for (name, member) in packages {
@@ -7473,6 +7510,8 @@ struct PackageWire {
 #[serde(rename_all = "kebab-case")]
 struct PackageMetadata {
     #[serde(default)]
+    requires_python: Option<VersionSpecifiers>,
+    #[serde(default)]
     requires_dist: BTreeSet<Requirement>,
     #[serde(default, rename = "provides-extras")]
     provides_extra: Box<[ExtraName]>,
@@ -7511,6 +7550,7 @@ impl PackageMetadata {
             .collect::<Result<_, _>>()?;
 
         Ok(Self {
+            requires_python: None,
             requires_dist,
             provides_extra: metadata.provides_extra.clone(),
             dependency_groups,
