@@ -9870,72 +9870,34 @@ fn no_binary_package_empty_environment_variable() -> Result<()> {
 }
 
 #[test]
-fn no_binary_error() -> Result<()> {
+fn no_binary_relocks_to_source_distribution() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let server = PackseServer::new("wheels/build-policy-relock.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["odrive"]
-        "#,
-    )?;
-
-    context.lock().assert().success();
-
-    let mut filters = context.filters();
-    filters.push((
-        r"(?m)^ \+ (pexpect==4\.9\.0|ptyprocess==0\.7\.0|pywin32==306)\n",
-        "",
-    ));
-
-    uv_snapshot!(filters, context.sync().arg("--no-binary-package").arg("odrive"), @"
+        dependencies = ["a"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).args(["--no-binary-package", "a"]), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 39 packages in [TIME]
-    Prepared 35 packages in [TIME]
-    Installed 36 packages in [TIME]
-     + asttokens==2.4.1
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + contourpy==1.2.0
-     + cycler==0.12.1
-     + decorator==5.1.1
-     + executing==2.0.1
-     + fonttools==4.50.0
-     + idna==3.6
-     + intelhex==2.3.0
-     + ipython==8.22.2
-     + jedi==0.19.1
-     + kiwisolver==1.4.5
-     + matplotlib==3.8.3
-     + matplotlib-inline==0.1.6
-     + monotonic==1.6
-     + numpy==1.26.4
-     + odrive==0.5.4
-     + packaging==24.0
-     + parso==0.8.3
-     + pillow==10.2.0
-     + prompt-toolkit==3.0.43
-     + pure-eval==0.2.2
-     + pygments==2.17.2
-     + pyparsing==3.1.2
-     + python-dateutil==2.9.0.post0
-     + pyusb==1.2.1
-     + requests==2.31.0
-     + setuptools==69.2.0
-     + six==1.16.0
-     + stack-data==0.6.3
-     + traitlets==5.14.2
-     + urllib3==2.2.1
-     + wcwidth==0.2.13
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0
     ");
-
     assert!(context.temp_dir.child("uv.lock").exists());
-
     Ok(())
 }
 

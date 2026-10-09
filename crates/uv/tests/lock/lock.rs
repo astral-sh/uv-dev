@@ -9,8 +9,6 @@ use anyhow::anyhow;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
-#[cfg(feature = "test-universal")]
-use insta::allow_duplicates;
 use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
 use serde_json::json;
@@ -36740,66 +36738,73 @@ fn lock_no_build_static_metadata() -> Result<()> {
     Ok(())
 }
 
-/// Changing the build policy must invalidate a lock that only contains a forbidden artifact.
 #[cfg(feature = "test-universal")]
 #[test]
-fn lock_build_policy_invalidates_unusable_artifacts() -> Result<()> {
-    allow_duplicates! {
-        for (scenario, flag) in [
-            ("wheels/only-wheels.toml", "--no-binary-package"),
-            ("wheels/no-wheels.toml", "--no-build-package"),
-        ] {
-            let server = PackseServer::new(scenario);
-            let context = uv_test::test_context!("3.12");
+fn lock_build_policy_requires_source_artifact() -> Result<()> {
+    let server = PackseServer::new("wheels/only-wheels.toml");
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a==1.0.0"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("--locked").args(["--no-binary-package", "a"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no source distribution and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
 
-            context.temp_dir.child("pyproject.toml").write_str(
-                r#"
-                [project]
-                name = "project"
-                version = "0.1.0"
-                requires-python = ">=3.12"
-                dependencies = ["a==1.0.0"]
-                "#,
-            )?;
+    hint: A source distribution is required for `a` because using pre-built wheels is disabled for `a` (i.e., with `--no-binary-package a`)
+    ");
+    Ok(())
+}
 
-            context
-                .lock()
-                .arg("--index-url")
-                .arg(server.index_url())
-                .assert()
-                .success();
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_policy_requires_wheel_artifact() -> Result<()> {
+    let server = PackseServer::new("wheels/no-wheels.toml");
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a==1.0.0"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("--locked").args(["--no-build-package", "a"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
 
-            let mut command = context.lock();
-            command
-                .arg("--index-url")
-                .arg(server.index_url())
-                .arg("--locked")
-                .arg(flag)
-                .arg("a");
+    hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
+    ");
+    Ok(())
+}
 
-            if flag == "--no-binary-package" {
-                uv_snapshot!(context.filters(), command, @"
-        exit_code: 1 (failure)
-        ----- stderr -----
-          × No solution found when resolving dependencies:
-          ╰─▶ Because a==1.0.0 has no source distribution and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
-
-        hint: A source distribution is required for `a` because using pre-built wheels is disabled for `a` (i.e., with `--no-binary-package a`)
-                ");
-            } else {
-                uv_snapshot!(context.filters(), command, @"
-        exit_code: 1 (failure)
-        ----- stderr -----
-          × No solution found when resolving dependencies:
-          ╰─▶ Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
-
-        hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
-                ");
-            }
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
-
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_policy_accepts_inactive_platform_wheel() -> Result<()> {
     // A wheel for another platform remains valid during universal lock validation. Installation
     // will enforce compatibility if that package is active on the current platform.
     let server = PackseServer::new("wheels/requires-python-subset.toml");
@@ -36827,11 +36832,19 @@ fn lock_build_policy_invalidates_unusable_artifacts() -> Result<()> {
         .arg("--index-url")
         .arg(server.index_url())
         .arg("--locked")
+        .arg("--offline")
+        .arg("--no-cache")
         .arg("--no-build-package")
         .arg("win-only")
         .assert()
         .success();
 
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_policy_checks_transitive_artifacts() -> Result<()> {
     // The same checks must apply behind an immutable registry parent.
     let server = PackseServer::new("wheels/transitive-artifacts.toml");
     let context = uv_test::test_context!("3.12");
@@ -36851,17 +36864,30 @@ fn lock_build_policy_invalidates_unusable_artifacts() -> Result<()> {
         .assert()
         .success();
 
-    for (flag, package) in [("--no-binary-package", "b"), ("--no-build-package", "c")] {
-        context
-            .lock()
-            .arg("--index-url")
-            .arg(server.index_url())
-            .arg("--locked")
-            .arg(flag)
-            .arg(package)
-            .assert()
-            .failure();
-    }
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--locked")
+        .args(["--no-binary-package", "b"])
+        .assert()
+        .failure();
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--locked")
+        .args(["--no-build-package", "c"])
+        .assert()
+        .failure();
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--locked")
+        .args(["--no-binary-package", "a", "--no-build-package", "a"])
+        .assert()
+        .failure();
 
     Ok(())
 }

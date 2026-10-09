@@ -4571,19 +4571,14 @@ impl Lock {
         // would miss a forbidden artifact behind an immutable parent. Accept incompatible wheels
         // here to preserve universal lock validation; installation checks compatibility later.
         for package in &self.packages {
-            if matches!(&package.id.source, Source::Registry(..))
-                && (build_options.no_binary_package(&package.id.name)
-                    || build_options.no_build_package(&package.id.name))
-                && package
-                    .to_dist(
-                        root,
-                        TagPolicy::Preferred(tags),
-                        build_options,
-                        markers,
-                        FirstParty::No,
-                    )
-                    .is_err()
-            {
+            if !matches!(&package.id.source, Source::Registry(..)) {
+                continue;
+            }
+            let no_binary = build_options.no_binary_package(&package.id.name);
+            let no_build = build_options.no_build_package(&package.id.name);
+            let has_wheel = !no_binary && !package.wheels.is_empty();
+            let has_sdist = !no_build && package.sdist.is_some();
+            if (no_binary || no_build) && !has_wheel && !has_sdist {
                 return Ok(SatisfiesResult::MismatchedBuildOptions(&package.id.name));
             }
         }
