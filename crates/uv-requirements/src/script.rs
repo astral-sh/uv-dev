@@ -208,8 +208,9 @@ pub(crate) async fn script_metadata_specification(
         .collect::<Vec<_>>();
 
     let indexes = SourceIndexes::try_from_iter(
-        selected_indexes
+        script_indexes
             .into_iter()
+            .filter(|index| selected_indexes.contains(index))
             .map(|index| index.with_origin(Origin::RequirementsTxt)),
     )?;
 
