@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -302,11 +302,56 @@ fn destination_keys(paths: &[PathBuf], replacing: bool) -> io::Result<Vec<Claim>
                 insert_creation_parent(&slot, &mut keys);
             }
         }
+        insert_traversed_slots(&absolute, &mut keys)?;
     }
     Ok(keys
         .into_iter()
         .map(|(key, exclusive)| Claim { key, exclusive })
         .collect())
+}
+
+/// Workers retain their original paths, so every entry traversed by a selected root must remain
+/// usable, including entries hidden inside a symlink's target spelling.
+fn insert_traversed_slots(path: &Path, keys: &mut BTreeMap<Key, bool>) -> io::Result<()> {
+    let mut pending = vec![path.to_path_buf()];
+    let mut visited = BTreeSet::new();
+    let mut links = 0;
+    while let Some(path) = pending.pop() {
+        for prefix in path.ancestors() {
+            let (Some(parent), Some(name)) = (prefix.parent(), prefix.file_name()) else {
+                continue;
+            };
+            let (parent, _) = canonicalize_destination(parent, keys)?;
+            let slot = parent.join(name);
+            if !visited.insert(slot.clone()) {
+                continue;
+            }
+            for ancestor in slot.ancestors() {
+                keys.entry(Key::Destination(ancestor.to_path_buf()))
+                    .or_insert(false);
+            }
+            let metadata = match fs_err::symlink_metadata(&slot) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            if metadata.is_symlink() {
+                // Canonicalization enforces the OS link limit. Also bound traversal if links
+                // keep changing between the individual filesystem observations.
+                links += 1;
+                if links > 256 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "too many symbolic links while collecting environment admission",
+                    ));
+                }
+                // Retain the target spelling: on Unix, `..` applies after earlier link
+                // expansion. Windows Path operations retain native prefix/root semantics.
+                pending.push(parent.join(fs_err::read_link(&slot)?));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn insert_tree(destination: &Path, keys: &mut BTreeMap<Key, bool>) {

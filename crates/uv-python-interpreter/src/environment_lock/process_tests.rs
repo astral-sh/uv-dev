@@ -226,10 +226,69 @@ async fn replacing_ancestor_waits_for_descendant_worker() -> Result<()> {
     let destination = parent.path().join("outer");
     let descendant = destination.join("inner");
     fs_err::create_dir_all(&descendant)?;
+    assert_replacement_waits(parent.path(), &destination, &descendant).await
+}
+
+#[tokio::test]
+async fn replacing_symlink_ancestor_waits_for_descendant_worker() -> Result<()> {
+    let parent = tempfile::tempdir()?;
+    let outer = parent.path().join("outer");
+    let outside = parent.path().join("outside");
+    fs_err::create_dir(&outer)?;
+    fs_err::create_dir_all(outside.join("inner"))?;
+    uv_fs::create_symlink(&outside, outer.join("alias"))?;
+    let descendant = outer.join("alias").join("inner");
+    assert_replacement_waits(parent.path(), &outer, &descendant).await
+}
+
+#[tokio::test]
+async fn replacing_chained_target_ancestor_waits_for_descendant_worker() -> Result<()> {
+    let parent = tempfile::tempdir()?;
+    let outer = parent.path().join("outer");
+    let intermediate = parent.path().join("intermediate");
+    let outside = parent.path().join("outside");
+    fs_err::create_dir(&outer)?;
+    fs_err::create_dir(&intermediate)?;
+    fs_err::create_dir_all(outside.join("sub").join("inner"))?;
+    uv_fs::create_symlink(&outside, intermediate.join("second_alias"))?;
+    uv_fs::create_symlink(
+        intermediate.join("second_alias").join("sub"),
+        outer.join("alias"),
+    )?;
+    let descendant = outer.join("alias").join("inner");
+    assert_replacement_waits(parent.path(), &intermediate, &descendant).await
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn replacing_relative_target_ancestor_waits_through_parent_component() -> Result<()> {
+    let parent = tempfile::tempdir()?;
+    let outer = parent.path().join("outer");
+    let intermediate = parent.path().join("intermediate");
+    let outside = parent.path().join("outside");
+    fs_err::create_dir(&outer)?;
+    fs_err::create_dir(&intermediate)?;
+    fs_err::create_dir_all(outside.join("branch"))?;
+    fs_err::create_dir(outside.join("inner"))?;
+    uv_fs::create_symlink("../outside/branch", intermediate.join("second_alias"))?;
+    uv_fs::create_symlink("../intermediate/second_alias/..", outer.join("alias"))?;
+    let descendant = outer.join("alias").join("inner");
+    assert_eq!(
+        fs_err::canonicalize(&descendant)?,
+        fs_err::canonicalize(outside.join("inner"))?
+    );
+    assert_replacement_waits(parent.path(), &intermediate, &descendant).await
+}
+
+async fn assert_replacement_waits(
+    parent: &Path,
+    destination: &Path,
+    descendant: &Path,
+) -> Result<()> {
     let destination = fs_err::canonicalize(destination)?;
-    let mut owner = Holder::spawn(&descendant, &parent.path().join("owner"), false)?;
+    let mut owner = Holder::spawn(descendant, &parent.join("owner"), false)?;
     owner.wait(Event::State("ready")).await?;
-    let mut waiter = Holder::spawn(&destination, &parent.path().join("waiter"), true)?;
+    let mut waiter = Holder::spawn(&destination, &parent.join("waiter"), true)?;
     waiter.wait(Event::Waiting(&destination)).await?;
     assert!(descendant.is_dir());
     owner.finish().await?;
