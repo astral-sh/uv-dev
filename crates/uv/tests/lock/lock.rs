@@ -38543,6 +38543,44 @@ fn lock_script_initialize_utf8_bom() -> Result<()> {
     Ok(())
 }
 
+/// Existing metadata immediately after a BOM must be reused without adding a second block.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_script_existing_metadata_utf8_bom() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let contents = format!(
+        "\u{feff}{}",
+        indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+        import importlib.metadata
+        print(importlib.metadata.version("iniconfig"))
+    "#}
+    );
+    context.temp_dir.child("script.py").write_str(&contents)?;
+    uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    assert_eq!(context.read("script.py"), contents);
+    uv_snapshot!(context.filters(), context.run().arg("--locked").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    assert_eq!(context.read("script.py"), contents);
+    Ok(())
+}
+
 /// Do not leave an unusable script lockfile behind if metadata cannot be persisted.
 #[cfg(all(feature = "test-universal", unix))]
 #[test]

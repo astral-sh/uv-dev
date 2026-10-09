@@ -504,6 +504,9 @@ impl ScriptTag {
     ///
     /// See: <https://peps.python.org/pep-0723/>
     pub fn parse(contents: &[u8]) -> Result<Option<Self>, Pep723Error> {
+        // A UTF-8 BOM precedes the first source line, including an existing metadata pragma.
+        let contents = contents.strip_prefix(b"\xef\xbb\xbf").unwrap_or(contents);
+
         // Identify the opening pragma.
         let Some(index) = FINDER.find(contents) else {
             return Ok(None);
