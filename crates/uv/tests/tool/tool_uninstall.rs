@@ -1,6 +1,5 @@
 #[cfg(unix)]
 use fs_err::os::unix::fs::symlink;
-#[cfg(windows)]
 use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -15,7 +14,6 @@ use uv_static::EnvVars;
 
 #[cfg(unix)]
 use uv_test::ReadOnlyDirectoryGuard;
-#[cfg(windows)]
 use uv_test::packse::generate_wheel;
 use uv_test::uv_snapshot;
 
@@ -376,14 +374,21 @@ fn tool_uninstall_preserves_replacement_when_ownership_is_unreadable() -> Result
     Ok(())
 }
 
-/// Different Windows filename casing can identify the same copied executable.
+/// Different filename casing can identify one directory entry on case-insensitive filesystems.
 #[test]
-#[cfg(windows)]
 fn tool_uninstall_preserves_replacement_with_different_filename_case() -> Result<()> {
     let context = uv_test::test_context!("3.13")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin = context.temp_dir.child("bin");
+    bin.create_dir_all()?;
+    let probe = bin.child("Case-Probe");
+    probe.write_binary(b"")?;
+    let case_insensitive = bin.child("case-probe").exists();
+    fs_err::remove_file(probe.path())?;
+    if !case_insensitive {
+        return Ok(());
+    }
     let (filename, wheel) = generate_wheel(
         &"first".parse()?,
         &"1.0.0".parse()?,
@@ -419,7 +424,7 @@ fn tool_uninstall_preserves_replacement_with_different_filename_case() -> Result
     Removed environment for `first`
     ");
     assert!(context.temp_dir.child("tools/second").exists());
-    uv_snapshot!(context.filters(), Command::new(bin.child("shared-tool.exe").path()), @"
+    uv_snapshot!(context.filters(), Command::new(bin.child(format!("shared-tool{}", std::env::consts::EXE_SUFFIX)).path()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hello from second!

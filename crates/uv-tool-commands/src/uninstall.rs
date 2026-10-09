@@ -297,21 +297,47 @@ async fn uninstall_tool(
     Ok(removed_entrypoints)
 }
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+enum ExecutableDestination {
+    #[cfg(unix)]
+    UnixEntry {
+        device: u64,
+        inode: u64,
+    },
+    Path(PathBuf),
+}
+
 /// Identify the destination directory without following the executable's own symlink.
-fn executable_destination(path: &Path) -> io::Result<PathBuf> {
+fn executable_destination(path: &Path) -> io::Result<ExecutableDestination> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match fs_err::symlink_metadata(path) {
+            Ok(metadata) => {
+                return Ok(ExecutableDestination::UnixEntry {
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
     // Windows launchers are regular files; canonicalization also normalizes filename casing.
     #[cfg(windows)]
     match fs_err::canonicalize(path) {
-        Ok(destination) => return Ok(destination),
+        Ok(destination) => return Ok(ExecutableDestination::Path(destination)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
     let (Some(parent), Some(filename)) = (path.parent(), path.file_name()) else {
-        return Ok(path.to_path_buf());
+        return Ok(ExecutableDestination::Path(path.to_path_buf()));
     };
     match fs_err::canonicalize(parent) {
-        Ok(parent) => Ok(parent.join(filename)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Ok(parent) => Ok(ExecutableDestination::Path(parent.join(filename))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(ExecutableDestination::Path(path.to_path_buf()))
+        }
         Err(error) => Err(error),
     }
 }
