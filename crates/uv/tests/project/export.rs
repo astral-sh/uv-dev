@@ -14328,6 +14328,7 @@ fn requirements_txt_undefined_registry_extra_conflict() -> Result<()> {
     ");
     context
         .lock()
+        .args(["--preview-features", "lock-without-metadata"])
         .arg("--index-url")
         .arg(server.index_url())
         .assert()
@@ -14392,19 +14393,58 @@ fn requirements_txt_registry_parent_requests_empty_conflicting_extra() -> Result
     ----- stderr -----
     error: Found conflicting selections `child[feature]` and `project:dev` enabled simultaneously
     ");
-    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
-    let child = lock["package"]
-        .as_array()
-        .expect("locked packages")
-        .iter()
-        .find(|package| package["name"].as_str() == Some("child"))
-        .expect("child package");
-    assert!(
-        child
-            .get("optional-dependencies")
-            .and_then(|extras| extras.get("unselected"))
-            .is_none()
-    );
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "child", extra = "feature" },
+            { package = "project", group = "dev" },
+        ]]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "child"
+        version = "1"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        declared-extras = ["feature", "unselected"]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/child-1-py3-none-any.whl", hash = "sha256:3ae0b8b07b903ace372c9cac1ad06961d75153c632eeccafb9786c12853622e3", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [package.optional-dependencies]
+        feature = []
+
+        [[package]]
+        name = "gateway"
+        version = "1"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        dependencies = [
+            { name = "child" },
+            { name = "child", extra = ["feature"], marker = "extra == 'extra-5-child-feature'" },
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/gateway-1-py3-none-any.whl", hash = "sha256:35184d5e797bdafcd77630a15efed44e4da647e4e845d5c52aa87a9df820724b", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "gateway" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "gateway" }]
+
+        [package.metadata.requires-dev]
+        dev = []
+        "#);
+    });
     context
         .lock()
         .args(["--upgrade", "--preview-features", "lock-without-metadata"])
