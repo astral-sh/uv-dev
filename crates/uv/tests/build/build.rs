@@ -3320,9 +3320,9 @@ fn build_name_mismatch() -> Result<()> {
     Ok(())
 }
 
-/// A backend must not return a wheel whose metadata disagrees with its filename.
+/// A backend must declare the name from the wheel filename.
 #[test]
-fn build_wheel_metadata_mismatch() -> Result<()> {
+fn build_wheel_metadata_name_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(indoc! {r#"
@@ -3354,7 +3354,7 @@ fn build_wheel_metadata_mismatch() -> Result<()> {
       cause: Package metadata name `other` does not match `alpha` from the wheel filename
     ");
 
-    // Preserve the compatibility escape hatch for known-bad third-party wheels.
+    // The compatibility escape hatch permits known-bad third-party wheels.
     uv_snapshot!(context.filters(), context.build().arg("--wheel").env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1").current_dir(&project), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -3362,7 +3362,20 @@ fn build_wheel_metadata_mismatch() -> Result<()> {
     Successfully built dist/alpha-1.0.0-py3-none-any.whl
     ");
 
-    fs_err::remove_dir_all(project.child("__pycache__"))?;
+    Ok(())
+}
+
+/// A backend must declare the version from the wheel filename.
+#[test]
+fn build_wheel_metadata_version_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
     project.child("backend.py").write_str(indoc! {r#"
         from pathlib import Path
         from zipfile import ZipFile
@@ -3386,8 +3399,20 @@ fn build_wheel_metadata_mismatch() -> Result<()> {
       cause: Package metadata version `9.0.0` does not match `1.0.0` from the wheel filename
     ");
 
-    // A filename may include a local version that is omitted from the embedded metadata.
-    fs_err::remove_dir_all(project.child("__pycache__"))?;
+    Ok(())
+}
+
+/// A filename can carry a local version omitted from embedded metadata.
+#[test]
+fn build_wheel_metadata_filename_local_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
     project.child("backend.py").write_str(indoc! {r#"
         from pathlib import Path
         from zipfile import ZipFile
@@ -3409,8 +3434,20 @@ fn build_wheel_metadata_mismatch() -> Result<()> {
     Successfully built dist/alpha-1.0.0+local-py3-none-any.whl
     ");
 
-    // Setuptools can omit the name when the source tree has no project metadata.
-    fs_err::remove_dir_all(project.child("__pycache__"))?;
+    Ok(())
+}
+
+/// Setuptools can omit the name when a source tree has no project metadata.
+#[test]
+fn build_wheel_metadata_unnamed() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
     project.child("backend.py").write_str(indoc! {r#"
         from pathlib import Path
         from zipfile import ZipFile
@@ -3432,10 +3469,34 @@ fn build_wheel_metadata_mismatch() -> Result<()> {
     Successfully built dist/UNKNOWN-0.0.0-py3-none-any.whl
     ");
 
-    fs_err::remove_dir_all(project.child("__pycache__"))?;
-    let backend = project.child("backend.py");
-    let contents = fs_err::read_to_string(&backend)?;
-    backend.write_str(&contents.replace("Version: 0.0.0", "Version: 9.0.0"))?;
+    Ok(())
+}
+
+/// An unnamed wheel must still declare the version from its filename.
+#[test]
+fn build_wheel_metadata_unnamed_version_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "UNKNOWN-0.0.0-py3-none-any.whl"
+            with ZipFile(Path(wheel_directory, filename), "w") as wheel:
+                wheel.writestr(
+                    "UNKNOWN-0.0.0.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nVersion: 9.0.0\n",
+                )
+            return filename
+    "#})?;
+
     uv_snapshot!(context.filters(), context.build().arg("--wheel").current_dir(&project), @"
     exit_code: 2 (failure)
     ----- stderr -----
