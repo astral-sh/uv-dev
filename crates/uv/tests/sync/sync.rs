@@ -10533,6 +10533,48 @@ fn sync_no_editable() -> Result<()> {
     Ok(())
 }
 
+/// A stale frozen-lock version does not prevent repairing the current source metadata directory.
+#[test]
+fn sync_frozen_repair_incomplete_local_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "demo"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("src/demo/__init__.py")
+        .write_str("__version__ = '1.0.0'\n")?;
+    context.sync().arg("--no-editable").assert().success();
+    let record = context.site_packages().join("demo-1.0.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    let lockfile = context.temp_dir.child("uv.lock");
+    let stale_lock =
+        fs_err::read_to_string(&lockfile)?.replace("version = \"1.0.0\"", "version = \"2.0.0\"");
+    lockfile.write_str(&stale_lock)?;
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-editable").arg("--reinstall-package").arg("demo"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    warning: Failed to uninstall package at `[SITE_PACKAGES]/demo-1.0.0.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ demo==1.0.0 (from file://[TEMP_DIR]/)
+    ");
+    assert!(record.is_file());
+    context.assert_installed("demo", "1.0.0");
+    assert_eq!(stale_lock, fs_err::read_to_string(lockfile)?);
+    Ok(())
+}
+
 /// Captures the behavior described in <https://github.com/astral-sh/uv/issues/15224>.
 #[test]
 fn sync_no_editable_ignores_source_changes() -> Result<()> {

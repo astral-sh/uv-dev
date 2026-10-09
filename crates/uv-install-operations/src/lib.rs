@@ -1,6 +1,6 @@
 //! Installation workflows used by uv commands.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,11 +16,12 @@ use uv_configuration::{BuildOptions, Concurrency, DryRun, Modifications, Reinsta
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{
-    CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, DistributionMetadata,
-    ExtraBuildRequires, ExtraBuildVariables, IndexLocations, InstalledDist, InstalledMetadata,
-    InstalledVersion, LocalDist, Name, PackageConfigSettings, Resolution, VersionOrUrlRef,
+    BuildableSource, CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist,
+    DistributionMetadata, ExtraBuildRequires, ExtraBuildVariables, IndexLocations, InstalledDist,
+    InstalledDistKind, InstalledMetadata, InstalledVersion, LocalDist, Name, PackageConfigSettings,
+    Resolution, ResolvedDist, VersionOrUrlRef,
 };
-use uv_fs::{CWD, Simplified, normalize_path_under};
+use uv_fs::{CWD, Simplified, is_same_file_allow_missing, normalize_path_under};
 use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
 use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
 use uv_normalize::PackageName;
@@ -440,6 +441,39 @@ impl InstallationPlan {
             return Ok(Changelog::default());
         }
 
+        // Reject version changes only when both the replacement artifact and installed metadata
+        // establish their versions. The prepared metadata directory remains authoritative when
+        // an installed directory name disagrees with its metadata, or for local sources/versions.
+        let check_wheel_filenames =
+            !uv_flags::contains(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK);
+        let replacement_versions = resolution
+            .distributions()
+            .filter_map(|dist| {
+                let (version, is_source) = match dist {
+                    ResolvedDist::Installable { dist, .. } => match dist.as_ref() {
+                        Dist::Built(wheel) => (Some(wheel.version().clone()), false),
+                        Dist::Source(source) => {
+                            (BuildableSource::Dist(source).version().cloned(), true)
+                        }
+                    },
+                    ResolvedDist::Installed { dist } => (Some(dist.version().clone()), false),
+                };
+                version.map(|version| (dist.name(), (version, is_source)))
+            })
+            .collect::<BTreeMap<_, _>>();
+        validate_replacement_records(extraneous.iter().chain(&reinstalls), |dist_info| {
+            Ok(replacement_versions
+                .get(dist_info.name())
+                .is_some_and(|(version, is_source)| {
+                    (*is_source || check_wheel_filenames)
+                        && version.clone().without_local()
+                            != dist_info.version().clone().without_local()
+                        && dist_info
+                            .read_metadata()
+                            .is_ok_and(|metadata| metadata.version == *dist_info.version())
+                }))
+        })?;
+
         // Partition into two sets: those that require build isolation, and those that disable it. This
         // is effectively a heuristic to make `--no-build-isolation` work "more often" by way of giving
         // `--no-build-isolation` packages "access" to the rest of the environment.
@@ -668,6 +702,34 @@ impl InstallPhase {
     }
 }
 
+/// Check that every replacement changing the installed metadata directory has an uninstall record.
+fn validate_replacement_records<'a>(
+    uninstalls: impl IntoIterator<Item = &'a InstalledDist>,
+    replaces_dist_info: impl Fn(&InstalledDist) -> Result<bool, Error>,
+) -> Result<(), Error> {
+    for dist_info in uninstalls {
+        if matches!(
+            &dist_info.kind,
+            InstalledDistKind::Registry(_) | InstalledDistKind::Url(_)
+        ) {
+            let record_path = dist_info.install_path().join("RECORD");
+            if !record_path.try_exists().with_context(|| {
+                format!(
+                    "Failed to inspect uninstall record at `{}`",
+                    record_path.user_display()
+                )
+            })? && replaces_dist_info(dist_info)?
+            {
+                return Err(uv_installer::UninstallError::Uninstall(
+                    uv_install_wheel::Error::MissingRecord(record_path),
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Execute a [`Plan`] to install distributions into a Python environment.
 async fn execute_plan(
     plan: Plan,
@@ -732,6 +794,26 @@ async fn execute_plan(
     // Remove any upgraded or extraneous installations.
     let uninstalls = extraneous.into_iter().chain(reinstalls).collect::<Vec<_>>();
     if !uninstalls.is_empty() {
+        let replacements = wheels
+            .iter()
+            .chain(&cached)
+            .map(|dist| (dist.name(), dist))
+            .collect::<BTreeMap<_, _>>();
+        let layout = venv.interpreter().layout();
+        validate_replacement_records(&uninstalls, |dist_info| {
+            let Some(replacement) = replacements.get(dist_info.name()) else {
+                return Ok(false);
+            };
+            let destination =
+                installed_dist_info_path(&layout, replacement.path()).with_context(|| {
+                    format!("Failed to locate replacement distribution: {replacement}")
+                })?;
+            Ok(
+                !is_same_file_allow_missing(&destination, dist_info.install_path())
+                    .unwrap_or(false),
+            )
+        })?;
+
         let start = std::time::Instant::now();
 
         let layout = venv.interpreter().layout();

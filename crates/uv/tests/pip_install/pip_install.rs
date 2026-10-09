@@ -31,7 +31,7 @@ use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
 use uv_fs::{PortablePath, Simplified};
 use uv_install_wheel::validate_and_heal_record;
 use uv_static::EnvVars;
-use uv_test::archive::write_tar_gz;
+use uv_test::archive::{generate_source_archive, write_tar_gz};
 #[cfg(feature = "test-git")]
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
@@ -1719,12 +1719,84 @@ fn reinstall_extras() -> Result<()> {
     Ok(())
 }
 
-/// Warn, but don't fail, when uninstalling incomplete packages.
+/// Do not uninstall any package when another candidate is missing its `RECORD` file.
 #[test]
 fn reinstall_incomplete() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Install anyio.
+    // Install anyio and a package that will become extraneous.
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio==3.7.0\niniconfig==1.1.1")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Prepared 4 packages in [TIME]
+    Installed 4 packages in [TIME]
+     + anyio==3.7.0
+     + idna==3.6
+     + iniconfig==1.1.1
+     + sniffio==1.3.1
+    "
+    );
+
+    // Manually remove the `RECORD` file.
+    fs_err::remove_file(context.site_packages().join("anyio-3.7.0.dist-info/RECORD"))?;
+
+    // Re-install anyio and remove the extraneous package. The preflight must fail before either
+    // package is uninstalled.
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("anyio==4.0.0")?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--exact")
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Cannot uninstall package; `RECORD` file not found at: [SITE_PACKAGES]/anyio-3.7.0.dist-info/RECORD
+    "
+    );
+
+    // A shared-build replacement must also fail before isolated-build packages are changed.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-cache")
+        .arg("--no-build-isolation-package").arg("anyio")
+        .arg("--exclude-newer").arg("2024-05-01T00:00:00Z")
+        .arg("anyio==4.0.0").arg("idna==3.7"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Cannot uninstall package; `RECORD` file not found at: [SITE_PACKAGES]/anyio-3.7.0.dist-info/RECORD
+    ");
+    context.assert_installed("idna", "3.6");
+
+    assert!(
+        context
+            .site_packages()
+            .join("anyio-3.7.0.dist-info")
+            .is_dir()
+    );
+    assert!(
+        context
+            .site_packages()
+            .join("iniconfig-1.1.1.dist-info")
+            .is_dir()
+    );
+    context.assert_command("import anyio, iniconfig").success();
+
+    Ok(())
+}
+
+/// A same-version reinstall can restore the missing `RECORD` and repair the installation.
+#[test]
+fn reinstall_incomplete_same_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio==3.7.0")?;
 
@@ -1742,16 +1814,14 @@ fn reinstall_incomplete() -> Result<()> {
     "
     );
 
-    // Manually remove the `RECORD` file.
-    fs_err::remove_file(context.site_packages().join("anyio-3.7.0.dist-info/RECORD"))?;
-
-    // Re-install anyio.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==4.0.0")?;
+    let record = context.site_packages().join("anyio-3.7.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
-        .arg("requirements.txt"), @"
+        .arg("requirements.txt")
+        .arg("--reinstall-package")
+        .arg("anyio"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -1759,11 +1829,285 @@ fn reinstall_incomplete() -> Result<()> {
     warning: Failed to uninstall package at `[SITE_PACKAGES]/anyio-3.7.0.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     - anyio==3.7.0
-     + anyio==4.0.0
+     ~ anyio==3.7.0
     "
     );
 
+    assert!(record.is_file());
+    context.assert_command("import anyio").success();
+
+    Ok(())
+}
+
+/// A local version in only the wheel filename can repair the existing metadata directory.
+#[test]
+fn reinstall_incomplete_filename_local_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (_, bytes) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel = context.temp_dir.child("demo-1.0.0+local-py3-none-any.whl");
+    wheel.write_binary(&bytes)?;
+    context.pip_install().arg(wheel.path()).assert().success();
+    let record = context.site_packages().join("demo-1.0.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel.path()).arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    warning: Failed to uninstall package at `[SITE_PACKAGES]/demo-1.0.0.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - demo==1.0.0 (from file://[TEMP_DIR]/demo-1.0.0+local-py3-none-any.whl)
+     + demo==1.0.0+local (from file://[TEMP_DIR]/demo-1.0.0+local-py3-none-any.whl)
+    ");
+    assert!(record.is_file());
+    context.assert_installed("demo", "1.0.0");
+    Ok(())
+}
+
+/// A local version in only the metadata directory can repair that same directory.
+#[test]
+fn reinstall_incomplete_directory_local_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.child("demo-1.0.0-py3-none-any.whl");
+    let record_contents = indoc! {"
+        demo/__init__.py,,
+        demo-1.0.0+local.dist-info/METADATA,,
+        demo-1.0.0+local.dist-info/WHEEL,,
+        demo-1.0.0+local.dist-info/RECORD,,
+    "};
+    let mut writer = ZipFileWriter::new(Vec::new());
+    for (name, contents) in [
+        ("demo/__init__.py", "__version__ = '1.0.0'\n"),
+        (
+            "demo-1.0.0+local.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: demo\nVersion: 1.0.0\n",
+        ),
+        (
+            "demo-1.0.0+local.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        ),
+        ("demo-1.0.0+local.dist-info/RECORD", record_contents),
+    ] {
+        let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+    }
+    wheel.write_binary(&block_on(writer.close())?)?;
+    context.pip_install().arg(wheel.path()).assert().success();
+    let record = context
+        .site_packages()
+        .join("demo-1.0.0+local.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel.path()).arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    warning: Failed to uninstall package at `[SITE_PACKAGES]/demo-1.0.0+local.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - demo==1.0.0+local (from file://[TEMP_DIR]/demo-1.0.0-py3-none-any.whl)
+     + demo==1.0.0 (from file://[TEMP_DIR]/demo-1.0.0-py3-none-any.whl)
+    ");
+    assert!(record.is_file());
+    context.assert_installed("demo", "1.0.0");
+    Ok(())
+}
+
+/// An inconsistent metadata directory version can repair that same directory.
+#[test]
+fn reinstall_incomplete_directory_version_mismatch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.child("demo-1.0.0-py3-none-any.whl");
+    let record_contents = indoc! {"
+        demo/__init__.py,,
+        demo-2.0.0.dist-info/METADATA,,
+        demo-2.0.0.dist-info/WHEEL,,
+        demo-2.0.0.dist-info/RECORD,,
+    "};
+    let mut writer = ZipFileWriter::new(Vec::new());
+    for (name, contents) in [
+        ("demo/__init__.py", "__version__ = '1.0.0'\n"),
+        (
+            "demo-2.0.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: demo\nVersion: 1.0.0\n",
+        ),
+        (
+            "demo-2.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        ),
+        ("demo-2.0.0.dist-info/RECORD", record_contents),
+    ] {
+        let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+    }
+    wheel.write_binary(&block_on(writer.close())?)?;
+    context.pip_install().arg(wheel.path()).assert().success();
+    let record = context.site_packages().join("demo-2.0.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel.path()).arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    warning: Failed to uninstall package at `[SITE_PACKAGES]/demo-2.0.0.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - demo==2.0.0 (from file://[TEMP_DIR]/demo-1.0.0-py3-none-any.whl)
+     + demo==1.0.0 (from file://[TEMP_DIR]/demo-1.0.0-py3-none-any.whl)
+    ");
+    assert!(record.is_file());
+    context.assert_installed("demo", "1.0.0");
+    Ok(())
+}
+
+/// The filename-check escape hatch permits an in-place repair from an inconsistent wheel.
+#[test]
+fn reinstall_incomplete_disabled_filename_validation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (_, bytes) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel = context.temp_dir.child("demo-2.0.0-py3-none-any.whl");
+    wheel.write_binary(&bytes)?;
+    context
+        .pip_install()
+        .arg(wheel.path())
+        .env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1")
+        .assert()
+        .success();
+    let record = context.site_packages().join("demo-1.0.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel.path()).arg("--reinstall").env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    warning: Failed to uninstall package at `[SITE_PACKAGES]/demo-1.0.0.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - demo==1.0.0 (from file://[TEMP_DIR]/demo-2.0.0-py3-none-any.whl)
+     + demo==2.0.0 (from file://[TEMP_DIR]/demo-2.0.0-py3-none-any.whl)
+    ");
+    assert!(record.is_file());
+    context.assert_installed("demo", "1.0.0");
+    Ok(())
+}
+
+/// Matching public versions do not authorize leaving an old metadata directory behind.
+#[test]
+fn reinstall_incomplete_different_local_metadata_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, bytes) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let initial = context.temp_dir.child(filename);
+    initial.write_binary(&bytes)?;
+    context.pip_install().arg(initial.path()).assert().success();
+    let record = context.site_packages().join("demo-1.0.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    let (filename, bytes) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0+local".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let replacement = context.temp_dir.child(filename);
+    replacement.write_binary(&bytes)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(replacement.path()).arg("--reinstall"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Cannot uninstall package; `RECORD` file not found at: [SITE_PACKAGES]/demo-1.0.0.dist-info/RECORD
+    ");
+    context.assert_installed("demo", "1.0.0");
+    assert!(
+        !context
+            .site_packages()
+            .join("demo-1.0.0+local.dist-info")
+            .exists()
+    );
+    Ok(())
+}
+
+/// An sdist's public filename version can build the local version already installed.
+#[test]
+fn reinstall_incomplete_sdist_local_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let archive = generate_source_archive(&"demo".parse()?, &"1.0.0+local".parse()?, "", None)?;
+    let sdist = context.temp_dir.child("demo-1.0.0.tar.gz");
+    sdist.write_binary(&archive)?;
+    context
+        .pip_install()
+        .arg("demo==1.0.0")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(context.temp_dir.path())
+        .assert()
+        .success();
+    let record = context
+        .site_packages()
+        .join("demo-1.0.0+local.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg("demo==1.0.0").arg("--no-index").arg("--find-links").arg(context.temp_dir.path()).arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    warning: Failed to uninstall package at `[SITE_PACKAGES]/demo-1.0.0+local.dist-info` due to missing `RECORD` file. Installation may result in an incomplete environment.
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ demo==1.0.0+local
+    ");
+    assert!(record.is_file());
+    context.assert_installed("demo", "1.0.0+local");
+    Ok(())
+}
+
+/// A failed filesystem lookup identifies the affected uninstall record.
+#[test]
+#[cfg(unix)]
+fn reinstall_incomplete_record_lookup_error() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((
+        r"Too many levels of symbolic links \(os error \d+\)",
+        "[SYMLINK LOOP]",
+    ));
+    context.pip_install().arg("anyio==3.7.0").assert().success();
+    let record = context.site_packages().join("anyio-3.7.0.dist-info/RECORD");
+    fs_err::remove_file(&record)?;
+    symlink("RECORD", &record)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg("anyio==4.0.0"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Failed to inspect uninstall record at `[SITE_PACKAGES]/anyio-3.7.0.dist-info/RECORD`
+      cause: [SYMLINK LOOP]
+    ");
+    context.assert_command("import anyio; from importlib.metadata import version; assert version('anyio') == '3.7.0'").success();
     Ok(())
 }
 
