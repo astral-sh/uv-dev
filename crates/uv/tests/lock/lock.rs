@@ -8,8 +8,6 @@ use anyhow::Result;
 use anyhow::anyhow;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
-#[cfg(feature = "test-universal")]
-#[cfg(feature = "test-universal")]
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
