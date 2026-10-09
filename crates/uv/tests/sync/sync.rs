@@ -15904,6 +15904,15 @@ dependencies = [
     "
     );
 
+    // Persist the global cutoff before testing an upgrade with a package override.
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .arg("--exclude-newer")
+        .arg("2022-04-04T12:00:00Z")
+        .assert()
+        .success();
+
     // Now sync with --exclude-newer-package to allow tqdm to use a newer version
     uv_snapshot!(context.filters(), context
         .sync().arg("--dry-run")
@@ -15916,8 +15925,9 @@ dependencies = [
     exit_code: 0 (success)
     ----- stderr -----
     Would use project environment at: .venv
+    Resolving despite existing lockfile due to addition of exclude newer `2022-09-04T00:00:00Z` for package `tqdm`
     Resolved [N] packages in [TIME]
-    Would create lockfile at: uv.lock
+    Would update lockfile at: uv.lock
     Would download 6 packages
     Would install 6 packages
      + certifi==2021.10.8
@@ -15974,6 +15984,13 @@ exclude-newer = "2022-04-04T12:00:00Z"
     "
     );
 
+    // Persist the configured cutoff before adding the package override.
+    context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+
     // Now add the package-specific exclude-newer to the config
     pyproject_toml.write_str(
         r#"
@@ -16000,8 +16017,9 @@ exclude-newer-package = { tqdm = "2022-09-04T00:00:00Z" }
     exit_code: 0 (success)
     ----- stderr -----
     Would use project environment at: .venv
+    Resolving despite existing lockfile due to addition of exclude newer `2022-09-04T00:00:00Z` for package `tqdm`
     Resolved [N] packages in [TIME]
-    Would create lockfile at: uv.lock
+    Would update lockfile at: uv.lock
     Would download 6 packages
     Would install 6 packages
      + certifi==2021.10.8

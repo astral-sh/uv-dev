@@ -10658,7 +10658,7 @@ fn tool_uv_sources() -> Result<()> {
             .join("poetry_editable/poetry_editable/__init__.py"),
     )?;
 
-    // Install the editable packages.
+    // Resolve the editable packages.
     uv_snapshot!(context.filters(), windows_filters=false, context.pip_install().arg("--dry-run")
         .arg("-r")
         .arg(require_path)
@@ -10681,28 +10681,6 @@ fn tool_uv_sources() -> Result<()> {
     "
     );
 
-    // Re-install the editable packages.
-    uv_snapshot!(context.filters(), windows_filters=false, context.pip_install().arg("--dry-run")
-        .arg("-r")
-        .arg(require_path)
-        .arg("--extra")
-        .arg("utils"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 9 packages in [TIME]
-    Would download 9 packages
-    Would install 9 packages
-     + anyio==4.3.0
-     + charset-normalizer @ git+https://github.com/jawah/charset_normalizer@ffdf7f5f08beb0ceb92dc0637e97382ba27cecfa
-     + colorama==0.4.6
-     + idna==3.6
-     + packaging @ git+https://github.com/pypa/packaging@32deafe8668a2130a3366b98154914d188f3718e
-     + poetry-editable @ file://[TEMP_DIR]/poetry_editable
-     + sniffio==1.3.1
-     + tqdm @ https://files.pythonhosted.org/packages/a5/d6/502a859bac4ad5e274255576cd3e15ca273cdb91731bc39fb840dd422ee9/tqdm-4.66.0-py3-none-any.whl
-     + urllib3 @ https://files.pythonhosted.org/packages/a2/73/a68704750a7679d0b6d3ad7aa8d4da8e14e151ae82e6fee774e6e0d05ec8/urllib3-2.2.1-py3-none-any.whl
-    "
-    );
     Ok(())
 }
 
