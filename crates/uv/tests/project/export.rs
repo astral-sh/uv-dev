@@ -10543,10 +10543,14 @@ fn requirements_txt_dynamic_scoped_override_conflict() -> Result<()> {
         backend-path = ["."]
         build-backend = "build_backend"
 
+        [dependency-groups]
+        shared = []
+
         [tool.uv]
-        conflicts = [[{{ package = "project" }}, {{ package = "child" }}]]
+        environments = ["sys_platform != '{inactive_platform}'"]
+        conflicts = [[{{ package = "child", extra = "feature" }}, {{ group = "shared" }}]]
         override-dependencies = [
-            "child",
+            "child[feature]",
             {{ package = {{ name = "project", version = "0.1.0" }}, dependencies = ["bridge"] }},
         ]
 
@@ -10580,23 +10584,26 @@ fn requirements_txt_dynamic_scoped_override_conflict() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
 
+        [project.optional-dependencies]
+        feature = []
+
         [tool.uv]
         package = false
     "#})?;
     uv_snapshot!(context.filters(), context.export().args([
-        "--package", "project", "--no-emit-project", "--preview-features", "package-conflicts", "--index",
+        "--package", "project", "--group", "shared", "--no-emit-project", "--index",
     ]).arg(server.index_url()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    error: Found conflicting selections `child[feature]` and `project:shared` enabled simultaneously
     ");
     uv_snapshot!(context.filters(), context.export().args([
-        "--frozen", "--package", "project", "--no-emit-project", "--preview-features", "package-conflicts", "--offline",
+        "--frozen", "--package", "project", "--group", "shared", "--no-emit-project", "--offline",
     ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    error: Found conflicting selections `child[feature]` and `project:shared` enabled simultaneously
     ");
     Ok(())
 }
