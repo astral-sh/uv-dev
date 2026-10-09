@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use anyhow::{Context, Result};
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
 use reqsign::azure::DefaultSigner as AzureDefaultSigner;
-use reqsign::google::DefaultSigner as GcsDefaultSigner;
+use reqsign::google::{DefaultSigner as GcsDefaultSigner, EnvCredentialProvider};
 use tracing::debug;
 use url::{ParseError, Url};
 
@@ -145,7 +145,14 @@ impl GcsEndpointProvider {
     /// This is potentially expensive as it may invoke credential helpers, so the result
     /// should be cached.
     pub(crate) fn create_signer() -> GcsDefaultSigner {
-        reqsign::google::default_signer("storage.googleapis.com")
+        let signer = reqsign::google::default_signer("storage.googleapis.com");
+        if std::env::var("GOOGLE_APPLICATION_CREDENTIALS").is_ok_and(|path| !path.is_empty()) {
+            // An explicitly selected credential file must not silently fall back to another
+            // identity if it cannot be loaded. The default chain skips provider errors.
+            signer.with_credential_provider(EnvCredentialProvider::new())
+        } else {
+            signer
+        }
     }
 }
 

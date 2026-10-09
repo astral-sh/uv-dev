@@ -14,7 +14,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::uv_snapshot;
 
-/// An external account file without a format silently selects the VM's identity instead.
+/// An invalid explicit external account must report its error without selecting the VM's identity.
 #[tokio::test]
 #[cfg(feature = "test-python")]
 async fn gcs_external_account_missing_file_format() -> Result<()> {
@@ -67,7 +67,7 @@ async fn gcs_external_account_missing_file_format() -> Result<()> {
             "token_type": "Bearer",
             "expires_in": 3600
         })))
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -81,12 +81,10 @@ async fn gcs_external_account_missing_file_format() -> Result<()> {
         .and(path("/packages/ok-1.0.0-py3-none-any.whl"))
         .and(header("Authorization", "Bearer test-metadata-token"))
         .respond_with(ResponseTemplate::new(403))
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
 
-    // The 403 hides the rejected configuration and the unintended identity switch:
-    // astral-sh/uv#22273.
     uv_snapshot!(context.filters(), context.sync()
         .arg("--no-index")
         .arg("--no-config")
@@ -100,13 +98,15 @@ async fn gcs_external_account_missing_file_format() -> Result<()> {
     ----- stderr -----
     error: Failed to download `ok @ http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl`
       cause: Failed to fetch: http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl
-      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl)
+      cause: Failed to sign request with GCS credentials
+      cause: failed to parse credential file
+      cause: data did not match any variant of untagged enum Source
     ");
 
     Ok(())
 }
 
-/// URL-sourced external accounts also require a format, with no diagnostic even under `-v`.
+/// URL-sourced external account errors must also be visible under `-v` without metadata fallback.
 #[tokio::test]
 #[cfg(feature = "test-python")]
 async fn gcs_external_account_missing_url_format() -> Result<()> {
@@ -163,7 +163,7 @@ async fn gcs_external_account_missing_url_format() -> Result<()> {
             "token_type": "Bearer",
             "expires_in": 3600
         })))
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
@@ -177,12 +177,10 @@ async fn gcs_external_account_missing_url_format() -> Result<()> {
         .and(path("/packages/ok-1.0.0-py3-none-any.whl"))
         .and(header("Authorization", "Bearer test-metadata-token"))
         .respond_with(ResponseTemplate::new(403))
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
 
-    // Even verbose output hides the credential-loading warning, making the unexpected
-    // metadata identity difficult to diagnose: astral-sh/uv#22273.
     uv_snapshot!(context.filters(), context.sync()
         .arg("--no-index")
         .arg("--no-config")
@@ -210,7 +208,9 @@ async fn gcs_external_account_missing_url_format() -> Result<()> {
     DEBUG Found GCS credentials for `http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl`
     error: Failed to download `ok @ http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl`
       cause: Failed to fetch: http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl
-      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl)
+      cause: Failed to sign request with GCS credentials
+      cause: failed to parse credential file
+      cause: data did not match any variant of untagged enum Source
     ");
 
     Ok(())
