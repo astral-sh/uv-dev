@@ -82,7 +82,9 @@ fn python_install() {
     ");
 
     // Similarly, when a requested version is already installed
-    uv_snapshot!(context.filters(), context.python_install().arg("3.15"), @"
+    uv_snapshot!(context.filters(), context.python_install().args([
+        "3.15", "--offline", "--preview-features", "remote-python-download-metadata",
+    ]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Python 3.15 is already installed
@@ -2274,7 +2276,7 @@ fn python_install_relative_broken_link() -> anyhow::Result<()> {
     assert!(context.temp_dir.child("unmanaged-python").try_exists()?);
 
     uv_snapshot!(context.filters(), context.python_install()
-        .args(["--no-config", "--offline", "3.13.1"]), @"
+        .args(["--no-config", "--offline", "3.13.1", "--preview-features", "remote-python-download-metadata"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Installed Python 3.13.1 in [TIME]

@@ -1085,12 +1085,20 @@ async fn python_list_ndjson_parse_error_redacts_url() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/line.ndjson"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("not-json\n"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(
+                "{\"version\":\"3.13.0+20260101\",\"artifacts\":[]}\n \t\nnot-json\n",
+            ),
+        )
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/buffer.ndjson"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("not-json"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(
+                "\n\r\n{\"version\":\"3.13.0+20260101\",\"artifacts\":[]}\nnot-json",
+            ),
+        )
         .mount(&server)
         .await;
     let authority = server.uri().replace("http://", "http://user:secret@");
@@ -1102,7 +1110,7 @@ async fn python_list_ndjson_parse_error_redacts_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Error while fetching remote python downloads NDJSON from 'http://user:****@[LOCALHOST]/line.ndjson?X-Amz-Signature=****'
-      cause: Unable to parse NDJSON line at http://user:****@[LOCALHOST]/line.ndjson?X-Amz-Signature=****
+      cause: Unable to parse NDJSON line 3 at http://user:****@[LOCALHOST]/line.ndjson?X-Amz-Signature=****
       cause: expected ident at line 1 column 2
     "#);
 
@@ -1113,9 +1121,28 @@ async fn python_list_ndjson_parse_error_redacts_url() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Error while fetching remote python downloads NDJSON from 'http://user:****@[LOCALHOST]/buffer.ndjson?X-Amz-Signature=****'
-      cause: Unable to parse NDJSON line at http://user:****@[LOCALHOST]/buffer.ndjson?X-Amz-Signature=****
+      cause: Unable to parse NDJSON line 4 at http://user:****@[LOCALHOST]/buffer.ndjson?X-Amz-Signature=****
       cause: expected ident at line 1 column 2
     "#);
 
+    Ok(())
+}
+
+/// Local catalog errors identify the physical record after blank lines.
+#[test]
+fn python_list_local_ndjson_error_line_number() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("python.ndjson")
+        .write_str("{\"version\":\"3.13.0+20260101\",\"artifacts\":[]}\n \t\r\nnot-json")?;
+    uv_snapshot!(context.filters(), context.python_list()
+        .args(["--python-downloads-json-url", "python.ndjson"])
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Unable to parse NDJSON line 3 at python.ndjson
+      cause: expected ident at line 1 column 2
+    ");
     Ok(())
 }

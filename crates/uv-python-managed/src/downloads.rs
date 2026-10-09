@@ -121,8 +121,13 @@ pub enum Error {
     RemotePythonDownloadsJSONClient(Box<uv_client::Error>),
     #[error(transparent)]
     ClientBuild(Box<ClientBuildError>),
-    #[error("Unable to parse NDJSON line at {0}")]
-    InvalidPythonDownloadsNdjsonLine(String, #[source] serde_json::Error),
+    #[error("Unable to parse NDJSON line {line} at {source}")]
+    InvalidPythonDownloadsNdjsonLine {
+        source: String,
+        line: usize,
+        #[source]
+        err: serde_json::Error,
+    },
     #[error("Error while fetching remote python downloads NDJSON from '{0}'")]
     FetchingPythonDownloadsNdjsonError(String, #[source] Box<Self>),
     #[error("An offline Python installation was requested, but `{file}` (from `{url}`) is missing in `{}`", python_builds_dir.user_display())]
@@ -757,7 +762,7 @@ fn download_metadata_error(error: CachedClientError<Error>) -> Error {
         } => match err {
             err @ (Error::InvalidPythonDownloadsJSON(..)
             | Error::UnsupportedPythonDownloadsJSON(..)
-            | Error::InvalidPythonDownloadsNdjsonLine(..)) => err,
+            | Error::InvalidPythonDownloadsNdjsonLine { .. }) => err,
             err if retries > 0 => err.into_retried(retries, duration),
             err => err,
         },
@@ -791,17 +796,20 @@ async fn fetch_ndjson_from_url(
         let mut stream = response.bytes_stream();
         let mut buffer = Vec::new();
         let mut versions = Vec::new();
+        let mut line_number = 1;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|err| Error::from_reqwest(url.clone(), err, None, start))?;
             buffer.extend_from_slice(&chunk);
             while let Some(newline) = buffer.iter().position(|&byte| byte == b'\n') {
-                if let Some(version) = parse_ndjson_line(&source, &buffer[..newline])? {
+                if let Some(version) = parse_ndjson_line(&source, line_number, &buffer[..newline])?
+                {
                     versions.push(version);
                 }
                 buffer.drain(..=newline);
+                line_number += 1;
             }
         }
-        if let Some(version) = parse_ndjson_line(&source, &buffer)? {
+        if let Some(version) = parse_ndjson_line(&source, line_number, &buffer)? {
             versions.push(version);
         }
         Ok::<_, Error>(versions)
@@ -819,20 +827,28 @@ async fn fetch_ndjson_from_url(
 }
 
 /// Parse one nonblank metadata line, accepting whitespace and CRLF consistently for every source.
-fn parse_ndjson_line(source: &str, line: &[u8]) -> Result<Option<NdjsonPythonVersionInfo>, Error> {
+fn parse_ndjson_line(
+    source: &str,
+    line_number: usize,
+    line: &[u8],
+) -> Result<Option<NdjsonPythonVersionInfo>, Error> {
     if line.iter().all(u8::is_ascii_whitespace) {
         return Ok(None);
     }
     serde_json::from_slice(line)
         .map(Some)
-        .map_err(|err| Error::InvalidPythonDownloadsNdjsonLine(source.to_owned(), err))
+        .map_err(|err| Error::InvalidPythonDownloadsNdjsonLine {
+            source: source.to_owned(),
+            line: line_number,
+            err,
+        })
 }
 
 /// Parse NDJSON content from bytes into a list of [`ManagedPythonDownload`]s.
 fn parse_ndjson_bytes(source: &str, buf: &[u8]) -> Result<Vec<ManagedPythonDownload>, Error> {
     let mut downloads = Vec::new();
-    for line in buf.split(|&byte| byte == b'\n') {
-        if let Some(version) = parse_ndjson_line(source, line)? {
+    for (line_number, line) in buf.split(|&byte| byte == b'\n').enumerate() {
+        if let Some(version) = parse_ndjson_line(source, line_number + 1, line)? {
             downloads.extend(parse_ndjson_version_info(version));
         }
     }
@@ -2305,14 +2321,14 @@ mod tests {
 
     #[test]
     fn ndjson_line_parser_accepts_blank_crlf_lines() -> Result<(), Error> {
-        assert!(parse_ndjson_line("test", b"\r").is_ok_and(|line| line.is_none()));
-        assert!(parse_ndjson_line("test", b" \t\r").is_ok_and(|line| line.is_none()));
+        assert!(parse_ndjson_line("test", 1, b"\r").is_ok_and(|line| line.is_none()));
+        assert!(parse_ndjson_line("test", 1, b" \t\r").is_ok_and(|line| line.is_none()));
         let downloads = parse_ndjson_bytes(
             "test",
             b"\r\n \t\r\n{\"version\":\"3.13.0+20260101\",\"artifacts\":[]}",
         )?;
         assert!(downloads.is_empty());
-        assert!(parse_ndjson_line("test", b"not-json").is_err());
+        assert!(parse_ndjson_line("test", 1, b"not-json").is_err());
         Ok(())
     }
     #[test]
