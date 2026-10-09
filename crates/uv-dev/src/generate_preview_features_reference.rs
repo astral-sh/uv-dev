@@ -362,6 +362,12 @@ mod tests {
         resolution can be retained even when their packages are absent from the final dependency
         graph.
 
+        ### `run-profile` {#run-profile}
+
+        The `uv run --profile` option profiles Python scripts and modules with Python's sampling
+        profiler. It requires CPython 3.15 or later and writes an HTML flame graph to
+        `profile.html` unless another output path is selected.
+
         ### `s3-endpoint` {#s3-endpoint}
 
         uv can authenticate requests to an S3-compatible storage endpoint using AWS Signature

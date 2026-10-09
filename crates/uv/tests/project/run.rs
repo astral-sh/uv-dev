@@ -85,21 +85,12 @@ fn run_profile_rejects_unsupported_targets() -> Result<()> {
     error: `--profile` requires a Python script or module
     ");
 
-    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
-    context.python_install().arg("3.15").assert().success();
-    uv_snapshot!(context.filters(), context.run().arg("--quiet")
-        .arg("--python").arg("3.15")
-        .arg("--profile").arg("python").arg("-c").arg("pass"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `--profile` only supports Python scripts and modules; use `uv run --profile script.py` or `uv run --profile -m module`
-    ");
     Ok(())
 }
 
 #[cfg(all(target_os = "linux", feature = "test-python-managed"))]
 #[test]
-fn run_profile_script_and_module() -> Result<()> {
+fn run_profile_script() -> Result<()> {
     let server = PackseServer::from_scenario(&toml::from_str(indoc! {r#"
         name = "run-profile"
         [root]
@@ -148,6 +139,24 @@ fn run_profile_script_and_module() -> Result<()> {
     assert_snapshot!(context.read("target.json"), @r#"[["--flag", "value"], "1.0.0"]"#);
     assert!(fs_err::metadata(context.temp_dir.join("script-profile.html"))?.len() > 0);
 
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", feature = "test-python-managed"))]
+#[test]
+fn run_profile_module() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    context.python_install().arg("3.15").assert().success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = "<3.15"
+        dependencies = ["missing-project-dependency"]
+    "#})?;
     context
         .temp_dir
         .child("profile_module.py")
