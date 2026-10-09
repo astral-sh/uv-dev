@@ -18591,7 +18591,11 @@ fn system_install_read_only_destination_hint() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_managed_python_dirs()
         .with_filtered_python_keys()
-        .with_filtered_latest_python_versions();
+        .with_filtered_latest_python_versions()
+        .with_filter((
+            r"/site-packages/permission_test(?:-1\.0\.0\.dist-info)?`",
+            "/site-packages/[PACKAGE-DIR]`",
+        ));
     context.python_install().arg("3.12").assert().success();
     let found = context
         .python_find()
@@ -18620,8 +18624,8 @@ fn system_install_read_only_destination_hint() -> Result<()> {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     error: Failed to install: permission_test-1.0.0-py3-none-any.whl (permission-test==1.0.0)
-      cause: Failed to create directory `[TEMP_DIR]/managed/cpython-3.12.[LATEST]-[PLATFORM]/[PYTHON-LIB]/site-packages/permission_test`
-      cause: failed to create directory `[TEMP_DIR]/managed/cpython-3.12.[LATEST]-[PLATFORM]/[PYTHON-LIB]/site-packages/permission_test`: Permission denied (os error 13)
+      cause: Failed to create directory `[TEMP_DIR]/managed/cpython-3.12.[LATEST]-[PLATFORM]/[PYTHON-LIB]/site-packages/[PACKAGE-DIR]`
+      cause: failed to create directory `[TEMP_DIR]/managed/cpython-3.12.[LATEST]-[PLATFORM]/[PYTHON-LIB]/site-packages/[PACKAGE-DIR]`: Permission denied (os error 13)
 
     hint: It looks like you do not have permission to write to the system Python environment. Create a virtual environment with `uv venv`, then install into it using `--python .venv`; remove `--system` and unset `UV_SYSTEM_PYTHON` if set
     "#);
