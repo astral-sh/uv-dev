@@ -25,6 +25,7 @@ uv-extract = { workspace = true }
 uv-fs = { workspace = true }
 uv-macros = { workspace = true }
 uv-platform = { workspace = true }
+uv-preview = { workspace = true }
 uv-pypi-types = { workspace = true }
 uv-python-interpreter = { workspace = true }
 uv-python-types = { workspace = true }
@@ -62,6 +63,7 @@ windows-registry = { workspace = true }
 
 [dev-dependencies]
 uv-pep440 = { workspace = true }
+uv-preview = { workspace = true, features = ["testing"] }
 
 indoc = { workspace = true }
 insta = { workspace = true }

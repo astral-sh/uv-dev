@@ -26,7 +26,7 @@ use uv_install_wheel::LinkMode;
 use uv_macros::{CombineOptions, OptionsMetadata};
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep508::Requirement;
-use uv_preview::{MaybePreviewFeature, Preview, PreviewFeature};
+use uv_preview::{MaybePreviewFeature, Preview};
 use uv_pypi_types::{SupportedEnvironments, VerbatimParsedUrl};
 use uv_python_types::{PythonDownloadMirrors, PythonDownloads, PythonPreference, PythonVersion};
 use uv_redacted::DisplaySafeUrl;
@@ -1433,9 +1433,9 @@ pub struct PythonInstallMirrors {
 }
 
 impl PythonInstallMirrors {
-    /// Return the configured Python downloads metadata URL, or the preview endpoint when enabled.
+    /// Return an explicitly configured Python downloads catalog.
     pub fn python_downloads_json_url(&self) -> Option<&str> {
-        resolve_python_downloads_json_url(self.python_downloads_json_url.as_deref())
+        self.python_downloads_json_url.as_deref()
     }
 
     /// Return the mirrors to use for managed Python downloads.
@@ -1460,16 +1460,6 @@ impl PythonInstallMirrors {
                 .or(other.python_downloads_json_url),
         }
     }
-}
-
-/// Return the configured Python downloads metadata URL, or the preview endpoint when enabled.
-pub fn resolve_python_downloads_json_url(configured: Option<&str>) -> Option<&str> {
-    const REMOTE_PYTHON_DOWNLOAD_METADATA_URL: &str = "https://raw.githubusercontent.com/astral-sh/versions/refs/heads/main/v1/python-build-standalone.ndjson";
-
-    configured.or_else(|| {
-        uv_preview::is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata)
-            .then_some(REMOTE_PYTHON_DOWNLOAD_METADATA_URL)
-    })
 }
 
 /// Settings that are specific to the `uv pip` command-line interface.
