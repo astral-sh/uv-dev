@@ -40,8 +40,8 @@ use uv_workspace::{
     WorkspaceErrorKind,
 };
 
-use crate::ProjectError;
 use crate::edit::{ProjectEdit, PythonTarget};
+use crate::{ProjectError, SyncMode};
 
 /// Version information for a project (`uv version`).
 #[derive(serde::Serialize)]
@@ -72,7 +72,6 @@ impl std::fmt::Display for ProjectVersionInfo {
 }
 
 /// Read or update project version (`uv version`)
-#[expect(clippy::fn_params_excessive_bools)]
 pub async fn project_version(
     value: Option<String>,
     mut bump: Vec<VersionBumpSpec>,
@@ -81,11 +80,11 @@ pub async fn project_version(
     project_dir: &Path,
     package: Option<PackageName>,
     explicit_project: bool,
-    dry_run: bool,
+    dry_run: DryRun,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
     settings: ResolverInstallerSettings,
@@ -327,7 +326,7 @@ pub async fn project_version(
     };
 
     // Update the toml and lock
-    let status = if dry_run {
+    let status = if dry_run.enabled() {
         ExitStatus::Success
     } else if let Some(new_version) = &new_version {
         let edit = ProjectEdit::new(
@@ -350,7 +349,7 @@ pub async fn project_version(
             lock_check,
             frozen,
             active,
-            no_sync,
+            sync,
             python,
             install_mirrors,
             &settings,
@@ -501,7 +500,7 @@ async fn lock_and_sync(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
     settings: &ResolverInstallerSettings,
@@ -517,6 +516,8 @@ async fn lock_and_sync(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
 ) -> Result<ExitStatus> {
+    let no_sync = sync.no_sync();
+
     // If frozen, don't touch the lock or sync at all
     if frozen.is_some() {
         return Ok(ExitStatus::Success);

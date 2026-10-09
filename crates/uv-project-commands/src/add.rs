@@ -62,9 +62,8 @@ use uv_warnings::warn_user_once;
 use uv_workspace::pyproject::{DependencyType, Source, SourceError, Sources, ToolUvSources};
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
-use crate::ProjectError;
-use crate::ScriptPath;
 use crate::edit::{EditTarget, ProjectEdit, PythonTarget};
+use crate::{ProjectError, ScriptPath, SyncMode};
 use uv_resolve_operations::reporters::ResolverReporter;
 
 /// A failed dependency addition, with `uv add`-specific recovery context.
@@ -99,7 +98,7 @@ pub async fn add(
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     no_install_project: bool,
     only_install_project: bool,
     no_install_workspace: bool,
@@ -139,6 +138,8 @@ pub async fn add(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
 ) -> Result<ExitStatus> {
+    let no_sync = sync.no_sync();
+
     for source in &requirements {
         match source {
             RequirementsSource::PyprojectToml(_) => {
