@@ -1022,14 +1022,6 @@ impl ProjectEnvironment {
             ProjectEnvironmentSelection::from_install_path(target.install_path(), active);
         let centralized = centralized_environments_enabled(&environment_selection, cache);
 
-        // Lock the project environment to avoid synchronization issues.
-        let _lock = lock_project_environment(target)
-            .await
-            .inspect_err(|err| {
-                warn!("Failed to acquire project environment lock: {err}");
-            })
-            .ok();
-
         // A selected installation target narrows group requirements. Otherwise a lockfile-only
         // environment uses the requirements of the entire workspace.
         let frozen_target = frozen_target.or_else(|| match target {
@@ -1041,37 +1033,37 @@ impl ProjectEnvironment {
                 lock,
             }),
         });
-        let project_python = if let Some(frozen_target) = frozen_target {
-            ProjectPythonRequest::from_requirements(
-                python,
-                Some(frozen_target.install_path()),
-                Some(frozen_target.python_requirement(groups)?),
-                target.install_path(),
-                config_discovery,
-            )
-            .await?
-        } else {
-            ProjectPythonRequest::from_request(
-                python,
-                target.workspace(),
-                groups,
-                target.install_path(),
-                config_discovery,
-            )
-            .await?
+        let project_python = || async {
+            if let Some(frozen_target) = frozen_target {
+                ProjectPythonRequest::from_requirements(
+                    python.clone(),
+                    Some(frozen_target.install_path()),
+                    Some(frozen_target.python_requirement(groups)?),
+                    target.install_path(),
+                    config_discovery,
+                )
+                .await
+                .map_err(EnvironmentError::from)
+            } else {
+                ProjectPythonRequest::from_request(
+                    python.clone(),
+                    target.workspace(),
+                    groups,
+                    target.install_path(),
+                    config_discovery,
+                )
+                .await
+                .map_err(EnvironmentError::from)
+            }
         };
-        let upgradeable = project_python
-            .python_request
-            .as_ref()
-            .is_none_or(|request| !request.includes_patch());
 
         let reference = environment_selection
             .explicit_path()
             .map_or_else(|| target.install_path().join(".venv"), Path::to_path_buf);
-        let discover = || {
+        let discover = |project_python| {
             ProjectInterpreter::discover_unreported(
                 target,
-                project_python.clone(),
+                project_python,
                 client_builder,
                 python_preference,
                 python_arch,
@@ -1088,7 +1080,7 @@ impl ProjectEnvironment {
             )
         };
         if no_sync && !dry_run.enabled() {
-            let (selected, report) = discover().await?;
+            let (selected, report) = discover(project_python().await?).await?;
             if let ProjectInterpreter::Environment(environment) = selected
                 && (!centralized
                     || project_environment_reference_matches(&reference, environment.root()))
@@ -1099,6 +1091,20 @@ impl ProjectEnvironment {
             // Any creation or reference update requires admission and fresh discovery. Discard
             // this preliminary report so only the accepted selection is printed.
         }
+        // Lock the project environment to avoid synchronization issues.
+        let _lock = lock_project_environment(target)
+            .await
+            .inspect_err(|err| {
+                warn!("Failed to acquire project environment lock: {err}");
+            })
+            .ok();
+
+        let project_python = project_python().await?;
+        let upgradeable = project_python
+            .python_request
+            .as_ref()
+            .is_none_or(|request| !request.includes_patch());
+
         let mut destination_lock = if dry_run.enabled() {
             // Dry runs use a private temporary environment when creation would be required.
             None
@@ -1106,7 +1112,7 @@ impl ProjectEnvironment {
             lock_environment_destination(&reference, &reference, cache).await?
         };
         loop {
-            let (selected, report) = discover().await?;
+            let (selected, report) = discover(project_python.clone()).await?;
             let selected = match selected {
                 ProjectInterpreter::Environment(environment) => {
                     SelectedEnvironment::Existing(environment)

@@ -383,6 +383,8 @@ async fn nested_no_sync_reuses_environment_during_build() -> Result<()> {
     context.venv().arg("--no-project").assert().success();
     let marker = context.venv.child("build-hook-owner");
     marker.write_str("existing project environment")?;
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let port = listener.local_addr()?.port();
     let (filename, wheel) = generate_wheel(
         &"project".parse()?,
         &"0.1.0".parse()?,
@@ -427,6 +429,7 @@ async fn nested_no_sync_reuses_environment_during_build() -> Result<()> {
         .write_str(&formatdoc! {r#"
         import os
         import shutil
+        import socket
         import subprocess
         from pathlib import Path
         from zipfile import ZipFile
@@ -443,6 +446,10 @@ async fn nested_no_sync_reuses_environment_during_build() -> Result<()> {
             return dist_info.name
 
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            if port := os.environ.get("UV_TEST_BUILD_GATE"):
+                with socket.create_connection(("127.0.0.1", int(port)), timeout=30) as connection:
+                    connection.sendall(b"ready")
+                    assert connection.recv(1) == b"x"
             subprocess.run(
                 [os.environ["UV_TEST_BIN"], "run", "--no-sync", "--offline", "python",
                  str(PROJECT / "check_environment.py")],
@@ -454,13 +461,35 @@ async fn nested_no_sync_reuses_environment_during_build() -> Result<()> {
             return WHEEL.name
     "#})?;
 
-    let mut command = context.sync();
-    let uv = command.get_program().to_os_string();
-    command
-        .args(["--offline", "--no-editable"])
-        .env("UV_TEST_BIN", uv)
-        .env("UV_TEST_PROJECT_ROOT", context.temp_dir.path());
-    QueuedCommand::spawn(command)?.finish().await?;
+    let sync_command = || {
+        let mut command = context.sync();
+        let uv = command.get_program().to_os_string();
+        command
+            .args(["--offline", "--no-editable"])
+            .env("UV_TEST_BIN", uv)
+            .env("UV_TEST_PROJECT_ROOT", context.temp_dir.path())
+            .env_remove("UV_TEST_BUILD_GATE");
+        command
+    };
+    // Only the first sync waits at the backend gate, even if the queued writer rebuilds.
+    let mut command = sync_command();
+    command.env("UV_TEST_BUILD_GATE", port.to_string());
+    let sync = QueuedCommand::spawn(command)?;
+    let (mut connection, _) =
+        tokio::time::timeout(Duration::from_secs(30), listener.accept()).await??;
+    let mut ready = [0; 5];
+    tokio::time::timeout(Duration::from_secs(30), connection.read_exact(&mut ready)).await??;
+    assert_eq!(&ready, b"ready");
+
+    let mut queued_sync = QueuedCommand::spawn(sync_command())?;
+    queued_sync
+        .wait_for_destination(&fs_err::canonicalize(context.venv.path())?)
+        .await?;
+    assert!(queued_sync.child.try_wait()?.is_none());
+    connection.write_all(b"x").await?;
+    drop(connection);
+    sync.finish().await?;
+    queued_sync.finish().await?;
     let prefix = fs_err::read_to_string(context.temp_dir.child("nested-prefix"))?;
     assert_eq!(
         fs_err::canonicalize(prefix)?,
@@ -609,7 +638,7 @@ async fn no_sync_reference_replacement_waits_for_destination() -> Result<()> {
             "centralized-project-envs",
             "python",
             "-c",
-            "import os, sys; from pathlib import Path; assert Path(sys.prefix).resolve() == Path(os.environ['UV_TEST_EXPECTED_PREFIX']).resolve()",
+            "import os, sys; from pathlib import Path; expected = os.environ['UV_TEST_EXPECTED_PREFIX']; assert Path(sys.prefix).samefile(expected), (sys.prefix, expected)",
         ])
         .env("UV_TEST_EXPECTED_PREFIX", &cached);
     let mut run = QueuedCommand::spawn(command)?;
@@ -655,7 +684,7 @@ async fn no_sync_reuses_centralized_indirect_path_file() -> Result<()> {
             "centralized-project-envs",
             "python",
             "-c",
-            "import os, sys; from pathlib import Path; assert Path(sys.prefix).resolve() == Path(os.environ['UV_TEST_EXPECTED_PREFIX']).resolve()",
+            "import os, sys; from pathlib import Path; expected = os.environ['UV_TEST_EXPECTED_PREFIX']; assert Path(sys.prefix).samefile(expected), (sys.prefix, expected)",
         ])
         .env("UV_TEST_EXPECTED_PREFIX", &cached);
     QueuedCommand::spawn(command)?.finish().await?;
