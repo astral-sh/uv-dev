@@ -1245,6 +1245,54 @@ mod tests {
         "#);
     }
 
+    #[test]
+    fn custom_downloads_reject_invalid_sha256() {
+        for sha256 in ["short", &"z".repeat(64)] {
+            let json = format!(
+                r#"{{"cpython-3.14.0-linux-x86_64-gnu":{{"name":"cpython","arch":{{"family":"x86_64","variant":null}},"os":"linux","libc":"gnu","major":3,"minor":14,"patch":0,"prerelease":null,"url":"https://example.com/python.tar.gz","sha256":"{sha256}","variant":null,"build":null}}}}"#
+            );
+
+            let error = parse_downloads_json(json.as_bytes(), "downloads.json".to_string())
+                .expect_err("an invalid SHA-256 digest should be rejected");
+            assert!(matches!(&error, Error::InvalidPythonDownloadsJSON(..)));
+            assert!(format!("{error:?}").contains("Invalid hash digest"));
+        }
+    }
+
+    #[test]
+    fn custom_downloads_reject_non_ascii_sha256() {
+        let sha256 = "💥".repeat(16);
+        let json = format!(
+            r#"{{"cpython-3.14.0-linux-x86_64-gnu":{{"name":"cpython","arch":{{"family":"x86_64","variant":null}},"os":"linux","libc":"gnu","major":3,"minor":14,"patch":0,"prerelease":null,"url":"https://example.com/python.tar.gz","sha256":"{sha256}","variant":null,"build":null}}}}"#
+        );
+
+        let error = parse_downloads_json(json.as_bytes(), "downloads.json".to_string())
+            .expect_err("a non-ASCII SHA-256 digest should be rejected");
+        insta::assert_debug_snapshot!(error, @r#"
+        InvalidPythonDownloadsJSON(
+            "downloads.json",
+            Error("Invalid hash digest (expected only hexadecimal characters): `💥💥💥💥💥💥💥💥💥💥💥💥💥💥💥💥`", line: 1, column: 287),
+        )
+        "#);
+    }
+
+    #[test]
+    fn custom_downloads_accept_valid_or_missing_sha256() {
+        for sha256 in [
+            r#""sha256":"c3223d5924a0ed0ef5958a750377c362d0957587f896c0f6c635ae4b39e0f337","#,
+            r#""sha256":"C3223D5924A0ED0EF5958A750377C362D0957587F896C0F6C635AE4B39E0F337","#,
+            r#""sha256":null,"#,
+            "",
+        ] {
+            let json = format!(
+                r#"{{"cpython-3.14.0-linux-x86_64-gnu":{{"name":"cpython","arch":{{"family":"x86_64","variant":null}},"os":"linux","libc":"gnu","major":3,"minor":14,"patch":0,"prerelease":null,"url":"https://example.com/python.tar.gz",{sha256}"variant":null,"build":null}}}}"#
+            );
+
+            parse_downloads_json(json.as_bytes(), "downloads.json".to_string())
+                .expect("a valid or absent SHA-256 digest should be accepted");
+        }
+    }
+
     /// Test that build filtering works correctly
     #[tokio::test]
     async fn test_python_download_request_build_filtering() {
