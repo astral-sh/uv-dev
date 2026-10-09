@@ -234,7 +234,7 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
 
 fn write_shared_script_wheel(path: &Path, name: &str, data_script: Option<&str>) -> Result<()> {
     let module = format!("def main():\n    print('{name}')\n");
-    let mut files = vec![(format!("{name}/__init__.py"), module)];
+    let mut files = vec![(format!("{name}/cli.py"), module)];
     if let Some(data_script) = data_script {
         files.push((
             format!(
@@ -246,7 +246,7 @@ fn write_shared_script_wheel(path: &Path, name: &str, data_script: Option<&str>)
     } else {
         files.push((
             format!("{name}-1.0.0.dist-info/entry_points.txt"),
-            format!("[console_scripts]\nshared-tool = {name}:main\n"),
+            format!("[console_scripts]\nshared-tool = {name}.cli:main\n"),
         ));
     }
     let files = files
@@ -277,10 +277,10 @@ fn install_bundled_wheel_script() -> Result<()> {
         None,
         "py3-none-any",
         &[
-            ("first/__init__.py", "def main():\n    print('first')\n"),
+            ("first/cli.py", "def main():\n    print('first')\n"),
             (
                 "first-1.0.0.dist-info/entry_points.txt",
-                "[console_scripts]\nshared-tool = first:main\n",
+                "[console_scripts]\nshared-tool = first.cli:main\n",
             ),
             (
                 "first-1.0.0.data/scripts/shared-tool-script.py",
