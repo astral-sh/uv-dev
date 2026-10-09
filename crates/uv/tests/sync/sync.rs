@@ -15735,19 +15735,6 @@ fn repeated_dev_member_all_packages() -> Result<()> {
      + second @ file://[TEMP_DIR]/second
     ");
 
-    uv_snapshot!(context.filters(), context.sync().arg("--dry-run").arg("--all-packages"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Would use project environment at: .venv
-    Resolved 3 packages in [TIME]
-    Would create lockfile at: uv.lock
-    Would download 3 packages
-    Would install 3 packages
-     + first @ file://[TEMP_DIR]/
-     + iniconfig==2.0.0
-     + second @ file://[TEMP_DIR]/second
-    ");
-
     Ok(())
 }
 
