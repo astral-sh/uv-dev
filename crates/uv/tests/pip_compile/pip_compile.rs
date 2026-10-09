@@ -15712,9 +15712,9 @@ fn universal_required_environment_requires_matching_wheel() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     warning: The `required-environments-mode` setting is experimental and may change without warning. Pass `--preview-features required-environments-mode` to disable this warning.
-      × No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*'):
-      ╰─▶ Because only holdout==1.0.0 is available and holdout==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels, we can conclude that all versions of holdout cannot be used.
-          And because project depends on holdout, we can conclude that your requirements are unsatisfiable.
+    error: No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*')
+      cause: Because holdout==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels and only holdout==1.0.0 is available, we can conclude that all versions of holdout cannot be used.
+             And because project depends on holdout, we can conclude that your requirements are unsatisfiable.
 
     hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
     ");
@@ -15745,9 +15745,9 @@ fn universal_required_environment_requires_matching_wheel() -> Result<()> {
         .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
     exit_code: 1 (failure)
     ----- stderr -----
-      × No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*'):
-      ╰─▶ Because only holdout==1.0.0 is available and holdout==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels, we can conclude that all versions of holdout cannot be used.
-          And because project depends on holdout, we can conclude that your requirements are unsatisfiable.
+    error: No solution found when resolving dependencies for split (markers: python_full_version == '3.13.*')
+      cause: Because holdout==1.0.0 has no `python_full_version == '3.13.*'`-compatible wheels and only holdout==1.0.0 is available, we can conclude that all versions of holdout cannot be used.
+             And because project depends on holdout, we can conclude that your requirements are unsatisfiable.
 
     hint: While the active Python version is 3.12, the resolution failed for other Python versions supported by your project. Consider limiting your project's supported Python versions using `requires-python`.
     ");
