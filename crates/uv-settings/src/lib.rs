@@ -752,9 +752,9 @@ impl EnvFlag {
 pub struct EnvironmentOptions {
     pub ruff_path: Option<PathBuf>,
     pub ty_path: Option<PathBuf>,
-    pub skip_wheel_filename_check: Option<bool>,
+    pub(crate) skip_wheel_filename_check: Option<bool>,
     pub require_metadata_range_requests: Option<bool>,
-    pub hide_build_output: Option<bool>,
+    pub(crate) hide_build_output: Option<bool>,
     pub python_arch: Option<PythonArchitecture>,
     require_build_hashes: Option<OsString>,
     pub python_install_bin: Option<bool>,
@@ -810,8 +810,8 @@ pub struct EnvironmentOptions {
     pub venv_clear: EnvFlag,
     pub venv_relocatable: EnvFlag,
     pub init_bare: EnvFlag,
-    pub malware_check: EnvFlag,
-    pub malware_check_url: Option<DisplaySafeUrl>,
+    pub(crate) malware_check: EnvFlag,
+    pub(crate) malware_check_url: Option<DisplaySafeUrl>,
     #[cfg(unix)]
     pub run_rlimit_nofile: Option<u32>,
 }
