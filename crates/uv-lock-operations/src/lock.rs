@@ -163,7 +163,7 @@ impl<'env> LockOperation<'env> {
     /// Perform a [`LockOperation`].
     pub async fn execute(self, target: LockTarget<'_>) -> Result<LockResult, LockError> {
         self.execute_with_writer(target, |path, contents| {
-            fs_err::tokio::write(path, contents)
+            uv_fs::write_file_async(path, contents.into_bytes())
         })
         .await
     }

@@ -14,6 +14,8 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use serde_json::json;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::io::Read;
 use std::path::Path;
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
@@ -8674,6 +8676,68 @@ fn remove_version_build_failure_reverts_project() -> Result<()> {
     Ok(())
 }
 
+/// A failed installation removes its new lockfile target, leaving the user's dangling link intact.
+#[test]
+#[cfg(unix)]
+fn failed_install_restores_dangling_lockfile() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def build_editable(*args, **kwargs):
+            lock = Path(__file__).with_name("uv.lock").read_text()
+            assert "[[package]]" in lock
+            Path(__file__).with_name("published-lock").write_text(lock)
+            raise RuntimeError("build failed after lockfile publication")
+    "#})?;
+    let locks = context.temp_dir.child("locks");
+    locks.create_dir_all()?;
+    let link = context.temp_dir.child("uv.lock");
+    let target = locks.child("project.lock");
+    fs_err::os::unix::fs::symlink("locks/project.lock", link.path())?;
+    let pyproject = context.read("pyproject.toml");
+
+    context
+        .remove()
+        .args(["iniconfig", "--offline"])
+        .assert()
+        .code(1);
+    assert!(context.temp_dir.join("published-lock").exists());
+    assert_eq!(context.read("pyproject.toml"), pyproject);
+    assert_eq!(
+        fs_err::read_link(link.path())?,
+        Path::new("locks/project.lock")
+    );
+    assert!(!target.exists());
+
+    context
+        .remove()
+        .args(["iniconfig", "--offline", "--no-sync"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs_err::read_link(link.path())?,
+        Path::new("locks/project.lock")
+    );
+    assert!(!fs_err::read(target.path())?.is_empty());
+    Ok(())
+}
+
 /// Interrupt during a build, after the manifest and lockfile have both been written.
 #[test]
 #[cfg(unix)]
@@ -8821,6 +8885,18 @@ fn rollback_preserves_external_project_edits() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn rollback_restores_partial_project_write() -> Result<()> {
+    check_project_write_failure(true)
+}
+
+/// A failed staged write must leave the original file intact without needing restoration.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn failed_staged_project_write_preserves_original() -> Result<()> {
+    check_project_write_failure(false)
+}
+
+#[cfg(unix)]
+fn check_project_write_failure(hard_link: bool) -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -8832,7 +8908,25 @@ fn rollback_restores_partial_project_write() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = []
     "#})?;
+    if !hard_link {
+        // Restoration cannot repair an in-place write when the original exceeds the same limit.
+        let contents = format!(
+            "{}\n# {}\n",
+            context.read("pyproject.toml"),
+            "x".repeat(70000)
+        );
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(&contents)?;
+    }
     let original = context.read("pyproject.toml");
+    if hard_link {
+        fs_err::hard_link(
+            context.temp_dir.child("pyproject.toml"),
+            context.temp_dir.child("alias.toml"),
+        )?;
+    }
     uv_snapshot!(context.filters(), context.python_command()
         .arg("-c")
         .arg(indoc! {r"
@@ -8856,6 +8950,111 @@ fn rollback_restores_partial_project_write() -> Result<()> {
     error: failed to write to file `[TEMP_DIR]/pyproject.toml`: File too large (os error 27)
     ");
     assert_eq!(context.read("pyproject.toml"), original);
+    if hard_link {
+        assert_eq!(context.read("alias.toml"), original);
+    }
+    for entry in fs_err::read_dir(context.temp_dir.path())? {
+        assert!(
+            !entry?
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".uv-publish-")
+        );
+    }
+    Ok(())
+}
+
+/// Manifest, script, and standalone lock publication write through links without tearing readers.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn project_file_publication_preserves_links() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let manifest = context.temp_dir.child("manifest.toml");
+    manifest.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    fs_err::os::unix::fs::symlink("manifest.toml", context.temp_dir.child("pyproject.toml"))?;
+    let original = context.read("manifest.toml");
+    let mut previous = fs_err::File::open(manifest.path())?;
+    context
+        .version()
+        .args(["--bump", "minor", "--offline"])
+        .assert()
+        .success();
+    let mut previous_contents = String::new();
+    previous.read_to_string(&mut previous_contents)?;
+    assert_eq!(previous_contents, original);
+    assert_eq!(
+        fs_err::read_link(context.temp_dir.child("pyproject.toml"))?,
+        Path::new("manifest.toml")
+    );
+    assert_snapshot!(context.read("manifest.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.2.0"
+    requires-python = ">=3.12"
+    dependencies = []
+    "#);
+
+    fs_err::rename(
+        context.temp_dir.child("uv.lock"),
+        context.temp_dir.child("lock-target"),
+    )?;
+    fs_err::os::unix::fs::symlink("lock-target", context.temp_dir.child("uv.lock"))?;
+    let original = context.read("lock-target");
+    let mut previous = fs_err::File::open(context.temp_dir.child("uv.lock").path())?;
+    manifest.write_str(&context.read("manifest.toml").replace("0.2.0", "0.3.0"))?;
+    context.lock().arg("--offline").assert().success();
+    let mut previous_contents = String::new();
+    previous.read_to_string(&mut previous_contents)?;
+    assert_eq!(previous_contents, original);
+    assert_ne!(context.read("uv.lock"), original);
+    assert_eq!(
+        fs_err::read_link(context.temp_dir.child("uv.lock"))?,
+        Path::new("lock-target")
+    );
+
+    let script = context.temp_dir.child("script-target.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+        print("hello")
+    "#})?;
+    fs_err::set_permissions(&script, Permissions::from_mode(0o751))?;
+    fs_err::os::unix::fs::symlink("script-target.py", context.temp_dir.child("script.py"))?;
+    let original = context.read("script-target.py");
+    let mut previous = fs_err::File::open(script.path())?;
+    context
+        .add()
+        .args(["iniconfig", "--script", "script.py", "--frozen"])
+        .assert()
+        .success();
+    let mut previous_contents = String::new();
+    previous.read_to_string(&mut previous_contents)?;
+    assert_eq!(previous_contents, original);
+    assert_eq!(
+        fs_err::metadata(&script)?.permissions().mode() & 0o777,
+        0o751
+    );
+    assert_eq!(
+        fs_err::read_link(context.temp_dir.child("script.py"))?,
+        Path::new("script-target.py")
+    );
+    assert_snapshot!(context.read("script-target.py"), @r#"
+    # /// script
+    # requires-python = ">=3.12"
+    # dependencies = [
+    #     "iniconfig",
+    # ]
+    # ///
+    print("hello")
+    "#);
     Ok(())
 }
 

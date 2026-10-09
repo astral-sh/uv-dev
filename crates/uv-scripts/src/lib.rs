@@ -324,7 +324,7 @@ impl Pep723Script {
             }
         };
 
-        Ok(fs_err::tokio::write(file, script).await?)
+        Ok(uv_fs::write_file_async(file.to_path_buf(), script.into_bytes()).await?)
     }
 
     /// Replace the metadata and publish the complete script with a caller-owned writer.

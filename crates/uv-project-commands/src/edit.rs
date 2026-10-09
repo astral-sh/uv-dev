@@ -1,7 +1,5 @@
 use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,7 +10,7 @@ use anyhow::Result;
 use same_file::Handle;
 use tracing::debug;
 
-use uv_fs::Simplified;
+use uv_fs::{FilePublication, Simplified};
 use uv_lock_operations::LockTarget;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_scripts::{Pep723Metadata, Pep723Script};
@@ -194,6 +192,7 @@ impl EditState {
                     path,
                     original,
                     written: None,
+                    created_path: None,
                 })
             })
             .collect::<io::Result<Vec<_>>>()?;
@@ -258,6 +257,7 @@ struct FileSnapshot {
     path: PathBuf,
     original: Option<FileContents>,
     written: Option<FileContents>,
+    created_path: Option<PathBuf>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -275,37 +275,55 @@ impl FileSnapshot {
                 self.path.user_display()
             )));
         }
-        // Identify the opened file before truncating it. A newly discovered path must not replace
-        // a file another writer created after the original absent snapshot.
-        let created = expected.is_none();
-        let mut file = fs_err::OpenOptions::new()
-            .write(true)
-            .create_new(created)
-            .truncate(false)
-            .open(&self.path)?;
-        let result = self.write_opened(&mut file, contents);
-        if result.is_err()
-            && created
-            && self.written.is_none()
-            && let Err(err) = remove_created_file(&self.path, file)
-        {
-            warn_user!(
-                "Failed to remove newly created `{}`: {err}",
-                self.path.user_display()
-            );
-        }
-        result
+        let publication = FilePublication::new(&self.path)?;
+        self.write_publication(publication, contents)
     }
 
-    fn write_opened(&mut self, file: &mut fs_err::File, contents: &[u8]) -> io::Result<()> {
-        let identity = Handle::from_file(file.file().try_clone()?)?;
-        if let Some(expected) = self.written.as_ref().or(self.original.as_ref())
-            && identity != expected.identity
-        {
-            return Err(io::Error::other(format!(
-                "refusing to overwrite `{}` because it was replaced before publication",
-                self.path.user_display()
-            )));
+    fn write_publication(
+        &mut self,
+        mut publication: FilePublication,
+        contents: &[u8],
+    ) -> io::Result<()> {
+        let expected = self.written.as_ref().or(self.original.as_ref());
+        let identity = publication
+            .original()
+            .map(|file| Handle::from_file(file.file().try_clone()?))
+            .transpose()?;
+        if identity.as_ref() != expected.map(|file| &file.identity) {
+            return Err(io::Error::other("file was replaced before publication"));
+        }
+        if publication.is_staged() {
+            drop(identity);
+            publication.writer().write_all(contents)?;
+            let contents = contents.to_vec();
+            let created_path = publication.creation_path().map(Path::to_path_buf);
+            if read_file(&self.path)?.as_ref() != expected {
+                return Err(io::Error::other("file changed before publication"));
+            }
+            let identity = publication.publish()?;
+            self.written = Some(FileContents { identity, contents });
+            if let Some(created_path) = created_path {
+                self.created_path = Some(created_path);
+            }
+            Ok(())
+        } else {
+            self.write_opened(
+                publication.writer(),
+                identity.expect("in-place writers have an original identity"),
+                contents,
+            )
+        }
+    }
+
+    fn write_opened(
+        &mut self,
+        file: &mut fs_err::File,
+        identity: Handle,
+        contents: &[u8],
+    ) -> io::Result<()> {
+        if !file.metadata()?.is_file() {
+            // Devices do not retain a file version that can be restored.
+            return file.write_all(contents);
         }
         let written_contents = Vec::with_capacity(contents.len());
         file.set_len(0)?;
@@ -357,6 +375,22 @@ impl FileSnapshot {
         let Some(written) = &self.written else {
             return Ok(());
         };
+        if let Some(created_path) = &self.created_path {
+            let metadata = match fs_err::symlink_metadata(created_path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error),
+            };
+            if !metadata.is_file()
+                || metadata.is_symlink()
+                || read_file(created_path)?.as_ref() != Some(written)
+            {
+                return Err(io::Error::other(
+                    "created file changed outside this project edit; leaving it unchanged",
+                ));
+            }
+            return fs_err::remove_file(created_path);
+        }
         let current = read_file(&self.path)?;
         if current.as_ref().map(|file| &file.contents)
             == self.original.as_ref().map(|file| &file.contents)
@@ -373,7 +407,7 @@ impl FileSnapshot {
         // can still race the final comparison and restoration.
         debug!("Reverting changes to `{}`", self.path.user_display());
         if let Some(original) = &self.original {
-            fs_err::write(&self.path, &original.contents)
+            uv_fs::write_file(&self.path, &original.contents)
         } else {
             fs_err::remove_file(&self.path)
         }
@@ -396,28 +430,6 @@ impl FileSnapshot {
         let (_, path) = recovery.keep().map_err(|err| err.error)?;
         Ok(Some(path))
     }
-}
-
-/// Clean up creation when handle setup fails before the first write is recorded.
-fn remove_created_file(path: &Path, file: fs_err::File) -> io::Result<()> {
-    // Consume the original descriptor rather than duplicating it: creation may have used the
-    // process's last available descriptor. Retain it until after the identity comparison.
-    let created = Handle::from_file(file.into_file())?;
-    let current = match fs_err::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err),
-    };
-    #[cfg(unix)]
-    let same = current.dev() == created.dev() && current.ino() == created.ino();
-    #[cfg(not(unix))]
-    let same = Handle::from_path(path)? == created;
-    if !same || !current.is_file() || current.len() != 0 {
-        return Err(io::Error::other(
-            "file changed outside this project edit; leaving it unchanged",
-        ));
-    }
-    fs_err::remove_file(path)
 }
 
 /// Attempt every restoration even if an earlier file cannot be restored.
@@ -472,6 +484,104 @@ mod tests {
         Ok(paths)
     }
 
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn rollback_preserves_dangling_lockfile_links() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let link = directory.path().join("uv.lock");
+        let middle = directory.path().join("middle");
+        let target = directory.path().join("created.lock");
+        fs_err::os::unix::fs::symlink("middle", &link)?;
+        fs_err::os::unix::fs::symlink("created.lock", &middle)?;
+        let state = Arc::new(EditState::new([link.clone()])?);
+        Arc::clone(&state)
+            .write_lockfile(link.clone(), "first lockfile".into())
+            .await?;
+        Arc::clone(&state)
+            .write_lockfile(link.clone(), "second lockfile".into())
+            .await?;
+        assert_eq!(fs_err::read(&target)?, b"second lockfile");
+        state.finish(false);
+        assert_eq!(fs_err::read_link(&link)?, Path::new("middle"));
+        assert_eq!(fs_err::read_link(&middle)?, Path::new("created.lock"));
+        assert!(!target.exists());
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rollback_keeps_a_foreign_created_target() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let link = directory.path().join("uv.lock");
+        let target = directory.path().join("created.lock");
+        fs_err::os::unix::fs::symlink("created.lock", &link)?;
+        let state = EditState::new([link.clone()])?;
+        state.write_file(&link, b"published")?;
+        fs_err::remove_file(&target)?;
+        fs_err::write(&target, "foreign")?;
+        state.finish(false);
+        assert_eq!(fs_err::read_link(&link)?, Path::new("created.lock"));
+        assert_eq!(fs_err::read(&target)?, b"foreign");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rollback_cleans_created_target_after_link_retargeting() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let link = directory.path().join("uv.lock");
+        let target = directory.path().join("created.lock");
+        let foreign = directory.path().join("foreign.lock");
+        fs_err::os::unix::fs::symlink("created.lock", &link)?;
+        let state = EditState::new([link.clone()])?;
+        state.write_file(&link, b"published")?;
+        fs_err::write(&foreign, "foreign")?;
+        fs_err::remove_file(&link)?;
+        fs_err::os::unix::fs::symlink("foreign.lock", &link)?;
+        state.finish(false);
+        assert_eq!(fs_err::read_link(&link)?, Path::new("foreign.lock"));
+        assert_eq!(fs_err::read(&foreign)?, b"foreign");
+        assert!(!target.exists());
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn rollback_keeps_a_foreign_link_at_the_created_target() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let link = directory.path().join("uv.lock");
+        let target = directory.path().join("created.lock");
+        let moved = directory.path().join("moved.lock");
+        fs_err::os::unix::fs::symlink("created.lock", &link)?;
+        let state = EditState::new([link.clone()])?;
+        state.write_file(&link, b"published")?;
+        fs_err::rename(&target, &moved)?;
+        fs_err::os::unix::fs::symlink("moved.lock", &target)?;
+        state.finish(false);
+        assert_eq!(fs_err::read_link(&link)?, Path::new("created.lock"));
+        assert_eq!(fs_err::read_link(&target)?, Path::new("moved.lock"));
+        assert_eq!(fs_err::read(&moved)?, b"published");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn tracked_special_file_writes_do_not_truncate() -> Result<()> {
+        for commit in [false, true] {
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("uv.lock");
+            fs_err::os::unix::fs::symlink("/dev/null", &path)?;
+            let state = EditState::new([path.clone()])?;
+            state.write_file(&path, b"discarded lock contents")?;
+            state.write_file(&path, b"more discarded lock contents")?;
+            state.finish(commit);
+            assert_eq!(fs_err::read_link(&path)?, Path::new("/dev/null"));
+            assert!(fs_err::read(&path)?.is_empty());
+            assert!(recovery_files(directory.path())?.is_empty());
+        }
+        Ok(())
+    }
+
     #[test]
     #[cfg(unix)]
     fn created_file_setup_failure_is_cleaned() -> Result<()> {
@@ -498,7 +608,7 @@ mod tests {
         while let Ok(file) = fs_err::File::open("/dev/null") {
             descriptors.push(file);
         }
-        // Creation can take the final descriptor, but duplicating it for identity tracking fails.
+        // Staging can take the final descriptor. Later ownership checks must fail before publishing.
         drop(descriptors.pop());
         let result = state.write_file(&path, b"lock contents");
         state.finish(false);
@@ -507,33 +617,13 @@ mod tests {
         let Err(error) = result else {
             bail!("descriptor exhaustion did not fail handle setup");
         };
-        assert_eq!(error.raw_os_error(), Some(24)); // EMFILE on Unix.
+        let exhausted = io::Error::from_raw_os_error(24); // EMFILE on Unix.
+        assert_eq!(error.kind(), exhausted.kind());
+        assert!(error.to_string().contains(&exhausted.to_string()));
         assert!(
             !exists,
             "setup failure left the newly created lockfile behind"
         );
-        Ok(())
-    }
-
-    #[test]
-    fn created_file_cleanup_preserves_foreign_changes() -> Result<()> {
-        for replacement in [false, true] {
-            let directory = tempfile::tempdir()?;
-            let path = directory.path().join("uv.lock");
-            let file = fs_err::File::create_new(&path)?;
-            if replacement {
-                let external = directory.path().join("external");
-                fs_err::write(&external, "")?;
-                fs_err::rename(external, &path)?;
-            } else {
-                fs_err::write(&path, "external")?;
-            }
-            assert!(super::remove_created_file(&path, file).is_err());
-            assert_eq!(
-                fs_err::read_to_string(&path)?,
-                if replacement { "" } else { "external" }
-            );
-        }
         Ok(())
     }
 
@@ -546,15 +636,41 @@ mod tests {
             path: path.clone(),
             original: read_file(&path)?,
             written: None,
+            created_path: None,
         };
         assert_eq!(read_file(&path)?, snapshot.original);
         // Replace the path after the initial comparison, before opening it for publication.
         let replacement = directory.path().join("replacement");
         fs_err::write(&replacement, "external")?;
+        // The hard link requires an in-place writer, whose identity check precedes truncation.
+        let alias = directory.path().join("alias");
+        fs_err::hard_link(&replacement, &alias)?;
         fs_err::rename(replacement, &path)?;
-        let mut opened = fs_err::OpenOptions::new().write(true).open(&path)?;
-        assert!(snapshot.write_opened(&mut opened, b"edited").is_err());
+        let publication = uv_fs::FilePublication::new(&path)?;
+        assert!(snapshot.write_publication(publication, b"edited").is_err());
         assert_eq!(fs_err::read_to_string(&path)?, "external");
+        assert_eq!(fs_err::read_to_string(&alias)?, "external");
+        assert!(snapshot.written.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn appearing_file_is_rejected_before_in_place_write() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("uv.lock");
+        let alias = directory.path().join("alias");
+        let mut snapshot = FileSnapshot {
+            path: path.clone(),
+            original: None,
+            written: None,
+            created_path: None,
+        };
+        fs_err::write(&path, "external")?;
+        fs_err::hard_link(&path, &alias)?;
+        let publication = uv_fs::FilePublication::new(&path)?;
+        assert!(snapshot.write_publication(publication, b"edited").is_err());
+        assert_eq!(fs_err::read_to_string(&path)?, "external");
+        assert_eq!(fs_err::read_to_string(&alias)?, "external");
         assert!(snapshot.written.is_none());
         Ok(())
     }
