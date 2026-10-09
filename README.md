@@ -8,7 +8,7 @@ Classification: question
 
 The reporter uses `#!/usr/bin/env -S uv run --script` and briefly sees `Resolving dependencies` on every invocation. They ask whether dependencies are resolved over the Internet every time and whether commands defined in `[project.scripts]` behave the same way. They do not report an execution failure or measured network traffic.
 
-The reported environment is Ubuntu 26.04, Linux 7.0.0-38-generic x86_64, with uv 0.12.21 (7af826859, September 29, 2026). Python version, script contents, inline dependency metadata, configuration, and lockfile status are missing. The issue has no comments.
+The reported environment is Ubuntu 26.04, Linux 7.0.0-38-generic x86_64, with uv 0.12.21 (7af826859, September 29, 2026). Python version, script contents, inline dependency metadata, configuration, and lockfile status are missing. Maintainer woodruffw has requested the script contents, particularly the PEP 723 metadata block; the supplied discussion contains no reporter follow-up providing them.
 
 Behavioral checks with the installed uv 0.12.13 confirm that the progress message does not imply Internet access: it appeared while creating a script lockfile entirely from cache, and while preparing a new script environment with `--offline`. Repeated runs of an unchanged minimal script, both unlocked and locked, and a project entry point reused their environments without Internet connection attempts or the reported progress message. These examples answer the general network question but do not explain this reporter's repeated message. The reproduction outcome is **needs_more_information**.
 
@@ -19,6 +19,12 @@ Keep this classified as a question. Neither the report nor the experiments estab
 The missing script and configuration prevent reproducing the specific repeated-message observation. The available binary is also older than the reported release. A successful simplified fixture is not sufficient to rule out a configuration-dependent problem. No root cause is confirmed.
 
 astral-sh/uv#7538 is a close historical symptom match, but it predates persistent local script environments. astral-sh/uv#9688 requested script locking, which was implemented before the reported release. Neither history establishes a duplicate or a regression.
+
+## Maintainer guidance and pending information
+
+In astral-sh/uv#22388, maintainer woodruffw explains that invoking a local script through `uv run --script` does not itself require Internet access. Resolving declared dependencies that are not cached can require network access. The maintainer also identifies a separate reason for networking: uv may download a Python version requested by the script metadata when that version is not already available locally, then reuse it on subsequent runs. They recommend `--offline` to disable uv's network access.
+
+This guidance does not establish which path the reporter's script takes or explain the recurring progress message. The maintainer's request for the script and PEP 723 metadata remains pending. Keep the existing distinction between cached artifacts and metadata freshness, and between uv's networking and the Python application's networking.
 
 ## Reproduction
 
@@ -136,7 +142,7 @@ These tests were read, not executed. `TestContext::run` in `crates/uv-test/src/l
 
 Request the minimal script including all inline metadata and uv settings, whether an adjacent script lockfile exists, the selected Python version, relevant project/configuration details, and sanitized verbose output from two consecutive executions on the reported uv 0.12.21. For the entry-point question, request the relevant `[project]`, `[project.scripts]`, build-system, source, workspace, and dependency-group configuration only if its actual behavior also needs investigation.
 
-No delayed metadata-expiration or custom-index/source scenario was tested; there is no such configuration in the report. Connection tracing is not a full packet capture. No recurring Internet access or root cause for recurring progress is established. Offline mode limits uv's networking, not the Python application's networking.
+Automatic Python downloads were not tested: the fixtures selected an existing `/usr/bin/python3` and set `UV_PYTHON_DOWNLOADS=never`. The missing-interpreter download path identified by the maintainer therefore remains outside these reproduction findings; the reporter has not supplied the Python requirement or selected interpreter. No delayed metadata-expiration or custom-index/source scenario was tested; there is no such configuration in the report. Connection tracing is not a full packet capture. No recurring Internet access or root cause for recurring progress is established. Offline mode limits uv's networking, not the Python application's networking.
 
 Reproduction artifacts are retained under `/tmp/uv-22388.T3qdCc`: `reproduce.py`, `project_checks.py`, the fixtures, `results.jsonl`, and per-command `.terminal.log` / `.connect.log` files. No checkout files or GitHub content were changed; pre-existing checkout modifications were left untouched.
 
