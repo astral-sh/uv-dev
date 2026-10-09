@@ -165,13 +165,43 @@ pub(crate) fn tool_entrypoints_are_fresh(tool: &Tool) -> bool {
     })
 }
 
-/// Compare destination directories without following an executable's own symlink.
+/// Compare destination entries using filesystem identity without following executable symlinks.
 fn same_entrypoint_destination(left: &Path, right: &Path) -> bool {
-    left.file_name() == right.file_name()
+    if left.file_name() == right.file_name()
         && left
             .parent()
             .zip(right.parent())
             .is_some_and(|(left, right)| is_same_file_allow_missing(left, right) == Some(true))
+    {
+        return true;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(left), Ok(right)) = (
+            fs_err::symlink_metadata(left),
+            fs_err::symlink_metadata(right),
+        ) {
+            return left.dev() == right.dev() && left.ino() == right.ino();
+        }
+    }
+    #[cfg(windows)]
+    {
+        use fs_err::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        let handle = |path| {
+            fs_err::OpenOptions::new()
+                .access_mode(0)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+                .open(path)
+                .and_then(|file| same_file::Handle::from_file(file.into_file()))
+        };
+        if let (Ok(left), Ok(right)) = (handle(left), handle(right)) {
+            return left == right;
+        }
+    }
+    false
 }
 
 /// Remove the entrypoints at the given paths.
@@ -1034,6 +1064,9 @@ pub(super) fn finalize_tool_install(
         for (name, src, target) in target_entrypoints {
             debug!("Installing executable: {name}");
 
+            // A failed Windows copy may leave a partial file only if no destination existed.
+            #[cfg(windows)]
+            let target_existed = !matches!(fs_err::symlink_metadata(&target), Err(err) if err.kind() == io::ErrorKind::NotFound);
             let result = {
                 #[cfg(unix)]
                 {
@@ -1053,11 +1086,16 @@ pub(super) fn finalize_tool_install(
                 }
             };
             if let Err(err) = result {
+                // Unix symlink replacement is atomic, so its failed target is untouched.
+                #[cfg(unix)]
+                let partial_target = None;
+                #[cfg(windows)]
+                let partial_target = (!target_existed).then_some(target.as_path());
                 remove_new_entrypoint_paths(
                     installed_entrypoints
                         .iter()
                         .map(|entrypoint| entrypoint.install_path.as_path())
-                        .chain(std::iter::once(target.as_path())),
+                        .chain(partial_target),
                     previous_entrypoints,
                 );
                 return Err(err);

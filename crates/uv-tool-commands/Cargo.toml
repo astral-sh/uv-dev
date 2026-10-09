@@ -72,4 +72,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
+same-file = { workspace = true }
+windows = { workspace = true }
 self-replace = { workspace = true }

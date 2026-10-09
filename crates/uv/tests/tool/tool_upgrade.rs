@@ -1941,3 +1941,63 @@ fn new_tool_index() -> PackseServer {
     .expect("new tool scenario should parse");
     PackseServer::from_scenario(&scenario)
 }
+
+#[test]
+fn tool_upgrade_renames_case_equivalent_entrypoint() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let bin = context.temp_dir.child("bin");
+    let original: Scenario = toml::from_str(indoc! {r#"
+        name = "original-entrypoint"
+        [root]
+        requires = ["tool"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."1.0.0"]
+        sdist = false
+        entry_points = ["Foo"]
+    "#})?;
+    let original = PackseServer::from_scenario(&original);
+    context
+        .tool_install()
+        .arg("tool")
+        .arg("--default-index")
+        .arg(original.index_url())
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let updated: Scenario = toml::from_str(indoc! {r#"
+        name = "renamed-entrypoint"
+        [root]
+        requires = ["tool"]
+        [expected]
+        satisfiable = true
+        [packages.tool.versions."2.0.0"]
+        sdist = false
+        entry_points = ["foo"]
+    "#})?;
+    let updated = PackseServer::from_scenario(&updated);
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("tool")
+        .arg("--default-index").arg(updated.index_url()).env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Updated tool v1.0.0 -> v2.0.0
+     - tool==1.0.0
+     + tool==2.0.0
+    Installed 1 executable: foo
+    "#);
+    uv_snapshot!(context.filters(), Command::new(bin.child(format!("foo{}", std::env::consts::EXE_SUFFIX)).path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from tool!
+    ");
+    let receipt: toml::Value = toml::from_str(&context.read("tools/tool/uv-receipt.toml"))?;
+    let entrypoints = receipt["tool"]["entrypoints"].as_array().unwrap();
+    assert_eq!(entrypoints.len(), 1);
+    assert_eq!(
+        entrypoints[0]["name"].as_str(),
+        Some(format!("foo{}", std::env::consts::EXE_SUFFIX).as_str())
+    );
+    Ok(())
+}
