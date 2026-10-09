@@ -26,8 +26,10 @@ pub(crate) use crate::lock::export::metadata::{
 };
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
-use crate::lock::{LockErrorKind, PackageIndex};
-use crate::{Installable, InstallableRootKind, LockError, Package};
+use crate::lock::{DependencyContext, LockErrorKind, PackageIndex};
+use crate::{
+    Installable, InstallableRootKind, Lock, LockError, Package, implicit_constraints_marker,
+};
 
 pub mod cyclonedx_json;
 mod metadata;
@@ -59,9 +61,6 @@ impl<'lock> ExportableRequirements<'lock> {
         annotate: bool,
         install_options: &'lock InstallOptions,
     ) -> Result<Self, LockError> {
-        if !target.lock().conflicts().is_empty() {
-            validate_extra_conflicts(target, prune, extras, groups)?;
-        }
         let size_guess = target.lock().packages.len();
         let mut graph = Graph::<Node<'lock>, Edge<'lock>>::with_capacity(size_guess, size_guess);
         let mut inverse = vec![None; size_guess];
@@ -369,9 +368,19 @@ fn validate_extra_conflicts<'lock>(
     groups: &DependencyGroupsWithDefaults,
 ) -> Result<(), LockError> {
     let lock = target.lock();
+    if lock.conflicts().is_empty() {
+        return Ok(());
+    }
     let modifiers = lock.dependency_modifiers()?;
-    let root_marker = lock.requires_python.to_marker_tree();
-    let mut requests = ExtraRequests::default();
+    let root_marker = implicit_constraints_marker(
+        lock.requires_python.to_marker_tree(),
+        lock.supported_environments(),
+    );
+    let mut requests = ExtraRequests {
+        lock,
+        queue: VecDeque::new(),
+        markers: FxHashMap::default(),
+    };
     for (name, kind) in target
         .roots()
         .map(|name| (name, InstallableRootKind::Production))
@@ -404,12 +413,18 @@ fn validate_extra_conflicts<'lock>(
             if !target.includes_group(Some(name), group, groups) {
                 continue;
             }
-            let requirements = package.dependency_requirements(None, Some(group), &modifiers);
+            let requirements = package.dependency_requirements(
+                DependencyContext::Group(group),
+                &modifiers,
+                target.install_path(),
+                lock.requires_python(),
+            )?;
             for dependency in dependencies {
                 if prune.contains(dependency.package_name()) {
                     continue;
                 }
-                let (marker, extras) = dependency.activation(requirements.as_deref());
+                let (marker, extras) =
+                    dependency.activation(requirements.as_deref(), target.install_path())?;
                 requests.push(dependency.index, None, root_marker.and(marker));
                 for (extra, marker) in extras {
                     requests.push(dependency.index, Some(extra), root_marker.and(marker));
@@ -450,7 +465,14 @@ fn validate_extra_conflicts<'lock>(
                 .and_modify(|marker| *marker = marker.or(parent_marker))
                 .or_insert(parent_marker);
         }
-        let requirements = package.dependency_requirements(extra.as_ref(), None, &modifiers);
+        let requirements = package.dependency_requirements(
+            extra
+                .as_ref()
+                .map_or(DependencyContext::Production, DependencyContext::Extra),
+            &modifiers,
+            target.install_path(),
+            lock.requires_python(),
+        )?;
         let dependencies = if let Some(extra) = &extra {
             Either::Left(
                 package
@@ -466,7 +488,8 @@ fn validate_extra_conflicts<'lock>(
             if prune.contains(dependency.package_name()) {
                 continue;
             }
-            let (marker, extras) = dependency.activation(requirements.as_deref());
+            let (marker, extras) =
+                dependency.activation(requirements.as_deref(), target.install_path())?;
             requests.push(dependency.index, None, parent_marker.and(marker));
             for (extra, marker) in extras {
                 requests.push(dependency.index, Some(extra), parent_marker.and(marker));
@@ -498,14 +521,27 @@ fn validate_extra_conflicts<'lock>(
     Ok(())
 }
 
-#[derive(Default)]
-struct ExtraRequests {
+struct ExtraRequests<'lock> {
+    lock: &'lock Lock,
     queue: VecDeque<(PackageIndex, Option<ExtraName>, MarkerTree)>,
     markers: FxHashMap<(PackageIndex, Option<ExtraName>), MarkerTree>,
 }
 
-impl ExtraRequests {
+impl ExtraRequests<'_> {
     fn push(&mut self, index: PackageIndex, extra: Option<ExtraName>, marker: MarkerTree) {
+        let package = self.lock.package(index);
+        let marker = if package.fork_markers.is_empty() {
+            marker
+        } else {
+            marker.and(
+                package
+                    .fork_markers
+                    .iter()
+                    .fold(MarkerTree::FALSE, |combined, fork| {
+                        combined.or(fork.pep508())
+                    }),
+            )
+        };
         let combined = self
             .markers
             .entry((index, extra.clone()))

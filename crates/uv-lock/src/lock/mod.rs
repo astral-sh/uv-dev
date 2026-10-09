@@ -7398,31 +7398,36 @@ impl Package {
     /// Prepare effective declarations once for a dependency section, when metadata is available.
     fn dependency_requirements(
         &self,
-        extra: Option<&ExtraName>,
-        group: Option<&GroupName>,
+        context: DependencyContext<'_>,
         modifiers: &DependencyModifiers,
-    ) -> Option<Vec<Requirement>> {
-        let requirements = group
-            .map_or(Some(&self.metadata.requires_dist), |group| {
-                self.metadata.dependency_groups.get(group)
-            })
-            .filter(|requirements| !requirements.is_empty())?;
-        let context = match (group, extra) {
-            (Some(group), _) => DependencyContext::Group(group),
-            (None, Some(extra)) => DependencyContext::Extra(extra),
-            (None, None) => DependencyContext::Production,
+        root: &Path,
+        requires_python: &RequiresPython,
+    ) -> Result<Option<Vec<Requirement>>, LockError> {
+        let requirements = match context {
+            DependencyContext::Group(group) => self.metadata.dependency_groups.get(group),
+            DependencyContext::Production | DependencyContext::Extra(_) => {
+                Some(&self.metadata.requires_dist)
+            }
         };
-        let mut requirements = Lock::preprocess_requirements(
+        let Some(requirements) = requirements.filter(|requirements| !requirements.is_empty())
+        else {
+            return Ok(None);
+        };
+        let requirements = Lock::preprocess_requirements(
             &self.id.name,
             self.id.version.as_ref(),
             &requirements.iter().cloned().collect::<Vec<_>>(),
             context,
             modifiers,
         );
-        for requirement in &mut requirements {
-            requirement.marker = context.requirement_marker(requirement.marker);
-        }
-        Some(requirements)
+        requirements
+            .into_iter()
+            .map(|mut requirement| {
+                requirement.marker = context.requirement_marker(requirement.marker);
+                normalize_requirement(requirement, root, requires_python)
+            })
+            .collect::<Result<Vec<_>, LockError>>()
+            .map(Some)
     }
 
     /// Returns an [`InstallTarget`] view for filtering decisions.
@@ -9290,31 +9295,47 @@ impl Dependency {
     fn activation(
         &self,
         requirements: Option<&[Requirement]>,
-    ) -> (MarkerTree, BTreeMap<ExtraName, MarkerTree>) {
+        root: &Path,
+    ) -> Result<(MarkerTree, BTreeMap<ExtraName, MarkerTree>), LockError> {
         let fallback = || {
             let marker = self.complexified_marker.pep508();
-            (
+            Ok((
                 marker,
                 self.extra
                     .iter()
                     .cloned()
                     .map(|extra| (extra, marker))
                     .collect(),
-            )
+            ))
         };
         let Some(requirements) = requirements else {
             return fallback();
         };
-        let mut requirements = requirements
-            .iter()
-            .filter(|requirement| requirement.name == *self.package_name())
-            .peekable();
-        if requirements.peek().is_none() {
-            return fallback();
-        }
+        let mut matched = false;
         let mut marker = MarkerTree::FALSE;
         let mut extras = BTreeMap::<ExtraName, MarkerTree>::new();
         for requirement in requirements {
+            if requirement.name != *self.package_name()
+                || requirement
+                    .source
+                    .version_specifiers()
+                    .zip(self.package_id.version.as_ref())
+                    .is_some_and(|(specifiers, version)| !specifiers.contains(version))
+            {
+                continue;
+            }
+            // An unqualified registry declaration can inherit a direct source from another root.
+            let source_matches = match &requirement.source {
+                RequirementSource::Registry { index: None, .. } => true,
+                source => self
+                    .package_id
+                    .source
+                    .satisfies_requirement_source(source, root)?,
+            };
+            if !source_matches {
+                continue;
+            }
+            matched = true;
             marker = marker.or(requirement.marker);
             for extra in &requirement.extras {
                 extras
@@ -9323,6 +9344,9 @@ impl Dependency {
                     .or_insert(requirement.marker);
             }
         }
+        if !matched {
+            return fallback();
+        }
         // A merged edge may receive its extras from separate declarations.
         for extra in &self.extra {
             marker = marker.and(extras.get(extra).copied().unwrap_or(MarkerTree::FALSE));
@@ -9330,7 +9354,7 @@ impl Dependency {
         for extra_marker in extras.values_mut() {
             *extra_marker = extra_marker.and(marker);
         }
-        (marker, extras)
+        Ok((marker, extras))
     }
 
     /// Returns the extras specified on this dependency.

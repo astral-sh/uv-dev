@@ -9595,6 +9595,131 @@ fn cyclonedx_export_dev_dependencies() -> Result<()> {
     Ok(())
 }
 
+/// SBOMs can describe alternatives selected by conflicting extras.
+#[cfg(feature = "test-universal")]
+#[test]
+fn cyclonedx_export_conflicting_extras() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_cyclonedx_filters();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = ["child-a"]
+        b = ["child-b"]
+
+        [tool.uv]
+        conflicts = [[{ extra = "a" }, { extra = "b" }]]
+
+        [tool.uv.workspace]
+        members = ["child-a", "child-b"]
+
+        [tool.uv.sources]
+        child-a = { workspace = true }
+        child-b = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child-a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child-a"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context
+        .temp_dir
+        .child("child-b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child-b"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().arg("--format").arg("cyclonedx1.5")
+        .arg("--all-extras").arg("--no-hashes").arg("--preview-features").arg("sbom-export"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "bomFormat": "CycloneDX",
+      "specVersion": "1.5",
+      "version": 1,
+      "serialNumber": "[SERIAL_NUMBER]",
+      "metadata": {
+        "timestamp": "[TIMESTAMP]",
+        "tools": [
+          {
+            "vendor": "Astral Software Inc.",
+            "name": "uv",
+            "version": "[VERSION]"
+          }
+        ],
+        "component": {
+          "type": "library",
+          "bom-ref": "project-1@0.1.0",
+          "name": "project",
+          "version": "0.1.0",
+          "properties": [
+            {
+              "name": "uv:package:is_project_root",
+              "value": "true"
+            }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "library",
+          "bom-ref": "child-a-2@0.1.0",
+          "name": "child-a",
+          "version": "0.1.0",
+          "properties": [
+            {
+              "name": "uv:workspace:path",
+              "value": "child-a"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "child-b-3@0.1.0",
+          "name": "child-b",
+          "version": "0.1.0",
+          "properties": [
+            {
+              "name": "uv:workspace:path",
+              "value": "child-b"
+            }
+          ]
+        }
+      ],
+      "dependencies": [
+        {
+          "ref": "child-a-2@0.1.0"
+        },
+        {
+          "ref": "child-b-3@0.1.0"
+        },
+        {
+          "ref": "project-1@0.1.0",
+          "dependsOn": [
+            "child-a-2@0.1.0",
+            "child-b-3@0.1.0"
+          ]
+        }
+      ]
+    }
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+    Ok(())
+}
+
 #[cfg(feature = "test-universal")]
 #[test]
 fn cyclonedx_export_all_packages_conflicting_workspace_members() -> Result<()> {
@@ -10165,6 +10290,14 @@ fn requirements_txt_same_named_member_options_do_not_conflict() -> Result<()> {
     ");
 
     uv_snapshot!(context.filters(), context.export()
+        .arg("--format").arg("pylock.toml").arg("--extra").arg("feature"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Found conflicting extras `child[feature]` and `project[feature]` enabled simultaneously
+    ");
+
+    uv_snapshot!(context.filters(), context.export()
         .arg("--extra").arg("feature").arg("--prune").arg("child").arg("--no-header"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -10282,17 +10415,143 @@ fn requirements_txt_transitive_extra_conflict_disjoint() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Overlapping activations still conflict.
+    let original = context.read("pyproject.toml");
     context.temp_dir.child("pyproject.toml").write_str(
-        &context
-            .read("pyproject.toml")
-            .replace("sys_platform == 'win32'", "sys_platform == 'linux'"),
+        &original
+            .replace("child[a]; sys_platform == 'linux'", "child[a]")
+            .replace(
+                "[tool.uv]",
+                "[tool.uv]\nenvironments = [\"sys_platform == 'linux'\"]",
+            ),
     )?;
+    uv_snapshot!(context.filters(), context.export().arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // Overlapping activations still conflict.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&original.replace("sys_platform == 'win32'", "sys_platform == 'linux'"))?;
     uv_snapshot!(context.filters(), context.export().arg("--no-emit-workspace").arg("--no-header"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     error: Found conflicting extras `child[a]` and `child[b]` enabled simultaneously
+    ");
+    Ok(())
+}
+
+/// Source-specific parent paths keep their dependency extras mutually exclusive.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_transitive_extra_conflict_distinct_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let active_platform = if cfg!(windows) {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context.temp_dir.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child", "bridge==1; sys_platform == '{active_platform}'", "bridge==2; sys_platform == '{inactive_platform}'"]
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        conflicts = [[{{ package = "child", extra = "a" }}, {{ package = "child", extra = "b" }}]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+        exclude = ["bridge1", "bridge2"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+        bridge = [
+            {{ path = "bridge1", marker = "sys_platform == '{active_platform}'" }},
+            {{ path = "bridge2", marker = "sys_platform == '{inactive_platform}'" }},
+        ]
+    "#})?;
+    context
+        .temp_dir
+        .child("bridge1/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "bridge"
+        version = "1"
+        requires-python = ">=3.12"
+        dependencies = ["child[a]"]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.sources]
+        child = { path = "../child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("bridge2/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "bridge"
+        version = "2"
+        requires-python = ">=3.12"
+        dependencies = ["child[b]"]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.sources]
+        child = { path = "../child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = []
+        b = []
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    // Sources remain distinct even when their versions agree.
+    context.temp_dir.child("bridge2/pyproject.toml").write_str(
+        &context
+            .read("bridge2/pyproject.toml")
+            .replace("version = \"2\"", "version = \"1\""),
+    )?;
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("bridge==2", "bridge==1"),
+    )?;
+    uv_snapshot!(context.filters(), context.export().arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().arg("--frozen").arg("--no-emit-workspace").arg("--no-header"), @"
+    exit_code: 0 (success)
     ");
     Ok(())
 }
