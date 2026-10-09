@@ -8,15 +8,15 @@ Classification: question
 
 The reporter uses `#!/usr/bin/env -S uv run --script` and briefly sees `Resolving dependencies` on every invocation. They ask whether dependencies are resolved over the Internet every time and whether commands defined in `[project.scripts]` behave the same way. They do not report an execution failure or measured network traffic.
 
-The reported environment is Ubuntu 26.04, Linux 7.0.0-38-generic x86_64, with uv 0.12.21 (7af826859, September 29, 2026). Python version, script contents, inline dependency metadata, configuration, and lockfile status are missing. Maintainer woodruffw has requested the script contents, particularly the PEP 723 metadata block; the supplied discussion contains no reporter follow-up providing them.
+The reported environment is Ubuntu 26.04, Linux 7.0.0-38-generic x86_64, with uv 0.12.21 (7af826859, September 29, 2026). The reporter has supplied the PEP 723 metadata: Python >=3.12, six dependencies, and a Git source for simpleaudio pinned to a full commit. They report that removing simpleaudio and its source entry stops the recurring progress message. The executable script body, selected Python version, other configuration, lockfile status, and verbose/network traces remain unavailable.
 
-Behavioral checks with the installed uv 0.12.13 confirm that the progress message does not imply Internet access: it appeared while creating a script lockfile entirely from cache, and while preparing a new script environment with `--offline`. Repeated runs of an unchanged minimal script, both unlocked and locked, and a project entry point reused their environments without Internet connection attempts or the reported progress message. These examples answer the general network question but do not explain this reporter's repeated message. The reproduction outcome is **needs_more_information**.
+Behavioral checks with the installed uv 0.12.13 confirm that the progress message does not imply Internet access: it appeared while creating a script lockfile entirely from cache, and while preparing a new script environment with `--offline`. Repeated runs of an unchanged minimal script, both unlocked and locked, and a project entry point reused their environments without Internet connection attempts or the reported progress message. These examples answer the general network question but do not explain this reporter's repeated message. They exercised a registry dependency, not the newly supplied Git source. The reproduction outcome remains **needs_more_information**; the reporter's dependency-removal comparison has not been independently tested.
 
 ## Classification
 
 Keep this classified as a question. Neither the report nor the experiments establish incorrect dependency behavior, unnecessary network requests, or a regression. Actual Internet access on every invocation is the reporter's question, not an observed fact in the report.
 
-The missing script and configuration prevent reproducing the specific repeated-message observation. The available binary is also older than the reported release. A successful simplified fixture is not sufficient to rule out a configuration-dependent problem. No root cause is confirmed.
+The supplied metadata now provides a concrete Git-source reproduction lead. The report establishes a user-observed association between that dependency and progress output, not recurring network requests or a confirmed cause. The available binary is older than the reported release, and the existing registry-only fixture does not test this source configuration. No root cause is confirmed. The reporter wants downloads when needed without forcing every invocation offline; whether this requires a behavior change remains unresolved.
 
 astral-sh/uv#7538 is a close historical symptom match, but it predates persistent local script environments. astral-sh/uv#9688 requested script locking, which was implemented before the reported release. Neither history establishes a duplicate or a regression.
 
@@ -24,11 +24,38 @@ astral-sh/uv#7538 is a close historical symptom match, but it predates persisten
 
 In astral-sh/uv#22388, maintainer woodruffw explains that invoking a local script through `uv run --script` does not itself require Internet access. Resolving declared dependencies that are not cached can require network access. The maintainer also identifies a separate reason for networking: uv may download a Python version requested by the script metadata when that version is not already available locally, then reuse it on subsequent runs. They recommend `--offline` to disable uv's network access.
 
-This guidance does not establish which path the reporter's script takes or explain the recurring progress message. The maintainer's request for the script and PEP 723 metadata remains pending. Keep the existing distinction between cached artifacts and metadata freshness, and between uv's networking and the Python application's networking.
+The reporter has answered the metadata portion of the maintainer's request. They do not want to put `--offline` in the shebang: fetching missing dependencies is acceptable, but they expect no repeated network access once everything needed is local. Offline mode remains a diagnostic control, not their accepted workflow. The maintainer's general guidance does not establish why the pinned Git dependency is associated with recurring progress. Keep the distinction between cached artifacts and metadata freshness, and between uv's networking and the Python application's networking.
+
+## Reporter-provided metadata and comparison
+
+The supplied header is:
+
+```python
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "argcomplete>=3,<4",
+#     "docker>=7.2.0",
+#     "pyyaml>=6,<7",
+#     "simpleaudio",
+#     "tabulate[widechars]>=0.10.0",
+#     "types-docker>=7.2.0.20260827",
+# ]
+#
+# [tool.uv.sources]
+# simpleaudio = {
+#     git = "https://github.com/cexen/py-simple-audio.git",
+#     rev = "6a7cb95c5af4537bad72bad9b190e09cb6d7883c",
+# }
+# ///
+```
+
+The reporter says that deleting both the `simpleaudio` dependency and its `[tool.uv.sources]` entry prevents `Resolving dependencies` from appearing. No executable body, verbose output, request trace, or timing comparison accompanies the header. The revision is a full commit identifier rather than a moving branch. This narrows investigation to the Git-source path and environment-satisfaction checks, but does not establish that uv fetches that repository on each invocation. The other dependencies should not be assumed necessary for a minimal reproduction until the comparison is tested.
 
 ## Reproduction
 
-**Outcome: needs_more_information.** The repeated progress message was not observed on warmed, unchanged fixtures. The conceptual question could be explored: displaying `Resolving dependencies` does not require Internet access, and neither script nor project entry-point execution inherently accesses the Internet every time.
+**Outcome: needs_more_information.** The repeated progress message was not observed on the earlier warmed, unchanged registry-only fixtures. The newly supplied Git-source configuration has not been tested. The conceptual question could be explored: displaying `Resolving dependencies` does not require Internet access, and neither script nor project entry-point execution inherently accesses the Internet every time.
 
 ### Environment and isolation
 
@@ -140,21 +167,17 @@ These tests were read, not executed. `TestContext::run` in `crates/uv-test/src/l
 
 ### Missing information and limits
 
-Request the minimal script including all inline metadata and uv settings, whether an adjacent script lockfile exists, the selected Python version, relevant project/configuration details, and sanitized verbose output from two consecutive executions on the reported uv 0.12.21. For the entry-point question, request the relevant `[project]`, `[project.scripts]`, build-system, source, workspace, and dependency-group configuration only if its actual behavior also needs investigation.
+The inline metadata and Python version constraint are now available above. Remaining useful information includes whether an adjacent script lockfile exists, the selected Python interpreter, any additional uv configuration, a minimal executable body if needed, and sanitized verbose output from consecutive executions on the reported uv 0.12.21. Network observations should distinguish actual connections from resolver progress. For the entry-point question, request the relevant `[project]`, `[project.scripts]`, build-system, source, workspace, and dependency-group configuration only if its actual behavior also needs investigation.
 
-Automatic Python downloads were not tested: the fixtures selected an existing `/usr/bin/python3` and set `UV_PYTHON_DOWNLOADS=never`. The missing-interpreter download path identified by the maintainer therefore remains outside these reproduction findings; the reporter has not supplied the Python requirement or selected interpreter. No delayed metadata-expiration or custom-index/source scenario was tested; there is no such configuration in the report. Connection tracing is not a full packet capture. No recurring Internet access or root cause for recurring progress is established. Offline mode limits uv's networking, not the Python application's networking.
+Automatic Python downloads were not tested: the fixtures selected an existing `/usr/bin/python3` and set `UV_PYTHON_DOWNLOADS=never`. The missing-interpreter download path identified by the maintainer therefore remains outside these reproduction findings; the reporter has supplied `requires-python = ">=3.12"`, but not the selected interpreter. No delayed metadata-expiration or custom-index/source scenario was tested. In particular, the newly reported Git source was absent from the earlier fixtures, so those results do not rule out behavior specific to this dependency. Connection tracing is not a full packet capture. No recurring Internet access or root cause for recurring progress is established. Offline mode limits uv's networking, not the Python application's networking.
 
 Reproduction artifacts are retained under `/tmp/uv-22388.T3qdCc`: `reproduce.py`, `project_checks.py`, the fixtures, `results.jsonl`, and per-command `.terminal.log` / `.connect.log` files. No checkout files or GitHub content were changed; pre-existing checkout modifications were left untouched.
 
-## Draft response
+## Follow-up investigation
 
-Not necessarily. `Resolving dependencies` is a progress message, not an indication that an Internet request occurred. In a local check with uv 0.12.13, it appeared even when running a script with `--offline` and installing entirely from cached packages. Repeated runs of an unchanged minimal script reused its existing environment without Internet connection attempts, both with and without a script lockfile.
+Use the supplied metadata as the starting point for a focused comparison on uv 0.12.21: consecutive warm runs with the pinned Git dependency, then the reporter's variant removing both the dependency and its source entry. Separate environment-satisfaction checks, resolution, Git operations, metadata reads, builds, and actual network connections in the evidence. A smaller fixture containing only the pinned dependency can then determine whether the other requirements matter. These are investigation steps, not completed experiments.
 
-For `[project.scripts]`, `uv run command` checks the project's lockfile and environment before launching the entry point. Those checks need not access the Internet either. Once the environment is prepared, `uv run --no-sync command` skips those updates; invoking `.venv/bin/command` directly bypasses uv.
-
-Use `uv run --offline --script example.py` or `uv run --offline command` to disable uv's network access. Required Python interpreters and dependencies must already be available locally. `uv lock --script example.py` records script dependency versions, but a lockfile alone is not an offline guarantee. None of these options prevent your Python code from accessing the network.
-
-The repeated progress message on your particular script still needs investigation. Please share a minimal script including its inline metadata and uv settings, whether it has a lockfile, the Python version, and verbose output from two consecutive `uv run -v --script example.py` invocations, with any secrets removed. The behavior above was checked on 0.12.13, not your reported 0.12.21.
+Establish lockfile status before drawing conclusions about locked versus unlocked execution. Offline execution can distinguish cache sufficiency from online behavior, but it does not satisfy the reporter's requested workflow by itself. If unnecessary repeated network access is established, reassess the classification and search for the specific Git-source behavior rather than general cache-policy requests. The project-entry-point question remains separate; no corresponding project reproduction has been supplied.
 
 ## Related
 
@@ -182,5 +205,5 @@ Searched astral-sh/uv open and closed issues and open, closed, and merged PRs. S
 
 The linked discussion chain was astral-sh/uv#7538 → astral-sh/uv#9688 and astral-sh/uv#6318 → astral-sh/uv#10135 / astral-sh/uv#10136. The abandoned draft astral-sh/uv#10123 was closed in favor of other PRs. astral-sh/uv#11472 contains a maintainer explanation that script environments use stable cached paths and are reused. astral-sh/uv#6091 led to astral-sh/uv#6063, whose lockfile-instability symptoms are absent here.
 
-The especially plausible tool-network report astral-sh/uv#12903 concerns explicitly pinned `uv tool run` packages and a maintainer-confirmed expectation about avoiding requests. The reporter here does not use that command or supply equivalent evidence. astral-sh/uv#15454 and astral-sh/uv#10380 request additional cache/fallback policies, which this report does not request. astral-sh/uv#15156 concerns module-name casing during installation, not resolver progress or repeated networking.
+The especially plausible tool-network report astral-sh/uv#12903 concerns explicitly pinned `uv tool run` packages and a maintainer-confirmed expectation about avoiding requests. The reporter here does not use that command or supply equivalent evidence. astral-sh/uv#15454 and astral-sh/uv#10380 request additional cache/fallback policies. The reporter's clarified preference for fetching only missing dependencies now makes them adjacent workflow discussions, but neither establishes the same pinned-Git-source behavior; the earlier exclusion should not be read as saying the reporter has no cache-policy preference. astral-sh/uv#15156 concerns module-name casing during installation, not resolver progress or repeated networking.
 
