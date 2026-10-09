@@ -13441,7 +13441,7 @@ fn sync_build_tag() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "[TEMP_DIR]/links", format = "flat" }]
+        indexes = [{ url = "[TEMP_DIR]/links", format = "flat", find-links = true }]
 
         [[package]]
         name = "build-tag"
@@ -18976,7 +18976,7 @@ fn project_build_hashes_lock_and_sync() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "wheels", format = "flat" }]
+        indexes = [{ url = "wheels", format = "flat", find-links = true }]
 
         [manifest]
         build-constraints = [{ name = "build-dependency", specifier = "==1.0.0", hashes = ["sha256:[BUILD_HASH]"] }]
@@ -19330,7 +19330,7 @@ fn project_build_hashes_locked_script_run_with_no_sync() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "package/wheels", format = "flat" }]
+        indexes = [{ url = "package/wheels", format = "flat", find-links = true }]
 
         [manifest]
         build-constraints = [{ name = "build-dependency", specifier = "==1.0.0", hashes = ["sha256:[BUILD_HASH]"] }]

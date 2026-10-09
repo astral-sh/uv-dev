@@ -9200,7 +9200,7 @@ fn conditional_sources_keep_default_platform_specific_transitive_dependencies() 
 
         [options]
         exclude-newer = "2025-02-06T00:00:00Z"
-        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu", explicit = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", default = true }]
+        indexes = [{ url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124", default = true }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu", explicit = true }]
 
         [[package]]
         name = "filelock"

@@ -194,6 +194,9 @@ fn write_options(writer: &mut LockWriter, options: &ResolverOptions) -> Result<(
             if index.format == IndexFormat::Flat {
                 writer.inline_value(&mut first, "format", "flat")?;
             }
+            if index.find_links {
+                writer.inline_value(&mut first, "find-links", true)?;
+            }
             if let Some(ignore_error_codes) = &index.ignore_error_codes {
                 writer.inline_key_start(&mut first, "ignore-error-codes")?;
                 writer.array(ignore_error_codes, |writer, status| {

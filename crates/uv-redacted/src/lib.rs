@@ -8,6 +8,7 @@ use thiserror::Error;
 use url::Url;
 
 const SENSITIVE_QUERY_PARAMETERS: &[&str] = &[
+    "token",
     "sig",
     "X-Amz-Credential",
     "X-Amz-Security-Token",
@@ -205,6 +206,27 @@ impl DisplaySafeUrl {
         }
         let _ = self.0.set_username("");
         let _ = self.0.set_password(None);
+    }
+
+    /// Remove sensitive query parameters while retaining routing parameters and their order.
+    pub fn remove_sensitive_query_parameters(&mut self) {
+        if !self
+            .0
+            .query_pairs()
+            .any(|(key, _)| is_sensitive_query_parameter(&key))
+        {
+            return;
+        }
+        let query = self
+            .0
+            .query_pairs()
+            .filter(|(key, _)| !is_sensitive_query_parameter(key))
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        self.0.set_query(None);
+        if !query.is_empty() {
+            self.0.query_pairs_mut().extend_pairs(query);
+        }
     }
 
     /// Returns the URL with any credentials removed.
@@ -621,13 +643,35 @@ mod tests {
     }
 
     #[test]
+    fn redact_token_query_values() {
+        let url = DisplaySafeUrl::parse("https://example.com/simple?channel=private&TOKEN=secret")
+            .expect("valid URL");
+        assert_eq!(
+            url.to_string(),
+            "https://example.com/simple?channel=private&TOKEN=****"
+        );
+    }
+
+    #[test]
+    fn remove_sensitive_query_parameters_retains_routing() {
+        let mut url = DisplaySafeUrl::parse("https://example.com/simple?channel=first&token=secret&channel=second&X-Amz-Signature=signed")
+            .expect("valid URL");
+        url.remove_sensitive_query_parameters();
+        assert_eq!(
+            url.as_str(),
+            "https://example.com/simple?channel=first&channel=second"
+        );
+    }
+
+    #[test]
     fn does_not_redact_unknown_query_values() {
         let log_safe_url =
-            DisplaySafeUrl::parse("https://bucket.s3.amazonaws.com/dist.whl?token=secret").unwrap();
+            DisplaySafeUrl::parse("https://bucket.s3.amazonaws.com/dist.whl?channel=private")
+                .unwrap();
 
         assert_eq!(
             log_safe_url.to_string(),
-            "https://bucket.s3.amazonaws.com/dist.whl?token=secret"
+            "https://bucket.s3.amazonaws.com/dist.whl?channel=private"
         );
     }
 

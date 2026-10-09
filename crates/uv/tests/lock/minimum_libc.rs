@@ -241,7 +241,7 @@ fn minimum_libc_switch_families() -> Result<()> {
         [options]
         minimum-libc-version = { glibc = "2.31" }
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "links", format = "flat" }]
+        indexes = [{ url = "links", format = "flat", find-links = true }]
 
         [[package]]
         name = "demo"
@@ -305,7 +305,7 @@ fn minimum_libc_switch_families() -> Result<()> {
         [options]
         minimum-libc-version = { glibc = "2.31", musl = "1.2" }
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "links", format = "flat" }]
+        indexes = [{ url = "links", format = "flat", find-links = true }]
 
         [[package]]
         name = "demo"
@@ -423,7 +423,7 @@ fn minimum_libc_local_version_fallback() -> Result<()> {
         [options]
         minimum-libc-version = { glibc = "2.31" }
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "links", format = "flat" }]
+        indexes = [{ url = "links", format = "flat", find-links = true }]
 
         [[package]]
         name = "demo"
@@ -552,7 +552,7 @@ fn minimum_libc_backtracks_and_invalidates_lock() -> Result<()> {
         [options]
         minimum-libc-version = { glibc = "2.31" }
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "links", format = "flat" }]
+        indexes = [{ url = "links", format = "flat", find-links = true }]
 
         [[package]]
         name = "demo"
@@ -765,7 +765,7 @@ fn minimum_libc_allows_sdist_fallback() -> Result<()> {
         [options]
         minimum-libc-version = { glibc = "2.31" }
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "links", format = "flat" }]
+        indexes = [{ url = "links", format = "flat", find-links = true }]
 
         [[package]]
         name = "demo"
@@ -967,7 +967,7 @@ fn minimum_libc_architectures_and_markers() -> Result<()> {
         [options]
         minimum-libc-version = { glibc = "2.31" }
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "links", format = "flat" }]
+        indexes = [{ url = "links", format = "flat", find-links = true }]
 
         [[package]]
         name = "demo"

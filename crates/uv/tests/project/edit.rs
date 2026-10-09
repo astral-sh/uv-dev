@@ -13058,7 +13058,7 @@ fn repeated_index_cli_environment_variable() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "https://test.pypi.org/simple" }, { url = "https://test.pypi.org/simple", default = true }]
+        indexes = [{ url = "https://test.pypi.org/simple", default = true }, { url = "https://test.pypi.org/simple" }]
 
         [[package]]
         name = "iniconfig"

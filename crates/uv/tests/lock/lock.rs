@@ -20,7 +20,7 @@ use walkdir::WalkDir;
 #[cfg(feature = "test-universal")]
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{method, path, query_param},
 };
 
 #[cfg(feature = "test-universal")]
@@ -29,6 +29,8 @@ use uv_fs::{Simplified, create_symlink};
 use uv_static::EnvVars;
 #[cfg(feature = "test-universal")]
 use uv_test::archive::{generate_source_archive, write_tar_gz};
+#[cfg(feature = "test-universal")]
+use uv_test::find_links::FindLinksServer;
 #[cfg(feature = "test-universal")]
 use uv_test::package_server::PackageServer;
 #[cfg(feature = "test-universal")]
@@ -215,7 +217,7 @@ fn lock_equivalent_requirements() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat" }]
+        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat", find-links = true }]
 
         [[package]]
         name = "ok"
@@ -292,7 +294,7 @@ fn lock_equivalent_requirements() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat" }]
+        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat", find-links = true }]
 
         [[package]]
         name = "ok"
@@ -587,7 +589,7 @@ fn lock_equivalent_pruned_inputs() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat" }]
+        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat", find-links = true }]
 
         [manifest]
         overrides = [{ name = "ok", specifier = ">=2" }]
@@ -17073,7 +17075,7 @@ fn lock_find_links_local_wheel() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "[TEMP_DIR]/links", format = "flat" }]
+        indexes = [{ url = "[TEMP_DIR]/links", format = "flat", find-links = true }]
 
         [[package]]
         name = "project"
@@ -17187,7 +17189,7 @@ fn lock_find_links_ignore_explicit_index() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "[TEMP_DIR]/links", format = "flat" }, { url = "https://pypi.org/simple" }]
+        indexes = [{ url = "[TEMP_DIR]/links", format = "flat", find-links = true }, { url = "https://pypi.org/simple" }]
 
         [[package]]
         name = "colorama"
@@ -17409,7 +17411,7 @@ fn lock_find_links_local_sdist() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "[TEMP_DIR]/links", format = "flat" }]
+        indexes = [{ url = "[TEMP_DIR]/links", format = "flat", find-links = true }]
 
         [[package]]
         name = "project"
@@ -17496,7 +17498,7 @@ fn lock_find_links_http_wheel() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "http://[LOCALHOST]/", format = "flat" }]
+        indexes = [{ url = "http://[LOCALHOST]/", format = "flat", find-links = true }]
 
         [[package]]
         name = "packaging"
@@ -17581,7 +17583,7 @@ fn lock_find_links_http_sdist() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "http://[LOCALHOST]/", format = "flat" }]
+        indexes = [{ url = "http://[LOCALHOST]/", format = "flat", find-links = true }]
 
         [[package]]
         name = "packaging"
@@ -27923,6 +27925,15 @@ fn lock_index_policy() -> Result<()> {
     let first = PackseServer::new("extras/missing-extra.toml");
     let priority = PackseServer::new("simple/single-package.toml");
     let default = PackseServer::new("simple/single-package.toml");
+    let first_filter = regex::escape(first.index_url().trim_end_matches("/simple/"));
+    let priority_filter = regex::escape(priority.index_url().trim_end_matches("/simple/"));
+    let default_filter = regex::escape(default.index_url().trim_end_matches("/simple/"));
+    let mut filters = vec![
+        (first_filter.as_str(), "http://[FIRST]"),
+        (priority_filter.as_str(), "http://[PRIORITY]"),
+        (default_filter.as_str(), "http://[DEFAULT]"),
+    ];
+    filters.extend(context.filters());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
 
     pyproject_toml.write_str(&formatdoc! {r#"
@@ -27946,10 +27957,35 @@ fn lock_index_policy() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
-    insta::with_settings!({ filters => context.filters() }, {
-        assert_snapshot!(lock.lines().filter(|line| line.starts_with("indexes = ") || line.starts_with("source = { registry = ")).collect::<Vec<_>>().join("\n"), @r#"
-        indexes = [{ url = "http://[LOCALHOST]/simple" }, { url = "http://[LOCALHOST]/simple", default = true }]
-        source = { registry = "http://[LOCALHOST]/simple/" }
+    insta::with_settings!({ filters => filters }, {
+        assert_snapshot!(lock, @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "http://[DEFAULT]/simple", default = true }, { url = "http://[FIRST]/simple" }]
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[FIRST]/simple/" }
+        sdist = { url = "http://[FIRST]/files/a-1.0.0.tar.gz", hash = "sha256:957f99ff1d65ce0d7883d50f4e67ed8d4b42e76d2c2b5e62384ff0ba538647b5", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[FIRST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:f936eedc194aa91ca01a4c6c9981136ca6c75ce6df47e3951b12522881dce809", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a" }]
         "#);
     });
 
@@ -28035,6 +28071,368 @@ fn lock_index_policy() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
 
+    Ok(())
+}
+
+/// Default-index declaration positions do not affect resolver priority.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_policy_default_position() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = PackseServer::new("extras/missing-extra.toml");
+    let default = PackseServer::new("simple/single-package.toml");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [[tool.uv.index]]
+        name = "default"
+        url = "{default}"
+        default = true
+        [[tool.uv.index]]
+        name = "first"
+        url = "{first}"
+    "#, first = first.index_url(), default = default.index_url()})?;
+    context.lock().assert().success();
+    let lock = context.read("uv.lock");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [[tool.uv.index]]
+        name = "first"
+        url = "{first}"
+        [[tool.uv.index]]
+        name = "default"
+        url = "{default}"
+        default = true
+    "#, first = first.index_url(), default = default.index_url()})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+/// Ignored status codes are a set in both current settings and older lockfiles.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_policy_status_code_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let contents = formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [[tool.uv.index]]
+        name = "test"
+        url = "{index}"
+        ignore-error-codes = [401, 403, 401]
+    "#, index = server.index_url()};
+    pyproject.write_str(&contents)?;
+    context.lock().assert().success();
+    pyproject.write_str(&contents.replace("[401, 403, 401]", "[403, 401]"))?;
+    let lock = context.read("uv.lock");
+    context.temp_dir.child("uv.lock").write_str(&lock.replace(
+        "ignore-error-codes = [401, 403]",
+        "ignore-error-codes = [403, 401, 403]",
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Flat configured indexes obey first-index priority, while find-links candidates are merged.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_index_policy_find_links_kind() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = PackseServer::new("extras/missing-extra.toml");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let (filename, bytes) = generate_wheel_with_files(
+        &"a".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    links.child(filename).write_binary(&bytes)?;
+    let flat = FindLinksServer::new(links.path());
+    let first_filter = regex::escape(first.index_url().trim_end_matches("/simple/"));
+    let flat_filter = regex::escape(flat.url());
+    let mut filters = vec![
+        (first_filter.as_str(), "http://[FIRST]"),
+        (flat_filter.as_str(), "http://[FLAT]"),
+    ];
+    filters.extend(context.filters());
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [tool.uv]
+        find-links = ["{flat}"]
+        [[tool.uv.index]]
+        name = "first"
+        url = "{first}"
+    "#, first = first.index_url(), flat = flat.url()})?;
+    context.lock().assert().success();
+    insta::with_settings!({ filters => filters.clone() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "http://[FLAT]/", format = "flat", find-links = true }, { url = "http://[FIRST]/simple" }]
+
+        [[package]]
+        name = "a"
+        version = "2.0.0"
+        source = { registry = "http://[FLAT]/" }
+        wheels = [
+            { url = "http://[FLAT]/a-2.0.0-py3-none-any.whl" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a" }]
+        "#);
+    });
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [[tool.uv.index]]
+        name = "first"
+        url = "{first}"
+        [[tool.uv.index]]
+        name = "flat"
+        url = "{flat}"
+        format = "flat"
+    "#, first = first.index_url(), flat = flat.url()})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    context.lock().assert().success();
+    insta::with_settings!({ filters => filters }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "http://[FLAT]/", format = "flat" }, { url = "http://[FIRST]/simple" }]
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[FIRST]/simple/" }
+        sdist = { url = "http://[FIRST]/files/a-1.0.0.tar.gz", hash = "sha256:957f99ff1d65ce0d7883d50f4e67ed8d4b42e76d2c2b5e62384ff0ba538647b5", upload-time = "2024-03-24T00:00:00Z" }
+        wheels = [
+            { url = "http://[FIRST]/files/a-1.0.0-py3-none-any.whl", hash = "sha256:f936eedc194aa91ca01a4c6c9981136ca6c75ce6df47e3951b12522881dce809", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a" }]
+        "#);
+    });
+    Ok(())
+}
+
+/// Routing queries distinguish flat indexes even when both URLs stay configured.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_index_policy_routing_queries() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let (first, first_bytes) = generate_wheel_with_files(
+        &"a".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let (second, second_bytes) = generate_wheel_with_files(
+        &"a".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    Mock::given(path("/"))
+        .and(query_param("channel", "first"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("<a href='{}/{first}'>{first}</a>", server.uri()),
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(path("/"))
+        .and(query_param("channel", "second"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("<a href='{}/{second}'>{second}</a>", server.uri()),
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(path(format!("/{first}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(first_bytes))
+        .mount(&server)
+        .await;
+    Mock::given(path(format!("/{second}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(second_bytes))
+        .mount(&server)
+        .await;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [[tool.uv.index]]
+        name = "first"
+        url = "{server}/?channel=first"
+        format = "flat"
+        [[tool.uv.index]]
+        name = "second"
+        url = "{server}/?channel=second"
+        format = "flat"
+    "#, server = server.uri()})?;
+    context.lock().assert().success();
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "http://[LOCALHOST]/?channel=second", format = "flat" }, { url = "http://[LOCALHOST]/?channel=first", format = "flat" }]
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/?channel=first" }
+        wheels = [
+            { url = "http://[LOCALHOST]/a-1.0.0-py3-none-any.whl" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a" }]
+        "#);
+    });
+    pyproject.write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [[tool.uv.index]]
+        name = "second"
+        url = "{server}/?channel=second"
+        format = "flat"
+        [[tool.uv.index]]
+        name = "first"
+        url = "{server}/?channel=first"
+        format = "flat"
+    "#, server = server.uri()})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    context.lock().assert().success();
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "http://[LOCALHOST]/?channel=first", format = "flat" }, { url = "http://[LOCALHOST]/?channel=second", format = "flat" }]
+
+        [[package]]
+        name = "a"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/?channel=second" }
+        wheels = [
+            { url = "http://[LOCALHOST]/a-2.0.0-py3-none-any.whl" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a" }]
+        "#);
+    });
     Ok(())
 }
 
@@ -28168,7 +28566,7 @@ fn lock_index_policy_relative_url() -> Result<()> {
     let lock = context.read("uv.lock");
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(lock.lines().find(|line| line.starts_with("indexes = ")).unwrap_or_default(), @r#"
-        indexes = [{ url = "links", explicit = true, format = "flat", ignore-error-codes = [403] }, { url = "http://[LOCALHOST]/simple", default = true }]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }, { url = "links", explicit = true, format = "flat", ignore-error-codes = [403] }]
         "#);
     });
 
@@ -28254,7 +28652,7 @@ fn lock_index_policy_credentials() -> Result<()> {
     let lock = context.read("uv.lock");
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(lock.lines().find(|line| line.starts_with("indexes = ")).unwrap_or_default(), @r#"
-        indexes = [{ url = "https://example.invalid/simple", explicit = true }, { url = "http://[LOCALHOST]/simple", default = true }]
+        indexes = [{ url = "http://[LOCALHOST]/simple", default = true }, { url = "https://example.invalid/simple", explicit = true }]
         "#);
     });
 
@@ -42229,7 +42627,7 @@ fn lock_trailing_slash_find_links() -> Result<()> {
 
             [options]
             exclude-newer = "2024-03-25T00:00:00Z"
-            indexes = [{ url = "https://pypi.org/simple/packaging", format = "flat" }]
+            indexes = [{ url = "https://pypi.org/simple/packaging", format = "flat", find-links = true }]
 
             [[package]]
             name = "packaging"
@@ -42306,7 +42704,7 @@ hint: To update the lockfile, run `uv lock`.
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "https://pypi.org/simple/packaging/", format = "flat" }]
+        indexes = [{ url = "https://pypi.org/simple/packaging/", format = "flat", find-links = true }]
 
         [[package]]
         name = "packaging"
@@ -45962,7 +46360,7 @@ fn lock_resolution_inputs_individual_constraints() -> Result<()> {
         [options]
         prerelease-mode = "explicit"
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat" }]
+        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat", find-links = true }]
 
         [[package]]
         name = "ok"

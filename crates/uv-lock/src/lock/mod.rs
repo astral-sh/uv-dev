@@ -6253,7 +6253,8 @@ struct ResolverIndex {
     explicit: bool,
     default: bool,
     format: IndexFormat,
-    ignore_error_codes: Option<Vec<SerializableStatusCode>>,
+    find_links: bool,
+    ignore_error_codes: Option<BTreeSet<SerializableStatusCode>>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -6267,17 +6268,19 @@ struct ResolverIndexWire {
     #[serde(default)]
     format: IndexFormat,
     #[serde(default)]
-    ignore_error_codes: Option<Vec<SerializableStatusCode>>,
+    find_links: bool,
+    #[serde(default)]
+    ignore_error_codes: Option<BTreeSet<SerializableStatusCode>>,
 }
 
 impl ResolverIndex {
-    fn from_index(index: &Index, root: &Path) -> Result<Self, LockError> {
+    fn from_index(index: &Index, find_links: bool, root: &Path) -> Result<Self, LockError> {
         let url = match index.url() {
             IndexUrl::Pypi(_) | IndexUrl::Url(_) => {
-                // Queries and fragments can contain short-lived credentials and do not
-                // participate in index policy identity.
+                // Routing query parameters are part of an index's identity. Remove only
+                // credentials and fragments, which are not sent to the index server.
                 let mut url = index.url().without_credentials().into_owned();
-                url.set_query(None);
+                url.remove_sensitive_query_parameters();
                 url.set_fragment(None);
                 if index.format == IndexFormat::Simple {
                     let path = url.path().trim_end_matches('/').to_owned();
@@ -6292,7 +6295,11 @@ impl ResolverIndex {
             explicit: index.explicit,
             default: index.default,
             format: index.format,
-            ignore_error_codes: index.ignore_error_codes.clone(),
+            find_links,
+            ignore_error_codes: index
+                .ignore_error_codes
+                .as_ref()
+                .map(|codes| codes.iter().copied().collect()),
         })
     }
 
@@ -6309,13 +6316,21 @@ impl ResolverIndex {
         let default_locations = IndexLocations::default();
         let default_index = default_locations
             .default_index()
-            .map(|index| Self::from_index(index, root))
+            .map(|index| Self::from_index(index, false, root))
             .transpose()?;
         let mut indexes = Vec::new();
-        // allowed_indexes returns reverse precedence order. Keep the first occurrence
-        // seen by resolution, then restore serialization order after deduplication.
-        for index in index_locations.allowed_indexes().into_iter().rev() {
-            let index = Self::from_index(index, root)?;
+        // The default index always has lower priority than other configured indexes, regardless
+        // of its declaration position. Find-links inputs merge candidates instead of participating
+        // in first-index precedence, so retain their distinct input kind.
+        let configured = index_locations
+            .defined_indexes()
+            .filter(|index| !index.default)
+            .chain(index_locations.default_index());
+        for (index, find_links) in configured
+            .map(|index| (index, false))
+            .chain(index_locations.flat_indexes().map(|index| (index, true)))
+        {
+            let index = Self::from_index(index, find_links, root)?;
             if Some(&index) != default_index.as_ref() && !indexes.contains(&index) {
                 indexes.push(index);
             }
@@ -6332,6 +6347,7 @@ impl From<ResolverIndexWire> for ResolverIndex {
             explicit: wire.explicit,
             default: wire.default,
             format: wire.format,
+            find_links: wire.find_links,
             ignore_error_codes: wire.ignore_error_codes,
         }
     }
@@ -6675,6 +6691,10 @@ impl TryFrom<LockWire> for Lock {
             .map(|simplified_marker| simplified_marker.into_marker(&wire.requires_python))
             .collect();
         let mut options_wire = wire.options;
+        // Older policies recorded defaults at their definition positions. Their priority is fixed.
+        options_wire
+            .indexes
+            .sort_by_key(|index| (!index.find_links, !index.default));
         if options_wire.exclude_newer.exclude_newer_span.is_some() {
             options_wire.exclude_newer.exclude_newer = None;
         }

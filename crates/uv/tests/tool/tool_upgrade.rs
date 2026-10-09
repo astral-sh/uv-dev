@@ -1630,7 +1630,7 @@ fn tool_upgrade_writes_preview_lock() {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
-        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat" }]
+        indexes = [{ url = "[WORKSPACE]/test/links", format = "flat", find-links = true }]
 
         [manifest]
         requirements = [{ name = "simple-launcher" }]
