@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::io::ReaderStream;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use uv_cache::{Cache, CacheBucket, CacheEntry, Freshness, WheelCache};
 use uv_cache_info::Timestamp;
@@ -128,6 +128,20 @@ impl PackedArchiveEntry {
     /// Return whether a local pointer is present; readers still verify its retained bytes.
     pub fn has_local_pointer(&self) -> bool {
         self.url.scheme() == "file" && self.entry.path().is_file()
+    }
+
+    /// Read the retained revision for installed-package freshness checks.
+    pub fn local_timestamp(&self) -> Result<Option<Timestamp>> {
+        if self.url.scheme() != "file" {
+            return Ok(None);
+        }
+        let bytes = match fs_err::read(self.entry.path()) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        let pointer: LocalPointer = rmp_serde::from_slice(&bytes)?;
+        Ok(Some(pointer.timestamp))
     }
 
     /// Open a verified local archive, retaining the original file's revision timestamp.
@@ -432,7 +446,16 @@ impl PackedArchiveEntry {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.into()),
         };
-        let cached = DataWithCachePolicy::from_reader(std::io::Cursor::new(bytes))?;
+        let cached = match DataWithCachePolicy::from_reader(std::io::Cursor::new(bytes)) {
+            Ok(cached) => cached,
+            Err(err) => {
+                warn!(
+                    "Ignoring broken packed archive metadata for {}: {err}",
+                    self.url
+                );
+                return Ok(None);
+            }
+        };
         if allow_stale {
             if !cached.cache_policy().matches_stale_request(request) {
                 return Ok(None);
@@ -448,7 +471,16 @@ impl PackedArchiveEntry {
                 return Ok(None);
             }
         }
-        let metadata: Metadata = rmp_serde::from_slice(cached.data())?;
+        let metadata: Metadata = match rmp_serde::from_slice(cached.data()) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                warn!(
+                    "Ignoring broken packed archive metadata for {}: {err}",
+                    self.url
+                );
+                return Ok(None);
+            }
+        };
         let Some(archive) = self.read(&metadata, None, None).await? else {
             return Ok(None);
         };
@@ -471,6 +503,83 @@ impl PackedArchiveEntry {
             .body(Body::wrap_stream(ReaderStream::new(archive.file)))?;
         Ok(Some((Response::from(response), policy)))
     }
+}
+
+/// Remove packed payloads no longer referenced by any pointer in their source shard.
+/// The caller must hold the cache's exclusive lock.
+pub fn prune_packed_archives(cache: &Cache) -> Result<uv_cache::Removal> {
+    let mut summary = cache.removal();
+    let root = cache.bucket(CacheBucket::Packed);
+    if !root.try_exists()? {
+        return Ok(summary);
+    }
+    let mut directories = vec![root];
+    while let Some(directory) = directories.pop() {
+        let mut references = std::collections::HashSet::new();
+        let mut payloads = Vec::new();
+        let mut unreadable_pointer = false;
+        for entry in fs_err::read_dir(&directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            if entry.file_type()?.is_dir() {
+                directories.push(path);
+                continue;
+            }
+            let extension = path.extension().and_then(std::ffi::OsStr::to_str);
+            let metadata = match extension {
+                Some("http") => fs_err::read(&path)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|bytes| {
+                        DataWithCachePolicy::from_reader(std::io::Cursor::new(bytes))
+                            .map_err(Into::into)
+                    })
+                    .and_then(|cached| {
+                        rmp_serde::from_slice::<Metadata>(cached.data()).map_err(Into::into)
+                    }),
+                Some("rev") => fs_err::read(&path)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|bytes| {
+                        rmp_serde::from_slice::<LocalPointer>(&bytes)
+                            .map(|pointer| pointer.archive)
+                            .map_err(Into::into)
+                    }),
+                _ => {
+                    if let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str)
+                        && name.len() == 64
+                        && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    {
+                        payloads.push(path);
+                    }
+                    continue;
+                }
+            };
+            match metadata {
+                Ok(metadata) => {
+                    references.insert(metadata.hash.digest().to_owned());
+                }
+                Err(err) => {
+                    // An unreadable pointer may still reference any payload in this shard.
+                    warn!(
+                        "Could not read packed archive pointer {}: {err}",
+                        path.display()
+                    );
+                    unreadable_pointer = true;
+                }
+            }
+        }
+        if !unreadable_pointer {
+            for path in payloads {
+                if !path
+                    .file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .is_some_and(|name| references.contains(name))
+                {
+                    summary += cache.remove_path(path)?;
+                }
+            }
+        }
+    }
+    Ok(summary)
 }
 
 impl PackedArchive {
