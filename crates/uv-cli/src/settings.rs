@@ -1068,6 +1068,7 @@ impl ToolInstallSettings {
         args: ToolInstallArgs,
         filesystem: Option<FilesystemOptions>,
         environment: EnvironmentOptions,
+        discover_project: bool,
     ) -> anyhow::Result<Self> {
         let ToolInstallArgs {
             package,
@@ -1165,6 +1166,7 @@ impl ToolInstallSettings {
                 options,
                 cli_environment_options,
                 resolver_filesystem_options,
+                discover_project,
             ),
             settings,
             install_mirrors: environment
