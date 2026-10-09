@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -15,28 +15,45 @@ use uv_redacted::DisplaySafeUrl;
 #[derive(Debug)]
 pub struct ResolverReporter {
     reporter: ProgressReporter,
-    started: AtomicBool,
+    state: Mutex<ResolverProgressState>,
+}
+
+#[derive(Debug, Default)]
+enum ResolverProgressState {
+    #[default]
+    Pending,
+    Started,
+    Finished,
 }
 
 impl ResolverReporter {
-    fn start(&self) {
-        if self.reporter.printer.emits_jsonl_progress()
-            && !self.started.swap(true, Ordering::Relaxed)
-        {
-            self.reporter.emit_progress(&JsonlProgressEvent::new(
-                ProgressPhase::Resolve,
-                ProgressStatus::Started,
-            ));
+    fn start(&self, state: &mut ResolverProgressState) -> bool {
+        match state {
+            ResolverProgressState::Finished => false,
+            ResolverProgressState::Started => true,
+            ResolverProgressState::Pending => {
+                self.reporter.emit_progress(&JsonlProgressEvent::new(
+                    ProgressPhase::Resolve,
+                    ProgressStatus::Started,
+                ));
+                *state = ResolverProgressState::Started;
+                true
+            }
         }
     }
 
     #[must_use]
     pub(super) fn with_length(self, length: u64) -> Self {
-        self.reporter.root.set_length(length);
-        self.start();
-        let mut event = JsonlProgressEvent::new(ProgressPhase::Resolve, ProgressStatus::Updated);
-        event.total = Some(length);
-        self.reporter.emit_progress(&event);
+        {
+            let mut state = self.state.lock().unwrap();
+            if self.start(&mut state) {
+                self.reporter.root.set_length(length);
+                let mut event =
+                    JsonlProgressEvent::new(ProgressPhase::Resolve, ProgressStatus::Updated);
+                event.total = Some(length);
+                self.reporter.emit_progress(&event);
+            }
+        }
         self
     }
 }
@@ -55,14 +72,17 @@ impl From<Printer> for ResolverReporter {
 
         Self {
             reporter: ProgressReporter::new(root, multi_progress, printer),
-            started: AtomicBool::new(false),
+            state: Mutex::default(),
         }
     }
 }
 
 impl uv_resolver::ResolverReporter for ResolverReporter {
     fn on_progress(&self, name: &PackageName, version_or_url: &VersionOrUrlRef) {
-        self.start();
+        let mut state = self.state.lock().unwrap();
+        if !self.start(&mut state) {
+            return;
+        }
         match version_or_url {
             VersionOrUrlRef::Version(version) => {
                 self.reporter.root.set_message(format!("{name}=={version}"));
@@ -84,7 +104,11 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
     }
 
     fn on_complete(&self, success: bool) {
-        self.start();
+        let mut state = self.state.lock().unwrap();
+        if !self.start(&mut state) {
+            return;
+        }
+        *state = ResolverProgressState::Finished;
         self.reporter.root.set_message("");
         self.reporter.emit_progress(&JsonlProgressEvent::new(
             ProgressPhase::Resolve,

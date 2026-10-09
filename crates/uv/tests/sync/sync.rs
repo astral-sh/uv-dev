@@ -1,4 +1,8 @@
 use std::collections::BTreeMap;
+use std::env;
+use std::process::Command;
+use std::sync::{Arc, mpsc};
+use std::thread;
 
 use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
@@ -8,14 +12,16 @@ use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-#[cfg(feature = "test-git")]
-use std::process::Command;
 use tempfile::tempdir_in;
 use url::Url;
 use wiremock::matchers::{basic_auth, body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use uv_command_support::Printer;
+use uv_distribution_types::VersionOrUrlRef;
 use uv_fs::Simplified;
+use uv_resolve_operations::reporters::ResolverReporter;
+use uv_resolver::ResolverReporter as _;
 use uv_static::EnvVars;
 use uv_test::archive::write_tar_gz;
 use uv_test::package_server::PackageServer;
@@ -2162,6 +2168,152 @@ async fn sync_jsonl_failed_index_request() -> Result<()> {
     ----- stderr -----
     error: Failed to fetch: http://[LOCALHOST]/simple/unavailable-package/
       cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/simple/unavailable-package/)
+    "#);
+    Ok(())
+}
+
+/// A detached solver cannot publish progress after another thread finishes the phase.
+#[test]
+fn sync_jsonl_resolver_reporter_late_progress() -> Result<()> {
+    const WORKER: &str = "UV_INTERNAL__TEST_RESOLVER_REPORTER_WORKER";
+    if env::var_os(WORKER).is_some() {
+        let reporter = Arc::new(ResolverReporter::from(Printer::Jsonl));
+        let (ready_sender, ready_receiver) = mpsc::channel();
+        let (resume_sender, resume_receiver) = mpsc::channel();
+        let solver_reporter = reporter.clone();
+        let solver = thread::spawn(move || {
+            let version = "1.0.0".parse()?;
+            solver_reporter.on_progress(&"before".parse()?, &VersionOrUrlRef::Version(&version));
+            ready_sender.send(())?;
+            resume_receiver.recv()?;
+            solver_reporter.on_progress(&"late".parse()?, &VersionOrUrlRef::Version(&version));
+            Ok::<_, anyhow::Error>(())
+        });
+        ready_receiver.recv()?;
+        reporter.on_complete(false);
+        resume_sender.send(())?;
+        solver
+            .join()
+            .map_err(|_| anyhow!("solver reporter thread panicked"))??;
+        reporter.on_complete(true);
+        return Ok(());
+    }
+
+    uv_snapshot!([
+        (r"finished in [0-9.]+s", "finished in [TIME]"),
+        (r"[0-9]+ filtered out", "[N] filtered out"),
+    ], Command::new(env::current_exe()?)
+        .args(["--exact", "sync::sync_jsonl_resolver_reporter_late_progress", "--nocapture", "--color", "never"])
+        .env(WORKER, "1"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+
+    running 1 test
+    {"type":"progress","phase":"resolve","status":"started"}
+    {"type":"progress","phase":"resolve","status":"updated","name":"before","version":"1.0.0"}
+    {"type":"progress","phase":"resolve","status":"failed"}
+    test sync::sync_jsonl_resolver_reporter_late_progress ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; [N] filtered out; finished in [TIME]
+    "#);
+    Ok(())
+}
+
+/// A frozen sync closes preparation even when an uncached wheel cannot be downloaded.
+#[tokio::test]
+async fn sync_jsonl_failed_preparation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let (filename, wheel) = generate_wheel(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example @ {url}/{filename}"]
+    "#, url = server.uri()})?;
+    context.lock().arg("--no-index").assert().success();
+    server.reset().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--frozen", "--no-cache", "--output-format", "jsonl", "--preview-features", "jsonl"])
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @r#"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    {"type":"progress","phase":"prepare","status":"started","total":1}
+    {"type":"progress","phase":"prepare","status":"failed","completed":0,"total":1}
+
+    ----- stderr -----
+    error: Failed to download `example @ http://[LOCALHOST]/example-1.0.0-py3-none-any.whl`
+      cause: Failed to fetch: http://[LOCALHOST]/example-1.0.0-py3-none-any.whl
+      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/example-1.0.0-py3-none-any.whl)
+
+    hint: `example` (v1.0.0) was included because `project` (v0.1.0) depends on `example`
+    "#);
+    Ok(())
+}
+
+/// Rejected installation settings still produce a terminal install phase event.
+#[test]
+fn sync_jsonl_failed_installation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"example".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context.temp_dir.child(&filename).write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["example"]
+        [tool.uv.sources]
+        example = {{ path = "{filename}" }}
+    "#})?;
+    context.lock().arg("--no-index").assert().success();
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--frozen", "--no-cache", "--link-mode", "symlink", "--output-format", "jsonl", "--preview-features", "jsonl"]), @r#"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    {"type":"progress","phase":"prepare","status":"started","total":1}
+    {"type":"progress","phase":"prepare","status":"updated","name":"example==1.0.0 (from file://[TEMP_DIR]/example-1.0.0-py3-none-any.whl)","completed":1,"total":1}
+    {"type":"progress","phase":"prepare","status":"completed","completed":1,"total":1}
+    {"type":"progress","phase":"install","status":"started","total":1}
+    {"type":"progress","phase":"install","status":"failed","completed":0,"total":1}
+
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    error: Symlink-based installation is not supported with `--no-cache`. The created environment will be rendered unusable by the removal of the cache.
     "#);
     Ok(())
 }

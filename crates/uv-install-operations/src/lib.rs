@@ -701,6 +701,7 @@ async fn execute_plan(
     } else {
         let start = std::time::Instant::now();
 
+        let reporter = Arc::new(PrepareReporter::new(printer, remote.len() as u64));
         let preparer = Preparer::new(
             cache,
             tags,
@@ -712,9 +713,12 @@ async fn execute_plan(
                 concurrency.downloads_semaphore.clone(),
             ),
         )
-        .with_reporter(Arc::new(PrepareReporter::new(printer, remote.len() as u64)));
+        .with_reporter(reporter.clone());
 
-        let wheels = preparer.prepare(remote, in_flight, resolution).await?;
+        let wheels = preparer
+            .prepare(remote, in_flight, resolution)
+            .await
+            .inspect_err(|_| reporter.on_failed())?;
 
         logger.on_prepare(
             wheels.len(),
@@ -772,18 +776,17 @@ async fn execute_plan(
     let mut installs = wheels.into_iter().chain(cached).collect::<Vec<_>>();
     if !installs.is_empty() {
         let start = std::time::Instant::now();
+        let reporter = Arc::new(InstallReporter::new(printer, installs.len() as u64));
         installs = uv_installer::Installer::new(venv, preview)
             .with_link_mode(link_mode)
             .with_cache(cache)
             .with_installer_metadata(installer_metadata)
-            .with_reporter(Arc::new(InstallReporter::new(
-                printer,
-                installs.len() as u64,
-            )))
+            .with_reporter(reporter.clone())
             // This technically can block the runtime, but we are on the main thread and
             // have no other running tasks at this point, so this lets us avoid spawning a blocking
             // task.
-            .install_blocking(installs)?;
+            .install_blocking(installs)
+            .inspect_err(|_| reporter.on_failed())?;
 
         logger.on_install(installs.len(), start, printer, DryRun::Disabled)?;
     }
