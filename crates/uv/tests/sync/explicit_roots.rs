@@ -1,25 +1,10 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{ChildPath, FileTouch, FileWriteStr, PathChild};
+use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
 use indoc::{formatdoc, indoc};
 use uv_test::packse::PackseServer;
+use uv_test::packse::scenario::Scenario;
 use uv_test::uv_snapshot;
-
-fn member(root: &ChildPath, name: &str, requires_python: Option<&str>) -> Result<()> {
-    let requires_python = requires_python
-        .map(|value| format!("requires-python = {value:?}"))
-        .unwrap_or_default();
-    root.child("pyproject.toml").write_str(&formatdoc! {r#"
-        [project]
-        name = "{name}"
-        version = "0.1.0"
-        {requires_python}
-
-        [tool.uv]
-        package = false
-    "#})?;
-    Ok(())
-}
 
 #[test]
 fn explicit_roots_membership_filters_and_freshness() -> Result<()> {
@@ -61,12 +46,45 @@ fn explicit_roots_membership_filters_and_freshness() -> Result<()> {
         .temp_dir
         .child("shared/src/shared/__init__.py")
         .touch()?;
-    member(&context.temp_dir.child("unused"), "unused", Some(">=3.12"))?;
+    context
+        .temp_dir
+        .child("unused/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "unused"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
     context
         .lock()
         .args(["--offline", "--no-index"])
         .assert()
         .success();
+
+    let tree = context
+        .tree()
+        .args([
+            "--frozen",
+            "--offline",
+            "--universal",
+            "--format",
+            "json",
+            "--preview-features",
+            "json-output",
+        ])
+        .output()?
+        .assert()
+        .success();
+    let tree: serde_json::Value = serde_json::from_slice(&tree.get_output().stdout)?;
+    insta::assert_json_snapshot!(tree["members"].as_array().into_iter().flatten().map(|member| &member["name"]).collect::<Vec<_>>(), @r#"
+    [
+      "app",
+      "shared"
+    ]
+    "#);
 
     uv_snapshot!(context.filters(), context.export().args([
         "--frozen", "--offline", "--no-header", "--no-hashes", "--no-emit-workspace",
@@ -107,7 +125,18 @@ fn explicit_roots_membership_filters_and_freshness() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(&manifest)?;
-    member(&context.temp_dir.child("new"), "new", Some(">=3.12"))?;
+    context
+        .temp_dir
+        .child("new/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "new"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--offline", "--no-index", "--locked"]), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -229,14 +258,36 @@ fn explicit_roots_validate_non_root_python_requirement() -> Result<()> {
         members = ["shared"]
         roots = ["app"]
     "#})?;
-    member(&context.temp_dir.child("shared"), "shared", Some(">=3.12"))?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
     context
         .lock()
         .args(["--offline", "--no-index"])
         .assert()
         .success();
     let locked = context.read("uv.lock");
-    member(&context.temp_dir.child("shared"), "shared", Some(">=3.13"))?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+
+        [tool.uv]
+        package = false
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-index"]), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -282,7 +333,18 @@ fn explicit_roots_conditional_python_requirement_and_legacy_metadata() -> Result
         url = "{index}"
         default = true
     "#})?;
-    member(&context.temp_dir.child("shared"), "shared", Some(">=3.13"))?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+
+        [tool.uv]
+        package = false
+    "#})?;
     context.lock().assert().success();
     let locked = context.read("uv.lock");
     uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @r#"
@@ -316,7 +378,18 @@ fn explicit_roots_conditional_python_requirement_and_legacy_metadata() -> Result
     Resolved 3 packages in [TIME]
     "#);
 
-    member(&context.temp_dir.child("shared"), "shared", Some(">=3.14"))?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.14"
+
+        [tool.uv]
+        package = false
+    "#})?;
     uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline"]), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -366,7 +439,18 @@ fn explicit_roots_frozen_selects_resolved_non_root_member() -> Result<()> {
         .temp_dir
         .child("shared/src/shared/__init__.py")
         .touch()?;
-    member(&context.temp_dir.child("unused"), "unused", Some(">=3.12"))?;
+    context
+        .temp_dir
+        .child("unused/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "unused"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
     context
         .lock()
         .args(["--offline", "--no-index"])
@@ -401,5 +485,185 @@ fn explicit_roots_frozen_selects_resolved_non_root_member() -> Result<()> {
     ----- stderr -----
     error: Package `unused` not found in lockfile workspace
     "#);
+    Ok(())
+}
+
+/// Metadata-free freshness validates optional sections only for resolution roots or requested extras.
+#[test]
+fn explicit_roots_metadata_free_ignores_unselected_sections() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "explicit-roots-metadata-free"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.leaf.versions."1"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared", "leaf"]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.sources]
+        shared = { workspace = true }
+
+        [tool.uv.workspace]
+        members = ["shared"]
+        roots = ["app"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        unused = ["missing-extra"]
+
+        [dependency-groups]
+        dev = ["missing-group"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--preview-features", "lock-without-metadata"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--locked", "--offline", "--no-cache", "--preview-features", "lock-without-metadata"])
+        .arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Selecting a transitive member cannot silently omit its unresolved explicit or default groups.
+#[test]
+fn explicit_roots_rejects_unresolved_member_groups() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared"]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.sources]
+        shared = { workspace = true }
+
+        [tool.uv.workspace]
+        members = ["shared"]
+        roots = ["app"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        dev = ["missing-group"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--group", "dev", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Group `dev` for workspace member `shared` was not resolved
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependency groups.
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Group `dev` for workspace member `shared` was not resolved
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependency groups.
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "shared", "--group", "dev", "--no-header",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Group `dev` for workspace member `shared` was not resolved
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependency groups.
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--no-default-groups", "--no-install-workspace",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--no-index",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--group", "dev", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Group `dev` for workspace member `shared` was not resolved
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependency groups.
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--no-install-workspace",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Group `dev` for workspace member `shared` was not resolved
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependency groups.
+    ");
     Ok(())
 }

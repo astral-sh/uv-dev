@@ -1805,18 +1805,18 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
 
     /// Include recorded sections so removing their dependency edges invalidates the lock.
     fn contexts(&self) -> impl Iterator<Item = DependencyContext<'_>> + '_ {
-        let is_workspace_package = self.lock.is_workspace_package(self.package);
+        let is_resolution_root = self.lock.is_resolution_root(self.package);
         let extras = self
             .provides_extra
             .iter()
-            .filter(|extra| is_workspace_package || self.activated_extras.contains_key(*extra))
+            .filter(|extra| is_resolution_root || self.activated_extras.contains_key(*extra))
             .chain(self.package.optional_dependencies.keys())
             .collect::<BTreeSet<_>>();
         let groups = self
             .dependency_groups
             .keys()
-            .filter(|_| is_workspace_package)
             .chain(self.package.dependency_groups.keys())
+            .filter(|_| is_resolution_root)
             .collect::<BTreeSet<_>>();
 
         iter::once(DependencyContext::Production)
@@ -1880,13 +1880,13 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
     fn context_parent_marker(&self, context: DependencyContext<'_>) -> UniversalMarker {
         let mut package_marker = self.package_marker;
         if let DependencyContext::Extra(extra) = context
-            && !self.lock.is_workspace_package(self.package)
+            && !self.lock.is_resolution_root(self.package)
             && let Some(activation) = self.activated_extras.get(extra)
         {
             package_marker.and(self.extra_activation_marker(*activation));
         }
         if let DependencyContext::Extra(extra) = context
-            && !self.lock.is_workspace_package(self.package)
+            && !self.lock.is_resolution_root(self.package)
             && let Some(marker) = self
                 .source_requirements
                 .package_markers
@@ -1928,7 +1928,7 @@ impl<'lock> ExpectedPackageDependencies<'lock> {
     ) -> UniversalMarker {
         let mut activation = parent_marker;
         if let DependencyContext::Extra(extra) = context
-            && !self.lock.is_workspace_package(self.package)
+            && !self.lock.is_resolution_root(self.package)
             && let Some(extra_activation) = self.activated_extras.get(extra)
         {
             activation.and(*extra_activation);
@@ -3270,7 +3270,7 @@ impl Lock {
     }
 
     /// Return the workspace packages, including the implicit single-project root.
-    fn workspace_packages(&self) -> impl Iterator<Item = &Package> {
+    pub fn workspace_packages(&self) -> impl Iterator<Item = &Package> {
         self.workspace_members
             .values()
             .map(|&index| self.package(index))
@@ -3850,6 +3850,12 @@ impl Lock {
             .any(|package| package.id.source != first.id.source)
     }
 
+    /// Return whether every optional dependency and group was included in resolution.
+    fn is_resolution_root(&self, package: &Package) -> bool {
+        self.members().contains(&package.id.name)
+            || (self.members().is_empty() && package.id.source.is_implicit_root())
+    }
+
     /// Return whether a source tree belongs to the workspace or represents its root.
     fn is_workspace_package(&self, package: &Package) -> bool {
         self.workspace_members().contains(&package.id.name) || package.id.source.is_implicit_root()
@@ -4103,7 +4109,7 @@ impl Lock {
         missing_metadata: bool,
         expected: &ExpectedPackageDependencies<'_>,
     ) -> Result<SatisfiesResult<'lock>, LockError> {
-        if missing_metadata && self.is_workspace_package(package) {
+        if missing_metadata && self.is_resolution_root(package) {
             let expected_extras = expected.provides_extra.iter().collect::<BTreeSet<_>>();
             if !expected_extras
                 .iter()
@@ -4164,7 +4170,7 @@ impl Lock {
             // Optional sections on dependencies matter only after an incoming edge requests the
             // extra. Empty declared sections are retained separately for frozen selection.
             if let DependencyContext::Extra(extra) = context
-                && !self.is_workspace_package(package)
+                && !self.is_resolution_root(package)
                 && !expected.activated_extras.contains_key(extra)
             {
                 continue;
@@ -5361,7 +5367,7 @@ impl Lock {
                         .into_iter()
                         .filter(|(group, _)| {
                             extra.is_none()
-                                && (self.is_workspace_package(package)
+                                && (self.is_resolution_root(package)
                                     || package.dependency_groups.contains_key(group))
                         })
                         .map(|(group, requirements)| {
@@ -5593,7 +5599,7 @@ impl Lock {
         let root_marker = self.fork_markers_union();
         let mut reachability = DependencySourceReachability::default();
         for package in &self.packages {
-            if self.is_workspace_package(package) {
+            if self.is_resolution_root(package) {
                 reachability
                     .package_queue
                     .push_back((package, None, root_marker));
@@ -5712,7 +5718,7 @@ impl Lock {
         let mut pending_packages = self
             .packages
             .iter()
-            .filter(|package| self.is_workspace_package(package))
+            .filter(|package| self.is_resolution_root(package))
             .collect::<Vec<_>>();
         let mut visited_packages = FxHashSet::default();
 
@@ -5910,7 +5916,7 @@ impl Lock {
                 &mut pending_sources,
             )?;
             for (group, requirements) in dependency_groups.into_iter().filter(|(group, _)| {
-                self.is_workspace_package(package) || package.dependency_groups.contains_key(group)
+                self.is_resolution_root(package) || package.dependency_groups.contains_key(group)
             }) {
                 self.add_source_requirements(
                     package,
