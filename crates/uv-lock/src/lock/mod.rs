@@ -3969,6 +3969,23 @@ impl Lock {
             None
         };
 
+        let effective_requirements: Option<BTreeSet<Requirement>> = if missing_metadata {
+            None
+        } else {
+            Some(
+                normalizer
+                    .requirements(Self::preprocess_requirements(
+                        &package.id.name,
+                        package_version,
+                        &requires_dist,
+                        DependencyContext::Production,
+                        modifiers,
+                    ))?
+                    .into_iter()
+                    .collect(),
+            )
+        };
+
         let expected_requirements = normalizer.requirements(requires_dist)?;
         let actual = normalizer.requirements(package.metadata.requires_dist.iter().cloned())?;
         if !missing_metadata
@@ -4024,21 +4041,6 @@ impl Lock {
             .into_iter()
             .map(|(group, requirements)| (group, requirements.into_iter().collect()))
             .collect();
-        let effective_requirements = if allow_missing_package_metadata {
-            None
-        } else {
-            Some(
-                Self::preprocess_requirements(
-                    &package.id.name,
-                    package_version,
-                    &expected_requirements.iter().cloned().collect::<Vec<_>>(),
-                    DependencyContext::Production,
-                    modifiers,
-                )
-                .into_iter()
-                .collect(),
-            )
-        };
         let declarations = effective_requirements
             .as_ref()
             .or(flattened.as_ref())
@@ -4059,7 +4061,7 @@ impl Lock {
             package,
             package_activated_extras,
             root,
-            missing_metadata || !allow_missing_package_metadata,
+            true,
         );
         if allow_missing_package_metadata {
             match self.satisfied_no_metadata(
@@ -4071,7 +4073,8 @@ impl Lock {
                 SatisfiesResult::Satisfied => {}
                 dissatisfied => return Ok(dissatisfied),
             }
-        } else {
+        }
+        if !missing_metadata {
             // Metadata declarations precede overrides, exclusions, and recursive-extra flattening.
             // Compare effective requirements in the same contexts used to construct dependency edges.
             let empty_requirements = BTreeSet::new();
@@ -4098,6 +4101,7 @@ impl Lock {
                     expected.context_parent_marker(context).pep508(),
                     package,
                     root,
+                    activated_extras,
                 )? {
                     return Ok(SatisfiesResult::UncoveredPackageDependency(
                         &package.id.name,
@@ -4260,6 +4264,7 @@ impl Lock {
         parent_marker: MarkerTree,
         package: &Package,
         root: &Path,
+        activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
     ) -> Result<Option<Requirement>, LockError> {
         let is_distribution_dependency = match context {
             DependencyContext::Production | DependencyContext::Extra(_) => true,
@@ -4284,27 +4289,48 @@ impl Lock {
             }
 
             let mut covered = MarkerTree::FALSE;
+            let mut extra_coverage = requirement
+                .extras
+                .iter()
+                .map(|extra| (extra, MarkerTree::FALSE))
+                .collect::<BTreeMap<_, _>>();
             for dependency in dependencies {
-                let target = self.package(self.by_id[&dependency.package_id]);
-                if dependency.package_id.name != requirement.name
-                    || !requirement
-                        .extras
-                        .iter()
-                        // Lock construction removes requested extras that the target does not provide.
-                        .filter(|extra| {
-                            target.optional_dependencies.contains_key(*extra)
-                                || target.metadata.provides_extra.contains(*extra)
-                        })
-                        .all(|extra| dependency.extra.contains(extra))
-                {
+                if dependency.package_id.name != requirement.name {
                     continue;
                 }
-                covered = covered.or(self
+                let target = self.package(dependency.index);
+                let marker = self
                     .requires_python
-                    .simplify_markers(dependency.complexified_marker.pep508().and(parent_marker)));
+                    .simplify_markers(dependency.complexified_marker.pep508().and(parent_marker));
+                covered = covered.or(marker);
+                for (extra, coverage) in &mut extra_coverage {
+                    // Lock construction drops labels without a resolved optional section.
+                    if dependency.extra.contains(*extra)
+                        || !target.optional_dependencies.contains_key(*extra)
+                    {
+                        *coverage = coverage.or(marker);
+                    }
+                    // Retain the declaration's request even when its edge label was dropped. The
+                    // target's refreshed metadata then distinguishes an empty extra from a removed
+                    // nonempty section, and later parents can trigger extra validation again.
+                    let mut activation = dependency.complexified_marker;
+                    activation.and(UniversalMarker::from_combined(required));
+                    if !activation.combined().is_false() {
+                        activated_extras
+                            .entry(dependency.package_id.clone())
+                            .or_default()
+                            .entry((**extra).clone())
+                            .and_modify(|marker| marker.or(activation))
+                            .or_insert(activation);
+                    }
+                }
             }
 
-            if !required.implies(covered).is_true() {
+            if !required.implies(covered).is_true()
+                || extra_coverage
+                    .values()
+                    .any(|coverage| !required.implies(*coverage).is_true())
+            {
                 return Ok(Some(requirement.clone()));
             }
         }
@@ -10904,6 +10930,7 @@ source = { registry = "https://example.com/simple" }
                 lock.fork_markers_union(),
                 package,
                 Path::new("."),
+                &mut FxHashMap::default(),
             )
             .expect("valid source")
             .is_none()
