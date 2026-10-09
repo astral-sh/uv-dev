@@ -243,10 +243,7 @@ pub(crate) async fn venv(
     let reference = centralized_workspace
         .map(|workspace| workspace.install_path().join(".venv"))
         .unwrap_or_else(|| path.clone());
-    let mut destination_lock = lock_environment_destination(&reference, &path, cache)
-        .await
-        .inspect_err(|err| warn!("Failed to acquire environment lock: {err}"))
-        .ok();
+    let mut destination_lock = lock_environment_destination(&reference, &path, cache).await?;
 
     let on_existing = match on_existing {
         OnExisting::Prompt | OnExisting::Remove(_) if centralized_workspace.is_some() => {

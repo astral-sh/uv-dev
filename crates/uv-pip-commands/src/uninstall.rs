@@ -75,10 +75,7 @@ pub async fn pip_uninstall(
         };
         if needs_admission {
             drop(destination_lock.take());
-            destination_lock = EnvironmentLock::acquire(&paths, &cache)
-                .await
-                .inspect_err(|err| warn!("Failed to acquire environment lock: {err}"))
-                .ok();
+            destination_lock = EnvironmentLock::acquire_optional(&paths, &cache).await?;
             admitted = true;
             if destination_lock.is_some() {
                 continue;

@@ -237,13 +237,11 @@ mod tests {
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Duration;
 
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use tokio::sync::oneshot;
     use uv_cache::Cache;
     use uv_cache_info::CacheInfo;
-    use uv_cache_key::cache_digest;
     use uv_distribution_types::{CachedDist, CachedRegistryDist};
-    use uv_fs::{LockedFile, LockedFileMode};
     use uv_preview::Preview;
     use uv_pypi_types::HashDigests;
     use uv_python_discovery::find_environment;
@@ -330,13 +328,12 @@ mod tests {
             "example.py,,\nexample-1.0.0.dist-info/METADATA,,\nexample-1.0.0.dist-info/WHEEL,,\nexample-1.0.0.dist-info/RECORD,,\n",
         )?;
 
-        let guard = EnvironmentLock::acquire(std::slice::from_ref(&root), &cache).await?;
-        let environment = environment()
-            .with_target(Target::from(root.clone()))?
-            .with_destination_lock(&guard);
-        let key = fs_err::canonicalize(&root)?;
-        let lock_path =
-            std::env::temp_dir().join(format!("uv-environment-{}.lock", cache_digest(&key)));
+        let mut guard = EnvironmentLock::acquire_optional(std::slice::from_ref(&root), &cache)
+            .await?
+            .context("destination admission")?;
+        let environment = environment().with_target(Target::from(root.clone()))?;
+        guard.finish_creation()?;
+        let environment = environment.with_destination_lock(&guard);
         let (started, ready) = oneshot::channel();
         let (release, receiver) = mpsc::channel();
         let reporter = Arc::new(InstallationGate {
@@ -362,18 +359,21 @@ mod tests {
         drop(cache);
         drop(guard);
 
-        assert!(root.join("example.py").is_file());
+        let waiter_cache = Cache::temp()?;
+        let paths = [root.clone()];
+        let waiter = EnvironmentLock::acquire_optional(&paths, &waiter_cache);
+        tokio::pin!(waiter);
         assert!(
-            LockedFile::acquire_no_wait(&lock_path, LockedFileMode::Exclusive, root.display())
-                .is_none()
+            tokio::time::timeout(Duration::from_millis(50), &mut waiter)
+                .await
+                .is_err()
         );
+        assert!(root.join("example.py").is_file());
 
         release.send(())?;
-        let admitted = tokio::time::timeout(
-            Duration::from_secs(30),
-            LockedFile::acquire(&lock_path, LockedFileMode::Exclusive, root.display()),
-        )
-        .await??;
+        let admitted = tokio::time::timeout(Duration::from_secs(30), waiter)
+            .await??
+            .context("destination admission after the worker exits")?;
         assert!(
             !root.exists(),
             "worker cache lease is released before destination admission"

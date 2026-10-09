@@ -87,7 +87,9 @@ async fn explicit_venv_replacement_waits_through_parent_alias() -> Result<()> {
     fs_err::write(&marker, "owned")?;
     let alias = context.root.child("alias");
     fs_err::os::unix::fs::symlink(context.temp_dir.path(), alias.path())?;
-    let guard = EnvironmentLock::acquire(std::slice::from_ref(&destination), &cache).await?;
+    let guard = EnvironmentLock::acquire_optional(std::slice::from_ref(&destination), &cache)
+        .await?
+        .context("destination admission")?;
 
     let mut command = context.venv();
     command
@@ -116,7 +118,9 @@ async fn explicit_venv_replacement_waits_with_different_temporary_directory() ->
     let alternate_temporary_directory = context.root.child("alternate-tmp");
     alternate_temporary_directory.create_dir_all()?;
     let alternate_temporary_directory = fs_err::canonicalize(alternate_temporary_directory.path())?;
-    let guard = EnvironmentLock::acquire(std::slice::from_ref(&destination), &cache).await?;
+    let guard = EnvironmentLock::acquire_optional(std::slice::from_ref(&destination), &cache)
+        .await?
+        .context("destination admission")?;
 
     let mut command = context.venv();
     command
@@ -162,7 +166,9 @@ async fn separate_workspaces_wait_for_shared_environment_destination() -> Result
     context.venv().arg(&destination).assert().success();
     let destination = fs_err::canonicalize(&destination)?;
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
-    let guard = EnvironmentLock::acquire(std::slice::from_ref(&destination), &cache).await?;
+    let guard = EnvironmentLock::acquire_optional(std::slice::from_ref(&destination), &cache)
+        .await?
+        .context("destination admission")?;
 
     let mut command = context.sync();
     command
@@ -230,9 +236,16 @@ async fn queued_sync_reclaims_changed_centralized_reference() -> Result<()> {
     fs_err::write(&reference, original.to_string_lossy().as_bytes())?;
 
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
-    let original_guard =
-        EnvironmentLock::acquire(&[reference.clone(), original.clone()], &cache).await?;
-    let updated_guard = EnvironmentLock::acquire(std::slice::from_ref(&updated), &cache).await?;
+    let mut original_guard =
+        EnvironmentLock::acquire_optional(&[reference.clone(), original.clone()], &cache)
+            .await?
+            .context("destination admission")?;
+    original_guard.finish_creation()?;
+    let mut updated_guard =
+        EnvironmentLock::acquire_optional(std::slice::from_ref(&updated), &cache)
+            .await?
+            .context("destination admission")?;
+    updated_guard.finish_creation()?;
     let mut command = context.sync();
     command.args([
         "--preview-features",
@@ -276,7 +289,9 @@ async fn queued_pip_install_rediscovers_retargeted_environment() -> Result<()> {
     let reference = context.temp_dir.join("selected");
     fs_err::os::unix::fs::symlink(&original, &reference)?;
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
-    let guard = EnvironmentLock::acquire(std::slice::from_ref(&original), &cache).await?;
+    let guard = EnvironmentLock::acquire_optional(std::slice::from_ref(&original), &cache)
+        .await?
+        .context("destination admission")?;
 
     let (filename, bytes) = generate_wheel(
         &"example".parse()?,
@@ -350,9 +365,10 @@ async fn run_releases_destination_before_user_program() -> Result<()> {
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
     let guard = tokio::time::timeout(
         Duration::from_secs(30),
-        EnvironmentLock::acquire(&[context.venv.path().to_path_buf()], &cache),
+        EnvironmentLock::acquire_optional(&[context.venv.path().to_path_buf()], &cache),
     )
-    .await??;
+    .await??
+    .context("destination admission")?;
     connection.write_all(b"x").await?;
     run.finish().await?;
     drop(guard);
@@ -458,7 +474,9 @@ async fn active_script_waits_for_environment_destination() -> Result<()> {
     "#})?;
     let destination = fs_err::canonicalize(context.venv.path())?;
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
-    let guard = EnvironmentLock::acquire(std::slice::from_ref(&destination), &cache).await?;
+    let guard = EnvironmentLock::acquire_optional(std::slice::from_ref(&destination), &cache)
+        .await?
+        .context("destination admission")?;
     let mut command = context.run();
     command.args(["--active", "--offline"]).arg(script.path());
     let mut run = QueuedCommand::spawn(command)?;
@@ -477,7 +495,9 @@ async fn venv_creation_waits_through_missing_parent_component() -> Result<()> {
     let indirect = parent.join("absent").join("..").join("environment");
     assert!(!destination.exists());
     let cache = Cache::from_path(context.cache_dir.path().to_path_buf());
-    let guard = EnvironmentLock::acquire(std::slice::from_ref(&destination), &cache).await?;
+    let guard = EnvironmentLock::acquire_optional(std::slice::from_ref(&destination), &cache)
+        .await?
+        .context("destination admission")?;
     let mut command = context.venv();
     command.arg(&indirect).arg("--no-project");
     let mut creation = QueuedCommand::spawn(command)?;

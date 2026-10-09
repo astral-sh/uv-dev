@@ -10,7 +10,7 @@ pub use environment::{
     EnvironmentNotFound, Error as PythonEnvironmentError, InvalidEnvironment,
     InvalidEnvironmentKind, PythonEnvironment,
 };
-pub use environment_lock::EnvironmentLock;
+pub use environment_lock::{EnvironmentLock, EnvironmentLockError};
 pub use interpreter::{
     BrokenLink, Error as InterpreterError, ExternallyManaged, Interpreter, InterpreterInfoError,
     StatusCodeError, UnexpectedResponseError, canonicalize_executable,

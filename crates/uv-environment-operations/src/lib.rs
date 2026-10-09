@@ -31,7 +31,8 @@ use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::{PythonInstallation, report_interpreter};
 use uv_python_interpreter::{
-    BrokenLink, EnvironmentLock, Interpreter, InvalidEnvironmentKind, PythonEnvironment,
+    BrokenLink, EnvironmentLock, EnvironmentLockError, Interpreter, InvalidEnvironmentKind,
+    PythonEnvironment,
 };
 use uv_python_managed::{ManagedPythonInstallation, PythonMinorVersionLink};
 use uv_python_types::{
@@ -895,12 +896,20 @@ pub async fn lock_environment_destination(
     reference: &Path,
     destination: &Path,
     cache: &Cache,
-) -> Result<Arc<EnvironmentLock>, LockedFileError> {
+) -> Result<Option<Arc<EnvironmentLock>>, EnvironmentLockError> {
     loop {
         let paths = environment_destinations(reference, destination, cache);
-        let lock = EnvironmentLock::acquire(&paths, cache).await?;
-        if lock.matches(&environment_destinations(reference, destination, cache))? {
-            return Ok(lock);
+        let Some(lock) = EnvironmentLock::acquire_optional(&paths, cache).await? else {
+            return Ok(None);
+        };
+        match lock.matches(&environment_destinations(reference, destination, cache)) {
+            Ok(true) => return Ok(Some(lock)),
+            Ok(false) => {}
+            Err(EnvironmentLockError::Destination(error)) => {
+                warn!("Failed to acquire environment lock: {error}");
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
         }
         // A path-file reference can change while waiting. Reclaim the complete set in order.
     }
@@ -919,7 +928,9 @@ fn environment_destinations(reference: &Path, destination: &Path, cache: &Cache)
     paths
 }
 
-fn finish_environment_creation(lock: &mut Option<Arc<EnvironmentLock>>) -> io::Result<()> {
+fn finish_environment_creation(
+    lock: &mut Option<Arc<EnvironmentLock>>,
+) -> Result<(), EnvironmentLockError> {
     if let Some(lock) = lock {
         lock.finish_creation()?;
     }
@@ -1039,10 +1050,8 @@ impl ProjectEnvironment {
         let reference = environment_selection
             .explicit_path()
             .map_or_else(|| target.install_path().join(".venv"), Path::to_path_buf);
-        let mut destination_lock = lock_environment_destination(&reference, &reference, cache)
-            .await
-            .inspect_err(|err| warn!("Failed to acquire environment lock: {err}"))
-            .ok();
+        let mut destination_lock =
+            lock_environment_destination(&reference, &reference, cache).await?;
         loop {
             let (selected, report) = ProjectInterpreter::discover_unreported(
                 target,
@@ -1092,10 +1101,8 @@ impl ProjectEnvironment {
             };
             if needs_admission {
                 drop(destination_lock.take());
-                destination_lock = lock_environment_destination(&reference, &destination, cache)
-                    .await
-                    .inspect_err(|err| warn!("Failed to acquire environment lock: {err}"))
-                    .ok();
+                destination_lock =
+                    lock_environment_destination(&reference, &destination, cache).await?;
                 continue;
             }
             report.report(printer)?;
@@ -1368,10 +1375,8 @@ impl ScriptEnvironment {
             .is_none_or(|request| !request.includes_patch());
 
         let reference = ScriptInterpreter::root(script, active, cache);
-        let mut destination_lock = lock_environment_destination(&reference, &reference, cache)
-            .await
-            .inspect_err(|err| warn!("Failed to acquire environment lock: {err}"))
-            .ok();
+        let mut destination_lock =
+            lock_environment_destination(&reference, &reference, cache).await?;
         loop {
             let selected = match ScriptInterpreter::discover(
                 script,
@@ -1404,10 +1409,8 @@ impl ScriptEnvironment {
                 && !lock.matches(&environment_destinations(&reference, &destination, cache))?
             {
                 drop(destination_lock.take());
-                destination_lock = lock_environment_destination(&reference, &destination, cache)
-                    .await
-                    .inspect_err(|err| warn!("Failed to acquire environment lock: {err}"))
-                    .ok();
+                destination_lock =
+                    lock_environment_destination(&reference, &destination, cache).await?;
                 continue;
             }
             return match selected {

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
@@ -82,10 +82,7 @@ pub(super) async fn prepare_environment(
         };
         if needs_admission {
             drop(destination_lock.take());
-            destination_lock = EnvironmentLock::acquire(&paths, cache)
-                .await
-                .inspect_err(|err| warn!("Failed to acquire environment lock: {err}"))
-                .ok();
+            destination_lock = EnvironmentLock::acquire_optional(&paths, cache).await?;
             admitted = true;
             if destination_lock.is_some() {
                 continue;
