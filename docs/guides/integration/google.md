@@ -27,8 +27,9 @@ url = "https://<REGION>-python.pkg.dev/<PROJECT>/<REPOSITORY>/simple/"
 
 ## Authenticate with Google credentials
 
-uv automatically searches for credentials when accessing Google Artifact Registry indexes over
-HTTPS. It looks for credentials in the following order:
+With the subprocess keyring provider disabled, uv automatically searches for credentials when
+accessing Google Artifact Registry indexes over HTTPS. It looks for credentials in the following
+order:
 
 1. [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials).
 2. On Unix, credentials from the [`gcloud`](https://cloud.google.com/sdk/gcloud) CLI.

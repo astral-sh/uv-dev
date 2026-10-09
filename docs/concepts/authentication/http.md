@@ -9,7 +9,8 @@ Authentication can come from the following sources, in order of precedence:
 - The uv credentials store
 - A [keyring provider](#keyring-providers) (off by default)
 - Built-in authentication for supported services, such as
-  [Google Artifact Registry](../../guides/integration/google.md)
+  [Google Artifact Registry](../../guides/integration/google.md), when the subprocess keyring
+  provider is disabled
 
 Authentication may be used for hosts specified in the following contexts:
 
