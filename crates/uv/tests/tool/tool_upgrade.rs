@@ -1995,9 +1995,6 @@ fn tool_upgrade_renames_case_equivalent_entrypoint() -> Result<()> {
     let receipt: toml::Value = toml::from_str(&context.read("tools/tool/uv-receipt.toml"))?;
     let entrypoints = receipt["tool"]["entrypoints"].as_array().unwrap();
     assert_eq!(entrypoints.len(), 1);
-    assert_eq!(
-        entrypoints[0]["name"].as_str(),
-        Some(format!("foo{}", std::env::consts::EXE_SUFFIX).as_str())
-    );
+    assert_eq!(entrypoints[0]["name"].as_str(), Some("foo"));
     Ok(())
 }
