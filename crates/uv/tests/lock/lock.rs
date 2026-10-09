@@ -48872,7 +48872,7 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     Ok(())
 }
 
-/// A package active only on Linux keeps its pin when the required environment is macOS.
+/// A package active only on Linux keeps its pin when the required environment is Windows.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_respects_package_activation() -> Result<()> {
