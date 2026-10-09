@@ -3958,6 +3958,13 @@ impl Lock {
                 )
             }))
         }
+        // Non-workspace mutable metadata is refreshed later during resolution. Its stored
+        // dependency markers cannot establish inactivity before that refresh.
+        if self.packages.iter().any(|package| {
+            !package.id.source.is_immutable() && !packages.contains_key(package.name())
+        }) {
+            return Ok(false);
+        }
         let environment_union = |markers: &[MarkerTree]| {
             if markers.is_empty() {
                 MarkerTree::TRUE
@@ -4071,8 +4078,9 @@ impl Lock {
         Ok(true)
     }
 
-    /// Calculate current package activation, falling back to all environments when stored edges
-    /// no longer describe the current roots, modifiers, or supported environments.
+    /// Calculate package activation within the current resolution scope.
+    ///
+    /// Unverified mutable metadata or changed root inputs make package-specific activation unknown.
     pub fn package_reachability<'lock>(
         &'lock self,
         root: &Path,
@@ -4084,6 +4092,13 @@ impl Lock {
         overrides: &[Override<Requirement>],
         excludes: &[ExcludeDependency],
     ) -> Result<Vec<(&'lock Package, MarkerTree)>, LockError> {
+        let current_scope = requires_python.complexify_markers(
+            supported_environments
+                .iter()
+                .copied()
+                .reduce(MarkerTree::or)
+                .unwrap_or(MarkerTree::TRUE),
+        );
         if !self.root_activation_is_current(
             root,
             requires_python,
@@ -4097,7 +4112,7 @@ impl Lock {
             return Ok(self
                 .packages
                 .iter()
-                .map(|package| (package, MarkerTree::TRUE))
+                .map(|package| (package, current_scope))
                 .collect());
         }
         let mut package_markers = PackageMarkers::default();
@@ -4107,7 +4122,7 @@ impl Lock {
         let current_marker = |marker| {
             requires_python.complexify_markers(self.requires_python.simplify_markers(marker))
         };
-        let root_marker = current_marker(self.fork_markers_union());
+        let root_marker = current_scope.and(current_marker(self.fork_markers_union()));
         let modifiers = DependencyModifiers::new(
             Overrides::from_entries(self.manifest.overrides.iter().cloned().collect())
                 .map_err(LockErrorKind::InvalidScopedOverride)?,

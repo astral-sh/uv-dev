@@ -49241,3 +49241,131 @@ fn lock_required_environment_broadened_supported_environments() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Unknown package activation still excludes Python versions outside the current resolution.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_changed_roots_python_bounds() -> Result<()> {
+    let context = uv_test::test_context!("3.13");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "changed-roots-python-bounds"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["py3-none-any"]
+        [packages.unrelated.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["example"]
+    "#})?;
+    context
+        .lock()
+        .args(["--upgrade-package", "example==1.0.0"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["example", "unrelated"]
+        [tool.uv]
+        required-environments = ["python_version == '3.12'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Added unrelated v1.0.0
+    "#);
+    Ok(())
+}
+
+/// Mutable non-workspace dependencies cannot establish inactivity from stale lock edges.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_changed_path_dependency_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str(indoc! {r#"
+        name = "changed-path-dependency-marker"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        wheel_tags = ["cp312-cp312-manylinux_2_17_x86_64"]
+        [packages.example.versions."2.0.0"]
+        wheel_tags = ["cp313-cp313-manylinux_2_17_x86_64"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("provider/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "provider"
+        version = "0.1.0"
+        dependencies = ["example; python_version < '3.13'"]
+    "#})?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["provider"]
+        [tool.uv.sources]
+        provider = { path = "provider" }
+    "#})?;
+    context
+        .lock()
+        .args(["--upgrade-package", "example==1.0.0"])
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("provider/pyproject.toml")
+        .write_str(
+            &context
+                .read("provider/pyproject.toml")
+                .replace("; python_version < '3.13'", ""),
+        )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&format!(
+            "{}\n[tool.uv]\nrequired-environments = [\"python_version == '3.13'\"]\n",
+            context.read("pyproject.toml"),
+        ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Updated example v1.0.0 -> v2.0.0
+    "#);
+    Ok(())
+}
