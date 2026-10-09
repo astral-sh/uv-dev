@@ -87,15 +87,7 @@ impl SourceIndexes {
 
 /// URL-based policy lookups must agree even when an endpoint has multiple names.
 fn validate_source_index_policy(existing: &Index, index: &Index) -> Result<(), SourceIndexError> {
-    if is_same_index(&existing.url, &index.url)
-        && (existing.format != index.format
-            || existing.authenticate != index.authenticate
-            || existing.status_code_strategy() != index.status_code_strategy()
-            || existing.simple_api_cache_control() != index.simple_api_cache_control()
-            || existing.artifact_cache_control() != index.artifact_cache_control()
-            || existing.hash_algorithm != index.hash_algorithm
-            || existing.exclude_newer != index.exclude_newer)
-    {
+    if is_same_index(&existing.url, &index.url) && !existing.has_same_policy(index) {
         return Err(SourceIndexError::ConflictingUrl(index.url.clone()));
     }
     Ok(())
@@ -403,18 +395,24 @@ impl IndexLocations {
         {
             return Err(SourceIndexError::ConfiguredDefault);
         }
-        let names = indexes
-            .iter()
-            .filter_map(|index| index.name.clone())
-            .collect::<FxHashSet<_>>();
-        let (command_line, configured): (Vec<_>, Vec<_>) = self
+        let (mut command_line, mut configured): (Vec<_>, Vec<_>) = self
             .indexes
             .into_iter()
             .partition(|index| index.origin == Some(Origin::Cli));
-        let configured = configured
+        // Use the same first-name precedence as configured_indexes before comparing policies.
+        let mut names = FxHashSet::default();
+        let mut keep_first_name = |index: &Index| {
+            index
+                .name
+                .as_ref()
+                .is_none_or(|name| names.insert(name.clone()))
+        };
+        command_line.retain(&mut keep_first_name);
+        let indexes = indexes
             .into_iter()
-            .filter(|index| index.name.as_ref().is_none_or(|name| !names.contains(name)))
+            .filter(&mut keep_first_name)
             .collect::<Vec<_>>();
+        configured.retain(keep_first_name);
         for index in &indexes {
             for existing in command_line.iter().chain(&configured) {
                 validate_source_index_policy(existing, index)?;

@@ -8772,3 +8772,45 @@ async fn run_pep723_requirements_conflicting_configured_alias() -> Result<()> {
     );
     Ok(())
 }
+
+/// A CLI name override removes the shadowed configuration before source policies are checked.
+#[test]
+fn run_pep723_requirements_ignore_shadowed_configured_alias() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let selected = PackseServer::new("simple/dependency-groups.toml");
+    let replacement = PackseServer::new("simple/dependency-groups.toml");
+    context
+        .temp_dir
+        .child("uv.toml")
+        .write_str(&formatdoc! {r#"
+        [[index]]
+        name = "mirror"
+        url = "{url}"
+        authenticate = "always"
+    "#, url = selected.index_url()})?;
+    context
+        .temp_dir
+        .child("requirements.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig==2.0.0"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # iniconfig = {{ index = "private" }}
+        # ///
+    "#, url = selected.index_url()})?;
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--index").arg(format!("mirror={}", replacement.index_url()))
+        .args(["--with-requirements", "requirements.py", "python", "-c", "import iniconfig"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    Ok(())
+}

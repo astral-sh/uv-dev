@@ -427,6 +427,32 @@ impl From<IndexHashAlgorithm> for HashAlgorithm {
 }
 
 impl Index {
+    /// Whether URL-based clients can apply the same policies to both index definitions.
+    pub(crate) fn has_same_policy(&self, other: &Self) -> bool {
+        let Self {
+            name: _,
+            url: _,
+            explicit: _,
+            default: _,
+            origin: _,
+            publish_url: _,
+            format,
+            authenticate,
+            // Compare these fields through their effective-policy accessors below.
+            ignore_error_codes: _,
+            cache_control: _,
+            hash_algorithm,
+            exclude_newer,
+        } = self;
+        *format == other.format
+            && *authenticate == other.authenticate
+            && self.status_code_strategy() == other.status_code_strategy()
+            && self.simple_api_cache_control() == other.simple_api_cache_control()
+            && self.artifact_cache_control() == other.artifact_cache_control()
+            && *hash_algorithm == other.hash_algorithm
+            && *exclude_newer == other.exclude_newer
+    }
+
     /// Initialize an [`Index`] from a pip-style `--index-url`.
     pub fn from_index_url(url: IndexUrl) -> Self {
         Self {
