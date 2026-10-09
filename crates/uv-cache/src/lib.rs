@@ -783,12 +783,25 @@ impl Cache {
                 for entry in walkdir::WalkDir::new(source_distributions) {
                     let entry = entry?;
 
-                    // If the directory contains a `metadata.msgpack`, then it's a built wheel revision.
                     if !entry.file_type().is_dir() {
                         continue;
                     }
 
-                    if !entry.path().join("metadata.msgpack").exists() {
+                    // Revisions with build settings may only have metadata in a child shard.
+                    let mut has_metadata = entry.path().join("metadata.msgpack").exists();
+                    if !has_metadata && entry.path().join("src").is_dir() {
+                        for shard in fs_err::read_dir(entry.path())? {
+                            let shard = shard?;
+                            if shard.file_name() != "src"
+                                && shard.file_type()?.is_dir()
+                                && shard.path().join("metadata.msgpack").exists()
+                            {
+                                has_metadata = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !has_metadata {
                         continue;
                     }
 
