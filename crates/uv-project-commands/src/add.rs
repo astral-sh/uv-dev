@@ -754,7 +754,6 @@ pub async fn add(
         let locations = IndexLocations::new(indexes, Vec::new(), false);
         let mut indexes = locations.defined_indexes().collect::<Vec<_>>();
         indexes.reverse();
-        let mut shadowed_names = BTreeSet::new();
         let mut member_indexes = Vec::new();
         if let EditTarget::Project(project) = &target
             && project.root() == project.workspace().install_path()
@@ -771,23 +770,10 @@ pub async fn add(
                     .and_then(|uv| uv.index.as_ref())
                     .into_iter()
                     .flatten();
-                for member_index in member_definitions {
-                    member_indexes.push(member_index);
-                    if let Some(name) = member_index.name.as_ref()
-                        && let Some(root_index) = project
-                            .workspace()
-                            .indexes()
-                            .iter()
-                            .find(|index| index.name.as_ref() == Some(name))
-                        && (member_index.url != root_index.url
-                            || member_index.format != root_index.format)
-                    {
-                        shadowed_names.insert(name.clone());
-                    }
-                }
+                member_indexes.extend(member_definitions);
             }
         }
-        toml.add_indexes(&indexes, root_dir, &shadowed_names, &member_indexes)?;
+        toml.add_indexes(&indexes, root_dir, &member_indexes)?;
     }
 
     let content = toml.to_string();

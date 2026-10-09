@@ -298,7 +298,7 @@ impl PyProjectTomlMut {
     /// Add an [`Index`] to `tool.uv.index`.
     #[cfg(test)]
     fn add_index(&mut self, index: &Index, root_dir: &Path) -> Result<(), Error> {
-        self.add_indexes(&[index], root_dir, &BTreeSet::new(), &[])
+        self.add_indexes(&[index], root_dir, &[])
     }
 
     /// Add indexes before updating source names against the final declarations.
@@ -307,27 +307,34 @@ impl PyProjectTomlMut {
         &mut self,
         indexes: &[&Index],
         root_dir: &Path,
-        shadowed_names: &BTreeSet<IndexName>,
         member_indexes: &[&Index],
     ) -> Result<(), Error> {
+        let shadowed_names = member_indexes
+            .iter()
+            .filter_map(|member| {
+                let name = member.name.as_ref()?;
+                let root = self.index_tables().find(|table| {
+                    table.get("name").and_then(Item::as_str) == Some(name.as_ref())
+                })?;
+                let url = root.get("url").and_then(Item::as_str)?;
+                let format = match root.get("format").and_then(Item::as_str) {
+                    Some("flat") => IndexFormat::Flat,
+                    _ => IndexFormat::Simple,
+                };
+                (!index_locations_equal(url, &member.url, root_dir) || member.format != format)
+                    .then(|| name.clone())
+            })
+            .collect::<BTreeSet<_>>();
         let mut renames = Vec::new();
         for index in indexes {
             let previous_names =
-                self.edit_index(index, root_dir, shadowed_names, member_indexes)?;
+                self.edit_index(index, root_dir, &shadowed_names, member_indexes)?;
             if let Some(name) = index.name.as_deref() {
                 renames.push((previous_names, name));
             }
         }
         let names = self
-            .doc
-            .get("tool")
-            .and_then(Item::as_table_like)
-            .and_then(|tool| tool.get("uv"))
-            .and_then(Item::as_table_like)
-            .and_then(|uv| uv.get("index"))
-            .and_then(Item::as_array_of_tables)
-            .into_iter()
-            .flat_map(|indexes| indexes.iter())
+            .index_tables()
             .filter_map(|index| index.get("name").and_then(Item::as_str))
             .map(ToOwned::to_owned)
             .collect::<BTreeSet<_>>();
@@ -336,6 +343,18 @@ impl PyProjectTomlMut {
             self.rename_index_sources(&previous_names, name);
         }
         Ok(())
+    }
+
+    fn index_tables(&self) -> impl Iterator<Item = &Table> {
+        self.doc
+            .get("tool")
+            .and_then(Item::as_table_like)
+            .and_then(|tool| tool.get("uv"))
+            .and_then(Item::as_table_like)
+            .and_then(|uv| uv.get("index"))
+            .and_then(Item::as_array_of_tables)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter())
     }
 
     fn edit_index(
@@ -536,16 +555,17 @@ impl PyProjectTomlMut {
             }
             !replaced
         });
-        for alias in aliases {
-            existing.push(alias);
-        }
-
         // Set the position to the minimum, if it's not already the first element.
-        if let Some(min) = existing.iter().filter_map(Table::position).min() {
+        if let Some(min) = existing
+            .iter()
+            .chain(&aliases)
+            .filter_map(Table::position)
+            .min()
+        {
             table.set_position(Some(min));
 
             // Increment the position of all existing elements.
-            for table in existing.iter_mut() {
+            for table in existing.iter_mut().chain(&mut aliases) {
                 if let Some(position) = table.position() {
                     table.set_position(Some(position + 1));
                 }
@@ -557,6 +577,10 @@ impl PyProjectTomlMut {
 
         // Push the item to the table.
         existing.push(table);
+        // Match the real replacement before synthetic aliases during subsequent batch edits.
+        for alias in aliases {
+            existing.push(alias);
+        }
 
         Ok(previous_names)
     }
@@ -1941,7 +1965,6 @@ mod test {
     };
     use anyhow::Result;
     use insta::assert_snapshot;
-    use std::collections::BTreeSet;
     use std::path::Path;
     use std::str::FromStr;
     use toml_edit::DocumentMut;
@@ -2497,13 +2520,9 @@ url = "https://example.com/simple"
         )
         .unwrap();
         let incoming = Index::from_str("https://example.com/simple").unwrap();
-        doc.add_indexes(
-            &[&incoming],
-            Path::new("."),
-            &BTreeSet::from(["old".parse().unwrap()]),
-            &[],
-        )
-        .unwrap();
+        let member = Index::from_str("old=https://member.example.com/simple").unwrap();
+        doc.add_indexes(&[&incoming], Path::new("."), &[&member])
+            .unwrap();
         assert_snapshot!(doc.to_string(), @r#"
 
 [[tool.uv.index]]
@@ -2529,7 +2548,7 @@ foo = { index = "old" }
         .unwrap();
         let incoming = Index::from_str("new=https://example.com/flat").unwrap();
         let member = Index::from_str("new=https://example.com/flat").unwrap();
-        doc.add_indexes(&[&incoming], Path::new("."), &BTreeSet::new(), &[&member])
+        doc.add_indexes(&[&incoming], Path::new("."), &[&member])
             .unwrap();
         assert_snapshot!(doc.to_string(), @r#"
 
@@ -2546,6 +2565,37 @@ explicit = true
 
 [tool.uv.sources]
 foo = { index = "old" }
+"#);
+    }
+
+    #[test]
+    fn add_indexes_do_not_copy_synthetic_alias_policy() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/simple"
+
+[tool.uv.sources]
+foo = { index = "old" }
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let middle = Index::from_str("middle=https://example.com/simple").unwrap();
+        let new = Index::from_str("new=https://example.com/simple").unwrap();
+        let mut member = Index::from_str("middle=https://member.example.com/simple").unwrap();
+        member.explicit = true;
+        doc.add_indexes(&[&middle, &new], Path::new("."), &[&member])
+            .unwrap();
+        assert_snapshot!(doc.to_string(), @r#"
+
+[[tool.uv.index]]
+name = "new"
+url = "https://example.com/simple"
+
+[tool.uv.sources]
+foo = { index = "new" }
 "#);
     }
 
