@@ -4409,10 +4409,11 @@ fn tool_install_preflight_preserves_build_failure_status() -> Result<()> {
         .temp_dir
         .child("bin")
         .child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
-    Command::new(executable.path())
-        .assert()
-        .success()
-        .stdout("Hi from the simple launcher!\n");
+    uv_snapshot!(context.filters(), Command::new(executable.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
     Ok(())
 }
 
