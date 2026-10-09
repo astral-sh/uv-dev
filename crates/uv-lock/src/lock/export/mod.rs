@@ -91,15 +91,9 @@ impl<'lock> ExportableRequirements<'lock> {
                 .ok_or_else(|| LockErrorKind::MissingRootPackage {
                     name: root_name.clone(),
                 })?;
-            let root_marker = if dist.fork_markers.is_empty() {
-                MarkerTree::TRUE
-            } else {
-                target.lock().simplify_environment(
-                    dist.fork_markers
-                        .iter()
-                        .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508())),
-                )
-            };
+            let root_marker = target
+                .lock()
+                .simplify_environment(dist.environment_marker());
 
             if root_kind == InstallableRootKind::Production {
                 // Track the activated package in the list of known conflicts.

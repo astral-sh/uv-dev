@@ -236,14 +236,7 @@ impl ValidatedLock {
                 let Some(package) = lock.find_by_name(name).ok().flatten() else {
                     return Ok(Self::Versions(lock));
                 };
-                let actual = if package.fork_markers().is_empty() {
-                    MarkerTree::TRUE
-                } else {
-                    package
-                        .fork_markers()
-                        .iter()
-                        .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.pep508()))
-                };
+                let actual = package.environment_marker();
                 if lock.simplify_environment(*expected) != lock.simplify_environment(actual) {
                     debug!(
                         "Resolving despite existing lockfile due to change in Python requirement for root `{name}`"
