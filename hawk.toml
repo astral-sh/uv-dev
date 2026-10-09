@@ -28,6 +28,12 @@ package = "uv-redacted"
 
 # Keep public APIs that are consumed by downstream Rust integrations.
 
+[[exclude]]
+crate = "uv_pyproject_toml"
+file = "crates/uv-pyproject-toml/src/lib.rs"
+level = "expect"
+reason = "standardized pyproject.toml types intentionally expose a reusable parser API"
+
 [[override]]
 lint = "hawk::unnecessary_public"
 crate = "uv_client"
