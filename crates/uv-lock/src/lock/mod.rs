@@ -3473,6 +3473,12 @@ impl Lock {
             .map(|&index| self.package(index))
     }
 
+    /// Return resolved workspace members that were not included as resolution roots.
+    pub fn non_root_workspace_packages(&self) -> impl Iterator<Item = &Package> {
+        self.workspace_packages()
+            .filter(|package| !self.is_resolution_root(package))
+    }
+
     /// Returns the root requirements that were used to generate this lock.
     fn requirements(&self) -> &BTreeSet<Requirement> {
         &self.manifest.requirements

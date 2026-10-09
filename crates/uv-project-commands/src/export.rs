@@ -678,9 +678,11 @@ async fn render_export<'output>(
                 .as_deref()
                 .and_then(Path::parent)
                 .unwrap_or(&CWD);
+            let requires_python = target.python_requirement(groups)?.requires_python;
             let mut export = PylockToml::from_lock(
                 &target,
                 output_dir,
+                requires_python,
                 prune,
                 extras,
                 groups,

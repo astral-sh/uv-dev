@@ -1595,3 +1595,135 @@ fn explicit_roots_non_root_production_preserves_platform_domain() -> Result<()> 
     ");
     Ok(())
 }
+
+#[test]
+fn explicit_roots_pylock_matches_selected_python_domain() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared; python_version >= '3.13'", "leaf; python_version < '3.13'"]
+
+        [dependency-groups]
+        check = []
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.dependency-groups]
+        check = { requires-python = ">=3.13" }
+
+        [tool.uv.sources]
+        shared = { workspace = true }
+        leaf = { workspace = true }
+
+        [tool.uv.workspace]
+        members = ["shared", "leaf"]
+        roots = ["app"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/src/shared/__init__.py")
+        .touch()?;
+    context
+        .temp_dir
+        .child("leaf/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "leaf"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("leaf/src/leaf/__init__.py")
+        .touch()?;
+    context
+        .lock()
+        .args(["--offline", "--no-index", "--python", "3.12"])
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.13"
+
+    [[packages]]
+    name = "shared"
+    directory = { path = "shared", editable = true }
+    "#);
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "app", "--group", "check", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.13"
+
+    [[packages]]
+    name = "shared"
+    directory = { path = "shared", editable = true }
+    "#);
+
+    // A member with wider bounds cannot widen the lockfile's resolved Python domain.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&context.read("pyproject.toml").replace(
+            r#"requires-python = ">=3.12""#,
+            r#"requires-python = ">=3.13""#,
+        ))?;
+    context.temp_dir.child("shared/pyproject.toml").write_str(
+        &context.read("shared/pyproject.toml").replace(
+            r#"requires-python = ">=3.13""#,
+            r#"requires-python = ">=3.12""#,
+        ),
+    )?;
+    context
+        .lock()
+        .args(["--offline", "--no-index", "--python", "3.13"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--offline", "--package", "shared", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.13"
+
+    [[packages]]
+    name = "shared"
+    directory = { path = "shared", editable = true }
+    "#);
+    Ok(())
+}
