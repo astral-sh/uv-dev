@@ -1,5 +1,3 @@
-use std::error::Error;
-
 use uv_errors::{Hinted, Hints};
 
 use crate::commands::pip::install::ExternallyManagedError;
