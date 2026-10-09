@@ -1,7 +1,6 @@
 //! Git support is derived from Cargo's implementation.
 //! Cargo is dual-licensed under either Apache 2.0 or MIT, at the user's choice.
 //! Source: <https://github.com/rust-lang/cargo/blob/23eb492cf920ce051abfc56bbaf838514dc8365c/src/cargo/sources/git/utils.rs>
-use std::env;
 use std::fmt::Display;
 use std::path::{Path, PathBuf, absolute};
 use std::str::{self};
@@ -541,6 +540,7 @@ impl GitDatabase {
             Some(co) => {
                 if self.lfs_ready == Some(true) {
                     if co.repo.lfs_fsck_objects(rev.as_str()) {
+                        co.materialize_lfs()?;
                         co.with_lfs_ready(Some(true))
                     } else {
                         let lfs_ready = self.copy_lfs_to(&co)?;
@@ -697,6 +697,24 @@ impl GitCheckout {
         }
     }
 
+    /// Replace LFS pointers using local objects, including when smudge filters are absent.
+    fn materialize_lfs(&self) -> Result<()> {
+        let mut command = GIT_LFS
+            .as_ref()
+            .map_err(|_| GitError::GitLfsNotFound)?
+            .clone();
+        // Git LFS skips checkout unless a clean filter is configured, even with local objects.
+        append_git_config(&mut command, "filter.lfs.clean", "git-lfs clean -- %f");
+        command
+            .arg("checkout")
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .env(EnvVars::GIT_ALLOW_PROTOCOL, "file")
+            .env_remove(EnvVars::GIT_LFS_SKIP_SMUDGE)
+            .cwd(&self.repo.path)
+            .exec_with_output()?;
+        Ok(())
+    }
+
     /// Indicates Git LFS artifacts have been initialized (when requested).
     pub(crate) fn lfs_ready(&self) -> Option<bool> {
         self.lfs_ready
@@ -823,7 +841,10 @@ impl GitCheckout {
         let lfs_validation = match with_lfs {
             None => None,
             Some(false) => Some(false),
-            Some(true) => Some(self.repo.lfs_fsck_objects(self.revision.as_str())),
+            Some(true) => {
+                self.materialize_lfs()?;
+                Some(self.repo.lfs_fsck_objects(self.revision.as_str()))
+            }
         };
 
         // The .ok file should be written when the reset is successful.
@@ -899,16 +920,23 @@ fn without_credentials(url: &DisplaySafeUrl) -> DisplaySafeUrl {
 fn apply_url_rewrite(cmd: &mut ProcessBuilder, url: &DisplaySafeUrl) {
     let url_without_credentials = without_credentials(url);
     if url_without_credentials != *url {
-        let config_index = env::var("GIT_CONFIG_COUNT")
-            .ok()
-            .and_then(|count| count.parse::<usize>().ok())
-            .unwrap_or(0);
-        let key_var = format!("GIT_CONFIG_KEY_{config_index}");
-        let value_var = format!("GIT_CONFIG_VALUE_{config_index}");
-        cmd.env("GIT_CONFIG_COUNT", (config_index + 1).to_string())
-            .env(&key_var, format!("url.{}.insteadOf", url.as_str()))
-            .env(&value_var, url_without_credentials.as_str());
+        append_git_config(
+            cmd,
+            &format!("url.{}.insteadOf", url.as_str()),
+            url_without_credentials.as_str(),
+        );
     }
+}
+
+/// Append command-local configuration without replacing inherited entries.
+fn append_git_config(cmd: &mut ProcessBuilder, key: &str, value: &str) {
+    let config_index = cmd
+        .get_env("GIT_CONFIG_COUNT")
+        .and_then(|count| count.to_str()?.parse::<usize>().ok())
+        .unwrap_or(0);
+    cmd.env("GIT_CONFIG_COUNT", (config_index + 1).to_string())
+        .env(&format!("GIT_CONFIG_KEY_{config_index}"), key)
+        .env(&format!("GIT_CONFIG_VALUE_{config_index}"), value);
 }
 
 /// Applies transport settings to commands that can fetch Git objects.
@@ -922,7 +950,8 @@ fn configure_git_network(
     cmd.env(EnvVars::GIT_TERMINAL_PROMPT, "0");
     apply_url_rewrite(cmd, url);
     if disable_ssl {
-        cmd.env(EnvVars::GIT_SSL_NO_VERIFY, "true");
+        let origin = remote_url_root(url.without_credentials().into_owned());
+        append_git_config(cmd, &format!("http.{origin}.sslVerify"), "false");
     }
     if offline {
         cmd.env(EnvVars::GIT_ALLOW_PROTOCOL, "file");
@@ -1279,6 +1308,46 @@ mod tests {
             submodule_update_config(&url),
             vec!["remote.origin.url=ssh://git@example.com/org/repo.git".to_string()]
         );
+    }
+
+    #[test]
+    #[cfg(feature = "test-git")]
+    fn git_tls_exception_is_scoped_to_remote_host() -> Result<()> {
+        let url = DisplaySafeUrl::parse("https://user:password@allowed.example/org/repo.git")?;
+        let mut command = GIT.as_ref().cloned()?;
+        command
+            .arg("-c")
+            .arg("http.sslVerify=true")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .env("GIT_CONFIG_COUNT", "0")
+            .env_remove(EnvVars::GIT_SSL_NO_VERIFY);
+        configure_git_network(&mut command, &url, true, false);
+
+        let allowed = command
+            .clone()
+            .args(&[
+                "config",
+                "--get-urlmatch",
+                "http.sslVerify",
+                "https://allowed.example/other.git",
+            ])
+            .exec_with_output()?;
+        assert_eq!(str::from_utf8(&allowed.stdout)?.trim(), "false");
+
+        let unrelated = command
+            .args(&[
+                "config",
+                "--get-urlmatch",
+                "http.sslVerify",
+                "https://untrusted.example/submodule.git",
+            ])
+            .exec_with_output()?;
+        assert_eq!(str::from_utf8(&unrelated.stdout)?.trim(), "true");
+        Ok(())
     }
 
     #[test]

@@ -1247,7 +1247,16 @@ fn git_lfs_cache_recovery(partial_fetches: bool) -> Result<()> {
         } else {
             command.arg("--no-preview");
         }
-        command.arg("--offline").assert().success();
+        // Fetching LFS objects must also materialize them when smudge filters are absent.
+        command
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .arg("--offline")
+            .assert()
+            .success();
     };
     let clear_source_metadata = || -> Result<()> {
         fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
@@ -1291,6 +1300,10 @@ fn git_lfs_cache_recovery(partial_fetches: bool) -> Result<()> {
     assert!(ok_checkout_file.exists());
     assert!(lfs_checkout_objects.exists());
     assert!(db_root.child(".git/lfs/objects").exists());
+    assert_eq!(
+        fs_err::read_to_string(checkout_root.child("module.py"))?,
+        "VALUE = True\n"
+    );
     let objects = Command::new("git")
         .args([
             "cat-file",
