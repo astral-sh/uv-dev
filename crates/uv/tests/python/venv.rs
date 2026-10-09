@@ -15,7 +15,7 @@ use uv_static::EnvVars;
 #[cfg(unix)]
 use fs_err::os::unix::fs::symlink;
 #[cfg(unix)]
-use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+use std::{ffi::OsStr, os::unix::ffi::OsStrExt, path::Path};
 #[cfg(windows)]
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
@@ -118,6 +118,63 @@ fn create_venv_caches_interpreter() -> Result<()> {
         .context("Fresh interpreter cache is locked")?;
     let queried = PythonEnvironment::from_root(&root_path, &fresh_cache)?;
     assert!(startup_marker.is_file());
+    assert_eq!(cached, queried);
+
+    Ok(())
+}
+
+/// An installation-directory alias remains part of the cached base executable.
+#[test]
+#[cfg(unix)]
+fn create_venv_caches_interpreter_from_symlinked_installation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let cache = Cache::from_path(context.cache_dir.path().to_path_buf())
+        .init_no_wait()?
+        .context("Interpreter cache is locked")?;
+    let environment = PythonEnvironment::from_root(context.venv.path(), &cache)?;
+    let base_executable = environment.interpreter().to_base_python()?;
+    let installation = base_executable
+        .parent()
+        .and_then(Path::parent)
+        .context("Python has no installation directory")?;
+    let alias = context.temp_dir.child("python-installation");
+    symlink(installation, alias.path())?;
+    let python = alias.join(base_executable.strip_prefix(installation)?);
+
+    let root = context.temp_dir.child("aliased-venv");
+    context
+        .venv()
+        .arg(root.path())
+        .arg("--python")
+        .arg(&python)
+        .assert()
+        .success();
+
+    let site_packages = site_packages_path(root.path(), "python3.12");
+    fs_err::write(
+        site_packages.join("sitecustomize.py"),
+        indoc! {r#"
+            from pathlib import Path
+
+            Path(__file__).with_name("interpreter-started").touch()
+        "#},
+    )?;
+    let startup_marker = site_packages.join("interpreter-started");
+
+    let cached_interpreters = context.cache_files(CacheBucket::Interpreter)?;
+    let cached = PythonEnvironment::from_root(root.path(), &cache)?;
+    assert!(!startup_marker.exists());
+    assert_eq!(
+        context.cache_files(CacheBucket::Interpreter)?,
+        cached_interpreters
+    );
+
+    let fresh_cache = Cache::temp()?
+        .init_no_wait()?
+        .context("Fresh interpreter cache is locked")?;
+    let queried = PythonEnvironment::from_root(root.path(), &fresh_cache)?;
+    assert!(startup_marker.is_file());
+    assert_eq!(queried.interpreter().to_base_python()?, python);
     assert_eq!(cached, queried);
 
     Ok(())

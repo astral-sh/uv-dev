@@ -1191,11 +1191,8 @@ impl TryFrom<&Interpreter> for InterpreterInfo {
             sys_base_exec_prefix: PathBuf::new(),
             sys_path: Vec::new(),
             sys_base_prefix: interpreter.sys_base_prefix.clone(),
-            sys_base_executable: interpreter
-                .sys_base_executable
-                .as_deref()
-                .map(canonicalize_executable)
-                .transpose()?,
+            // Python retains installation-directory aliases in the base executable.
+            sys_base_executable: interpreter.sys_base_executable.clone(),
             sys_executable: std::path::absolute(interpreter.sys_executable())?
                 .simplified()
                 .to_path_buf(),
