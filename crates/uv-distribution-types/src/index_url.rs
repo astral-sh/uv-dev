@@ -19,6 +19,81 @@ use uv_warnings::warn_user;
 
 use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Origin, Verbatim};
 
+/// Full index definitions selected by requirements sources, validated before composition.
+#[derive(Debug, Default, Clone)]
+pub struct SourceIndexes(Vec<Index>);
+
+/// Conflicting source-index definitions would discard a selected policy in index clients.
+#[derive(Debug, Error)]
+pub enum SourceIndexError {
+    #[error("Conflicting definitions for index `{0}` in requirements sources")]
+    ConflictingName(crate::IndexName),
+    #[error("Multiple default indexes in requirements sources")]
+    MultipleDefaults,
+}
+
+impl SourceIndexes {
+    /// Construct a collection while rejecting conflicting selected policies.
+    pub fn try_from_iter(
+        indexes: impl IntoIterator<Item = Index>,
+    ) -> Result<Self, SourceIndexError> {
+        let mut result = Self::default();
+        result.try_extend(indexes)?;
+        Ok(result)
+    }
+
+    /// Merge definitions without losing policies to client name or default-index selection.
+    pub fn try_extend(
+        &mut self,
+        indexes: impl IntoIterator<Item = Index>,
+    ) -> Result<(), SourceIndexError> {
+        for index in indexes {
+            if let Some(name) = index.name.as_ref()
+                && let Some(existing) = self
+                    .0
+                    .iter()
+                    .find(|existing| existing.name.as_ref() == Some(name))
+            {
+                if existing != &index {
+                    return Err(SourceIndexError::ConflictingName(name.clone()));
+                }
+                continue;
+            }
+            if index.default && self.0.iter().any(|existing| existing.default) {
+                return Err(SourceIndexError::MultipleDefaults);
+            }
+            self.0.push(index);
+        }
+        Ok(())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Index> {
+        self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a SourceIndexes {
+    type Item = &'a Index;
+    type IntoIter = std::slice::Iter<'a, Index>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl IntoIterator for SourceIndexes {
+    type Item = Index;
+    type IntoIter = std::vec::IntoIter<Index>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 pub static PYPI_URL: LazyLock<DisplaySafeUrl> =
     LazyLock::new(|| DisplaySafeUrl::parse("https://pypi.org/simple").unwrap());
 
@@ -292,7 +367,7 @@ impl IndexLocations {
 
     /// Add index definitions from sources, retaining command-line precedence.
     #[must_use]
-    pub fn with_source_indexes(mut self, indexes: Vec<Index>) -> Self {
+    pub fn with_source_indexes(mut self, indexes: SourceIndexes) -> Self {
         if indexes.is_empty() {
             return self;
         }

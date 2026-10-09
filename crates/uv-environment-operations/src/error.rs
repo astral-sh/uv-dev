@@ -307,6 +307,7 @@ impl From<ScriptRequirementsError> for EnvironmentError {
         match error {
             ScriptRequirementsError::Io(error) => Self::Io(error),
             ScriptRequirementsError::IndexUrl(error) => Self::IndexUrl(error),
+            ScriptRequirementsError::SourceIndex(error) => Self::Anyhow(error.into()),
             ScriptRequirementsError::Lowering(error) => Self::Lowering(error),
         }
     }

@@ -8,8 +8,8 @@ use uv_cache::Cache;
 use uv_configuration::{NoSources, Override, PackageOverride};
 use uv_distribution::{LoweredExtraBuildDependencies, LoweredRequirement, LoweringError};
 use uv_distribution_types::{
-    ExtraBuildRequirement, ExtraBuildRequires, Index, IndexLocations, IndexMetadata, IndexUrlError,
-    Origin, Requirement, RequirementSource,
+    ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, IndexMetadata, IndexUrlError,
+    Origin, Requirement, RequirementSource, SourceIndexError, SourceIndexes,
 };
 use uv_scripts::{Pep723ItemRef, Pep723Metadata};
 use uv_workspace::WorkspaceCache;
@@ -25,6 +25,9 @@ pub enum ScriptRequirementsError {
 
     #[error(transparent)]
     IndexUrl(#[from] IndexUrlError),
+
+    #[error(transparent)]
+    SourceIndex(#[from] SourceIndexError),
 
     #[error(transparent)]
     Lowering(#[from] Box<LoweringError>),
@@ -73,7 +76,7 @@ pub(crate) async fn script_metadata_specification(
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     credentials_cache: &CredentialsCache,
-) -> Result<(RequirementsSpecification, Vec<Index>), ScriptRequirementsError> {
+) -> Result<(RequirementsSpecification, SourceIndexes), ScriptRequirementsError> {
     let script_indexes = metadata
         .indexes(sources)
         .iter()
@@ -219,18 +222,19 @@ pub(crate) async fn script_metadata_specification(
             }
         }
     }
-    let indexes = script_indexes
-        .into_iter()
-        .filter(|index| {
-            selected_indexes.contains(&IndexMetadata {
-                url: index.url.clone(),
-                format: index.format,
-            }) && !index_locations.defined_indexes().any(|configured| {
-                configured.origin == Some(Origin::Cli) && configured.name == index.name
+    let indexes = SourceIndexes::try_from_iter(
+        script_indexes
+            .into_iter()
+            .filter(|index| {
+                selected_indexes.contains(&IndexMetadata {
+                    url: index.url.clone(),
+                    format: index.format,
+                }) && !index_locations.defined_indexes().any(|configured| {
+                    configured.origin == Some(Origin::Cli) && configured.name == index.name
+                })
             })
-        })
-        .map(|index| index.with_origin(Origin::RequirementsTxt))
-        .collect();
+            .map(|index| index.with_origin(Origin::RequirementsTxt)),
+    )?;
 
     let mut specification =
         RequirementsSpecification::from_excludes(requirements, constraints, Vec::new(), Vec::new());

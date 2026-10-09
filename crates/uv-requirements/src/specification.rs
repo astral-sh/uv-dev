@@ -123,7 +123,7 @@ pub struct RequirementsSpecification {
     /// The extras used to collect requirements.
     pub extras: FxHashSet<ExtraName>,
     /// Full definitions of indexes selected by lowered script sources.
-    pub indexes: Vec<Index>,
+    pub indexes: uv_distribution_types::SourceIndexes,
     /// The index URL to use for fetching packages.
     pub index_url: Option<IndexUrl>,
     /// The extra index URLs to use for fetching packages.
@@ -143,28 +143,7 @@ pub struct RequirementsSpecification {
 impl RequirementsSpecification {
     /// Merge source indexes without losing policies to name-based client deduplication.
     pub fn extend_indexes(&mut self, indexes: impl IntoIterator<Item = Index>) -> Result<()> {
-        for index in indexes {
-            if let Some(name) = index.name.as_ref()
-                && let Some(existing) = self
-                    .indexes
-                    .iter()
-                    .find(|existing| existing.name.as_ref() == Some(name))
-            {
-                if existing != &index {
-                    return Err(anyhow::anyhow!(
-                        "Conflicting definitions for index `{name}` in requirements sources"
-                    ));
-                }
-                continue;
-            }
-            if index.default && self.indexes.iter().any(|existing| existing.default) {
-                return Err(anyhow::anyhow!(
-                    "Multiple default indexes in requirements sources"
-                ));
-            }
-            self.indexes.push(index);
-        }
-        Ok(())
+        Ok(self.indexes.try_extend(indexes)?)
     }
 
     /// Read the requirements and constraints from a source.
