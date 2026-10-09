@@ -87,7 +87,7 @@ pub async fn read_constraints(
     constraints: &[RequirementsSource],
     client_builder: &BaseClientBuilder<'_>,
     lowering_context: LoweringContext<'_>,
-) -> Result<Vec<NameRequirementSpecification>, Error> {
+) -> Result<RequirementsSpecification, Error> {
     Ok(RequirementsSpecification::from_sources(
         &[],
         constraints,
@@ -97,8 +97,7 @@ pub async fn read_constraints(
         client_builder,
         lowering_context,
     )
-    .await?
-    .constraints)
+    .await?)
 }
 
 /// Resolve a set of requirements, similar to running `pip compile`.
