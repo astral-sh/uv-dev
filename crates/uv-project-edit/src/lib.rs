@@ -659,22 +659,53 @@ impl PyProjectTomlMut {
         Ok(added)
     }
 
-    /// Adds a batch of dependencies to the requested dependency array.
+    /// Add dependencies across arrays, applying source changes in input order.
     ///
-    /// Returns an edit for every input dependency, using the final array indices.
+    /// Returns one edit per input dependency in input order, using each array's final indices.
     pub fn add_dependencies(
         &mut self,
-        dependency_type: &DependencyType,
-        requirements: &[(&Requirement, Option<&Source>)],
+        requirements: &[(&DependencyType, &Requirement, Option<&Source>)],
         raw: bool,
     ) -> Result<Vec<ArrayEdit>, Error> {
-        let edits = self.add_dependency_array(dependency_type, requirements, raw)?;
-        self.add_dependency_sources(requirements)?;
-        Ok(edits)
+        let mut dependency_types = Vec::new();
+        for (dependency_type, _, _) in requirements {
+            if !dependency_types.contains(dependency_type) {
+                dependency_types.push(*dependency_type);
+            }
+        }
+        let mut edits = Vec::with_capacity(requirements.len());
+        for dependency_type in dependency_types {
+            let positions = requirements
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (kind, requirement, source))| {
+                    (*kind == dependency_type).then_some((index, (*requirement, *source)))
+                })
+                .collect::<Vec<_>>();
+            let array_requirements = positions
+                .iter()
+                .map(|(_, requirement)| *requirement)
+                .collect::<Vec<_>>();
+            let array_edits =
+                self.add_dependency_array(dependency_type, &array_requirements, raw)?;
+            edits.extend(
+                positions
+                    .into_iter()
+                    .map(|(index, _)| index)
+                    .zip(array_edits),
+            );
+        }
+        let sources = requirements
+            .iter()
+            .map(|(_, requirement, source)| (*requirement, *source))
+            .collect::<Vec<_>>();
+        self.add_dependency_sources(&sources)?;
+        edits.sort_unstable_by_key(|(index, _)| *index);
+        Ok(edits.into_iter().map(|(_, edit)| edit).collect())
     }
 
     /// Adds a batch of dependencies without updating their sources.
-    pub fn add_dependency_array(
+    fn add_dependency_array(
         &mut self,
         dependency_type: &DependencyType,
         requirements: &[(&Requirement, Option<&Source>)],
@@ -989,7 +1020,7 @@ impl PyProjectTomlMut {
     }
 
     /// Adds a batch of sources, resolving normalized source keys once.
-    pub fn add_dependency_sources(
+    fn add_dependency_sources(
         &mut self,
         requirements: &[(&Requirement, Option<&Source>)],
     ) -> Result<(), Error> {
@@ -2226,9 +2257,9 @@ mod test {
         let mut batch = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
         let requests = requirements
             .iter()
-            .map(|requirement| (requirement, None))
+            .map(|requirement| (dependency_type, requirement, None))
             .collect::<Vec<_>>();
-        let batch_edits = batch.add_dependencies(dependency_type, &requests, false)?;
+        let batch_edits = batch.add_dependencies(&requests, false)?;
 
         assert_eq!(batch.to_string(), individual.to_string());
         assert_eq!(batch_edits, individual_edits);
@@ -2463,18 +2494,18 @@ Alpha = { index = "old" }
         let first = toml::from_str::<Source>("index = 'first'")?;
         let last = toml::from_str::<Source>("index = 'last'")?;
         let requests = [
-            (&requirements[0], Some(&first)),
-            (&requirements[1], None),
-            (&requirements[2], Some(&last)),
+            (&DependencyType::Production, &requirements[0], Some(&first)),
+            (&DependencyType::Production, &requirements[1], None),
+            (&DependencyType::Production, &requirements[2], Some(&last)),
         ];
 
         let mut individual = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
         let individual_edits = requests
             .iter()
-            .map(|(requirement, source)| individual.add_dependency(requirement, *source, false))
+            .map(|(_, requirement, source)| individual.add_dependency(requirement, *source, false))
             .collect::<Result<Vec<_>, _>>()?;
         let mut batch = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
-        let batch_edits = batch.add_dependencies(&DependencyType::Production, &requests, false)?;
+        let batch_edits = batch.add_dependencies(&requests, false)?;
 
         assert_eq!(batch.to_string(), individual.to_string());
         assert_eq!(batch_edits, individual_edits);
@@ -2485,8 +2516,7 @@ Alpha = { index = "old" }
         )?;
         assert!(matches!(
             ambiguous.add_dependencies(
-                &DependencyType::Production,
-                &[(&requirements[0], None)],
+                &[(&DependencyType::Production, &requirements[0], None)],
                 false
             ),
             Err(super::Error::Ambiguous { .. })
@@ -2525,19 +2555,19 @@ dev-dependencies = ["idna>=1"]
         )?;
 
         let mut batch = PyProjectTomlMut::from_toml(toml, DependencyTarget::PyProjectToml)?;
-        let group = [
-            (&requirements[0], Some(&source)),
-            (&requirements[2], Some(&source)),
-        ];
-        let legacy = [(&requirements[1], Some(&source))];
-        batch.add_dependency_array(&DependencyType::Group(dev), &group, false)?;
-        batch.add_dependency_array(&DependencyType::Dev, &legacy, false)?;
-        let sources = [
-            (&requirements[0], Some(&source)),
-            (&requirements[1], Some(&source)),
-            (&requirements[2], Some(&source)),
-        ];
-        batch.add_dependency_sources(&sources)?;
+        let group = DependencyType::Group(dev);
+        let edits = batch.add_dependencies(
+            &[
+                (&group, &requirements[0], Some(&source)),
+                (&DependencyType::Dev, &requirements[1], Some(&source)),
+                (&group, &requirements[2], Some(&source)),
+            ],
+            false,
+        )?;
+        assert_eq!(
+            edits,
+            [ArrayEdit::Add(1), ArrayEdit::Update(0), ArrayEdit::Add(0)]
+        );
 
         assert_eq!(batch.to_string(), individual.to_string());
         Ok(())
