@@ -101,6 +101,9 @@ fn extra_conflict_discovery_respects_parent_reachability() -> Result<()> {
     Checked in [TIME]
     ");
 
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--extra", "feature", "--frozen", "--no-header"]), @"exit_code: 0 (success)");
+
     Ok(())
 }
 

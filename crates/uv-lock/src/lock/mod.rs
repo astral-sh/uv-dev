@@ -57,8 +57,8 @@ use uv_platform_tags::{
 };
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{
-    ConflictItem, ConflictKindRef, ConflictSet, Conflicts, HashAlgorithm, HashDigest, HashDigests,
-    ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, PyProjectToml,
+    ConflictItem, ConflictKind, ConflictKindRef, ConflictSet, Conflicts, HashAlgorithm, HashDigest,
+    HashDigests, ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, PyProjectToml,
 };
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 use uv_resolver_types::{
@@ -7382,6 +7382,11 @@ impl Package {
         root: &Path,
         requires_python: &RequiresPython,
     ) -> Result<Option<Vec<Requirement>>, LockError> {
+        // Scoped overrides need the resolved version; dynamic sources omit it from the lock.
+        // Their resolved edges retain the policy applied during resolution.
+        if self.id.version.is_none() && modifiers.has_scoped_package(&self.id.name) {
+            return Ok(None);
+        }
         let requirements = match context {
             DependencyContext::Group(group) => self.metadata.dependency_groups.get(group),
             DependencyContext::Production | DependencyContext::Extra(_) => {
@@ -9898,6 +9903,14 @@ impl std::fmt::Display for WheelTagHint {
     }
 }
 
+fn format_conflict_item(item: &ConflictItem) -> String {
+    match item.kind() {
+        ConflictKind::Project => item.package().to_string(),
+        ConflictKind::Extra(extra) => format!("{}[{extra}]", item.package()),
+        ConflictKind::Group(group) => format!("{}:{group}", item.package()),
+    }
+}
+
 /// An error that occurs when generating a `Lock` data structure.
 ///
 /// These errors are sometimes the result of possible programming bugs.
@@ -10274,6 +10287,8 @@ enum LockErrorKind {
         package2: PackageName,
         extra2: ExtraName,
     },
+    #[error("Found conflicting selections `{}` and `{}` enabled simultaneously", format_conflict_item(.0), format_conflict_item(.1))]
+    ConflictingSelections(ConflictItem, ConflictItem),
     #[error(transparent)]
     GitUrlParse(#[from] GitUrlParseError),
     #[error("Failed to read `{path}`")]

@@ -10307,6 +10307,172 @@ fn requirements_txt_same_named_member_options_do_not_conflict() -> Result<()> {
     Ok(())
 }
 
+/// Dependency-activated extras also conflict with selected groups and production packages.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_dependency_extra_mixed_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[feature]"]
+
+        [project.optional-dependencies]
+        feature = []
+
+        [dependency-groups]
+        shared = []
+
+        [tool.uv]
+        conflicts = [[{ package = "child", extra = "feature" }, { group = "shared" }]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--extra", "feature", "--group", "shared",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Found conflicting selections `child[feature]` and `project:shared` enabled simultaneously
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--format", "pylock.toml", "--extra", "feature", "--group", "shared",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Found conflicting selections `child[feature]` and `project:shared` enabled simultaneously
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "feature", "--group", "shared", "--prune", "child", "--no-header",
+    ]), @"exit_code: 0 (success)");
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("{ group = \"shared\" }", "{ package = \"project\" }"),
+    )?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--extra", "feature", "--preview-features", "package-conflicts",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Found conflicting selections `child[feature]` and `project` enabled simultaneously
+    ");
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_dynamic_scoped_override_conflict() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "dynamic-scoped-conflict"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.bridge.versions."1.0.0"]
+        requires = ["child"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        dynamic = ["version"]
+        requires-python = ">=3.12"
+        dependencies = ["bridge; sys_platform == '{inactive_platform}'"]
+
+        [build-system]
+        requires = []
+        backend-path = ["."]
+        build-backend = "build_backend"
+
+        [tool.uv]
+        conflicts = [[{{ package = "project" }}, {{ package = "child" }}]]
+        override-dependencies = [
+            "child",
+            {{ package = {{ name = "project", version = "0.1.0" }}, dependencies = ["bridge"] }},
+        ]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+    "#})?;
+    context
+        .temp_dir
+        .child("build_backend.py")
+        .write_str(&formatdoc! {r#"
+        from pathlib import Path
+
+        def prepare_metadata_for_build_editable(metadata_directory, config_settings=None):
+            metadata = Path(metadata_directory) / "project-0.1.0.dist-info"
+            metadata.mkdir()
+            metadata.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.2\nName: project\nVersion: 0.1.0\n"
+                "Requires-Dist: bridge; sys_platform == '{inactive_platform}'\n"
+            )
+            return metadata.name
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.export().args([
+        "--package", "project", "--no-emit-project", "--preview-features", "package-conflicts", "--index",
+    ]).arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "project", "--no-emit-project", "--preview-features", "package-conflicts", "--offline",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    Ok(())
+}
+
 /// Selecting a member can still activate conflicting groups inherited from the workspace root.
 #[cfg(feature = "test-universal")]
 #[test]

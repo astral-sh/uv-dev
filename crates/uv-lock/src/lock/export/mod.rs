@@ -355,7 +355,7 @@ impl<'lock> ExportableRequirements<'lock> {
 }
 
 /// Validate requested extras before conflict guards can remove their resolved edges.
-fn validate_extra_conflicts<'lock>(
+fn validate_requested_conflicts<'lock>(
     target: &impl Installable<'lock>,
     prune: &[PackageName],
     extras: &ExtrasSpecificationWithDefaults,
@@ -441,6 +441,14 @@ fn validate_extra_conflicts<'lock>(
                 }
             }
         }
+        for group in package.metadata.dependency_groups.keys() {
+            if target.includes_group(Some(name), group, groups) {
+                known_conflicts.insert(
+                    ConflictItem::from((name.clone(), group.clone())),
+                    root_marker,
+                );
+            }
+        }
     }
     for requirement in lock.requirements().iter().chain(
         lock.dependency_groups()
@@ -451,11 +459,7 @@ fn validate_extra_conflicts<'lock>(
         if prune.contains(&requirement.name) {
             continue;
         }
-        for package in lock
-            .packages()
-            .iter()
-            .filter(|package| package.name() == &requirement.name)
-        {
+        for package in lock.packages_for_name(&requirement.name) {
             let Some(marker) = lock.root_requirement_marker(requirement, package) else {
                 continue;
             };
@@ -473,26 +477,16 @@ fn validate_extra_conflicts<'lock>(
     }
     while let Some((index, extra, parent)) = requests.queue.pop_front() {
         let package = lock.package(index);
+        let context = extra
+            .as_ref()
+            .map_or(DependencyContext::Production, DependencyContext::Extra);
         let requirements = package.dependency_requirements(
-            extra
-                .as_ref()
-                .map_or(DependencyContext::Production, DependencyContext::Extra),
+            context,
             &modifiers,
             target.install_path(),
             lock.requires_python(),
         )?;
-        let dependencies = if let Some(extra) = &extra {
-            Either::Left(
-                package
-                    .optional_dependencies
-                    .get(extra)
-                    .into_iter()
-                    .flatten(),
-            )
-        } else {
-            Either::Right(package.dependencies.iter())
-        };
-        for dependency in dependencies {
+        for dependency in context.dependencies(package) {
             if prune.contains(dependency.package_name()) {
                 continue;
             }
@@ -504,35 +498,45 @@ fn validate_extra_conflicts<'lock>(
             }
         }
     }
-    let mut activated = BTreeMap::<(&PackageName, ExtraName), MarkerTree>::new();
+    let mut activated = known_conflicts
+        .iter()
+        .map(|(item, marker)| (item.clone(), *marker))
+        .collect::<BTreeMap<_, _>>();
     for (index, extra, marker) in requests.finish(&known_conflicts) {
+        let package = lock.package(index);
+        if groups.prod() && lock.is_workspace_package(package) {
+            activated
+                .entry(ConflictItem::from(package.name().clone()))
+                .and_modify(|current| *current = current.or(marker))
+                .or_insert(marker);
+        }
         if let Some(extra) = extra {
             activated
-                .entry((lock.package(index).name(), extra))
+                .entry(ConflictItem::from((package.name().clone(), extra)))
                 .and_modify(|current| *current = current.or(marker))
                 .or_insert(marker);
         }
     }
     for set in lock.conflicts().iter() {
-        let extras = set.iter().filter_map(|item| {
-            let ConflictKind::Extra(extra) = item.kind() else {
-                return None;
-            };
-            let marker = activated.get(&(item.package(), extra.clone()))?;
-            Some((item.package(), extra, marker))
-        });
-        for ((package1, extra1, marker1), (package2, extra2, marker2)) in
-            extras.tuple_combinations()
-        {
-            if !marker1.is_disjoint(*marker2) {
+        let items = set
+            .iter()
+            .filter_map(|item| activated.get(item).map(|marker| (item, marker)));
+        for ((item1, marker1), (item2, marker2)) in items.tuple_combinations() {
+            if marker1.is_disjoint(*marker2) {
+                continue;
+            }
+            if let (ConflictKind::Extra(extra1), ConflictKind::Extra(extra2)) =
+                (item1.kind(), item2.kind())
+            {
                 return Err(LockErrorKind::ConflictingExtra {
-                    package1: package1.clone(),
+                    package1: item1.package().clone(),
                     extra1: extra1.clone(),
-                    package2: package2.clone(),
+                    package2: item2.package().clone(),
                     extra2: extra2.clone(),
                 }
                 .into());
             }
+            return Err(LockErrorKind::ConflictingSelections(item1.clone(), item2.clone()).into());
         }
     }
     Ok(())
