@@ -136,8 +136,7 @@ pub fn is_enabled(flag: PreviewFeature) -> bool {
 
 /// Check whether a feature was selected individually instead of by enabling all previews.
 pub fn is_enabled_explicitly(flag: PreviewFeature) -> bool {
-    let preview = get();
-    preview.is_enabled(flag) && !preview.all_enabled()
+    get().is_enabled_explicitly(flag)
 }
 
 /// Functions for unit tests, do not use from normal code!
@@ -585,6 +584,11 @@ impl Preview {
     /// Check if a single feature is enabled.
     pub fn is_enabled(&self, flag: PreviewFeature) -> bool {
         self.flags.contains(flag)
+    }
+
+    /// Check whether a feature was selected individually rather than enabling all previews.
+    pub fn is_enabled_explicitly(&self, flag: PreviewFeature) -> bool {
+        self.is_enabled(flag) && !self.all_enabled()
     }
 
     /// Check if all preview feature rae enabled.

@@ -129,7 +129,11 @@ pub async fn list(
             // TODO(zanieb): Add a way to show debug downloads, we just hide them for now
             .filter(|download| !download.key().variant().is_debug());
 
+        let mut seen = FxHashSet::default();
         for download in downloads {
+            if !seen.insert(download.key()) {
+                continue;
+            }
             output.insert((
                 download.key().clone(),
                 Kind::Download,

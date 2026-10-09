@@ -121,8 +121,8 @@ pub enum Error {
     RemotePythonDownloadsJSONClient(Box<uv_client::Error>),
     #[error(transparent)]
     ClientBuild(Box<ClientBuildError>),
-    #[error("Unable to parse NDJSON line at {0}")]
-    InvalidPythonDownloadsNdjsonLine(String, #[source] serde_json::Error),
+    #[error("Unable to parse NDJSON line {1} at {0}")]
+    InvalidPythonDownloadsNdjsonLine(String, usize, #[source] serde_json::Error),
     #[error("Error while fetching remote python downloads NDJSON from '{0}'")]
     FetchingPythonDownloadsNdjsonError(String, #[source] Box<Self>),
     #[error("An offline Python installation was requested, but `{file}` (from `{url}`) is missing in `{}`", python_builds_dir.user_display())]
@@ -1064,6 +1064,12 @@ impl ManagedPythonDownloadList {
                 Err(Error::NoDownloadFound(_)) => Ok(None),
                 Err(err) => Err(err),
             };
+        }
+        if request
+            .implementation()
+            .is_some_and(|implementation| *implementation != ImplementationName::CPython)
+        {
+            return find_in_embedded_downloads_with_prereleases(request);
         }
         if let Some(download) =
             find_matching_download(client_builder, &source, cache, request).await?
@@ -2093,13 +2099,18 @@ fn ndjson_artifact_priority(flavor: &str, build_options: &[&str]) -> (usize, i8)
     (flavor_priority, build_option_priority)
 }
 
-fn parse_ndjson_line(source: &str, line: &[u8]) -> Result<NdjsonPythonVersionInfo, Error> {
+fn parse_ndjson_line(
+    source: &str,
+    line_number: usize,
+    line: &[u8],
+) -> Result<NdjsonPythonVersionInfo, Error> {
     serde_json::from_slice(line)
-        .map_err(|err| Error::InvalidPythonDownloadsNdjsonLine(source.to_owned(), err))
+        .map_err(|err| Error::InvalidPythonDownloadsNdjsonLine(source.to_owned(), line_number, err))
 }
 
 fn visit_ndjson_line<T>(
     source: &str,
+    line_number: usize,
     line: &[u8],
     visitor: &mut impl FnMut(ManagedPythonDownload) -> ControlFlow<T, ()>,
 ) -> Result<Option<T>, Error> {
@@ -2107,7 +2118,7 @@ fn visit_ndjson_line<T>(
         return Ok(None);
     }
 
-    let version_info = parse_ndjson_line(source, line)?;
+    let version_info = parse_ndjson_line(source, line_number, line)?;
     for download in parse_ndjson_version_info(version_info) {
         if let ControlFlow::Break(value) = visitor(download) {
             return Ok(Some(value));
@@ -2122,8 +2133,8 @@ fn parse_ndjson_bytes_with<T>(
     buf: &[u8],
     mut visitor: impl FnMut(ManagedPythonDownload) -> ControlFlow<T, ()>,
 ) -> Result<Option<T>, Error> {
-    for line in buf.split(|byte| *byte == b'\n') {
-        if let Some(value) = visit_ndjson_line(source, line, &mut visitor)? {
+    for (index, line) in buf.split(|byte| *byte == b'\n').enumerate() {
+        if let Some(value) = visit_ndjson_line(source, index + 1, line, &mut visitor)? {
             return Ok(Some(value));
         }
     }
@@ -2180,12 +2191,14 @@ async fn fetch_ndjson_streaming<T>(
     let (reader, _) = read_url(url, client).await?;
     let mut reader = BufReader::new(reader);
     let mut line = Vec::new();
+    let mut line_number = 0;
 
     loop {
         line.clear();
         if reader.read_until(b'\n', &mut line).await? == 0 {
             break;
         }
+        line_number += 1;
 
         if line.last() == Some(&b'\n') {
             line.pop();
@@ -2194,7 +2207,7 @@ async fn fetch_ndjson_streaming<T>(
             line.pop();
         }
 
-        if let Some(value) = visit_ndjson_line(&source, &line, &mut visitor)? {
+        if let Some(value) = visit_ndjson_line(&source, line_number, &line, &mut visitor)? {
             return Ok(Some(value));
         }
     }
@@ -2293,6 +2306,7 @@ async fn fetch_ndjson_collect_streaming_cached(
         .compat();
     let mut reader = BufReader::new(reader);
     let mut line = Vec::new();
+    let mut line_number = 0;
     let mut content = Vec::new();
     let mut downloads = Vec::new();
     let mut visitor = |download| {
@@ -2316,6 +2330,7 @@ async fn fetch_ndjson_collect_streaming_cached(
             }
         }
 
+        line_number += 1;
         content.extend_from_slice(&line);
 
         if line.last() == Some(&b'\n') {
@@ -2325,7 +2340,7 @@ async fn fetch_ndjson_collect_streaming_cached(
             line.pop();
         }
 
-        visit_ndjson_line(&source, &line, &mut visitor)?;
+        visit_ndjson_line(&source, line_number, &line, &mut visitor)?;
     }
 
     write_streamed_versions_cache(cache, url, &content, etag).await;
@@ -2807,10 +2822,12 @@ mod tests {
 
     #[test]
     fn parse_ndjson_bytes_rejects_invalid_digest() {
-        let ndjson = br#"{"version":"3.14.1","artifacts":[{"url":"https://example.com/python.tar.gz","platform":"aarch64-apple-darwin","sha256":"abc123","variant":"install_only"}]}"#;
+        let ndjson = br#"
+{"version":"3.13.0","artifacts":[]}
+{"version":"3.14.1","artifacts":[{"url":"https://example.com/python.tar.gz","platform":"aarch64-apple-darwin","sha256":"abc123","variant":"install_only"}]}"#;
         assert_matches!(
             parse_ndjson_bytes("test.ndjson", ndjson),
-            Err(Error::InvalidPythonDownloadsNdjsonLine(..))
+            Err(Error::InvalidPythonDownloadsNdjsonLine(_, 3, _))
         );
     }
 
@@ -2960,6 +2977,33 @@ mod tests {
             prepend_versions_cache_content("test", existing, b"{\n", existing.len() as u64 + 2)
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn streaming_parse_error_retains_manifest_line_number() -> anyhow::Result<()> {
+        let content = b"\n{\"version\":\"3.14.1\",\"artifacts\":[]}\n{\n";
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let server = std::thread::spawn(move || -> io::Result<()> {
+            let (mut stream, _) = listener.accept()?;
+            let _ = read_http_request(&mut stream);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                content.len()
+            )?;
+            stream.write_all(content)
+        });
+        let client = BaseClientBuilder::default().retries(0).build()?;
+        let url = DisplaySafeUrl::parse(&format!("http://{address}/versions.ndjson"))?;
+        let error = fetch_ndjson_find(&client, &url, |_| false)
+            .await
+            .expect_err("third record is invalid");
+        assert_matches!(error, Error::InvalidPythonDownloadsNdjsonLine(_, 3, _));
+        server
+            .join()
+            .expect("metadata server thread should finish")?;
+        Ok(())
     }
 
     #[tokio::test]

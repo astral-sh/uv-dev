@@ -58,13 +58,11 @@ struct InstallRequest<'a> {
 }
 
 impl<'a> InstallRequest<'a> {
-    fn new(
-        request: PythonRequest,
+    fn normalize_request(
+        request: &PythonRequest,
         arch: Option<PythonArchitecture>,
-        download_list: &'a ManagedPythonDownloadList,
-    ) -> Result<Self> {
-        // Make sure the request is a valid download request and fill platform information
-        let download_request = PythonDownloadRequest::from_request(&request)
+    ) -> Result<PythonDownloadRequest> {
+        Ok(PythonDownloadRequest::from_request(request)
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "`{}` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions",
@@ -72,7 +70,16 @@ impl<'a> InstallRequest<'a> {
                 )
             })?
             .with_default_arch(arch.map(PythonArchitecture::into_inner))
-            .fill()?;
+            .fill()?)
+    }
+
+    fn new(
+        request: PythonRequest,
+        arch: Option<PythonArchitecture>,
+        download_list: &'a ManagedPythonDownloadList,
+    ) -> Result<Self> {
+        // Make sure the request is a valid download request and fill platform information
+        let download_request = Self::normalize_request(&request, arch)?;
 
         // Find a matching download
         let download = match download_list.find(&download_request) {
@@ -104,15 +111,7 @@ impl<'a> InstallRequest<'a> {
         cache: &Cache,
         python_downloads_json_url: Option<&str>,
     ) -> Result<InstallRequest<'static>> {
-        let download_request = PythonDownloadRequest::from_request(&request)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "`{}` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions",
-                    request.to_canonical_string()
-                )
-            })?
-            .with_default_arch(arch.map(PythonArchitecture::into_inner))
-            .fill()?;
+        let download_request = Self::normalize_request(&request, arch)?;
 
         let download = match ManagedPythonDownloadList::find_streaming(
             client_builder,

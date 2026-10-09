@@ -247,8 +247,7 @@ impl<'a> BaseClientBuilder<'a> {
     /// Return whether remote Python download metadata was enabled explicitly.
     pub fn remote_python_download_metadata_enabled(&self) -> bool {
         self.preview
-            .is_enabled(PreviewFeature::RemotePythonDownloadMetadata)
-            && !self.preview.all_enabled()
+            .is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata)
     }
 
     pub fn new(
