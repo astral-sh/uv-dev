@@ -49027,3 +49027,72 @@ async fn lock_exclude_newer_active_flat_default() -> Result<()> {
     assert_eq!(context.read("uv.lock"), lock);
     Ok(())
 }
+
+/// A path dependency outside the workspace can supply a timestamp-free flat index.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_exclude_newer_external_path_flat_index() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "external-path-flat-index"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.a.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let flat_index = MockServer::start().await;
+    Mock::given(path("/links"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                r#"<a href="{}">a-1.0.0-py3-none-any.whl</a>"#,
+                server.file_url("a-1.0.0-py3-none-any.whl")
+            ),
+            "text/html",
+        ))
+        .mount(&flat_index)
+        .await;
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2024-03-26T00:00:00Z");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv.sources]
+        child = { path = "../child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+        [tool.uv.sources]
+        a = {{ index = "child-flat" }}
+        [[tool.uv.index]]
+        name = "child-flat"
+        url = "{}/links"
+        format = "flat"
+        explicit = true
+    "#, flat_index.uri()})?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(project.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 3 packages in [TIME]
+    ");
+    let lock = context.read("project/uv.lock");
+    uv_snapshot!(context.filters(), context.lock().current_dir(project.path())
+        .args(["--locked", "--offline", "--no-cache"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 3 packages in [TIME]
+    ");
+    assert_eq!(context.read("project/uv.lock"), lock);
+    Ok(())
+}

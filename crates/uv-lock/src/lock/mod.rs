@@ -38,11 +38,11 @@ use uv_distribution_types::{
     ArchiveHashPolicy, BuiltDist, DependencyMetadata, DirectUrlBuiltDist, DirectUrlSourceDist,
     DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
     FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
-    HashValidation, Identifier, Index, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
-    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
-    StaticMetadata, ToUrlError, UrlString, VersionId,
+    HashValidation, Identifier, Index, IndexLocations, IndexMetadata, IndexMetadataRef, IndexUrl,
+    MetadataHashPolicy, MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, Requirement, RequirementSource, RequiresPython, ResolvedDist,
+    SimplifiedMarkerTree, StaticMetadata, ToUrlError, UrlString, VersionId,
 };
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -3097,12 +3097,12 @@ impl Lock {
 
     /// Return the first locked package with an artifact that does not satisfy its current
     /// `exclude-newer` cutoff.
-    pub fn find_exclude_newer_mismatch(
+    fn find_exclude_newer_mismatch(
         &self,
         root: &Path,
         exclude_newer: &ExcludeNewer,
         index_locations: &IndexLocations,
-        source_indexes: &[Index],
+        source_indexes: &[IndexMetadata],
     ) -> Result<Option<(&PackageName, Timestamp)>, LockError> {
         for package in &self.packages {
             let Some(index) = package.index(root)? else {
@@ -3117,7 +3117,9 @@ impl Lock {
 
             // Flat indexes bypass cutoffs during resolution, including when their HTML lists
             // upload times. A URL also configured as a Simple index has ambiguous provenance.
-            if index_locations.is_flat_index(&index, source_indexes) {
+            if index_locations
+                .is_flat_index(&index, source_indexes.iter().map(IndexMetadataRef::from))
+            {
                 continue;
             }
             let mismatched = |upload_time: Option<Timestamp>| {
@@ -3964,6 +3966,7 @@ impl Lock {
         activated_extras: &mut FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>>,
         remotes: &mut Option<BTreeSet<UrlString>>,
         locals: &mut Option<BTreeSet<Box<Path>>>,
+        source_indexes: &mut Vec<IndexMetadata>,
         root: &Path,
         allow_missing_package_metadata: bool,
     ) -> Result<SatisfiesResult<'lock>, LockError> {
@@ -4093,6 +4096,7 @@ impl Lock {
         for index in &indexes {
             Self::record_index(index, remotes, locals, root);
         }
+        source_indexes.extend(indexes);
 
         Ok(SatisfiesResult::Satisfied)
     }
@@ -4245,7 +4249,9 @@ impl Lock {
         workspace_group_metadata: &BTreeMap<GroupName, GroupMetadata>,
         workspace_default_groups: Option<&DefaultGroups>,
         dependency_metadata: &DependencyMetadata,
-        indexes: Option<&IndexLocations>,
+        index_locations: &IndexLocations,
+        source_indexes: &[Index],
+        exclude_newer: &ExcludeNewer,
         tags: &Tags,
         markers: &MarkerEnvironment,
         build_options: &BuildOptions,
@@ -4254,6 +4260,15 @@ impl Lock {
         database: &DistributionDatabase<'_, Context>,
         allow_missing_package_metadata: bool,
     ) -> Result<SatisfiesResult<'_>, LockError> {
+        // With no configured indexes, locked registry sources remain available for reuse.
+        let indexes = (!index_locations.is_none()).then_some(index_locations);
+        let mut source_indexes = source_indexes
+            .iter()
+            .map(|index| IndexMetadata {
+                url: index.url().clone(),
+                format: index.format,
+            })
+            .collect::<Vec<_>>();
         let mut queue: VecDeque<PackageIndex> = VecDeque::new();
         let mut seen = FxHashSet::default();
         let mut activated_extras: FxHashMap<PackageId, BTreeMap<ExtraName, UniversalMarker>> =
@@ -4807,6 +4822,7 @@ impl Lock {
                             &mut activated_extras,
                             &mut remotes,
                             &mut locals,
+                            &mut source_indexes,
                             root,
                             allow_missing_package_metadata,
                         )? {
@@ -4873,6 +4889,7 @@ impl Lock {
                         &mut activated_extras,
                         &mut remotes,
                         &mut locals,
+                        &mut source_indexes,
                         root,
                         allow_missing_package_metadata,
                     )? {
@@ -4941,6 +4958,7 @@ impl Lock {
                         &mut activated_extras,
                         &mut remotes,
                         &mut locals,
+                        &mut source_indexes,
                         root,
                         allow_missing_package_metadata,
                     ) {
@@ -5006,6 +5024,7 @@ impl Lock {
                         &mut activated_extras,
                         &mut remotes,
                         &mut locals,
+                        &mut source_indexes,
                         root,
                         allow_missing_package_metadata,
                     )? {
@@ -5035,6 +5054,14 @@ impl Lock {
                     queue.push_back(dependency.index);
                 }
             }
+        }
+
+        // Metadata validation discovers indexes owned by external path and Git dependencies.
+        // Apply artifact cutoffs only after those current source formats have been collected.
+        if let Some((package, cutoff)) =
+            self.find_exclude_newer_mismatch(root, exclude_newer, index_locations, &source_indexes)?
+        {
+            return Ok(SatisfiesResult::MismatchedExcludeNewer(package, cutoff));
         }
 
         Ok(SatisfiesResult::Satisfied)
@@ -6140,6 +6167,8 @@ impl<'tags> TagPolicy<'tags> {
 pub enum SatisfiesResult<'lock> {
     /// The lockfile satisfies the requirements.
     Satisfied,
+    /// A locked artifact does not satisfy the current index's upload-time cutoff.
+    MismatchedExcludeNewer(&'lock PackageName, Timestamp),
     /// The lockfile uses a different set of workspace members.
     MismatchedMembers(BTreeSet<PackageName>, &'lock BTreeSet<PackageName>),
     /// The lockfile records different default groups for workspace members.

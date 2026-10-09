@@ -17,7 +17,9 @@ use uv_pypi_types::HashAlgorithm;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
 
-use crate::{ExcludeNewerOverride, Index, IndexFormat, IndexStatusCodeStrategy, Verbatim};
+use crate::{
+    ExcludeNewerOverride, Index, IndexFormat, IndexMetadataRef, IndexStatusCodeStrategy, Verbatim,
+};
 
 pub static PYPI_URL: LazyLock<DisplaySafeUrl> =
     LazyLock::new(|| DisplaySafeUrl::parse("https://pypi.org/simple").unwrap());
@@ -394,14 +396,19 @@ impl<'a> IndexLocations {
     /// Return whether the given URL is configured only as a flat index.
     ///
     /// Include source-scoped indexes, which can be defined by individual workspace members.
-    pub fn is_flat_index(&self, url: &IndexUrl, source_indexes: &[Index]) -> bool {
+    pub fn is_flat_index(
+        &'a self,
+        url: &IndexUrl,
+        source_indexes: impl IntoIterator<Item = IndexMetadataRef<'a>>,
+    ) -> bool {
         let mut flat = false;
         for index in self
             .allowed_indexes()
             .into_iter()
-            .chain(source_indexes.iter().filter(|_| !self.no_index))
+            .map(IndexMetadataRef::from)
+            .chain(source_indexes.into_iter().filter(|_| !self.no_index))
         {
-            if is_same_index(index.url(), url) {
+            if is_same_index(index.url, url) {
                 match index.format {
                     IndexFormat::Flat => flat = true,
                     IndexFormat::Simple => return false,
@@ -692,7 +699,7 @@ mod tests {
         let mut shadowed = simple.clone();
         shadowed.format = IndexFormat::Flat;
         let locations = IndexLocations::new(vec![simple, shadowed], vec![], false);
-        assert!(!locations.is_flat_index(&url, &[]));
+        assert!(!locations.is_flat_index(&url, []));
         Ok(())
     }
 
@@ -703,7 +710,7 @@ mod tests {
         flat.explicit = true;
         let url = flat.url().clone();
         let locations = IndexLocations::new(vec![flat], vec![], false);
-        assert!(!locations.is_flat_index(&url, &[]));
+        assert!(!locations.is_flat_index(&url, []));
         Ok(())
     }
 
@@ -714,9 +721,9 @@ mod tests {
         let mut flat = simple.clone();
         flat.format = IndexFormat::Flat;
         let locations = IndexLocations::new(vec![simple], vec![flat.clone()], false);
-        assert!(!locations.is_flat_index(&url, &[]));
+        assert!(!locations.is_flat_index(&url, []));
         let locations = IndexLocations::new(vec![], vec![flat], true);
-        assert!(locations.is_flat_index(&url, &[]));
+        assert!(locations.is_flat_index(&url, []));
         Ok(())
     }
 
@@ -727,9 +734,9 @@ mod tests {
         let mut flat = simple.clone();
         flat.format = IndexFormat::Flat;
         let locations = IndexLocations::new(vec![simple.clone()], vec![flat.clone()], true);
-        assert!(locations.is_flat_index(&url, &[simple]));
+        assert!(locations.is_flat_index(&url, [(&simple).into()]));
         let locations = IndexLocations::new(vec![], vec![], true);
-        assert!(!locations.is_flat_index(&url, &[flat]));
+        assert!(!locations.is_flat_index(&url, [(&flat).into()]));
         Ok(())
     }
 
@@ -742,7 +749,7 @@ mod tests {
         let mut legacy = Index::from_str("https://example.com/packages")?;
         legacy.default = true;
         let locations = IndexLocations::new(vec![flat.clone(), legacy], vec![], false);
-        assert!(locations.is_flat_index(&url, &[flat]));
+        assert!(locations.is_flat_index(&url, [(&flat).into()]));
         Ok(())
     }
 

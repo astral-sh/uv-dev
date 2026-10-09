@@ -207,19 +207,6 @@ impl ValidatedLock {
             };
         }
 
-        if let Some((package, cutoff)) = lock.find_exclude_newer_mismatch(
-            install_path,
-            &options.exclude_newer,
-            index_locations,
-            source_indexes,
-        )? {
-            let _ = writeln!(
-                printer.stderr(),
-                "Resolving despite existing lockfile because package `{package}` contains artifacts that do not satisfy the `exclude-newer` cutoff of `{cutoff}`",
-            );
-            return Ok(Self::Preferable(lock));
-        }
-
         // If the pre-release mode has changed, we have to re-resolve, but can retain the existing
         // versions and forks.
         if lock.prerelease() != &options.prerelease {
@@ -258,19 +245,6 @@ impl ValidatedLock {
             return Ok(Self::Preferable(lock));
         }
 
-        // If the user provided at least one index URL (from the command line, or from a configuration
-        // file), don't use the existing lockfile if it references any registries that are no longer
-        // included in the current configuration.
-        //
-        // However, if _no_ indexes were provided, we assume that the user wants to reuse the existing
-        // distributions, even though a failure to reuse the lockfile will result in re-resolving
-        // against PyPI by default.
-        let indexes = if index_locations.is_none() {
-            None
-        } else {
-            Some(index_locations)
-        };
-
         // Determine whether the lockfile satisfies the workspace requirements.
         match lock
             .satisfies(
@@ -287,7 +261,9 @@ impl ValidatedLock {
                 workspace_group_metadata,
                 workspace_default_groups,
                 dependency_metadata,
-                indexes,
+                index_locations,
+                source_indexes,
+                &options.exclude_newer,
                 interpreter.tags()?,
                 interpreter.markers(),
                 &options.build_options,
@@ -301,6 +277,13 @@ impl ValidatedLock {
             SatisfiesResult::Satisfied => {
                 debug!("Existing `uv.lock` satisfies workspace requirements");
                 Ok(Self::Satisfies(lock))
+            }
+            SatisfiesResult::MismatchedExcludeNewer(package, cutoff) => {
+                let _ = writeln!(
+                    printer.stderr(),
+                    "Resolving despite existing lockfile because package `{package}` contains artifacts that do not satisfy the `exclude-newer` cutoff of `{cutoff}`",
+                );
+                Ok(Self::Preferable(lock))
             }
             SatisfiesResult::MismatchedMembers(expected, actual) => {
                 debug!(
