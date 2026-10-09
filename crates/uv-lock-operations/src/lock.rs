@@ -478,7 +478,7 @@ fn workspace_group_conflict(error: &LockError) -> bool {
         | LockError::IndexUrl(_)
         | LockError::Lock(_)
         | LockError::Tags(_)
-        | LockError::PythonContext(_)
+        | LockError::PythonSelection(_)
         | LockError::HashStrategy(_)
         | LockError::DependencyGroup(_)
         | LockError::DefaultGroups(_)
