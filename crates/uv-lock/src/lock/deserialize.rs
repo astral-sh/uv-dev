@@ -341,6 +341,7 @@ enum MapKind {
     OptionsExcludeNewerPackage,
     Manifest,
     ManifestDependencyGroups,
+    ManifestDependencyGroupIncludes,
     ManifestDependencyMetadata,
     ManifestGroupRequiresPython,
     Package,
@@ -471,6 +472,7 @@ impl<'de> DocumentMapAccess<'_, 'de> {
             (
                 MapKind::Root,
                 "[manifest.dependency-groups]"
+                | "[manifest.dependency-group-includes]"
                 | "[[manifest.dependency-metadata]]"
                 | "[manifest.group-requires-python]",
             ) => {
@@ -495,6 +497,11 @@ impl<'de> DocumentMapAccess<'_, 'de> {
                 "dependency-groups",
                 Pending::Map(MapKind::ManifestDependencyGroups),
                 "[manifest.dependency-groups]",
+            )),
+            (MapKind::Manifest, "[manifest.dependency-group-includes]") => Some((
+                "dependency-group-includes",
+                Pending::Map(MapKind::ManifestDependencyGroupIncludes),
+                "[manifest.dependency-group-includes]",
             )),
             (MapKind::Manifest, "[manifest.group-requires-python]") => Some((
                 "group-requires-python",
@@ -995,6 +1002,9 @@ dev = [{ name = "dependency", specifier = ">=1" }]
         for subtable in [
             r#"[manifest.dependency-groups]
 dev = [{ name = "dependency", specifier = ">=1" }]
+"#,
+            r#"[manifest.dependency-group-includes]
+dev = [{ package = "member", group = "test" }]
 "#,
             r#"[[manifest.dependency-metadata]]
 name = "dependency"

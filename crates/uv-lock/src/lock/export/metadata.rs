@@ -1393,10 +1393,30 @@ impl Metadata {
             MetadataTarget::Workspace(_) => {
                 let mut dependency_groups = Vec::new();
                 for (group, requirements) in lock.dependency_groups() {
+                    let mut dependencies = root_dependencies(&workspace_root, lock, requirements);
+                    for included in lock
+                        .manifest
+                        .dependency_group_includes
+                        .get(group)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let Some(&index) = lock.workspace_members.get(&included.package) {
+                            dependencies.push(MetadataDependency {
+                                id: MetadataNodeId::from_package_id(
+                                    &workspace_root,
+                                    &lock.package(index).id,
+                                    MetadataNodeKind::Group(included.group.clone()),
+                                )
+                                .to_flat(),
+                                marker: None,
+                            });
+                        }
+                    }
                     let node = MetadataNode::from_workspace_group(
                         workspace_root.clone(),
                         group.clone(),
-                        root_dependencies(&workspace_root, lock, requirements),
+                        dependencies,
                     );
                     let id = node.id.to_flat();
                     resolve.insert(id.clone(), node);

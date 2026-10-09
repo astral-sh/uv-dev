@@ -48945,5 +48945,106 @@ fn lock_workspace_nonproject_group_include_conflicts() -> Result<()> {
     ----- stderr -----
     Resolved 4 packages in [TIME]
     "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+    conflicts = [[
+        { package = "tools", group = "other" },
+        { package = "tools", group = "test" },
+    ], [
+        { package = "child", group = "dev" },
+        { package = "tools", group = "other" },
+    ]]
+
+    [manifest]
+    members = [
+        "child",
+        "tools",
+    ]
+
+    [manifest.dependency-groups]
+    check = []
+    lint = []
+
+    [manifest.dependency-group-includes]
+    check = [{ package = "tools", group = "test" }]
+    lint = [{ package = "tools", group = "test" }]
+
+    [[package]]
+    name = "child"
+    version = "0.1.0"
+    source = { virtual = "child" }
+
+    [package.dev-dependencies]
+    dev = [
+        { name = "example", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+    ]
+
+    [package.metadata]
+
+    [package.metadata.requires-dev]
+    dev = [{ name = "example", specifier = "==1.0.0" }]
+
+    [[package]]
+    name = "example"
+    version = "1.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/example-1.0.0-py3-none-any.whl", hash = "sha256:b7afa474387cab6d91b2c82e69a9784a246413f090aa97e7ce63a5e6a14e6268", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
+    name = "example"
+    version = "2.0.0"
+    source = { registry = "http://[LOCALHOST]/simple/" }
+    wheels = [
+        { url = "http://[LOCALHOST]/files/example-2.0.0-py3-none-any.whl", hash = "sha256:863c55eed676a5cf37adbad0b27ca4e1360b324cbd354bf73af87718ec9bef03", upload-time = "2024-03-24T00:00:00Z" },
+    ]
+
+    [[package]]
+    name = "tools"
+    version = "0.1.0"
+    source = { virtual = "tools" }
+
+    [package.dev-dependencies]
+    other = [
+        { name = "example", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+    ]
+    test = [
+        { name = "example", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" } },
+    ]
+
+    [package.metadata]
+
+    [package.metadata.requires-dev]
+    other = [{ name = "example", specifier = "==2.0.0" }]
+    test = [{ name = "example", specifier = "==1.0.0" }]
+    "#);
+    });
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint"])
+        .arg("--index-url").arg(server.index_url()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint", "--no-hashes", "--no-header"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
+    "#);
+    uv_snapshot!(context.filters(), context.tree()
+        .args(["--preview-features", "include-group-workspace", "--frozen", "--only-group", "lint"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tools v0.1.0
+    └── example v1.0.0 (group: test)
+    child v0.1.0
+    "#);
     Ok(())
 }
