@@ -45,10 +45,7 @@ class CodspeedShards(unittest.TestCase):
                 "bench / walltime on x86_64 linux (2/3)",
             },
             {"bench / walltime on x86_64 linux (0/1)"},
-            {
-                f"bench / walltime on x86_64 linux ({index}/9)"
-                for index in range(1, 10)
-            },
+            {f"bench / walltime on x86_64 linux ({index}/9)" for index in range(1, 10)},
         ):
             with self.subTest(jobs=jobs):
                 self.assertIsNone(
