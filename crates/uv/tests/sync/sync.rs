@@ -18,6 +18,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
+use uv_test::packse::scenario::Scenario;
 use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 
 use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
@@ -9894,6 +9895,585 @@ fn no_binary_error() -> Result<()> {
     ");
 
     assert!(context.temp_dir.child("uv.lock").exists());
+
+    Ok(())
+}
+
+/// An inactive platform dependency must not make a workspace package conflict active.
+#[test]
+fn sync_ignores_inactive_platform_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child; sys_platform == '{inactive_platform}'"]
+
+        [tool.uv]
+        conflicts = [[
+            {{ package = "project" }},
+            {{ package = "child" }},
+        ]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+        "#})?;
+    context.temp_dir.child("child/pyproject.toml").write_str(
+        r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+            "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--package")
+        .arg("project")
+        .arg("--preview-features")
+        .arg("package-conflicts"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+
+    context
+        .lock()
+        .args([
+            "--upgrade",
+            "--preview-features",
+            "package-conflicts,lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "project", "--preview-features", "package-conflicts,lock-without-metadata",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "project", "--preview-features", "package-conflicts,lock-without-metadata",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+
+    // Recorded overrides replace the original platform marker, including during frozen sync.
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(&context.read("pyproject.toml").replace(
+        "[tool.uv]",
+        "[tool.uv]\noverride-dependencies = [\"child\"]",
+    ))?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen")
+        .arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+
+    context
+        .lock()
+        .args([
+            "--upgrade",
+            "--preview-features",
+            "package-conflicts,lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "project", "--preview-features", "package-conflicts,lock-without-metadata",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "project", "--preview-features", "package-conflicts,lock-without-metadata",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+
+    Ok(())
+}
+
+/// Workspace conflict discovery follows the exact version and source selected by each edge.
+#[test]
+fn sync_preserves_package_identity_across_platform_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "bridge==1.0.0; sys_platform != '{inactive_platform}'",
+            "bridge==2.0.0; sys_platform == '{inactive_platform}'",
+        ]
+
+        [tool.uv]
+        conflicts = [[{{ package = "project" }}, {{ package = "child" }}]]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        bridge = [
+            {{ path = "bridge-1", marker = "sys_platform != '{inactive_platform}'" }},
+            {{ path = "bridge-2", marker = "sys_platform == '{inactive_platform}'" }},
+        ]
+    "#})?;
+    context
+        .temp_dir
+        .child("bridge-1/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "bridge"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.sources]
+        child = { path = "../child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("bridge-2/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "bridge"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["child; sys_platform == '{inactive_platform}'"]
+
+        [tool.uv]
+        package = false
+
+        [tool.uv.sources]
+        child = {{ path = "../child" }}
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "project", "--preview-features", "package-conflicts", "--offline",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "project", "--preview-features", "package-conflicts", "--offline",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+
+    // The inactive fork cannot activate a child whose declaration is unconditional in that fork.
+    context
+        .temp_dir
+        .child("bridge-1/pyproject.toml")
+        .write_str(
+            &context
+                .read("bridge-1/pyproject.toml")
+                .replace("dependencies = [\"child\"]", "dependencies = []"),
+        )?;
+    context
+        .temp_dir
+        .child("bridge-2/pyproject.toml")
+        .write_str(&context.read("bridge-2/pyproject.toml").replace(
+            &format!("child; sys_platform == '{inactive_platform}'"),
+            "child",
+        ))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "project", "--preview-features", "package-conflicts", "--offline",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "project", "--preview-features", "package-conflicts", "--offline",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    Ok(())
+}
+
+/// A dynamic package's scoped overrides remain effective when its lock entry omits the version.
+#[test]
+fn sync_detects_dynamic_scoped_override_conflict() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "dynamic-scoped-conflict"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.bridge.versions."1.0.0"]
+        requires = ["child"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12");
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        dynamic = ["version"]
+        requires-python = ">=3.12"
+        dependencies = ["bridge; sys_platform == '{inactive_platform}'"]
+
+        [build-system]
+        requires = []
+        backend-path = ["."]
+        build-backend = "build_backend"
+
+        [tool.uv]
+        conflicts = [[{{ package = "project" }}, {{ package = "child" }}]]
+        override-dependencies = [
+            "child",
+            {{ package = {{ name = "project", version = "0.1.0" }}, dependencies = ["bridge"] }},
+        ]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+    "#})?;
+    context
+        .temp_dir
+        .child("build_backend.py")
+        .write_str(&formatdoc! {r#"
+        from pathlib import Path
+
+        def prepare_metadata_for_build_editable(metadata_directory, config_settings=None):
+            metadata = Path(metadata_directory) / "project-0.1.0.dist-info"
+            metadata.mkdir()
+            metadata.joinpath("METADATA").write_text(
+                "Metadata-Version: 2.2\nName: project\nVersion: 0.1.0\n"
+                "Requires-Dist: bridge; sys_platform == '{inactive_platform}'\n"
+            )
+            return metadata.name
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv]
+        package = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--package", "project", "--no-install-project", "--preview-features", "package-conflicts", "--index",
+    ]).arg(server.index_url()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "project", "--no-install-project", "--preview-features", "package-conflicts", "--offline",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    Ok(())
+}
+
+/// A plain active dependency does not activate an extra requested only on another platform.
+#[test]
+fn sync_ignores_inactive_extra_with_plain_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "child; sys_platform != '{inactive_platform}'",
+            "child[feature]; sys_platform == '{inactive_platform}'",
+        ]
+
+        [tool.uv]
+        conflicts = [[{{ package = "project" }}, {{ package = "grandchild" }}]]
+
+        [tool.uv.workspace]
+        members = ["child", "grandchild"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+        grandchild = {{ workspace = true }}
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = ["grandchild"]
+
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("grandchild/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "grandchild"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen")
+        .arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    Ok(())
+}
+
+/// Separate declarations can contribute the extras on one merged locked edge.
+#[test]
+fn sync_detects_conflict_through_merged_extra_declarations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[a]", "child[b]", "child[a,b]; sys_platform == '{inactive_platform}'"]
+
+        [tool.uv]
+        conflicts = [[{{ package = "project" }}, {{ package = "child" }}]]
+
+        [tool.uv.workspace]
+        members = ["child", "payload"]
+
+        [tool.uv.sources]
+        child = {{ workspace = true }}
+        payload = {{ workspace = true }}
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = ["payload"]
+        b = ["payload"]
+    "#})?;
+    context
+        .temp_dir
+        .child("payload/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "payload"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `child` and package `project` are incompatible with the declared conflicts: {child, project}
+    ");
+    Ok(())
+}
+
+/// A platform-applicable dependency behind an activated extra must remain reachable.
+#[test]
+fn sync_detects_active_platform_conflict_behind_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let active_platform = if cfg!(windows) {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child[feature]"]
+
+        [tool.uv]
+        conflicts = [[
+            { package = "project" },
+            { package = "grandchild" },
+        ]]
+
+        [tool.uv.workspace]
+        members = ["child", "grandchild"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+        grandchild = { workspace = true }
+        "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [project.optional-dependencies]
+        feature = ["grandchild; sys_platform == '{active_platform}'"]
+        "#})?;
+    context
+        .temp_dir
+        .child("grandchild/pyproject.toml")
+        .write_str(
+            r#"
+        [project]
+        name = "grandchild"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        "#,
+        )?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--package")
+        .arg("project")
+        .arg("--preview-features")
+        .arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `grandchild` and package `project` are incompatible with the declared conflicts: {grandchild, project}
+    ");
+
+    // Recursive extras retain the same effective platform-conditional dependency.
+    context.temp_dir.child("pyproject.toml").write_str(
+        &context
+            .read("pyproject.toml")
+            .replace("child[feature]", "child[all]"),
+    )?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(&format!(
+            "{}\nall = [\"child[feature]\"]\n",
+            context.read("child/pyproject.toml"),
+        ))?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Package `grandchild` and package `project` are incompatible with the declared conflicts: {grandchild, project}
+    ");
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--frozen")
+        .arg("--package").arg("project")
+        .arg("--preview-features").arg("package-conflicts"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `grandchild` and package `project` are incompatible with the declared conflicts: {grandchild, project}
+    ");
 
     Ok(())
 }

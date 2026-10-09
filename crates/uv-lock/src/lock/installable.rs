@@ -13,7 +13,7 @@ use uv_configuration::{
     BuildOptions, DependencyGroupsWithDefaults, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions,
 };
-use uv_distribution_types::{Edge, FirstParty, Node, Resolution, ResolvedDist};
+use uv_distribution_types::{Edge, FirstParty, Node, Requirement, Resolution, ResolvedDist};
 use uv_normalize::{DefaultExtras, ExtraName, GroupName, PackageName};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{ConflictKind, ConflictSet, ResolverMarkerEnvironment};
@@ -22,8 +22,8 @@ use uv_resolver_types::UniversalMarker;
 use uv_resolver_types::universal_marker::ActivatedConflictItems;
 
 use crate::lock::{
-    Dependency, DependencySelectionContext, HashedDist, LockErrorKind, Package, PackageIndex,
-    SelectedDependency, TagPolicy,
+    Dependency, DependencyContext, DependencySelectionContext, HashedDist, LockErrorKind, Package,
+    PackageIndex, SelectedDependency, TagPolicy,
 };
 use crate::{Lock, LockError};
 
@@ -86,7 +86,7 @@ fn package_dependencies<'a>(
 
 /// Determines which dependencies are included from an install target root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InstallableRootKind {
+pub(super) enum InstallableRootKind {
     /// Include the root's production dependencies and selected dependency groups.
     Production,
     /// Include only the root's selected dependency groups.
@@ -122,6 +122,118 @@ pub trait Installable<'lock> {
 
     /// Return the [`PackageName`] of the target, if available.
     fn project_name(&self) -> Option<&PackageName>;
+
+    /// Return workspace members reachable from the selected projects and dependency groups.
+    ///
+    /// Traversal keeps the exact locked package identity until projecting the result to names.
+    fn reachable_workspace_members(
+        &self,
+        extras: &ExtrasSpecification,
+        groups: &DependencyGroupsWithDefaults,
+        marker_env: Option<&ResolverMarkerEnvironment>,
+    ) -> Result<BTreeSet<&'lock PackageName>, LockError> {
+        let lock = self.lock();
+        let modifiers = marker_env
+            .map(|_| lock.dependency_modifiers())
+            .transpose()?;
+        let dependency_is_active =
+            |dependency: &Dependency, requirements: Option<&[Requirement]>| {
+                marker_env.is_none_or(|marker_env| {
+                    let target = lock.package(dependency.index);
+                    // An edge can omit conditions already supplied by its destination's locked fork.
+                    (target.fork_markers.is_empty()
+                        || target
+                            .fork_markers
+                            .iter()
+                            .any(|marker| marker.pep508().evaluate(marker_env.markers(), &[])))
+                        && dependency
+                            .activation_marker(requirements, lock.conflicts())
+                            .evaluate(marker_env.markers(), &[])
+                })
+            };
+        let resolve_root = |name: &PackageName| {
+            lock.find_by_name(name)
+                .map_err(|_| LockErrorKind::MultipleRootPackages { name: name.clone() })?
+                .ok_or_else(|| {
+                    LockError::from(LockErrorKind::MissingRootPackage { name: name.clone() })
+                })
+        };
+        let roots = self
+            .roots()
+            .map(resolve_root)
+            .collect::<Result<Vec<_>, _>>()?;
+        let group_root = self.group_root(groups).map(resolve_root).transpose()?;
+        let mut required_members = roots
+            .iter()
+            .map(|package| package.name())
+            .collect::<BTreeSet<_>>();
+        let mut queue = VecDeque::new();
+        let mut seen = FxHashSet::default();
+
+        for (package, kind) in roots
+            .into_iter()
+            .map(|package| (package, InstallableRootKind::Production))
+            .chain(group_root.map(|package| (package, InstallableRootKind::DependencyGroups)))
+        {
+            let index = lock.by_id[&package.id];
+            if kind == InstallableRootKind::Production && groups.prod() {
+                if seen.insert((index, None)) {
+                    queue.push_back((index, None));
+                }
+                for extra in extras.extra_names(package.optional_dependencies.keys()) {
+                    if seen.insert((index, Some(extra))) {
+                        queue.push_back((index, Some(extra)));
+                    }
+                }
+            }
+            for (group, dependencies) in &package.dependency_groups {
+                if !self.includes_group(Some(package.name()), group, groups) {
+                    continue;
+                }
+                let requirements = modifiers.as_ref().and_then(|modifiers| {
+                    package.dependency_requirements(DependencyContext::Group(group), modifiers)
+                });
+                for dependency in dependencies {
+                    if !dependency_is_active(dependency, requirements.as_deref()) {
+                        continue;
+                    }
+                    if seen.insert((dependency.index, None)) {
+                        queue.push_back((dependency.index, None));
+                    }
+                    for extra in dependency.extra() {
+                        if seen.insert((dependency.index, Some(extra))) {
+                            queue.push_back((dependency.index, Some(extra)));
+                        }
+                    }
+                }
+            }
+        }
+
+        while let Some((index, extra)) = queue.pop_front() {
+            let package = lock.package(index);
+            if lock.members().contains(package.name()) {
+                required_members.insert(package.name());
+            }
+            let context = extra.map_or(DependencyContext::Production, DependencyContext::Extra);
+            let requirements = modifiers
+                .as_ref()
+                .and_then(|modifiers| package.dependency_requirements(context, modifiers));
+            for dependency in context.dependencies(package) {
+                if !dependency_is_active(dependency, requirements.as_deref()) {
+                    continue;
+                }
+                if seen.insert((dependency.index, None)) {
+                    queue.push_back((dependency.index, None));
+                }
+                for extra in dependency.extra() {
+                    if seen.insert((dependency.index, Some(extra))) {
+                        queue.push_back((dependency.index, Some(extra)));
+                    }
+                }
+            }
+        }
+        Ok(required_members)
+    }
 
     /// Convert the [`Lock`] to a [`Resolution`] using the given marker environment, tags, and root.
     fn to_resolution(
