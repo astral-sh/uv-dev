@@ -11137,6 +11137,8 @@ fn override_with_incompatible_constraint() -> Result<()> {
 }
 
 /// Resolve a package, marking a dependency as unsafe.
+/// Missing package names bring the exclusions to 33 entries, exercising indexed membership
+/// above the 32-entry threshold without changing the resolved dependencies.
 #[test]
 fn unsafe_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -18914,6 +18916,8 @@ fn pep_751_compile_no_binary() -> Result<()> {
     Ok(())
 }
 
+/// Exclude packages from pylock output using indexed membership.
+/// Missing package names bring the exclusions to 33 entries, above the 32-entry threshold.
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_compile_no_emit_package() -> Result<()> {
