@@ -11,12 +11,15 @@ use uv_configuration::{
     ExtrasSpecificationWithDefaults, InstallOptions, InstallTarget as InstallOptionTarget,
 };
 use uv_distribution_types::{Index, RequiresPython, Resolution};
-use uv_lock::{Installable, InstallableRootKind, Lock, LockError, Package};
+use uv_lock::{
+    Installable, InstallableRootKind, Lock, LockError, Package, implicit_constraints_marker,
+};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
+use uv_pep508::MarkerTree;
 use uv_platform_tags::Tags;
 use uv_pypi_types::{
-    DependencyGroupSpecifier, DependencyGroups, LenientRequirement, ResolverMarkerEnvironment,
-    VerbatimParsedUrl,
+    ConflictItem, DependencyGroupSpecifier, DependencyGroups, LenientRequirement,
+    ResolverMarkerEnvironment, VerbatimParsedUrl,
 };
 use uv_python_discovery::ProjectPythonRequirement;
 use uv_python_discovery::PythonRequirementSource;
@@ -293,6 +296,20 @@ impl<'lock> InstallTarget<'lock> {
     ) -> Result<ProjectPythonRequirement, EnvironmentError> {
         let lock = self.lock();
         let mut group_requirements = RequiresPythonSources::new();
+        for package in lock.workspace_packages().filter(|package| {
+            groups.prod()
+                && self.roots().any(|root| root == package.name())
+                && lock.workspace_members().contains(package.name())
+                && !lock.members().contains(package.name())
+        }) {
+            let requires_python = package.workspace_requires_python().ok_or_else(|| {
+                EnvironmentError::MissingWorkspaceMemberPython(package.name().clone())
+            })?;
+            group_requirements.insert(
+                RequiresPythonDeclaration::Member(package.name().clone(), None),
+                requires_python.clone(),
+            );
+        }
 
         if let Some(members) = lock.member_group_metadata() {
             let group_root = self.group_root(groups);
@@ -672,6 +689,91 @@ impl<'lock> InstallTarget<'lock> {
             }
         }
 
+        Ok(())
+    }
+
+    /// Validate that selected non-root extras were resolved for the requested environment.
+    pub fn validate_extra_resolution(
+        &self,
+        extras: &ExtrasSpecification,
+        groups: &DependencyGroupsWithDefaults,
+        marker_environment: Option<&ResolverMarkerEnvironment>,
+    ) -> Result<(), EnvironmentError> {
+        if extras.is_empty() {
+            return Ok(());
+        }
+        let lock = self.lock();
+        let roots = self.roots().collect::<FxHashSet<_>>();
+        let selected = lock
+            .workspace_packages()
+            .filter(|package| {
+                roots.contains(package.name())
+                    && lock.workspace_members().contains(package.name())
+                    && !lock.members().contains(package.name())
+            })
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Ok(());
+        }
+        let mut activated = roots
+            .iter()
+            .map(|name| ConflictItem::from((*name).clone()))
+            .collect::<Vec<_>>();
+        let group_root = self.group_root(groups);
+        for package in lock.workspace_packages() {
+            if roots.contains(package.name()) {
+                for extra in extras.extra_names(
+                    package
+                        .provides_extras()
+                        .iter()
+                        .chain(package.optional_dependencies().keys()),
+                ) {
+                    activated.push(ConflictItem::from((package.name().clone(), extra.clone())));
+                }
+            }
+            if roots.contains(package.name()) || group_root == Some(package.name()) {
+                for group in package
+                    .dependency_groups()
+                    .keys()
+                    .chain(package.resolved_dependency_groups().keys())
+                {
+                    if self.includes_group(Some(package.name()), group, groups) {
+                        activated.push(ConflictItem::from((package.name().clone(), group.clone())));
+                    }
+                }
+            }
+        }
+        let resolved = lock.resolved_workspace_extras(self.install_path(), &activated)?;
+        let domain = implicit_constraints_marker(
+            self.python_requirement(groups)?
+                .requires_python
+                .to_marker_tree(),
+            lock.supported_environments(),
+        );
+        for package in selected {
+            for extra in extras.extra_names(
+                package
+                    .provides_extras()
+                    .iter()
+                    .chain(package.optional_dependencies().keys()),
+            ) {
+                let marker = resolved
+                    .get(&(package.name(), extra))
+                    .copied()
+                    .unwrap_or(MarkerTree::FALSE);
+                let available = if let Some(environment) = marker_environment {
+                    marker.evaluate(environment.markers(), &[])
+                } else {
+                    domain.and(marker.negate()).is_false()
+                };
+                if !available {
+                    return Err(EnvironmentError::UnresolvedWorkspaceExtra {
+                        package: package.name().clone(),
+                        extra: extra.clone(),
+                    });
+                }
+            }
+        }
         Ok(())
     }
 

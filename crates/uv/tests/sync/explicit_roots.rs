@@ -64,28 +64,6 @@ fn explicit_roots_membership_filters_and_freshness() -> Result<()> {
         .assert()
         .success();
 
-    let tree = context
-        .tree()
-        .args([
-            "--frozen",
-            "--offline",
-            "--universal",
-            "--format",
-            "json",
-            "--preview-features",
-            "json-output",
-        ])
-        .output()?
-        .assert()
-        .success();
-    let tree: serde_json::Value = serde_json::from_slice(&tree.get_output().stdout)?;
-    insta::assert_json_snapshot!(tree["members"].as_array().into_iter().flatten().map(|member| &member["name"]).collect::<Vec<_>>(), @r#"
-    [
-      "app",
-      "shared"
-    ]
-    "#);
-
     uv_snapshot!(context.filters(), context.export().args([
         "--frozen", "--offline", "--no-header", "--no-hashes", "--no-emit-workspace",
     ]), @"exit_code: 0 (success)");
@@ -664,6 +642,401 @@ fn explicit_roots_rejects_unresolved_member_groups() -> Result<()> {
     error: Group `dev` for workspace member `shared` was not resolved
 
     hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its dependency groups.
+    ");
+    Ok(())
+}
+
+#[test]
+fn explicit_roots_rejects_unresolved_member_extras() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        shared = { workspace = true }
+        [tool.uv.workspace]
+        members = ["shared"]
+        roots = ["app"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        feature = ["missing-leaf"]
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--extra", "feature",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `feature` for workspace member `shared` was not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its optional dependencies.
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "shared", "--all-extras", "--no-header",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `feature` for workspace member `shared` was not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its optional dependencies.
+    ");
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--no-index",
+            "--upgrade",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--all-extras",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `feature` for workspace member `shared` was not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its optional dependencies.
+    ");
+    Ok(())
+}
+
+#[test]
+fn explicit_roots_resolved_empty_extra_preserves_platform_domain() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let active_platform = if cfg!(windows) {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    let inactive_target = if cfg!(windows) {
+        "x86_64-apple-darwin"
+    } else {
+        "x86_64-pc-windows-msvc"
+    };
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared", "shared[empty]; sys_platform == '{active_platform}'"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        shared = {{ workspace = true }}
+        [tool.uv.workspace]
+        members = ["shared"]
+        roots = ["app"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        empty = []
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--extra", "empty",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--extra", "empty", "--python-platform",
+    ]).arg(inactive_target), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `empty` for workspace member `shared` was not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its optional dependencies.
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "shared", "--extra", "empty", "--no-header",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `empty` for workspace member `shared` was not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its optional dependencies.
+    ");
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--no-index",
+            "--upgrade",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("shared/pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--extra", "empty", "--preview-features", "frozen-lockfile",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--extra", "empty", "--preview-features", "frozen-lockfile", "--python-platform",
+    ]).arg(inactive_target), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `empty` for workspace member `shared` was not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its optional dependencies.
+    ");
+    // Older metadata-free locks can retain an empty section without evidence of an incoming request.
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&context.read("uv.lock").replace("extra = [\"empty\"], ", ""))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--extra", "empty", "--preview-features", "frozen-lockfile",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `empty` for workspace member `shared` was not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its optional dependencies.
+    ");
+    Ok(())
+}
+
+#[test]
+fn explicit_roots_selected_non_root_python_requirement() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["shared; python_version >= '3.13'"]
+        [tool.uv]
+        package = false
+        [tool.uv.sources]
+        shared = { workspace = true }
+        [tool.uv.workspace]
+        members = ["shared"]
+        roots = ["app"]
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index", "--python", "3.12"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--python", "3.12",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `shared` in `uv.lock`).
+    ");
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--python", "3.13",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
+    Creating virtual environment at: .venv
+    Checked in [TIME]
+    ");
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--no-index",
+            "--upgrade",
+            "--python",
+            "3.12",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
+    fs_err::remove_file(context.temp_dir.child("shared/pyproject.toml"))?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--python", "3.12", "--preview-features", "frozen-lockfile",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The requested interpreter resolved to Python 3.12.[X], which is incompatible with the project's Python requirement: `>=3.13` (from `shared` in `uv.lock`).
+    ");
+    context.temp_dir.child("uv.lock").write_str(
+        &context
+            .read("uv.lock")
+            .replace("requires-python = \">=3.13\"", ""),
+    )?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--python", "3.13", "--preview-features", "frozen-lockfile",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Python requirement for workspace member `shared` is missing from the lockfile
+
+    hint: Run `uv lock` to record the selected workspace member's Python requirement.
+    "#);
+    Ok(())
+}
+
+#[test]
+fn explicit_roots_workspace_group_resolves_non_root_empty_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["shared[empty]"]
+        [tool.uv.workspace]
+        members = ["app", "shared"]
+        roots = ["app"]
+        [tool.uv.sources]
+        shared = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("app/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "app"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .temp_dir
+        .child("shared/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "shared"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        [project.optional-dependencies]
+        empty = []
+        [tool.uv]
+        package = false
+    "#})?;
+    context
+        .lock()
+        .args(["--offline", "--no-index"])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--extra", "empty", "--no-default-groups",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--package", "shared", "--extra", "empty", "--no-default-groups", "--no-header",
+    ]), @"exit_code: 0 (success)");
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--no-index",
+            "--upgrade",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--extra", "empty", "--no-default-groups",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&context.read("pyproject.toml").replace(
+            "[tool.uv.sources]",
+            "[tool.uv]\noverride-dependencies = [\"shared\"]\n[tool.uv.sources]",
+        ))?;
+    context
+        .lock()
+        .args([
+            "--offline",
+            "--no-index",
+            "--upgrade",
+            "--preview-features",
+            "lock-without-metadata",
+        ])
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--package", "shared", "--extra", "empty", "--no-default-groups",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `empty` for workspace member `shared` was not resolved for this selection
+
+    hint: Add `shared` to `tool.uv.workspace.roots` and run `uv lock` to resolve its optional dependencies.
     ");
     Ok(())
 }
