@@ -26,7 +26,7 @@ use uv_static::EnvVars;
 use uv_test::packse::{
     PackseServer, generate_wheel, generate_wheel_with_files, scenario::Scenario,
 };
-use uv_test::uv_snapshot;
+use uv_test::{uv_snapshot, venv_bin_path};
 
 #[cfg(feature = "test-git")]
 fn tool_install_git_path(bin_dir: &ChildPath) -> OsString {
@@ -2803,6 +2803,193 @@ fn tool_install_restores_missing_executables_with_locks() -> Result<()> {
         .child(format!("basic-app{}", std::env::consts::EXE_SUFFIX))
         .assert(predicate::path::exists());
 
+    Ok(())
+}
+
+#[test]
+fn tool_install_repair_preserves_entrypoints_with_invalid_bin_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix()
+        .with_filter((r"(?:File exists|Cannot create a file when that file already exists\.?) \(os error \d+\)", "[ALREADY EXISTS]"));
+    let bin = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    let invalid_bin = context.temp_dir.child("not-a-directory");
+    invalid_bin.write_str("occupied")?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&wheel).arg("--force")
+        .env(EnvVars::UV_TOOL_BIN_DIR, invalid_bin.path())
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to create executable directory
+      cause: failed to create directory `[TEMP_DIR]/not-a-directory`: [ALREADY EXISTS]
+    "#);
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert_eq!(context.read("not-a-directory"), "occupied");
+    Command::new(bin.join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn tool_upgrade_repair_preserves_entrypoints_with_invalid_bin_directory() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix()
+        .with_filter((r"(?:File exists|Cannot create a file when that file already exists\.?) \(os error \d+\)", "[ALREADY EXISTS]"));
+    let bin = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    let invalid_bin = context.temp_dir.child("not-a-directory");
+    invalid_bin.write_str("occupied")?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .env(EnvVars::UV_TOOL_BIN_DIR, invalid_bin.path())
+        .env(EnvVars::PATH, bin.path()), @r#"
+        exit_code: 1 (failure)
+        ----- stderr -----
+        error: Failed to upgrade simple-launcher
+          cause: Failed to create executable directory
+          cause: failed to create directory `[TEMP_DIR]/not-a-directory`: [ALREADY EXISTS]
+        "#);
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert_eq!(context.read("not-a-directory"), "occupied");
+    Command::new(bin.join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn tool_install_executable_repair_retains_python_request() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.13", "3.12"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let bin = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .args(["--python", "3.12"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    fs_err::remove_file(bin.join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&wheel)
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    Installed 1 executable: simple_launcher
+    "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/simple-launcher/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [{ name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" }]
+        python = "3.12"
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
+    context
+        .tool_install()
+        .arg(&wheel)
+        .arg("--reinstall")
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let python = venv_bin_path(context.temp_dir.child("tools/simple-launcher"))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(python).args(["-c", "import sys; print(sys.version_info[:2])"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 12)
+    ");
+    Ok(())
+}
+
+#[test]
+fn tool_install_executable_repair_retains_python_request_with_locks() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.13", "3.12"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let bin = context.temp_dir.child("bin");
+    let wheel = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&wheel)
+        .args(["--python", "3.12"])
+        .args(["--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    fs_err::remove_file(bin.join(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&wheel).args(["--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 executable: simple_launcher
+    "#);
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/simple-launcher/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [{ name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" }]
+        python = "3.12"
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
+    context
+        .tool_install()
+        .arg(&wheel)
+        .arg("--reinstall")
+        .args(["--preview-features", "tool-install-locks"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let python = venv_bin_path(context.temp_dir.child("tools/simple-launcher"))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(python).args(["-c", "import sys; print(sys.version_info[:2])"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    (3, 12)
+    ");
     Ok(())
 }
 

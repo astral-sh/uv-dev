@@ -32,7 +32,8 @@ use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
 use crate::common::{
-    ToolLock, remove_entrypoints, tool_entrypoints_are_fresh, tool_environment_spec,
+    ToolLock, prepare_tool_executable_dir, remove_entrypoints, tool_entrypoints_are_fresh,
+    tool_environment_spec,
 };
 use uv_command_support::{ExitStatus, Printer, conjunction};
 use uv_environment_operations::{
@@ -601,6 +602,8 @@ async fn upgrade_tool(
         UpgradeOutcome::UpgradeEnvironment | UpgradeOutcome::UpgradeTool
     ) || !tool_entrypoints_are_fresh(&existing_tool_receipt)
     {
+        prepare_tool_executable_dir()?;
+
         // At this point, we updated the existing environment, so we should remove any of its
         // existing executables.
         remove_entrypoints(&existing_tool_receipt);

@@ -780,6 +780,14 @@ fn package_entrypoint_targets(
     ))
 }
 
+/// Prepare the executable directory before changing existing environments or entrypoints.
+pub(super) fn prepare_tool_executable_dir() -> anyhow::Result<PathBuf> {
+    let executable_directory = uv_tool::tool_executable_dir()?;
+    fs_err::create_dir_all(&executable_directory)
+        .context("Failed to create executable directory")?;
+    Ok(executable_directory)
+}
+
 /// Check destination conflicts before removing an existing tool's executables.
 pub(super) fn check_entrypoint_conflicts(
     environment: &PythonEnvironment,
@@ -788,10 +796,10 @@ pub(super) fn check_entrypoint_conflicts(
     receipt: Option<&Tool>,
     force: bool,
 ) -> anyhow::Result<()> {
+    let executable_directory = prepare_tool_executable_dir()?;
     if force {
         return Ok(());
     }
-    let executable_directory = uv_tool::tool_executable_dir()?;
     let site_packages = SitePackages::from_environment(environment)?;
     let mut conflicts = BTreeSet::new();
     for package in entrypoints.iter().chain(std::iter::once(name)) {
@@ -850,9 +858,7 @@ pub(super) fn finalize_tool_install(
     lock: Option<&ToolLock>,
     printer: Printer,
 ) -> anyhow::Result<()> {
-    let executable_directory = uv_tool::tool_executable_dir()?;
-    fs_err::create_dir_all(&executable_directory)
-        .context("Failed to create executable directory")?;
+    let executable_directory = prepare_tool_executable_dir()?;
     debug!(
         "Installing tool executables into: {}",
         executable_directory.user_display()
