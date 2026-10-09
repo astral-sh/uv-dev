@@ -7928,3 +7928,106 @@ fn tool_install_locked_extra_build_dependency_source() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Locked tool builds match extra build requirements to the projected runtime selection.
+#[test]
+fn tool_install_locked_extra_build_dependency_matches_runtime() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_exe_suffix();
+    let project = context.temp_dir.child("foo");
+    let tools = context.temp_dir.child("tools");
+    let bin = context.temp_dir.child("bin");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "tool-build-runtime-match"
+        [root]
+        requires = ["build-helper"]
+        [expected]
+        satisfiable = true
+        [packages.build-helper.versions."1.0.0"]
+        sdist = false
+        [packages.build-helper.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    let index_url = index.index_url();
+    let (filename, wheel) = generate_wheel(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &["build-helper==1.0.0".parse()?],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["foo".to_owned()],
+    );
+    project.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["build-helper==1.0.0"]
+        [project.scripts]
+        foo = "foo.cli:main"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+        [tool.uv.extra-build-dependencies]
+        foo = [{{ requirement = "build-helper", match-runtime = true }}]
+        [[tool.uv.index]]
+        url = "{index_url}"
+        default = true
+    "#})?;
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            import build_helper
+            assert build_helper.__version__ == "1.0.0"
+            with Path(__file__).with_name("builds").open("a") as marker:
+                marker.write("built\n")
+            Path(wheel_directory, "{filename}").write_bytes(bytes.fromhex("{}"))
+            return "{filename}"
+    "#, hex::encode(&wheel)})?;
+    context
+        .lock()
+        .current_dir(project.path())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
+        .args(["--locked", "--no-cache", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::UV_TOOL_DIR, tools.path()).env(EnvVars::XDG_BIN_HOME, bin.path())
+        .env(EnvVars::PATH, bin.path()), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + build-helper==1.0.0
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    ");
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path())
+        .args(["--locked", "--no-cache", "--reinstall", "--preview-features", "tool-install-locks"])
+        .env(EnvVars::UV_TOOL_DIR, tools.path()).env(EnvVars::XDG_BIN_HOME, bin.path())
+        .env(EnvVars::PATH, bin.path()), @r"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Uninstalled [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     ~ build-helper==1.0.0
+     ~ foo==0.1.0 (from file://[TEMP_DIR]/foo)
+    Installed 1 executable: foo
+    ");
+    assert_snapshot!(fs_err::read_to_string(project.child("builds"))?, @"
+    built
+    built
+    ");
+    uv_snapshot!(context.filters(), Command::new("foo").env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from foo!
+    ");
+    Ok(())
+}
