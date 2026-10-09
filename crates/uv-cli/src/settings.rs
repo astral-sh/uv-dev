@@ -4439,30 +4439,41 @@ fn resolve_pip_build_hash_checking(
 #[derive(Debug)]
 pub struct DownloadSettings {
     pub refresh: Refresh,
-    pub settings: ResolverSettings,
+    pub index_locations: IndexLocations,
+    pub index_strategy: IndexStrategy,
+    pub keyring_provider: KeyringProviderType,
 }
 
 impl DownloadSettings {
-    pub fn resolve(
-        args: DownloadArgs,
-        filesystem: Option<FilesystemOptions>,
-        environment: &EnvironmentOptions,
-    ) -> Result<Self> {
+    pub fn resolve(args: DownloadArgs, filesystem: Option<FilesystemOptions>) -> Result<Self> {
         let indexes = args
             .index
             .resolve(configured_indexes(filesystem.as_ref()))?;
+        let filesystem = filesystem
+            .map(FilesystemOptions::into_options)
+            .map(|options| options.top_level)
+            .unwrap_or_default();
         Ok(Self {
             refresh: Refresh::try_from(args.refresh)?,
-            settings: combine_resolver_settings(
-                ResolverOptions {
-                    indexes,
-                    keyring_provider: args.registry.keyring_provider,
-                    index_strategy: args.registry.index_strategy,
-                    ..ResolverOptions::default()
-                },
-                filesystem,
-                environment,
-            ),
+            index_locations: indexes
+                .combine(IndexOptions {
+                    index: filesystem.index,
+                    index_url: filesystem.index_url,
+                    extra_index_url: filesystem.extra_index_url,
+                    no_index: filesystem.no_index,
+                    find_links: filesystem.find_links,
+                })
+                .into(),
+            index_strategy: args
+                .registry
+                .index_strategy
+                .combine(filesystem.index_strategy)
+                .unwrap_or_default(),
+            keyring_provider: args
+                .registry
+                .keyring_provider
+                .combine(filesystem.keyring_provider)
+                .unwrap_or_default(),
         })
     }
 }
