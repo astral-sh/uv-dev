@@ -10444,6 +10444,102 @@ fn requirements_txt_transitive_extra_conflict_disjoint() -> Result<()> {
     Ok(())
 }
 
+/// Registry dependency version guards select only one transitive extra activation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn requirements_txt_transitive_extra_conflict_registry_forks() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "export-extra-conflict-registry-forks"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.gateway.versions."1"]
+        requires = ["bridge"]
+        sdist = false
+
+        [packages.bridge.versions."1"]
+        requires = ["child[a]"]
+        sdist = false
+
+        [packages.bridge.versions."2"]
+        requires = ["child[b]"]
+        sdist = false
+
+        [packages.left.versions."1"]
+        sdist = false
+
+        [packages.right.versions."1"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["gateway", "child"]
+
+        [project.optional-dependencies]
+        first = ["bridge==1"]
+        second = ["bridge==2"]
+
+        [tool.uv]
+        conflicts = [
+            [{ extra = "first" }, { extra = "second" }],
+            [{ package = "child", extra = "a" }, { package = "child", extra = "b" }],
+        ]
+
+        [tool.uv.workspace]
+        members = ["child"]
+
+        [tool.uv.sources]
+        child = { workspace = true }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        a = ["left"]
+        b = ["right"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--extra", "first", "--no-emit-workspace", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==1
+    gateway==1
+    left==1
+    ");
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--frozen", "--extra", "second", "--no-emit-workspace", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    bridge==2
+    gateway==1
+    right==1
+    ");
+    Ok(())
+}
+
 /// Source-specific parent paths keep their dependency extras mutually exclusive.
 #[cfg(feature = "test-universal")]
 #[test]
