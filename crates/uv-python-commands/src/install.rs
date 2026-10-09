@@ -621,10 +621,9 @@ async fn perform_install(
     while let Some((download, result)) = tasks.next().await {
         match result {
             Ok(download_result) => {
-                // `Fetched` installations are already finalized in `downloads.rs`
-                // (externally-managed, sysconfig, executables, build-file, dylib,
-                // and minor-version-link). `AlreadyAvailable` installations skipped
-                // the download path and still need finalization here.
+                // `Fetched` installations have completed `ManagedPythonInstallation::finalize`.
+                // `AlreadyAvailable` installations skipped the download path and still need
+                // finalization here. Minor-version links are selected after all downloads finish.
                 let (path, finalized_in_download) = match download_result {
                     DownloadResult::AlreadyAvailable(path) => (path, false),
                     DownloadResult::Fetched(path) => (path, true),

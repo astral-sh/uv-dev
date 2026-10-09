@@ -352,3 +352,12 @@ reason = "retained as a public pyvenv.cfg editing helper"
 crate = "uv_extract"
 module = "dirhash"
 reason = "intentionally public"
+
+# Keep the benchmark entry point separate from complete installation finalization.
+[[override]]
+lint = "hawk::dead_public"
+crate = "uv_python_managed"
+item = "managed::ManagedPythonInstallation::ensure_dylib_patched"
+kind = "inherent_method"
+level = "expect"
+reason = "used by the macos_dylib benchmark to isolate install_name_tool costs"
