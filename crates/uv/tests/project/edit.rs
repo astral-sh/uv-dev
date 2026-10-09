@@ -11564,6 +11564,88 @@ async fn add_index_empty_directory() -> Result<()> {
     Ok(())
 }
 
+/// Selecting a configured empty index still pins the dependency to that source.
+#[test]
+fn add_index_empty_directory_retains_named_selection() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [[tool.uv.index]]
+        name = "internal"
+        url = "./wheels"
+        format = "flat"
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--index").arg("internal").arg("--frozen").args(["--preview-features", "index-by-name"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Index directory `file://[TEMP_DIR]/wheels` is empty
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig",
+    ]
+    [[tool.uv.index]]
+    name = "internal"
+    url = "wheels"
+    format = "flat"
+
+    [tool.uv.sources]
+    iniconfig = { index = "internal" }
+    "#);
+    Ok(())
+}
+
+/// A new named empty index must remain declared when a frozen edit pins a dependency to it.
+#[test]
+fn add_index_empty_directory_retains_new_named_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("wheels").create_dir_all()?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--index").arg("internal=./wheels").arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Index directory `file://[TEMP_DIR]/wheels` is empty
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig",
+    ]
+
+    [tool.uv.sources]
+    iniconfig = { index = "internal" }
+
+    [[tool.uv.index]]
+    name = "internal"
+    url = "wheels"
+    "#);
+    Ok(())
+}
+
 /// Skipping an empty index must not turn a multiple-index request into a source pin.
 #[test]
 fn add_index_empty_directory_retains_multiple_index_selection() -> Result<()> {
