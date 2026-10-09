@@ -6109,6 +6109,14 @@ impl Lock {
         package: &Package,
         database: &DistributionDatabase<'_, Context>,
     ) -> Result<Option<SourceTreeRequiresDist>, LockError> {
+        // Configured metadata takes precedence over every authored field, including an omitted
+        // Python bound. The full metadata path applies that override before reading or building.
+        if database
+            .dependency_metadata(&package.id.name, package.id.version.as_ref())
+            .is_some()
+        {
+            return Ok(None);
+        }
         let parent = root.join(source_tree);
         let path = parent.join("pyproject.toml");
         match fs_err::tokio::read_to_string(&path).await {
@@ -6124,10 +6132,12 @@ impl Lock {
                     .and_then(|project| project.version.clone());
                 let requires_python = match pyproject_toml.requires_python() {
                     Ok(requires_python) => requires_python,
-                    Err(
-                        uv_pypi_types::MetadataError::FieldNotFound("project")
-                        | uv_pypi_types::MetadataError::DynamicField("requires-python"),
-                    ) => None,
+                    Err(uv_pypi_types::MetadataError::FieldNotFound("project")) => None,
+                    // A dynamic Python requirement needs backend metadata before the lock can
+                    // be accepted, even when the version and dependencies are static.
+                    Err(uv_pypi_types::MetadataError::DynamicField("requires-python")) => {
+                        return Ok(None);
+                    }
                     Err(err) => {
                         return Err(LockErrorKind::InvalidPyprojectToml {
                             path: path.clone(),

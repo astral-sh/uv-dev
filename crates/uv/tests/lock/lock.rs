@@ -49214,3 +49214,183 @@ fn lock_path_requires_python_excludes_conflict_combinations() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Configured metadata controls local Python compatibility during offline lock validation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_configured_python_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "local-python-configured-python-requirement"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv.sources]
+        child = { path = "child" }
+        [[tool.uv.dependency-metadata]]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        requires-dist = ["example"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["example"]
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--check", "--offline", "--no-cache"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Configured metadata controls local Python compatibility during offline lock validation.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_configured_absent_python_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "local-python-configured-absent-python-requirement"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv.sources]
+        child = { path = "child" }
+        [[tool.uv.dependency-metadata]]
+        name = "child"
+        version = "0.1.0"
+        requires-dist = ["example"]
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["example"]
+        [build-system]
+        requires = []
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--index-url").arg(server.index_url())
+        .args(["--check", "--offline", "--no-cache"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Dynamic Python metadata is refreshed even when the local version and dependencies are static.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_local_python_dynamic_requirement_change() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+        [tool.uv.sources]
+        child = { path = "child" }
+    "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+        dependencies = []
+        dynamic = ["requires-python"]
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("child/backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = Path(metadata_directory, "child-0.1.0.dist-info")
+            dist_info.mkdir()
+            (dist_info / "METADATA").write_text("Metadata-Version: 2.2\nName: child\nVersion: 0.1.0\nRequires-Python: >=3.12\n")
+            return dist_info.name
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    context.temp_dir.child("child/backend.py").write_str(
+        &context
+            .read("child/backend.py")
+            .replace(">=3.12", ">=3.13.0"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline", "--no-cache"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because the requested Python version (>=3.12) does not satisfy Python>=3.13.0 and child==0.1.0 depends on Python>=3.13.0, we can conclude that child==0.1.0 cannot be used.
+             And because only child==0.1.0 is available and your project depends on child, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: The `requires-python` value (>=3.12) includes Python versions that are not supported by your dependencies (e.g., child==0.1.0 only supports >=3.13.0). Consider using a more restrictive `requires-python` value (like >=3.13.0).
+    "#);
+    Ok(())
+}
