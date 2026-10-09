@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -85,8 +86,21 @@ pub fn read_lock_requirements(
 
     let upgrade_packages = lock.upgrade_packages(upgrade);
 
-    let mut preferences = Vec::new();
+    let mut candidates = Vec::new();
     let mut git = Vec::new();
+    let mut unlocked = Vec::new();
+    let missing_wheels = |package: &Package, activation: MarkerTree| {
+        let mut wheel_coverage = None;
+        required_environments.iter().copied().any(|marker| {
+            let applicable = activation.and(marker);
+            !applicable.is_false()
+                && wheel_coverage
+                    .get_or_insert_with(|| {
+                        implied_markers_for_wheels(package.wheel_filenames(), minimum_libc_version)
+                    })
+                    .is_disjoint(applicable)
+        })
+    };
 
     let packages = if let Some(activation) = activation {
         Either::Right(activation.into_iter())
@@ -101,6 +115,7 @@ pub fn read_lock_requirements(
         // Skip the distribution if it's included in the upgrade strategy (either by explicit
         // package name or via a dependency group).
         if upgrade_packages.contains(package.name()) {
+            unlocked.push((package.name(), activation));
             continue;
         }
 
@@ -111,30 +126,68 @@ pub fn read_lock_requirements(
 
         // If a required environment is active for this package and the existing lock entry has no
         // matching wheel, drop the lock preference so the resolver can eagerly upgrade it.
-        let mut wheel_coverage = None;
-        if required_environments.iter().copied().any(|marker| {
-            let applicable = activation.and(marker);
-            !applicable.is_false()
-                && wheel_coverage
-                    .get_or_insert_with(|| {
-                        implied_markers_for_wheels(package.wheel_filenames(), minimum_libc_version)
-                    })
-                    .is_disjoint(applicable)
-        }) {
+        if missing_wheels(package, activation) {
+            // Registry selection can move to another release. Fixed URLs, Git pins, and
+            // workspace sources retain their dependency metadata when only wheel preference changes.
+            if package.index(install_path)?.is_some() {
+                unlocked.push((package.name(), activation));
+            }
             continue;
         }
 
         // Map each entry in the lockfile to a preference.
         if let Some(version) = package.version() {
-            preferences.push(Preference::from_locked(
-                package.name().clone(),
-                version.clone(),
-                package.index(install_path)?,
-                package.fork_markers().to_vec(),
+            candidates.push((
+                package,
+                activation,
+                Preference::from_locked(
+                    package.name().clone(),
+                    version.clone(),
+                    package.index(install_path)?,
+                    package.fork_markers().to_vec(),
+                ),
             ));
         }
     }
 
+    // An unlocked ancestor can replace conditional edges throughout its dependency subtree.
+    // Propagate its activation without those old edge markers, while retaining the ancestor's
+    // root and Python bounds.
+    let mut changed_activation = BTreeMap::new();
+    if !unlocked.is_empty() && !required_environments.is_empty() {
+        let mut packages_by_name = BTreeMap::<_, Vec<_>>::new();
+        for package in lock.packages() {
+            packages_by_name
+                .entry(package.name())
+                .or_default()
+                .push(package);
+        }
+        while let Some((name, activation)) = unlocked.pop() {
+            for package in packages_by_name.get(name).into_iter().flatten() {
+                for dependency in package.all_dependencies() {
+                    let current = changed_activation
+                        .entry(dependency.package_name())
+                        .or_insert(MarkerTree::FALSE);
+                    let combined = current.or(activation);
+                    if combined != *current {
+                        *current = combined;
+                        unlocked.push((dependency.package_name(), combined));
+                    }
+                }
+            }
+        }
+    }
+    let preferences = candidates
+        .into_iter()
+        .filter_map(|(package, activation, preference)| {
+            let changed = changed_activation
+                .get(package.name())
+                .copied()
+                .unwrap_or(MarkerTree::FALSE);
+            (changed.is_false() || !missing_wheels(package, activation.or(changed)))
+                .then_some(preference)
+        })
+        .collect();
     Ok(LockedRequirements { preferences, git })
 }
 
