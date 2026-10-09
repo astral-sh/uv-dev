@@ -1400,45 +1400,48 @@ pub(crate) async fn find_best_python_installation(
             && !previous_fetch_failed
             && let Some(download_request) = PythonDownloadRequest::from_request(request)
         {
-            let (client, retry_policy, download_list) =
-                if let Some(download_state) = &mut download_state {
-                    download_state
-                } else {
-                    let download_list = ManagedPythonDownloadList::new(
-                        client_builder,
+            let result = async {
+                let (client, retry_policy, download_list) =
+                    if let Some(download_state) = &mut download_state {
+                        download_state
+                    } else {
+                        let download_list = ManagedPythonDownloadList::new(
+                            client_builder,
+                            cache,
+                            python_downloads_json_url,
+                        )
+                        .await?;
+                        let retry_policy = client_builder.retry_policy();
+
+                        // Python downloads are performing their own retries to catch stream errors, disable
+                        // the default retries to avoid the middleware performing uncontrolled retries.
+                        let client = client_builder.clone().retries(0).build()?;
+                        download_state.insert((client, retry_policy, download_list))
+                    };
+
+                let download = download_request
+                    .clone()
+                    .with_default_arch(arch.map(PythonArchitecture::into_inner))
+                    .fill()
+                    .map(|request| download_list.find(&request));
+
+                match download {
+                    Ok(Ok(download)) => PythonInstallation::fetch(
+                        download,
+                        client,
+                        retry_policy,
                         cache,
-                        python_downloads_json_url,
+                        reporter,
+                        mirrors,
                     )
-                    .await?;
-                    let retry_policy = client_builder.retry_policy();
-
-                    // Python downloads are performing their own retries to catch stream errors, disable
-                    // the default retries to avoid the middleware performing uncontrolled retries.
-                    let client = client_builder.clone().retries(0).build()?;
-                    download_state.insert((client, retry_policy, download_list))
-                };
-
-            let download = download_request
-                .clone()
-                .with_default_arch(arch.map(PythonArchitecture::into_inner))
-                .fill()
-                .map(|request| download_list.find(&request));
-
-            let result = match download {
-                Ok(Ok(download)) => PythonInstallation::fetch(
-                    download,
-                    client,
-                    retry_policy,
-                    cache,
-                    reporter,
-                    mirrors,
-                )
-                .await
-                .map(Some),
-                Ok(Err(uv_python_managed::downloads::Error::NoDownloadFound(_))) => Ok(None),
-                Ok(Err(error)) => Err(error.into()),
-                Err(error) => Err(error.into()),
-            };
+                    .await
+                    .map(Some),
+                    Ok(Err(uv_python_managed::downloads::Error::NoDownloadFound(_))) => Ok(None),
+                    Ok(Err(error)) => Err(error.into()),
+                    Err(error) => Err(error.into()),
+                }
+            }
+            .await;
             if let Ok(Some(installation)) = result {
                 return Ok(installation);
             }
@@ -1460,7 +1463,7 @@ pub(crate) async fn find_best_python_installation(
                 warn_user_with_chain!(
                     anyhow::Error::from(error)
                         .context(format!(
-                            "A managed Python download is available for {request}, but an error occurred when attempting to download it."
+                            "An error occurred when attempting a managed Python download for {request}."
                         ))
                         .as_ref()
                 );
