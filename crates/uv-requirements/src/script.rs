@@ -8,7 +8,7 @@ use uv_cache::Cache;
 use uv_configuration::{NoSources, Override, PackageOverride};
 use uv_distribution::{LoweredExtraBuildDependencies, LoweredRequirement, LoweringError};
 use uv_distribution_types::{
-    ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, IndexMetadata, IndexUrlError,
+    ExtraBuildRequirement, ExtraBuildRequires, Index, IndexLocations, IndexMetadata, IndexUrlError,
     Origin, Requirement, RequirementSource,
 };
 use uv_scripts::{Pep723ItemRef, Pep723Metadata};
@@ -60,7 +60,8 @@ pub async fn script_specification(
         credentials_cache,
     )
     .await
-    .map(Some)
+    // Direct script commands already resolve the complete ordered index configuration.
+    .map(|(specification, _)| Some(specification))
 }
 
 /// Lower requirements from script metadata relative to its directory.
@@ -72,7 +73,7 @@ pub(crate) async fn script_metadata_specification(
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     credentials_cache: &CredentialsCache,
-) -> Result<RequirementsSpecification, ScriptRequirementsError> {
+) -> Result<(RequirementsSpecification, Vec<Index>), ScriptRequirementsError> {
     let script_indexes = metadata
         .indexes(sources)
         .iter()
@@ -233,10 +234,9 @@ pub(crate) async fn script_metadata_specification(
 
     let mut specification =
         RequirementsSpecification::from_excludes(requirements, constraints, Vec::new(), Vec::new());
-    specification.indexes = indexes;
     specification.override_dependencies = overrides;
     specification.excludes = excludes;
-    Ok(specification)
+    Ok((specification, indexes))
 }
 
 /// Determine the extra build requires for a script.
