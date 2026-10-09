@@ -1,9 +1,10 @@
 use std::fmt::{self, Display, Formatter};
+use std::future::Future;
 use std::hash::BuildHasherDefault;
 use std::sync::{Arc, PoisonError, RwLock};
 
 use rustc_hash::{FxHashMap, FxHasher};
-use tokio::sync::{Mutex as AsyncMutex, MutexGuard};
+use tokio::sync::{Mutex as AsyncMutex, MutexGuard, OnceCell};
 use tracing::trace;
 use url::Url;
 
@@ -121,7 +122,7 @@ pub struct CredentialsCache {
     /// Cached subprocess keyring lookups.
     pub(crate) keyring_fetches: FxOnceMap<(FetchUrl, Username), Option<FetchedCredentials>>,
     /// Native credential snapshots, loaded at most once per realm.
-    pub(crate) native_realms: FxOnceMap<Realm, NativeRealmCredentials>,
+    native_realms: RwLock<FxHashMap<Realm, Arc<OnceCell<NativeRealmCredentials>>>>,
     /// Successfully authenticated credential snapshots, matched by service path.
     stored: RwLock<FxHashMap<Realm, StoredCredentials>>,
     /// A cache per URL, uses a trie for efficient prefix queries.
@@ -140,12 +141,33 @@ impl CredentialsCache {
         Self {
             fetches: FxOnceMap::default(),
             keyring_fetches: FxOnceMap::default(),
-            native_realms: FxOnceMap::default(),
+            native_realms: RwLock::new(FxHashMap::default()),
             realms: RwLock::new(FxHashMap::default()),
             keyring_realms: RwLock::new(FxHashMap::default()),
             stored: RwLock::new(FxHashMap::default()),
             urls: RwLock::new(UrlTrie::new()),
         }
+    }
+
+    /// Load and share native credentials for a realm across clients.
+    pub(crate) async fn native_realm<F, Fut>(
+        &self,
+        realm: &Realm,
+        initialize: F,
+    ) -> NativeRealmCredentials
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = NativeRealmCredentials>,
+    {
+        let cell = self
+            .native_realms
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(realm.clone())
+            .or_default()
+            .clone();
+        // Cancelled native operations leave the cell available for a later initializer.
+        cell.get_or_init(initialize).await.clone()
     }
 
     /// Populate the global authentication store with credentials on a URL, if there are any.

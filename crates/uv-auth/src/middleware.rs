@@ -316,18 +316,14 @@ impl AuthMiddleware {
         &self,
         realm: &Realm,
     ) -> Result<StoredCredentials, Arc<crate::keyring::Error>> {
-        if let Some(credentials) = self.cache().native_realms.register_or_wait(realm).await {
-            return credentials;
-        }
-
-        let credentials = crate::keyring::load_native_realm(realm)
-            .await
-            .map(StoredCredentials::from)
-            .map_err(Arc::new);
         self.cache()
-            .native_realms
-            .done(realm.clone(), credentials.clone());
-        credentials
+            .native_realm(realm, || async {
+                crate::keyring::load_native_realm(realm)
+                    .await
+                    .map(StoredCredentials::from)
+                    .map_err(Arc::new)
+            })
+            .await
     }
 
     /// Preserve explicit native-store failures when surfacing middleware errors.
@@ -969,36 +965,48 @@ impl AuthMiddleware {
                 .await
                 .inspect_err(|err| debug!("Failed to get credentials from native store: {err}"))
                 .map_err(Self::native_store_error)?;
-            // The lock spans lookup and publication, so later migrations cannot publish first.
-            let lookup = snapshot.lock_native_lookup().await;
-            match CredentialsCache::select_stored(&snapshot, url, &username) {
-                Ok(Some(credentials)) => Some(FetchedCredentials {
-                    credentials,
-                    cache_scope: CredentialsCacheScope::Stored(snapshot.clone()),
-                }),
-                Ok(None) if username.is_none() => None,
-                Ok(None) => crate::keyring::fetch_native(url, username.as_deref())
-                    .await
-                    .inspect_err(|err| {
-                        debug!("Failed to get credentials from native store: {err}");
+            let select = || {
+                CredentialsCache::select_stored(&snapshot, url, &username)
+                    .map(|credentials| {
+                        credentials.map(|credentials| FetchedCredentials {
+                            credentials,
+                            cache_scope: CredentialsCacheScope::Stored(snapshot.clone()),
+                        })
                     })
-                    .map_err(Self::native_store_error)?
-                    .map(|fetched| {
-                        let cache_scope = if let Some(credentials) = fetched.snapshot {
-                            lookup.replace(credentials);
-                            CredentialsCacheScope::Stored(snapshot.clone())
-                        } else {
-                            CredentialsCacheScope::FetchOnly
-                        };
-                        FetchedCredentials {
-                            credentials: Arc::new(Authentication::from(fetched.credentials)),
-                            cache_scope,
-                        }
-                    }),
-                Err(_) => {
-                    return Err(Self::native_store_error(
-                        crate::keyring::Error::AmbiguousUsername(url.clone()),
-                    ));
+                    .map_err(|_| {
+                        Self::native_store_error(crate::keyring::Error::AmbiguousUsername(
+                            url.clone(),
+                        ))
+                    })
+            };
+            let credentials = select()?;
+            if credentials.is_some() || username.is_none() {
+                credentials
+            } else {
+                // Only a cache miss serializes legacy lookup through publication. Recheck after
+                // acquiring the lock because another lookup may have populated this account.
+                let lookup = snapshot.lock_native_lookup().await;
+                if let Some(credentials) = select()? {
+                    Some(credentials)
+                } else {
+                    crate::keyring::fetch_native(url, username.as_deref())
+                        .await
+                        .inspect_err(|err| {
+                            debug!("Failed to get credentials from native store: {err}");
+                        })
+                        .map_err(Self::native_store_error)?
+                        .map(|fetched| {
+                            let cache_scope = if let Some(credentials) = fetched.snapshot {
+                                lookup.replace(credentials);
+                                CredentialsCacheScope::Stored(snapshot.clone())
+                            } else {
+                                CredentialsCacheScope::FetchOnly
+                            };
+                            FetchedCredentials {
+                                credentials: Arc::new(Authentication::from(fetched.credentials)),
+                                cache_scope,
+                            }
+                        })
                 }
             }
         } else {
@@ -1114,6 +1122,7 @@ fn tracing_url(request: &Request, credentials: Option<&Authentication>) -> Displ
 #[cfg(test)]
 mod tests {
     use std::assert_matches;
+    use std::future::pending;
     use std::io::Write;
     use std::str::FromStr;
     use std::time::Duration;
@@ -1131,6 +1140,7 @@ mod tests {
 
     use crate::Index;
     use crate::credentials::Password;
+    use crate::persistent::PersistentCredential;
 
     use super::*;
 
@@ -1186,6 +1196,89 @@ mod tests {
             401
         );
 
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn native_realm_initialization_recovers_after_cancellation() -> Result<(), Error> {
+        let url = DisplaySafeUrl::parse("https://example.com")?;
+        let realm = Realm::from(&url);
+        let cache = Arc::new(CredentialsCache::new());
+        let started = Arc::new(Notify::new());
+        let loading = {
+            let cache = cache.clone();
+            let realm = realm.clone();
+            let started = started.clone();
+            tokio::spawn(async move {
+                cache
+                    .native_realm(&realm, || async move {
+                        started.notify_one();
+                        Ok(StoredCredentials::from(
+                            pending::<Vec<PersistentCredential>>().await,
+                        ))
+                    })
+                    .await
+            })
+        };
+        let initialization = timeout(Duration::from_secs(5), started.notified()).await;
+        loading.abort();
+        assert!(
+            loading
+                .await
+                .expect_err("initialization was aborted")
+                .is_cancelled()
+        );
+        initialization?;
+
+        let service = crate::Service::from_str(url.as_str())?;
+        let snapshot = timeout(
+            Duration::from_secs(5),
+            cache.native_realm(&realm, || async {
+                Ok(StoredCredentials::from(vec![PersistentCredential {
+                    service,
+                    credentials: Credentials::basic(
+                        Some("user".to_string()),
+                        Some("password".to_string()),
+                    ),
+                }]))
+            }),
+        )
+        .await??;
+        let credentials = CredentialsCache::select_stored(&snapshot, &url, &Username::none())
+            .map_err(|_| "one stored credential must be unambiguous")?
+            .expect("the second initializer must publish its credentials");
+        assert_eq!(credentials.username(), Some("user"));
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn native_cached_account_does_not_wait_for_legacy_lookup() -> Result<(), Error> {
+        let server = start_test_server("user", "password").await;
+        let mut url = DisplaySafeUrl::parse(&server.uri())?;
+        let snapshot = StoredCredentials::from(vec![PersistentCredential {
+            service: crate::Service::from_str(url.as_str())?,
+            credentials: Credentials::basic(Some("user".to_string()), Some("password".to_string())),
+        }]);
+        let cache = Arc::new(CredentialsCache::new());
+        cache
+            .native_realm(&Realm::from(&url), || async { Ok(snapshot.clone()) })
+            .await?;
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_netrc(None)
+                    .with_text_store(None)
+                    .with_preview(Preview::all())
+                    .with_cache_arc(cache),
+            )
+            .build();
+        url.set_username("user").map_err(|()| "invalid username")?;
+
+        // A legacy lookup for another username may remain blocked in the operating system.
+        let lookup = snapshot.lock_native_lookup().await;
+        let response = timeout(Duration::from_secs(5), client.get(url.as_str()).send()).await;
+        drop(lookup);
+        assert_eq!(response??.status(), 200);
         Ok(())
     }
 
@@ -1248,8 +1341,8 @@ mod tests {
         let snapshot = StoredCredentials::from(vec![first.clone()]);
         let cache = Arc::new(CredentialsCache::new());
         cache
-            .native_realms
-            .done(Realm::from(&url), Ok(snapshot.clone()));
+            .native_realm(&Realm::from(&url), || async { Ok(snapshot.clone()) })
+            .await?;
         let started = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
         let client = test_client_builder()
@@ -1303,7 +1396,7 @@ mod tests {
         Ok(())
     }
 
-    fn ambiguous_native_cache(url: &DisplaySafeUrl) -> CredentialsCache {
+    async fn ambiguous_native_cache(url: &DisplaySafeUrl) -> CredentialsCache {
         let cache = CredentialsCache::new();
         let service = crate::Service::from_str(url.as_str()).unwrap();
         let snapshot = StoredCredentials::from(vec![
@@ -1323,8 +1416,9 @@ mod tests {
             },
         ]);
         cache
-            .native_realms
-            .done(Realm::from(url), Ok(snapshot.clone()));
+            .native_realm(&Realm::from(url), || async { Ok(snapshot.clone()) })
+            .await
+            .expect("native snapshot should initialize");
         cache.insert_stored(url, snapshot);
         cache
     }
@@ -1342,7 +1436,7 @@ mod tests {
             .with(
                 AuthMiddleware::new()
                     .with_preview(Preview::all())
-                    .with_cache(ambiguous_native_cache(&url)),
+                    .with_cache(ambiguous_native_cache(&url).await),
             )
             .build();
         assert_eq!(client.get(server.uri()).send().await?.status(), 200);
@@ -1362,7 +1456,7 @@ mod tests {
             .with(
                 AuthMiddleware::new()
                     .with_preview(Preview::all())
-                    .with_cache(ambiguous_native_cache(&url)),
+                    .with_cache(ambiguous_native_cache(&url).await),
             )
             .build();
         let error = client.get(server.uri()).send().await.unwrap_err();
