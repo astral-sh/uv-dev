@@ -6404,11 +6404,15 @@ dependencies = [
  "tokio",
  "tracing",
  "uv-console",
+ "uv-errors",
  "uv-fs",
+ "uv-pypi-types",
  "uv-redacted",
+ "uv-settings",
  "uv-shell",
  "uv-static",
  "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]
@@ -7981,8 +7985,6 @@ dependencies = [
  "fs-err",
  "schemars",
  "serde",
- "textwrap",
- "serde-untagged",
  "thiserror",
  "toml",
  "tracing",

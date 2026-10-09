@@ -9,9 +9,6 @@ use std::iter;
 
 use owo_colors::{AnsiColors, DynColor, OwoColorize};
 
-#[cfg(test)]
-use diagnostic::Info;
-use diagnostic::write_info;
 pub use diagnostic::{Diagnostic, DiagnosticFn};
 use line_wrap::{get_wrap_width, wrap_text};
 use source::write_snippets;
@@ -394,7 +391,6 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
     )?;
     if let Some(diagnostic) = &main_diagnostic {
         write_snippets(&mut stream, &diagnostic.snippets, color)?;
-        write_info(&mut stream, &diagnostic.info, width)?;
     }
 
     let mut source_override = main_diagnostic.and_then(|diagnostic| diagnostic.source);
@@ -430,7 +426,6 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
         }
         if let Some(diagnostic) = &source_diagnostic {
             write_snippets(&mut stream, &diagnostic.snippets, color)?;
-            write_info(&mut stream, &diagnostic.info, width)?;
         }
         source_override = source_diagnostic.and_then(|diagnostic| diagnostic.source);
     }
@@ -452,7 +447,7 @@ mod tests {
     use owo_colors::AnsiColors;
 
     use super::{
-        Diagnostic, ErrorOptions, ErrorWithHints, Hint, HintOrdering, Hints, Info, SourceFile,
+        Diagnostic, ErrorOptions, ErrorWithHints, Hint, HintOrdering, Hints, SourceFile,
         SourceSnippet, debug_error_chain, write_error_chain_with_options,
     };
 
@@ -893,149 +888,6 @@ mod tests {
 
                  For downloads, please refer to https://example.com/download/python3.13.tar.zst
           cause: Caused By: HTTP Error 400
-        ");
-    }
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("HTTP error 400 Bad Request")]
-    struct HttpError;
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("Failed to fetch {url}. Server says: {body}")]
-    struct FetchError {
-        url: String,
-        body: String,
-        #[source]
-        source: HttpError,
-    }
-
-    fn fetch_diagnostic<'a>(error: &'a (dyn Error + 'static)) -> Option<Diagnostic<'a>> {
-        let error = error.downcast_ref::<FetchError>()?;
-        Some(
-            Diagnostic::new(format!("Failed to fetch {}", error.url)).with_info(
-                Info::new("The server included the following context:")
-                    .with_details(error.body.as_str()),
-            ),
-        )
-    }
-
-    #[test]
-    fn format_info_between_causes() {
-        let error = anyhow!(FetchError {
-            url: "https://example.com/python.tar.zst".to_string(),
-            body: "This endpoint accepts POST requests only.\n\nUse /download/ instead."
-                .to_string(),
-            source: HttpError,
-        })
-        .context("Failed to download Python 3.13");
-        let mut output = String::new();
-        write_error_chain_with_options(
-            error.as_ref(),
-            &Hints::from("Check the download URL"),
-            ErrorOptions::default()
-                .with_diagnostic(fetch_diagnostic)
-                .with_stream(&mut output),
-        )
-        .unwrap();
-        assert_snapshot!(anstream::adapter::strip_str(&output), @"
-        error: Failed to download Python 3.13
-          cause: Failed to fetch https://example.com/python.tar.zst
-          info: The server included the following context:
-            |
-            | This endpoint accepts POST requests only.
-            |
-            | Use /download/ instead.
-            |
-          cause: HTTP error 400 Bad Request
-
-        hint: Check the download URL
-        ");
-    }
-
-    #[test]
-    fn format_info_on_root() {
-        let mut output = String::new();
-        write_error_chain_with_options(
-            &HttpError,
-            &Hints::none(),
-            ErrorOptions::default()
-                .with_diagnostic(|error| {
-                    error.downcast_ref::<HttpError>().map(|_| {
-                        Diagnostic::default()
-                            .with_info(Info::new("First detail"))
-                            .with_info(Info::new("Second detail").with_details(""))
-                    })
-                })
-                .with_stream(&mut output),
-        )
-        .unwrap();
-        assert_snapshot!(anstream::adapter::strip_str(&output), @"
-        error: HTTP error 400 Bad Request
-          info: First detail
-          info: Second detail
-        ");
-    }
-
-    #[test]
-    fn format_info_wrapping() {
-        let error = FetchError {
-            url: "https://example.com".to_string(),
-            body: "First paragraph has several words.\n\n  Indented second paragraph.".to_string(),
-            source: HttpError,
-        };
-        let mut output = String::new();
-        write_error_chain_with_options(
-            &error,
-            &Hints::none(),
-            ErrorOptions::default()
-                .with_level("warning")
-                .with_color(AnsiColors::Yellow)
-                .with_width_override(30)
-                .with_diagnostic(fetch_diagnostic)
-                .with_stream(&mut output),
-        )
-        .unwrap();
-        assert_snapshot!(anstream::adapter::strip_str(&output), @"
-        warning: Failed to fetch
-                 https://example.com
-          info: The server included
-                the following context:
-            |
-            | First paragraph has
-            | several words.
-            |
-            |   Indented second
-            | paragraph.
-            |
-          cause: HTTP error 400 Bad
-                 Request
-        ");
-    }
-
-    #[test]
-    fn format_untrusted_info_details() {
-        let mut output = String::new();
-        write_error_chain_with_options(
-            &HttpError,
-            &Hints::none(),
-            ErrorOptions::default()
-                .with_diagnostic(|_| {
-                    Some(Diagnostic::default().with_info(Info::new("Server response:").with_details(
-                        "café 👩‍💻\r\n\tindented\n\u{1b}[31mred\u{1b}[0m\n\u{1b}]8;;https://example.com\u{7}link\u{85}\u{202e}text\u{2029}\rrewritten",
-                    )))
-                })
-                .with_stream(&mut output),
-        )
-        .unwrap();
-        assert_snapshot!(anstream::adapter::strip_str(&output), @r"
-        error: HTTP error 400 Bad Request
-          info: Server response:
-            |
-            | café 👩‍💻
-            |     indented
-            | \u{1b}[31mred\u{1b}[0m
-            | \u{1b}]8;;https://example.com\u{7}link\u{85}\u{202e}text\u{2029}\rrewritten
-            |
         ");
     }
 

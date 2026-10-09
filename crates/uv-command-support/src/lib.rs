@@ -9,10 +9,12 @@ use std::time::Duration;
 use anstream::AutoStream;
 
 pub mod child;
+mod diagnostics;
 mod printer;
 pub mod progress;
 pub mod update_shell;
 
+pub use diagnostics::diagnostic_for_error;
 pub use printer::{Printer, Stderr, Stdout};
 
 /// The process status for a command that completed without a final error to render.
