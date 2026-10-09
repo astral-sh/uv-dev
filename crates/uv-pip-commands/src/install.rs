@@ -563,6 +563,7 @@ pub async fn pip_install(
         let (resolution, hasher) = match uv_resolve_operations::resolve(
             requirements,
             constraints,
+            None,
             overrides,
             override_dependencies,
             excludes,

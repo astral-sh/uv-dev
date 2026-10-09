@@ -1,3 +1,4 @@
+use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -10,25 +11,44 @@ use crate::python_requirement::PythonRequirement;
 
 /// [`Arc`] wrapper around [`PubGrubPackageInner`] to make cloning (inside PubGrub) cheap.
 #[derive(Debug, Clone, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub struct PubGrubPackage(Arc<PubGrubPackageInner>);
+pub struct PubGrubPackage(Arc<PubGrubPackageData>);
+
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
+struct PubGrubPackageData {
+    inner: PubGrubPackageInner,
+    /// Build contexts share versions with runtime packages while retaining conditional constraints.
+    build: bool,
+}
+
+impl Hash for PubGrubPackageData {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+        if self.build {
+            self.build.hash(state);
+        }
+    }
+}
 
 impl Deref for PubGrubPackage {
     type Target = PubGrubPackageInner;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.0.inner
     }
 }
 
 impl std::fmt::Display for PubGrubPackage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
+        std::fmt::Display::fmt(&self.0.inner, f)
     }
 }
 
 impl From<PubGrubPackageInner> for PubGrubPackage {
     fn from(package: PubGrubPackageInner) -> Self {
-        Self(Arc::new(package))
+        Self(Arc::new(PubGrubPackageData {
+            inner: package,
+            build: false,
+        }))
     }
 }
 
@@ -93,6 +113,23 @@ pub enum PubGrubPackageInner {
 }
 
 impl PubGrubPackage {
+    /// Track build dependency use independently from runtime dependency use.
+    pub(crate) fn for_build(mut self) -> Self {
+        if self.name_no_root().is_some() {
+            Arc::make_mut(&mut self.0).build = true;
+        }
+        self
+    }
+
+    /// Return the corresponding runtime package, which selects the same version.
+    pub(crate) fn without_build(&self) -> Self {
+        Self::from(self.0.inner.clone())
+    }
+
+    pub(crate) fn is_build(&self) -> bool {
+        self.0.build
+    }
+
     /// Create a [`PubGrubPackage`] from a package name and [`PackageNodeKind`].
     pub(crate) fn from_package(
         name: PackageName,
@@ -106,24 +143,22 @@ impl PubGrubPackage {
         // unable to unify version constraints across such packages.
         let marker = marker.simplify_extras_with(|_| true);
         match kind {
-            PackageNodeKind::Extra(extra) => Self(Arc::new(PubGrubPackageInner::Extra {
+            PackageNodeKind::Extra(extra) => Self::from(PubGrubPackageInner::Extra {
                 name,
                 extra,
                 marker,
-            })),
-            PackageNodeKind::Group(group) => Self(Arc::new(PubGrubPackageInner::Group {
+            }),
+            PackageNodeKind::Group(group) => Self::from(PubGrubPackageInner::Group {
                 name,
                 group,
                 marker,
-            })),
+            }),
             PackageNodeKind::Base if !marker.is_true() => {
-                Self(Arc::new(PubGrubPackageInner::Marker { name, marker }))
+                Self::from(PubGrubPackageInner::Marker { name, marker })
             }
-            PackageNodeKind::Base => Self(Arc::new(PubGrubPackageInner::Package {
-                name,
-                kind,
-                marker,
-            })),
+            PackageNodeKind::Base => {
+                Self::from(PubGrubPackageInner::Package { name, kind, marker })
+            }
         }
     }
 
@@ -132,6 +167,9 @@ impl PubGrubPackage {
     /// While dependency groups may be attached to a package, we don't consider them here as
     /// there is no (mandatory) dependency from a dependency group to the package.
     pub(crate) fn base_package(&self) -> Option<Self> {
+        if self.0.build {
+            return Some(self.without_build());
+        }
         match &**self {
             PubGrubPackageInner::Root(_)
             | PubGrubPackageInner::Python(_)
@@ -288,12 +326,13 @@ impl PubGrubPackage {
 
     /// Returns `true` if this PubGrub package is a proxy package.
     pub(crate) fn is_proxy(&self) -> bool {
-        matches!(
-            &**self,
-            PubGrubPackageInner::Extra { .. }
-                | PubGrubPackageInner::Group { .. }
-                | PubGrubPackageInner::Marker { .. }
-        )
+        self.0.build
+            || matches!(
+                &**self,
+                PubGrubPackageInner::Extra { .. }
+                    | PubGrubPackageInner::Group { .. }
+                    | PubGrubPackageInner::Marker { .. }
+            )
     }
 
     /// This simplifies the markers on this package (if any exist) using the
@@ -308,7 +347,7 @@ impl PubGrubPackage {
     /// time of writing, this was a larger refactor, particularly in the error
     /// reporting where this routine is used.
     pub(crate) fn simplify_markers(&mut self, python_requirement: &PythonRequirement) {
-        match *Arc::make_mut(&mut self.0) {
+        match Arc::make_mut(&mut self.0).inner {
             PubGrubPackageInner::Root(_)
             | PubGrubPackageInner::Python(_)
             | PubGrubPackageInner::System(_) => {}

@@ -30,8 +30,9 @@ use uv_requirements::{
     RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
 };
 use uv_resolver::{
-    DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
-    Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput, UpgradePackages,
+    BuildDependencies, DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options,
+    Preference, Preferences, PythonRequirement, Resolver, ResolverEnvironment, ResolverOutput,
+    UpgradePackages,
 };
 use uv_types::{BuildContext, HashStrategy};
 
@@ -95,6 +96,7 @@ pub async fn read_constraints(
 pub async fn resolve(
     requirements: Vec<UnresolvedRequirementSpecification>,
     constraints: Vec<NameRequirementSpecification>,
+    build_dependencies: Option<BuildDependencies>,
     overrides: Vec<UnresolvedRequirementSpecification>,
     lowered_overrides: Vec<Override<Requirement>>,
     excludes: Vec<ExcludeDependency>,
@@ -364,6 +366,7 @@ pub async fn resolve(
         exclusions,
         lookaheads,
     )
+    .with_build_dependencies(build_dependencies.unwrap_or_default())
     .with_recorder(recorder.clone());
 
     // Resolve the dependencies.
