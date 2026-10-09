@@ -448,9 +448,21 @@ async fn do_lock(
         .await?;
     let mut lowered_dependency_groups = BTreeMap::new();
     for (name, group) in dependency_groups {
+        // Imported requirements are resolved by their member group, whose sources may differ
+        // from the root's. Retain the references without lowering their flattened copies here.
+        let requirements = group
+            .requirements
+            .into_iter()
+            .filter(|requirement| {
+                !matches!(
+                    requirement.origin,
+                    Some(RequirementOrigin::Group(_, Some(_), _))
+                )
+            })
+            .collect();
         let requirements = target
             .lower(
-                group.requirements,
+                requirements,
                 index_locations,
                 sources,
                 cache,
@@ -935,16 +947,7 @@ async fn do_lock(
                     .chain(
                         dependency_groups
                             .values()
-                            .flat_map(|group| group.requirements.iter().cloned())
-                            // Imported requirements already enter resolution through their
-                            // member groups above. Their flattened lock-manifest copies must
-                            // not become unconditional root dependencies.
-                            .filter(|requirement| {
-                                !matches!(
-                                    requirement.origin,
-                                    Some(RequirementOrigin::Group(_, Some(_), _))
-                                )
-                            }),
+                            .flat_map(|group| group.requirements.iter().cloned()),
                     )
                     .map(UnresolvedRequirementSpecification::from)
                     .collect(),
