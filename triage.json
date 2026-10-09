@@ -3,11 +3,27 @@
     "items": [
       {
         "kind": "pull_request",
+        "number": 22272,
+        "title": "Preserve lexical fallback for Darwin release markers",
+        "url": "https://github.com/astral-sh/uv/pull/22272",
+        "state": "open",
+        "reason": "Draft opened in response to astral-sh/uv#22259. Proposes paired numeric and lexical constraints to address both reported failures, with negation, composition, and serialization tests. It preserves legacy lexical fallback; it is not a merged fix or an independent duplicate."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22295,
+        "title": "Use version zero for unparseable Darwin releases",
+        "url": "https://github.com/astral-sh/uv/pull/22295",
+        "state": "open",
+        "reason": "Alternative draft responding to astral-sh/uv#22259. Maps unparseable releases to version zero to restore consistency with numeric range algebra. This changes the fallback contract: the reported union remains true, rather than satisfying the requested opaque-string result."
+      },
+      {
+        "kind": "pull_request",
         "number": 22258,
         "title": "test: reproduce Darwin release marker fallback inconsistencies",
         "url": "https://github.com/astral-sh/uv/pull/22258",
         "state": "open",
-        "reason": "Companion draft containing exactly the two reported public-API tests. Its diff adds only tests and its description reports both failing. It supplies reproductions for this report, not an independent canonical discussion or production fix."
+        "reason": "Companion reproduction-only draft. Its diff adds exactly the two reported public-API tests and no production changes; the reported run has two failures. It does not resolve the issue."
       },
       {
         "kind": "pull_request",
@@ -15,7 +31,15 @@
         "title": "Infer Darwin release markers from macOS wheel tags",
         "url": "https://github.com/astral-sh/uv/pull/21766",
         "state": "merged",
-        "reason": "Introduced Darwin-specific VersionString lowering, the unconditional false return on version-parse failure, and numeric-range serialization. Merged September 17, 2026 and included in uv 0.12.16. Its tests cover valid releases, leaving the reported opaque inputs uncovered."
+        "reason": "Merged September 17, 2026. Its diff introduced Darwin-specific VersionString nodes, numeric range lowering, and the parse-error return false branch implicated here. Its tests cover valid dotted releases, not opaque values."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22304,
+        "title": "Set Darwin release markers for macOS targets",
+        "url": "https://github.com/astral-sh/uv/pull/22304",
+        "state": "open",
+        "reason": "Related draft supplies a Darwin release baseline for explicit macOS targets, whose release is currently empty. This addresses a concrete CLI trigger of the same evaluation path, but leaves arbitrary opaque-string evaluation and simplification separate."
       },
       {
         "kind": "pull_request",
@@ -23,7 +47,7 @@
         "title": "Update string marker ordering semantics",
         "url": "https://github.com/astral-sh/uv/pull/19808",
         "state": "merged",
-        "reason": "Applied updated ordering rules to pure String marker fields. Explicitly excluded platform_release and platform_version because they are Version | String fields, so it provides contract context but did not fix the reported Darwin failures."
+        "reason": "Merged June 13, 2026. Implements current ordering rules for pure String marker fields, explicitly excluding platform_release and platform_version because they are Version | String fields. Relevant contract precedent, not a previous fix of these failures."
       },
       {
         "kind": "issue",
@@ -31,13 +55,13 @@
         "title": "Different understanding of environment markers vs pip",
         "url": "https://github.com/astral-sh/uv/issues/3917",
         "state": "closed",
-        "reason": "Discusses non-PEP-440 platform_release values and numeric versus lexicographic fallback, including maintainer comments on inconsistent ordering. It concerns Linux/pip comparisons and predates the Darwin numeric path; it does not track broken logical negation or loss of opaque values during numeric simplification."
+        "reason": "Historical discussion of non-version platform_release values and lexical versus PEP 440 comparisons; maintainer comments explain the fallback ambiguity. Its Linux/pip comparison predates Darwin VersionString lowering and does not track the negation or numeric-union failures."
       }
     ],
-    "search_scope": "Used authenticated gh to search open/closed issues and open/closed/merged PRs separately for negation/parse-failure and simplification/tautology claims. Literal terms included platform_release, VersionString, not-a-version, 3-invalid, and both test names; conceptual terms included opaque, lexical/lexicographic, string ordering, negation, and marker simplification without platform constraints. PR keyword searches returned no hits even for known matching PRs, so coverage was supplemented with the 500 most recent all-state PRs, marker-file commit history, direct diffs, comments, reviews, and linked discussions. Ruled out astral-sh/uv#19105 and astral-sh/uv#18971 (normal-release dependency selection), astral-sh/uv#5044 and astral-sh/uv#5050 (eliding genuine tautologies), astral-sh/uv#21309 (unsupported reversed membership), astral-sh/uv#21825 (wheel-coverage fork boundaries), and astral-sh/uv#21939 (python_version false-marker serialization). No independent matching issue or production repair was found."
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separate literal searches covered platform_release, not-a-version, 3-invalid, marker.negate().evaluate, darwin_release_fallback, and VersionString. Conceptual searches covered negation, boolean logic, tautologies/always-true markers, simplification, lexical/lexicographic and string comparisons, serialization, and area:rustlib. Fix-oriented searches covered Darwin release inference and string-ordering changes. REST PR searches hit a rate limit and indexed PR searches omitted known matches; supplemented them by filtering titles/bodies of the latest 3,000 PRs across all states, then inspecting relevant diffs, comments, reviews, and referenced discussions. Ruled out astral-sh/uv#12833 and astral-sh/uv#21309 and astral-sh/uv#21310 (invalid literal comparisons or version containment), astral-sh/uv#18971 and astral-sh/uv#19105 (dependency selection on ordinary macOS releases), astral-sh/uv#5044 and astral-sh/uv#5078 and astral-sh/uv#6295 leading to astral-sh/uv#5992 (simplification completeness/conciseness), and astral-sh/uv#22262 with merged astral-sh/uv#22234 (export extra-activation propagation)."
   },
   "type": "bug",
-  "type_reason": "Source confirms that MarkerEnvironment accepts arbitrary platform_release strings, but Darwin VersionString evaluation returns false before following complemented edges on parse failure. Numeric lowering also reduces the reported union to true on Darwin, losing the opaque-value case before evaluation. These violate existing API semantics. The companion reproduction PR astral-sh/uv#22258 does not make this a duplicate. Earlier ordering work explicitly excluded these mixed-type fields; no previously fixed instance of these failures was established.",
-  "summary": "astral-sh/uv#22258 reproduces both failures, and astral-sh/uv#21766 introduced the affected Darwin path. astral-sh/uv#19808 and astral-sh/uv#3917 provide comparison-semantics context. No independent duplicate or production fix was found. The requested README update could not be saved because $RUNNER_TEMP/issue-context/README.md is on a read-only filesystem; its template remains unchanged.",
-  "draft_response": "Your examples identify two correctness problems in the public API: an unparseable Darwin release returns false before complemented edges are evaluated, and numeric range simplification can discard the opaque-value case entirely. The relevant path was added in astral-sh/uv#21766.\n\nastral-sh/uv#22258 provides reproductions, with no production fix. The next step is to preserve the non-version case through evaluation, simplification, and printing/reparsing, using both tests as regressions. Changing only the parse-failure return will not cover the second case. The broader fallback contract still needs a design decision; these synthetic inputs do not establish an installation failure on normal macOS releases."
+  "type_reason": "Source confirms incorrect behavior for opaque strings accepted by MarkerEnvironment: failed VersionString parsing bypasses complemented edges, while numeric-only range reduction can eliminate the opaque domain before evaluation. The broader fallback policy remains undecided, but these correctness failures are established. The companion reproduction and subsequent proposed fixes respond to this issue, so they do not make it a duplicate. No previous fix of these failures was established; astral-sh/uv#19808 explicitly excluded these fields.",
+  "summary": "astral-sh/uv#22272 and astral-sh/uv#22295 are unmerged draft proposals with different fallback policies; astral-sh/uv#22258 supplies the reproductions. astral-sh/uv#21766 introduced the affected path, and astral-sh/uv#22304 addresses explicit macOS targets. Earlier string-ordering discussions provide context, not a duplicate.",
+  "draft_response": "Your examples identify two correctness problems in the public marker API. The source confirms that failed version parsing bypasses negation, and numeric range simplification can erase the opaque-string case before evaluation.\n\nastral-sh/uv#22272 proposes preserving lexical fallback through composition and serialization. astral-sh/uv#22295 instead proposes treating unparseable releases as version zero, which would give your second example a different result. Both remain drafts. The next step is to settle the fallback contract and review it against both reproductions and printing/serialization round trips."
 }
