@@ -754,9 +754,26 @@ pub async fn add(
         let locations = IndexLocations::new(indexes, Vec::new(), false);
         let mut indexes = locations.defined_indexes().collect::<Vec<_>>();
         indexes.reverse();
-        for index in indexes {
-            toml.add_index(index, root_dir)?;
+        let mut member_indexes = Vec::new();
+        if let EditTarget::Project(project) = &target
+            && project.root() == project.workspace().install_path()
+        {
+            for member in project.workspace().packages().values() {
+                if member.root() == project.root() {
+                    continue;
+                }
+                let member_definitions = member
+                    .pyproject_toml()
+                    .tool
+                    .as_ref()
+                    .and_then(|tool| tool.uv.as_ref())
+                    .and_then(|uv| uv.index.as_ref())
+                    .into_iter()
+                    .flatten();
+                member_indexes.extend(member_definitions);
+            }
         }
+        toml.add_indexes(&indexes, root_dir, &member_indexes)?;
     }
 
     let content = toml.to_string();
